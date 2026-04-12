@@ -112,7 +112,7 @@ function AppLayout() {
           color: '#fff', fontWeight: 'bold', fontSize: 16,
           borderBottom: '1px solid rgba(255,255,255,0.1)', padding: '0 16px',
         }}>
-          经营小组-增长中台
+          增长中台
         </div>
         <Menu
           theme="dark"
