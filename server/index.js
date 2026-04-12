@@ -223,15 +223,17 @@ if (!existingCols.includes('created_by')) {
 }
 
 const cpCols = db.prepare("PRAGMA table_info(company_personnel)").all().map(c => c.name);
-if (!cpCols.includes('manager_id')) {
-  db.exec("ALTER TABLE company_personnel ADD COLUMN manager_id INTEGER DEFAULT NULL");
-}
-if (!cpCols.includes('entity_id')) {
-  db.exec("ALTER TABLE company_personnel ADD COLUMN entity_id INTEGER DEFAULT NULL");
+if (cpCols.length > 0) {
+  if (!cpCols.includes('manager_id')) {
+    db.exec("ALTER TABLE company_personnel ADD COLUMN manager_id INTEGER DEFAULT NULL");
+  }
+  if (!cpCols.includes('entity_id')) {
+    db.exec("ALTER TABLE company_personnel ADD COLUMN entity_id INTEGER DEFAULT NULL");
+  }
 }
 
 const prCols = db.prepare("PRAGMA table_info(company_products)").all().map(c => c.name);
-if (!prCols.includes('entity_id')) {
+if (prCols.length > 0 && !prCols.includes('entity_id')) {
   db.exec("ALTER TABLE company_products ADD COLUMN entity_id INTEGER DEFAULT NULL");
 }
 
