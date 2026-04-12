@@ -216,11 +216,18 @@ if (migrated === 0) {
 // =========== 动态加列 ===========
 const existingCols = db.prepare("PRAGMA table_info(persons)").all().map(c => c.name);
 if (existingCols.length > 0) {
-  if (!existingCols.includes('weight')) {
-    db.exec("ALTER TABLE persons ADD COLUMN weight TEXT DEFAULT 'medium'");
-  }
-  if (!existingCols.includes('created_by')) {
-    db.exec("ALTER TABLE persons ADD COLUMN created_by INTEGER DEFAULT NULL");
+  const personColsToAdd = [
+    ["city",          "TEXT"],
+    ["resources",     "TEXT"],
+    ["demands",       "TEXT"],
+    ["potential_level","TEXT"],
+    ["weight",        "TEXT DEFAULT 'medium'"],
+    ["created_by",    "INTEGER DEFAULT NULL"],
+  ];
+  for (const [col, def] of personColsToAdd) {
+    if (!existingCols.includes(col)) {
+      db.exec(`ALTER TABLE persons ADD COLUMN ${col} ${def}`);
+    }
   }
 }
 
@@ -358,7 +365,7 @@ app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
 
 // =========== 人脉 API ===========
 app.get('/api/persons', (req, res) => {
-  const { search, person_category, relation_type, potential_level, recruit_status, intent_level } = req.query;
+  const { search, person_category, relation_type, potential_level, recruit_status, intent_level, city, weight } = req.query;
   let query = 'SELECT * FROM persons WHERE 1=1';
   const params = [];
 
@@ -378,6 +385,8 @@ app.get('/api/persons', (req, res) => {
   if (potential_level) { query += ' AND potential_level = ?'; params.push(potential_level); }
   if (recruit_status) { query += ' AND recruit_status = ?'; params.push(recruit_status); }
   if (intent_level) { query += ' AND intent_level = ?'; params.push(intent_level); }
+  if (city) { query += ' AND city LIKE ?'; params.push(`%${city}%`); }
+  if (weight) { query += ' AND weight = ?'; params.push(weight); }
 
   query += ' ORDER BY updated_at DESC';
   res.json(db.prepare(query).all(...params));
@@ -504,9 +513,9 @@ app.post('/api/persons/import', (req, res) => {
 
 // =========== 互动记录 API ===========
 app.get('/api/interactions', (req, res) => {
-  const { person_id, type } = req.query;
+  const { person_id, type, city, weight, importance, date_start, date_end } = req.query;
   let query = `
-    SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company
+    SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company, p.city, p.weight
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
     WHERE 1=1
@@ -514,6 +523,11 @@ app.get('/api/interactions', (req, res) => {
   const params = [];
   if (person_id) { query += ' AND i.person_id = ?'; params.push(person_id); }
   if (type) { query += ' AND i.type = ?'; params.push(type); }
+  if (city) { query += ' AND p.city LIKE ?'; params.push(`%${city}%`); }
+  if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
+  if (importance) { query += ' AND i.importance = ?'; params.push(importance); }
+  if (date_start) { query += ' AND i.date >= ?'; params.push(date_start); }
+  if (date_end) { query += ' AND i.date <= ?'; params.push(date_end); }
   query += ' ORDER BY i.date DESC';
   res.json(db.prepare(query).all(...params));
 });
