@@ -396,6 +396,8 @@ export default function Persons() {
   const [filterPotentialLevel, setFilterPotentialLevel] = useState('');
   const [filterRecruitStatus, setFilterRecruitStatus] = useState('');
   const [filterIntentLevel, setFilterIntentLevel] = useState('');
+  const [filterCity, setFilterCity] = useState('');
+  const [filterWeight, setFilterWeight] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -422,10 +424,12 @@ export default function Persons() {
     if (filterPotentialLevel) params.potential_level = filterPotentialLevel;
     if (filterRecruitStatus) params.recruit_status = filterRecruitStatus;
     if (filterIntentLevel) params.intent_level = filterIntentLevel;
+    if (filterCity) params.city = filterCity;
+    if (filterWeight) params.weight = filterWeight;
     const res = await personsApi.list(params);
     setData(res);
     setLoading(false);
-  }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel]);
+  }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -769,6 +773,22 @@ export default function Persons() {
           {Object.entries(relationTypeMap)
             .filter(([, v]) => !filterCategory || v.category === filterCategory || !v.category)
             .map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+        </Select>
+        <Input.Search
+          placeholder="城市"
+          allowClear
+          style={{ width: 120 }}
+          onSearch={setFilterCity}
+          onChange={e => !e.target.value && setFilterCity('')}
+        />
+        <Select
+          placeholder="权重"
+          allowClear
+          style={{ width: 100 }}
+          value={filterWeight || undefined}
+          onChange={v => setFilterWeight(v || '')}
+        >
+          {Object.entries(weightMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
         </Select>
       </Space>
 

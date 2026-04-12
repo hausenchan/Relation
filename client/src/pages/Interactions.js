@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Typography, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
+import { Table, Select, Tag, Space, Typography, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi } from '../api';
 import dayjs from 'dayjs';
 
@@ -35,6 +35,20 @@ export default function Interactions() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterType, setFilterType] = useState('');
+  const [filterCity, setFilterCity] = useState('');
+  const [filterWeight, setFilterWeight] = useState('');
+  const [filterImportance, setFilterImportance] = useState('');
+  const [dateRange, setDateRange] = useState(null); // { start, end, label }
+  const [customPickerOpen, setCustomPickerOpen] = useState(false);
+
+  // 快捷日期选项
+  const DATE_SHORTCUTS = [
+    { label: '今天',     getRange: () => { const d = dayjs().format('YYYY-MM-DD'); return { start: d, end: d }; } },
+    { label: '昨天',     getRange: () => { const d = dayjs().subtract(1,'day').format('YYYY-MM-DD'); return { start: d, end: d }; } },
+    { label: '最近7天',  getRange: () => ({ start: dayjs().subtract(6,'day').format('YYYY-MM-DD'), end: dayjs().format('YYYY-MM-DD') }) },
+    { label: '最近30天', getRange: () => ({ start: dayjs().subtract(29,'day').format('YYYY-MM-DD'), end: dayjs().format('YYYY-MM-DD') }) },
+    { label: '本月',     getRange: () => ({ start: dayjs().startOf('month').format('YYYY-MM-DD'), end: dayjs().endOf('month').format('YYYY-MM-DD') }) },
+  ];
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [persons, setPersons] = useState([]);
@@ -44,10 +58,14 @@ export default function Interactions() {
     setLoading(true);
     const params = {};
     if (filterType) params.type = filterType;
+    if (filterCity) params.city = filterCity;
+    if (filterWeight) params.weight = filterWeight;
+    if (filterImportance) params.importance = filterImportance;
+    if (dateRange) { params.date_start = dateRange.start; params.date_end = dateRange.end; }
     const res = await interactionsApi.list(params);
     setData(res);
     setLoading(false);
-  }, [filterType]);
+  }, [filterType, filterCity, filterWeight, filterImportance, dateRange]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -154,6 +172,71 @@ export default function Interactions() {
         <Select placeholder="互动类型" allowClear style={{ width: 120 }} onChange={setFilterType}>
           {Object.entries(typeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
+        <Input.Search
+          placeholder="城市"
+          allowClear
+          style={{ width: 120 }}
+          onSearch={setFilterCity}
+          onChange={e => !e.target.value && setFilterCity('')}
+        />
+        <Select placeholder="人脉权重" allowClear style={{ width: 110 }} value={filterWeight || undefined} onChange={v => setFilterWeight(v || '')}>
+          <Option value="high"><Tag color="red">高</Tag></Option>
+          <Option value="medium"><Tag color="orange">中</Tag></Option>
+          <Option value="low"><Tag color="default">低</Tag></Option>
+        </Select>
+        <Select placeholder="信息重要程度" allowClear style={{ width: 130 }} value={filterImportance || undefined} onChange={v => setFilterImportance(v || '')}>
+          {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
+        </Select>
+
+        {/* 日期范围选择器 */}
+        <Dropdown
+          trigger={['click']}
+          open={customPickerOpen}
+          onOpenChange={open => { if (!open) setCustomPickerOpen(false); }}
+          dropdownRender={() => (
+            <div style={{ background: '#fff', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 12, minWidth: 240 }}>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>快捷选择</div>
+              <Space wrap style={{ marginBottom: 12 }}>
+                {DATE_SHORTCUTS.map(s => (
+                  <Button
+                    key={s.label}
+                    size="small"
+                    type={dateRange?.label === s.label ? 'primary' : 'default'}
+                    onClick={() => { setDateRange({ ...s.getRange(), label: s.label }); setCustomPickerOpen(false); }}
+                  >
+                    {s.label}
+                  </Button>
+                ))}
+              </Space>
+              <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>自定义范围</div>
+              <DatePicker.RangePicker
+                size="small"
+                style={{ width: '100%' }}
+                onChange={(_, strs) => {
+                  if (strs[0] && strs[1]) {
+                    setDateRange({ start: strs[0], end: strs[1], label: `${strs[0]} ~ ${strs[1]}` });
+                    setCustomPickerOpen(false);
+                  }
+                }}
+              />
+            </div>
+          )}
+        >
+          <Button
+            icon={<CalendarOutlined />}
+            type={dateRange ? 'primary' : 'default'}
+            ghost={!!dateRange}
+            onClick={() => setCustomPickerOpen(v => !v)}
+          >
+            {dateRange ? dateRange.label : '日期范围'}
+            {dateRange && (
+              <CloseCircleOutlined
+                style={{ marginLeft: 6, fontSize: 12 }}
+                onClick={e => { e.stopPropagation(); setDateRange(null); setCustomPickerOpen(false); }}
+              />
+            )}
+          </Button>
+        </Dropdown>
       </Space>
       <Table
         columns={columns}

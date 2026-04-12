@@ -3,7 +3,8 @@ import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react
 import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Typography } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
-  AppstoreOutlined, BankOutlined, UserOutlined, LogoutOutlined, KeyOutlined, SettingOutlined
+  AppstoreOutlined, BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
+  GiftOutlined, CalendarOutlined, AuditOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -14,13 +15,16 @@ import Interactions from './pages/Interactions';
 import Reminders from './pages/Reminders';
 import Companies from './pages/Companies';
 import Users from './pages/Users';
-import { remindersApi } from './api';
+import Gifts from './pages/Gifts';
+import GiftPlans from './pages/GiftPlans';
+import GiftReview from './pages/GiftReview';
+import { remindersApi, giftRequestsApi } from './api';
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
 
-const roleLabel = { admin: '管理员', member: '成员', readonly: '只读', guest: '访客' };
-const roleColor = { admin: '#ff4d4f', member: '#1677ff', readonly: '#888', guest: '#fa8c16' };
+const roleLabel = { admin: '管理员', leader: '组长', member: '成员', readonly: '只读', guest: '访客' };
+const roleColor = { admin: '#ff4d4f', leader: '#fa541c', member: '#1677ff', readonly: '#888', guest: '#fa8c16' };
 
 // 路由守卫
 function PrivateRoute({ children, module }) {
@@ -42,6 +46,7 @@ function AppLayout() {
   const location = useLocation();
   const { user, logout, canAccessModule } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
+  const [pendingGiftCount, setPendingGiftCount] = useState(0);
 
   useEffect(() => {
     if (!user) return;
@@ -54,11 +59,13 @@ function AppLayout() {
       });
       setPendingCount(upcoming.length);
     }).catch(() => {});
+    if (user.role === 'leader' || user.role === 'admin') {
+      giftRequestsApi.list({ status: 'pending' }).then(r => setPendingGiftCount(r.length)).catch(() => {});
+    }
   }, [location, user]);
 
   const selectedKey = '/' + location.pathname.split('/')[1];
 
-  // 按权限构建菜单
   const crmChildren = [
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
     canAccessModule('persons') && { key: '/persons', icon: <TeamOutlined />, label: <Link to="/persons">人脉管理</Link> },
@@ -74,12 +81,27 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
+  const giftChildren = [
+    { key: '/gift-plans', icon: <CalendarOutlined />, label: <Link to="/gift-plans">送礼计划</Link> },
+    {
+      key: '/gift-review', icon: <AuditOutlined />,
+      label: (
+        <span>
+          <Link to="/gift-review">审核与记录</Link>
+          {pendingGiftCount > 0 && <Badge count={pendingGiftCount} size="small" style={{ marginLeft: 8 }} />}
+        </span>
+      ),
+    },
+    (user?.role === 'admin') && { key: '/gifts', icon: <GiftOutlined />, label: <Link to="/gifts">礼品库</Link> },
+  ].filter(Boolean);
+
   const menuItems = [
     { key: 'crm', icon: <AppstoreOutlined />, label: '人脉管理助手', children: crmChildren },
     canAccessModule('companies') && {
       key: 'research', icon: <BankOutlined />, label: '公司研究助手',
       children: [{ key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> }],
     },
+    { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftChildren },
     user?.role === 'admin' && {
       key: 'system', icon: <SettingOutlined />, label: '系统管理',
       children: [{ key: '/users', icon: <UserOutlined />, label: <Link to="/users">用户管理</Link> }],
@@ -118,7 +140,7 @@ function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={['crm', 'research', 'system']}
+          defaultOpenKeys={['crm', 'research', 'gift', 'system']}
           items={menuItems}
           style={{ marginTop: 8 }}
         />
@@ -151,6 +173,9 @@ function AppLayout() {
             <Route path="/interactions" element={<PrivateRoute module="interactions"><Interactions /></PrivateRoute>} />
             <Route path="/reminders" element={<PrivateRoute module="reminders"><Reminders /></PrivateRoute>} />
             <Route path="/companies" element={<PrivateRoute module="companies"><Companies /></PrivateRoute>} />
+            <Route path="/gifts" element={<PrivateRoute><Gifts /></PrivateRoute>} />
+            <Route path="/gift-plans" element={<PrivateRoute><GiftPlans /></PrivateRoute>} />
+            <Route path="/gift-review" element={<PrivateRoute><GiftReview /></PrivateRoute>} />
             <Route path="/users" element={<PrivateRoute><Users /></PrivateRoute>} />
           </Routes>
         </Content>

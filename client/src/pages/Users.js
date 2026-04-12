@@ -12,6 +12,7 @@ const { Option } = Select;
 
 const roleMap = {
   admin:    { label: '超级管理员', color: 'red' },
+  leader:   { label: '商务组长',   color: 'volcano' },
   member:   { label: '普通成员',   color: 'blue' },
   readonly: { label: '只读访客',   color: 'default' },
   guest:    { label: '按模块授权', color: 'orange' },
@@ -56,6 +57,7 @@ export default function UsersPage() {
     form.setFieldsValue({
       display_name: r.display_name,
       role: r.role,
+      leader_id: r.leader_id || undefined,
       modulePerms: r.modulePerms?.reduce((acc, p) => {
         acc[p.module] = { can_read: p.can_read === 1, can_write: p.can_write === 1 };
         return acc;
@@ -108,6 +110,14 @@ export default function UsersPage() {
     {
       title: '角色', dataIndex: 'role',
       render: v => { const m = roleMap[v]; return m ? <Tag color={m.color}>{m.label}</Tag> : v; },
+    },
+    {
+      title: '归属组长', dataIndex: 'leader_id',
+      render: v => {
+        if (!v) return <Text type="secondary" style={{ fontSize: 12 }}>-</Text>;
+        const leader = data.find(u => u.id === v);
+        return leader ? <Tag color="volcano">{leader.display_name || leader.username}</Tag> : '-';
+      },
     },
     {
       title: '模块权限', dataIndex: 'modulePerms',
@@ -186,6 +196,16 @@ export default function UsersPage() {
               ))}
             </Select>
           </Form.Item>
+
+          {role === 'member' && (
+            <Form.Item label="归属组长" name="leader_id" extra="普通成员需指定所属商务组长，方便组长审核送礼申请">
+              <Select allowClear placeholder="请选择组长">
+                {data.filter(u => u.role === 'leader').map(u => (
+                  <Option key={u.id} value={u.id}>{u.display_name || u.username}</Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
 
           {role === 'guest' && (
             <>

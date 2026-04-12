@@ -94,6 +94,32 @@ export const companyProductsApi = {
   delete: (id) => api.delete(`/company_products/${id}`).then(r => r.data),
 };
 
+export const giftsApi = {
+  list: () => api.get('/gifts').then(r => r.data),
+  create: (data) => api.post('/gifts', data).then(r => r.data),
+  update: (id, data) => api.put(`/gifts/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/gifts/${id}`).then(r => r.data),
+};
+
+export const giftPlansApi = {
+  list: () => api.get('/gift_plans').then(r => r.data),
+  create: (data) => api.post('/gift_plans', data).then(r => r.data),
+  update: (id, data) => api.put(`/gift_plans/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/gift_plans/${id}`).then(r => r.data),
+};
+
+export const giftRequestsApi = {
+  list: (params) => api.get('/gift_requests', { params }).then(r => r.data),
+  create: (data) => api.post('/gift_requests', data).then(r => r.data),
+  delete: (id) => api.delete(`/gift_requests/${id}`).then(r => r.data),
+  review: (id, data) => api.post(`/gift_requests/${id}/review`, data).then(r => r.data),
+};
+
+export const giftRecordsApi = {
+  list: (params) => api.get('/gift_records', { params }).then(r => r.data),
+  update: (id, data) => api.put(`/gift_records/${id}`, data).then(r => r.data),
+};
+
 export const companyDynamicsApi = {
   list: (params) => api.get('/company_dynamics', { params }).then(r => r.data),
   create: (data) => api.post('/company_dynamics', data).then(r => r.data),

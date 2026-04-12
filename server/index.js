@@ -251,6 +251,255 @@ if (companyCols.length > 0 && !companyCols.includes('created_by')) {
   db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");
 }
 
+// users 表加 leader_id
+const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+if (userCols.length > 0 && !userCols.includes('leader_id')) {
+  db.exec("ALTER TABLE users ADD COLUMN leader_id INTEGER DEFAULT NULL");
+}
+
+// =========== 送礼模块建表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS gifts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    category TEXT,
+    description TEXT,
+    price REAL DEFAULT 0,
+    stock INTEGER DEFAULT 0,
+    unit TEXT DEFAULT '个',
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS gift_plans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    occasion TEXT,
+    plan_date TEXT,
+    description TEXT,
+    status TEXT DEFAULT 'draft',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS gift_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER,
+    person_id INTEGER NOT NULL,
+    gift_id INTEGER NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    requester_id INTEGER NOT NULL,
+    notes TEXT,
+    status TEXT DEFAULT 'pending',
+    reviewer_id INTEGER,
+    review_note TEXT,
+    reviewed_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS gift_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL,
+    person_id INTEGER NOT NULL,
+    gift_id INTEGER NOT NULL,
+    quantity INTEGER DEFAULT 1,
+    sender_id INTEGER NOT NULL,
+    send_date TEXT,
+    status TEXT DEFAULT 'pending',
+    feedback TEXT,
+    rating INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+// =========== 送礼模块 API ===========
+
+// 礼品库
+app.get('/api/gifts', (req, res) => {
+  res.json(db.prepare('SELECT * FROM gifts ORDER BY category, name').all());
+});
+app.post('/api/gifts', canWrite, (req, res) => {
+  const { name, category, description, price, stock, unit, notes } = req.body;
+  const r = db.prepare(`INSERT INTO gifts (name, category, description, price, stock, unit, notes) VALUES (?,?,?,?,?,?,?)`)
+    .run(name, category, description, price || 0, stock || 0, unit || '个', notes);
+  res.json({ id: r.lastInsertRowid });
+});
+app.put('/api/gifts/:id', canWrite, (req, res) => {
+  const { name, category, description, price, stock, unit, notes } = req.body;
+  db.prepare(`UPDATE gifts SET name=?, category=?, description=?, price=?, stock=?, unit=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(name, category, description, price, stock, unit || '个', notes, req.params.id);
+  res.json({ success: true });
+});
+app.delete('/api/gifts/:id', canWrite, (req, res) => {
+  db.prepare('DELETE FROM gifts WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// 送礼计划
+app.get('/api/gift_plans', (req, res) => {
+  const plans = db.prepare(`SELECT gp.*, u.display_name as creator_name FROM gift_plans gp LEFT JOIN users u ON gp.created_by = u.id ORDER BY gp.created_at DESC`).all();
+  res.json(plans);
+});
+app.post('/api/gift_plans', canWrite, (req, res) => {
+  const { title, occasion, plan_date, description } = req.body;
+  const r = db.prepare(`INSERT INTO gift_plans (title, occasion, plan_date, description, created_by) VALUES (?,?,?,?,?)`)
+    .run(title, occasion, plan_date, description, req.user.id);
+  res.json({ id: r.lastInsertRowid });
+});
+app.put('/api/gift_plans/:id', canWrite, (req, res) => {
+  const { title, occasion, plan_date, description, status } = req.body;
+  db.prepare(`UPDATE gift_plans SET title=?, occasion=?, plan_date=?, description=?, status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(title, occasion, plan_date, description, status, req.params.id);
+  res.json({ success: true });
+});
+app.delete('/api/gift_plans/:id', canWrite, (req, res) => {
+  db.prepare('DELETE FROM gift_plans WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// 送礼申请
+app.get('/api/gift_requests', (req, res) => {
+  const { status, plan_id } = req.query;
+  let q = `
+    SELECT gr.*,
+      p.name as person_name, p.company, p.city,
+      g.name as gift_name, g.price as gift_price, g.unit as gift_unit,
+      u.display_name as requester_name,
+      rv.display_name as reviewer_name,
+      gp.title as plan_title
+    FROM gift_requests gr
+    LEFT JOIN persons p ON gr.person_id = p.id
+    LEFT JOIN gifts g ON gr.gift_id = g.id
+    LEFT JOIN users u ON gr.requester_id = u.id
+    LEFT JOIN users rv ON gr.reviewer_id = rv.id
+    LEFT JOIN gift_plans gp ON gr.plan_id = gp.id
+    WHERE 1=1
+  `;
+  const params = [];
+  // member 只看自己的申请；leader 看自己组员的申请；admin 看全部
+  if (req.user.role === 'member') {
+    q += ' AND gr.requester_id = ?'; params.push(req.user.id);
+  } else if (req.user.role === 'leader') {
+    // 找该 leader 下的所有 member id
+    const members = db.prepare('SELECT id FROM users WHERE leader_id = ?').all(req.user.id).map(u => u.id);
+    members.push(req.user.id);
+    q += ` AND gr.requester_id IN (${members.map(() => '?').join(',')})`;
+    params.push(...members);
+  }
+  if (status) { q += ' AND gr.status = ?'; params.push(status); }
+  if (plan_id) { q += ' AND gr.plan_id = ?'; params.push(plan_id); }
+  q += ' ORDER BY gr.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+app.post('/api/gift_requests', canWrite, (req, res) => {
+  const { plan_id, person_id, gift_id, quantity, notes } = req.body;
+  // 检查库存
+  const gift = db.prepare('SELECT * FROM gifts WHERE id = ?').get(gift_id);
+  if (!gift) return res.status(400).json({ error: '礼品不存在' });
+  if (gift.stock < (quantity || 1)) return res.status(400).json({ error: `库存不足，当前库存 ${gift.stock} ${gift.unit}` });
+  const r = db.prepare(`INSERT INTO gift_requests (plan_id, person_id, gift_id, quantity, requester_id, notes) VALUES (?,?,?,?,?,?)`)
+    .run(plan_id || null, person_id, gift_id, quantity || 1, req.user.id, notes);
+  res.json({ id: r.lastInsertRowid });
+});
+
+app.delete('/api/gift_requests/:id', canWrite, (req, res) => {
+  const req_ = db.prepare('SELECT * FROM gift_requests WHERE id = ?').get(req.params.id);
+  if (!req_) return res.status(404).json({ error: '未找到' });
+  if (req_.status !== 'pending') return res.status(400).json({ error: '只能撤回待审核的申请' });
+  if (req_.requester_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: '无权操作' });
+  db.prepare('DELETE FROM gift_requests WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// 审核申请（leader / admin）
+app.post('/api/gift_requests/:id/review', (req, res) => {
+  if (req.user.role !== 'leader' && req.user.role !== 'admin') return res.status(403).json({ error: '无审核权限' });
+  const { action, review_note } = req.body; // action: approve | reject
+  const request = db.prepare('SELECT * FROM gift_requests WHERE id = ?').get(req.params.id);
+  if (!request) return res.status(404).json({ error: '未找到' });
+  if (request.status !== 'pending') return res.status(400).json({ error: '该申请已处理' });
+
+  if (action === 'approve') {
+    // 扣减库存
+    const gift = db.prepare('SELECT * FROM gifts WHERE id = ?').get(request.gift_id);
+    if (gift.stock < request.quantity) return res.status(400).json({ error: '库存不足，无法审核通过' });
+    const approveAndRecord = db.transaction(() => {
+      db.prepare(`UPDATE gift_requests SET status='approved', reviewer_id=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(req.user.id, review_note, req.params.id);
+      db.prepare(`UPDATE gifts SET stock = stock - ?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+        .run(request.quantity, request.gift_id);
+      db.prepare(`INSERT INTO gift_records (request_id, person_id, gift_id, quantity, sender_id) VALUES (?,?,?,?,?)`)
+        .run(request.id, request.person_id, request.gift_id, request.quantity, request.requester_id);
+    });
+    approveAndRecord();
+  } else {
+    db.prepare(`UPDATE gift_requests SET status='rejected', reviewer_id=?, review_note=?, reviewed_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(req.user.id, review_note, req.params.id);
+  }
+  res.json({ success: true });
+});
+
+// 送礼记录
+app.get('/api/gift_records', (req, res) => {
+  const { status } = req.query;
+  let q = `
+    SELECT gr.*,
+      p.name as person_name, p.company, p.city, p.phone, p.wechat,
+      g.name as gift_name, g.unit as gift_unit, g.price as gift_price,
+      u.display_name as sender_name
+    FROM gift_records gr
+    LEFT JOIN persons p ON gr.person_id = p.id
+    LEFT JOIN gifts g ON gr.gift_id = g.id
+    LEFT JOIN users u ON gr.sender_id = u.id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (req.user.role === 'member') {
+    q += ' AND gr.sender_id = ?'; params.push(req.user.id);
+  } else if (req.user.role === 'leader') {
+    const members = db.prepare('SELECT id FROM users WHERE leader_id = ?').all(req.user.id).map(u => u.id);
+    members.push(req.user.id);
+    q += ` AND gr.sender_id IN (${members.map(() => '?').join(',')})`;
+    params.push(...members);
+  }
+  if (status) { q += ' AND gr.status = ?'; params.push(status); }
+  q += ' ORDER BY gr.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+app.put('/api/gift_records/:id', (req, res) => {
+  const { status, feedback, rating, send_date } = req.body;
+  const record = db.prepare('SELECT * FROM gift_records WHERE id = ?').get(req.params.id);
+  if (!record) return res.status(404).json({ error: '未找到' });
+  if (record.sender_id !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'leader') {
+    return res.status(403).json({ error: '无权操作' });
+  }
+
+  const updateAndLog = db.transaction(() => {
+    db.prepare(`UPDATE gift_records SET status=?, feedback=?, rating=?, send_date=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(status, feedback, rating || null, send_date, req.params.id);
+
+    // 状态变为「已接收」且之前不是「已接收」时，自动生成互动记录
+    if (status === 'received' && record.status !== 'received') {
+      const gift = db.prepare('SELECT name FROM gifts WHERE id = ?').get(record.gift_id);
+      const giftName = gift ? gift.name : '礼品';
+      const interactionDate = send_date || new Date().toISOString().slice(0, 10);
+      const description = `送出礼品：${giftName} × ${record.quantity}${feedback ? `\n收礼反馈：${feedback}` : ''}`;
+      db.prepare(`
+        INSERT INTO interactions (person_id, type, date, description, importance, created_at)
+        VALUES (?, 'gift', ?, ?, 'normal', CURRENT_TIMESTAMP)
+      `).run(record.person_id, interactionDate, description);
+    }
+  });
+
+  updateAndLog();
+  res.json({ success: true });
+});
+
 // =========== JWT 鉴权中间件 ===========
 function auth(req, res, next) {
   const header = req.headers['authorization'];
@@ -324,11 +573,11 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
 });
 
 app.post('/api/users', auth, adminOnly, (req, res) => {
-  const { username, password, display_name, role, modulePerms } = req.body;
+  const { username, password, display_name, role, modulePerms, leader_id } = req.body;
   if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
   const hash = bcrypt.hashSync(password, 10);
   try {
-    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role) VALUES (?,?,?,?)").run(username, hash, display_name, role || 'member');
+    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, leader_id) VALUES (?,?,?,?,?)").run(username, hash, display_name, role || 'member', leader_id || null);
     if (role === 'guest' && modulePerms?.length) {
       const ins = db.prepare("INSERT OR REPLACE INTO user_module_perms (user_id, module, can_read, can_write) VALUES (?,?,?,?)");
       modulePerms.forEach(p => ins.run(r.lastInsertRowid, p.module, p.can_read ? 1 : 0, p.can_write ? 1 : 0));
@@ -340,11 +589,11 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
 });
 
 app.put('/api/users/:id', auth, adminOnly, (req, res) => {
-  const { display_name, role, password, modulePerms } = req.body;
+  const { display_name, role, password, modulePerms, leader_id } = req.body;
   if (password) {
-    db.prepare('UPDATE users SET display_name=?, role=?, password_hash=? WHERE id=?').run(display_name, role, bcrypt.hashSync(password, 10), req.params.id);
+    db.prepare('UPDATE users SET display_name=?, role=?, password_hash=?, leader_id=? WHERE id=?').run(display_name, role, bcrypt.hashSync(password, 10), leader_id || null, req.params.id);
   } else {
-    db.prepare('UPDATE users SET display_name=?, role=? WHERE id=?').run(display_name, role, req.params.id);
+    db.prepare('UPDATE users SET display_name=?, role=?, leader_id=? WHERE id=?').run(display_name, role, leader_id || null, req.params.id);
   }
   if (role === 'guest') {
     db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
