@@ -4,7 +4,7 @@ import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Ty
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
   AppstoreOutlined, BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
-  GiftOutlined, CalendarOutlined, AuditOutlined
+  GiftOutlined, CalendarOutlined, AuditOutlined, CarOutlined, RiseOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -18,7 +18,9 @@ import Users from './pages/Users';
 import Gifts from './pages/Gifts';
 import GiftPlans from './pages/GiftPlans';
 import GiftReview from './pages/GiftReview';
-import { remindersApi, giftRequestsApi } from './api';
+import Trips from './pages/Trips';
+import TripStats from './pages/TripStats';
+import { remindersApi, giftRequestsApi, tripsApi } from './api';
 
 const { Sider, Content } = Layout;
 const { Text } = Typography;
@@ -47,6 +49,7 @@ function AppLayout() {
   const { user, logout, canAccessModule } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingGiftCount, setPendingGiftCount] = useState(0);
+  const [pendingTripCount, setPendingTripCount] = useState(0);
 
   useEffect(() => {
     if (!user) return;
@@ -61,6 +64,7 @@ function AppLayout() {
     }).catch(() => {});
     if (user.role === 'leader' || user.role === 'admin') {
       giftRequestsApi.list({ status: 'pending' }).then(r => setPendingGiftCount(r.length)).catch(() => {});
+      tripsApi.list({ status: 'pending' }).then(r => setPendingTripCount(r.length)).catch(() => {});
     }
   }, [location, user]);
 
@@ -102,6 +106,21 @@ function AppLayout() {
       children: [{ key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> }],
     },
     { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftChildren },
+    {
+      key: 'trip', icon: <CarOutlined />, label: '出差管理',
+      children: [
+        {
+          key: '/trips', icon: <CarOutlined />,
+          label: (
+            <span>
+              <Link to="/trips">出差申请</Link>
+              {pendingTripCount > 0 && <Badge count={pendingTripCount} size="small" style={{ marginLeft: 8 }} />}
+            </span>
+          ),
+        },
+        { key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link> },
+      ],
+    },
     user?.role === 'admin' && {
       key: 'system', icon: <SettingOutlined />, label: '系统管理',
       children: [{ key: '/users', icon: <UserOutlined />, label: <Link to="/users">用户管理</Link> }],
@@ -140,7 +159,7 @@ function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={['crm', 'research', 'gift', 'system']}
+          defaultOpenKeys={['crm', 'research', 'gift', 'trip', 'system']}
           items={menuItems}
           style={{ marginTop: 8 }}
         />
@@ -177,6 +196,8 @@ function AppLayout() {
             <Route path="/gift-plans" element={<PrivateRoute><GiftPlans /></PrivateRoute>} />
             <Route path="/gift-review" element={<PrivateRoute><GiftReview /></PrivateRoute>} />
             <Route path="/users" element={<PrivateRoute><Users /></PrivateRoute>} />
+            <Route path="/trips" element={<PrivateRoute><Trips /></PrivateRoute>} />
+            <Route path="/trip-stats" element={<PrivateRoute><TripStats /></PrivateRoute>} />
           </Routes>
         </Content>
       </Layout>

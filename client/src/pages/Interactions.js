@@ -53,6 +53,7 @@ export default function Interactions() {
   const [editing, setEditing] = useState(null);
   const [persons, setPersons] = useState([]);
   const [form] = Form.useForm();
+  const interactionType = Form.useWatch('type', form);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -133,6 +134,11 @@ export default function Interactions() {
       render: v => <Tag color={typeMap[v]?.color}>{typeMap[v]?.label || v}</Tag>,
     },
     { title: '描述', dataIndex: 'description', ellipsis: true },
+    {
+      title: '礼物',
+      dataIndex: 'gift_name',
+      render: (v, r) => r.type === 'gift' && v ? <Tag color="gold">{v}</Tag> : null,
+    },
     {
       title: '重要程度',
       dataIndex: 'importance',
@@ -289,11 +295,22 @@ export default function Interactions() {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={8}>
-              <Form.Item label="金额(元)" name="amount">
-                <InputNumber min={0} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
+            {/* 餐饮时显示金额 */}
+            {interactionType === 'meal' && (
+              <Col span={8}>
+                <Form.Item label="金额（元）" name="amount">
+                  <InputNumber min={0} style={{ width: '100%' }} placeholder="餐饮费用" />
+                </Form.Item>
+              </Col>
+            )}
+            {/* 送礼时显示礼物 */}
+            {interactionType === 'gift' && (
+              <Col span={8}>
+                <Form.Item label="礼物" name="gift_name">
+                  <Input placeholder="如：茅台、月饼礼盒" />
+                </Form.Item>
+              </Col>
+            )}
             <Col span={8}>
               <Form.Item label="信息重要程度" name="importance" initialValue="normal">
                 <Select>

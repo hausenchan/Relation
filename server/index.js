@@ -246,6 +246,11 @@ if (prCols.length > 0 && !prCols.includes('entity_id')) {
   db.exec("ALTER TABLE company_products ADD COLUMN entity_id INTEGER DEFAULT NULL");
 }
 
+const intCols = db.prepare("PRAGMA table_info(interactions)").all().map(c => c.name);
+if (intCols.length > 0 && !intCols.includes('gift_name')) {
+  db.exec("ALTER TABLE interactions ADD COLUMN gift_name TEXT DEFAULT NULL");
+}
+
 const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.name);
 if (companyCols.length > 0 && !companyCols.includes('created_by')) {
   db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");
@@ -782,11 +787,11 @@ app.get('/api/interactions', (req, res) => {
 });
 
 app.post('/api/interactions', (req, res) => {
-  const { person_id, type, date, amount, description, outcome, next_action, next_action_date, importance } = req.body;
+  const { person_id, type, date, amount, description, outcome, next_action, next_action_date, importance, gift_name } = req.body;
   const result = db.prepare(`
-    INSERT INTO interactions (person_id, type, date, amount, description, outcome, next_action, next_action_date, importance)
-    VALUES (?,?,?,?,?,?,?,?,?)
-  `).run(person_id, type, date, amount, description, outcome, next_action, next_action_date, importance || 'normal');
+    INSERT INTO interactions (person_id, type, date, amount, description, outcome, next_action, next_action_date, importance, gift_name)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+  `).run(person_id, type, date, amount, description, outcome, next_action, next_action_date, importance || 'normal', gift_name || null);
 
   if (next_action_date && next_action) {
     const remindDate = new Date(next_action_date);
@@ -807,12 +812,12 @@ app.post('/api/interactions', (req, res) => {
 });
 
 app.put('/api/interactions/:id', (req, res) => {
-  const { type, date, amount, description, outcome, next_action, next_action_date, importance } = req.body;
+  const { type, date, amount, description, outcome, next_action, next_action_date, importance, gift_name } = req.body;
   const original = db.prepare('SELECT person_id FROM interactions WHERE id=?').get(req.params.id);
   db.prepare(`
-    UPDATE interactions SET type=?, date=?, amount=?, description=?, outcome=?, next_action=?, next_action_date=?, importance=?
+    UPDATE interactions SET type=?, date=?, amount=?, description=?, outcome=?, next_action=?, next_action_date=?, importance=?, gift_name=?
     WHERE id=?
-  `).run(type, date, amount, description, outcome, next_action, next_action_date, importance || 'normal', req.params.id);
+  `).run(type, date, amount, description, outcome, next_action, next_action_date, importance || 'normal', gift_name || null, req.params.id);
 
   if (next_action_date && next_action && original) {
     const remindDate = new Date(next_action_date);
@@ -1214,6 +1219,369 @@ app.put('/api/company_dynamics/:id', (req, res) => {
 app.delete('/api/company_dynamics/:id', (req, res) => {
   db.prepare('DELETE FROM company_dynamics WHERE id = ?').run(req.params.id);
   res.json({ success: true });
+});
+
+// =========== 出差管理建表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    leader_id INTEGER,
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS business_trips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    group_id INTEGER,
+    destinations TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    purpose TEXT,
+    related_persons TEXT,
+    estimated_cost REAL,
+    status TEXT DEFAULT 'draft',
+    approve_note TEXT,
+    approved_by INTEGER,
+    approved_at TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS trip_expenses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    date TEXT NOT NULL,
+    amount REAL NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS expense_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    total_amount REAL DEFAULT 0,
+    status TEXT DEFAULT 'draft',
+    approve_note TEXT,
+    approved_by INTEGER,
+    approved_at TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+// 动态加列：users.group_id
+const userColsForGroup = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+if (!userColsForGroup.includes('group_id')) {
+  db.exec("ALTER TABLE users ADD COLUMN group_id INTEGER DEFAULT NULL");
+}
+
+// =========== 小组 API ===========
+app.get('/api/groups', (req, res) => {
+  const rows = db.prepare(`
+    SELECT g.*, u.display_name as leader_name
+    FROM groups g LEFT JOIN users u ON g.leader_id = u.id
+    ORDER BY g.id ASC
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/groups', (req, res) => {
+  const { name, leader_id, notes } = req.body;
+  const r = db.prepare('INSERT INTO groups (name, leader_id, notes) VALUES (?,?,?)').run(name, leader_id || null, notes);
+  res.json({ id: r.lastInsertRowid });
+});
+
+app.put('/api/groups/:id', (req, res) => {
+  const { name, leader_id, notes } = req.body;
+  db.prepare('UPDATE groups SET name=?, leader_id=?, notes=? WHERE id=?').run(name, leader_id || null, notes, req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/groups/:id', (req, res) => {
+  db.prepare('UPDATE users SET group_id=NULL WHERE group_id=?').run(req.params.id);
+  db.prepare('DELETE FROM groups WHERE id=?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// =========== 出差申请 API ===========
+// 权限辅助：是否可操作该申请（本人 or leader/admin）
+function canAccessTrip(req, tripUserId) {
+  const { id, role } = req.user;
+  return role === 'admin' || role === 'leader' || id === tripUserId;
+}
+
+app.get('/api/trips', (req, res) => {
+  const { status, user_id, group_id } = req.query;
+  const { id: me, role } = req.user;
+  let q = `
+    SELECT t.*, u.display_name as user_name, u.group_id,
+           g.name as group_name,
+           a.display_name as approver_name,
+           er.status as report_status, er.total_amount, er.id as report_id
+    FROM business_trips t
+    LEFT JOIN users u ON t.user_id = u.id
+    LEFT JOIN groups g ON t.group_id = g.id
+    LEFT JOIN users a ON t.approved_by = a.id
+    LEFT JOIN expense_reports er ON er.trip_id = t.id
+    WHERE 1=1
+  `;
+  const params = [];
+  // member 只能看自己的
+  if (role === 'member') { q += ' AND t.user_id = ?'; params.push(me); }
+  else if (role === 'leader') {
+    // leader 看本组 + 自己
+    const myGroup = db.prepare('SELECT group_id FROM users WHERE id=?').get(me)?.group_id;
+    if (myGroup) { q += ' AND (u.group_id = ? OR t.user_id = ?)'; params.push(myGroup, me); }
+    else { q += ' AND t.user_id = ?'; params.push(me); }
+  }
+  if (status) { q += ' AND t.status = ?'; params.push(status); }
+  if (user_id) { q += ' AND t.user_id = ?'; params.push(user_id); }
+  if (group_id) { q += ' AND u.group_id = ?'; params.push(group_id); }
+  q += ' ORDER BY t.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+app.get('/api/trips/:id', (req, res) => {
+  const t = db.prepare(`
+    SELECT t.*, u.display_name as user_name, g.name as group_name, a.display_name as approver_name
+    FROM business_trips t
+    LEFT JOIN users u ON t.user_id = u.id
+    LEFT JOIN groups g ON t.group_id = g.id
+    LEFT JOIN users a ON t.approved_by = a.id
+    WHERE t.id = ?
+  `).get(req.params.id);
+  if (!t) return res.status(404).json({ error: '未找到' });
+  if (!canAccessTrip(req, t.user_id)) return res.status(403).json({ error: '无权限' });
+  const expenses = db.prepare('SELECT * FROM trip_expenses WHERE trip_id = ? ORDER BY date ASC').all(req.params.id);
+  const report = db.prepare('SELECT * FROM expense_reports WHERE trip_id = ?').get(req.params.id);
+  res.json({ ...t, expenses, report });
+});
+
+app.post('/api/trips', (req, res) => {
+  const { destinations, start_date, end_date, purpose, related_persons, estimated_cost } = req.body;
+  const user = db.prepare('SELECT group_id FROM users WHERE id=?').get(req.user.id);
+  const r = db.prepare(`
+    INSERT INTO business_trips (user_id, group_id, destinations, start_date, end_date, purpose, related_persons, estimated_cost, status)
+    VALUES (?,?,?,?,?,?,?,?,'draft')
+  `).run(req.user.id, user?.group_id || null, destinations, start_date, end_date, purpose, related_persons || '', estimated_cost || null);
+  res.json({ id: r.lastInsertRowid });
+});
+
+app.put('/api/trips/:id', (req, res) => {
+  const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: '未找到' });
+  if (t.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: '无权限' });
+  if (!['draft', 'rejected'].includes(t.status)) return res.status(400).json({ error: '当前状态不可编辑' });
+  const { destinations, start_date, end_date, purpose, related_persons, estimated_cost } = req.body;
+  db.prepare(`
+    UPDATE business_trips SET destinations=?, start_date=?, end_date=?, purpose=?, related_persons=?, estimated_cost=?, updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `).run(destinations, start_date, end_date, purpose, related_persons || '', estimated_cost || null, req.params.id);
+  res.json({ success: true });
+});
+
+// 提交审批
+app.post('/api/trips/:id/submit', (req, res) => {
+  const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
+  if (!t || t.user_id !== req.user.id) return res.status(403).json({ error: '无权限' });
+  if (!['draft', 'rejected'].includes(t.status)) return res.status(400).json({ error: '当前状态不可提交' });
+  db.prepare("UPDATE business_trips SET status='pending', updated_at=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id);
+  res.json({ success: true });
+});
+
+// 审批
+app.post('/api/trips/:id/approve', (req, res) => {
+  const { role } = req.user;
+  if (role !== 'admin' && role !== 'leader') return res.status(403).json({ error: '无审批权限' });
+  const { action, note } = req.body; // action: approved | rejected
+  if (!['approved', 'rejected'].includes(action)) return res.status(400).json({ error: '无效操作' });
+  db.prepare(`
+    UPDATE business_trips SET status=?, approve_note=?, approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `).run(action, note || '', req.user.id, req.params.id);
+  res.json({ success: true });
+});
+
+// 标记完成
+app.post('/api/trips/:id/complete', (req, res) => {
+  const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: '未找到' });
+  if (t.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: '无权限' });
+  db.prepare("UPDATE business_trips SET status='completed', updated_at=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/trips/:id', (req, res) => {
+  const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
+  if (!t || (t.user_id !== req.user.id && req.user.role !== 'admin')) return res.status(403).json({ error: '无权限' });
+  if (t.status === 'approved') return res.status(400).json({ error: '已审批的申请不可删除' });
+  db.prepare('DELETE FROM trip_expenses WHERE trip_id=?').run(req.params.id);
+  db.prepare('DELETE FROM expense_reports WHERE trip_id=?').run(req.params.id);
+  db.prepare('DELETE FROM business_trips WHERE id=?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// =========== 费用明细 API ===========
+app.get('/api/trips/:id/expenses', (req, res) => {
+  res.json(db.prepare('SELECT * FROM trip_expenses WHERE trip_id=? ORDER BY date ASC').all(req.params.id));
+});
+
+app.post('/api/trips/:id/expenses', (req, res) => {
+  const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
+  if (!t) return res.status(404).json({ error: '未找到' });
+  if (!['approved', 'completed'].includes(t.status)) return res.status(400).json({ error: '出差审批通过后才能录入费用' });
+  const { type, date, amount, description } = req.body;
+  const r = db.prepare('INSERT INTO trip_expenses (trip_id, type, date, amount, description) VALUES (?,?,?,?,?)')
+    .run(req.params.id, type, date, amount, description);
+  // 更新报销单总额
+  const total = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM trip_expenses WHERE trip_id=?').get(req.params.id).t;
+  db.prepare('UPDATE expense_reports SET total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE trip_id=?').run(total, req.params.id);
+  res.json({ id: r.lastInsertRowid });
+});
+
+app.put('/api/trip_expenses/:id', (req, res) => {
+  const { type, date, amount, description } = req.body;
+  const exp = db.prepare('SELECT trip_id FROM trip_expenses WHERE id=?').get(req.params.id);
+  db.prepare('UPDATE trip_expenses SET type=?, date=?, amount=?, description=? WHERE id=?').run(type, date, amount, description, req.params.id);
+  if (exp) {
+    const total = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM trip_expenses WHERE trip_id=?').get(exp.trip_id).t;
+    db.prepare('UPDATE expense_reports SET total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE trip_id=?').run(total, exp.trip_id);
+  }
+  res.json({ success: true });
+});
+
+app.delete('/api/trip_expenses/:id', (req, res) => {
+  const exp = db.prepare('SELECT trip_id FROM trip_expenses WHERE id=?').get(req.params.id);
+  db.prepare('DELETE FROM trip_expenses WHERE id=?').run(req.params.id);
+  if (exp) {
+    const total = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM trip_expenses WHERE trip_id=?').get(exp.trip_id).t;
+    db.prepare('UPDATE expense_reports SET total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE trip_id=?').run(total, exp.trip_id);
+  }
+  res.json({ success: true });
+});
+
+// =========== 报销单 API ===========
+app.get('/api/trips/:id/report', (req, res) => {
+  const report = db.prepare('SELECT * FROM expense_reports WHERE trip_id=?').get(req.params.id);
+  if (!report) return res.status(404).json({ error: '报销单不存在' });
+  res.json(report);
+});
+
+// 创建报销单
+app.post('/api/trips/:id/report', (req, res) => {
+  const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
+  if (!t || t.status !== 'completed') return res.status(400).json({ error: '出差须完成后才能提交报销' });
+  const exists = db.prepare('SELECT id FROM expense_reports WHERE trip_id=?').get(req.params.id);
+  if (exists) return res.status(400).json({ error: '报销单已存在' });
+  const total = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM trip_expenses WHERE trip_id=?').get(req.params.id).t;
+  const r = db.prepare('INSERT INTO expense_reports (trip_id, user_id, total_amount, status) VALUES (?,?,?,\'draft\')')
+    .run(req.params.id, req.user.id, total);
+  res.json({ id: r.lastInsertRowid });
+});
+
+// 提交报销审批
+app.post('/api/reports/:id/submit', (req, res) => {
+  db.prepare("UPDATE expense_reports SET status='pending', updated_at=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id);
+  res.json({ success: true });
+});
+
+// 审批报销
+app.post('/api/reports/:id/approve', (req, res) => {
+  const { role } = req.user;
+  if (role !== 'admin' && role !== 'leader') return res.status(403).json({ error: '无审批权限' });
+  const { action, note } = req.body;
+  const status = action === 'approved' ? 'paid' : 'rejected';
+  db.prepare(`UPDATE expense_reports SET status=?, approve_note=?, approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .run(status, note || '', req.user.id, req.params.id);
+  res.json({ success: true });
+});
+
+// =========== 出差统计 API ===========
+app.get('/api/trips/stats/summary', (req, res) => {
+  const { year, month, group_id } = req.query;
+
+  let baseWhere = "WHERE t.status IN ('approved','completed')";
+  const p = [];
+  if (year && month) {
+    baseWhere += ` AND strftime('%Y-%m', t.start_date) = ?`;
+    p.push(`${year}-${String(month).padStart(2,'0')}`);
+  } else if (year) {
+    baseWhere += ` AND strftime('%Y', t.start_date) = ?`;
+    p.push(year);
+  }
+  if (group_id) { baseWhere += ' AND u.group_id = ?'; p.push(group_id); }
+
+  // 月度费用趋势（近12个月）
+  const monthly = db.prepare(`
+    SELECT strftime('%Y-%m', t.start_date) as month,
+           COUNT(DISTINCT t.id) as trip_count,
+           COALESCE(SUM(er.total_amount),0) as total_amount
+    FROM business_trips t
+    LEFT JOIN users u ON t.user_id = u.id
+    LEFT JOIN expense_reports er ON er.trip_id = t.id AND er.status = 'paid'
+    WHERE t.status IN ('approved','completed')
+      AND t.start_date >= date('now','-12 months')
+    ${group_id ? 'AND u.group_id = ?' : ''}
+    GROUP BY month ORDER BY month ASC
+  `).all(...(group_id ? [group_id] : []));
+
+  // 费用类型分布
+  const byType = db.prepare(`
+    SELECT e.type, COALESCE(SUM(e.amount),0) as total
+    FROM trip_expenses e
+    JOIN business_trips t ON e.trip_id = t.id
+    LEFT JOIN users u ON t.user_id = u.id
+    ${baseWhere.replace('WHERE','WHERE')}
+    GROUP BY e.type
+  `).all(...p);
+
+  // 人员费用排行
+  const byUser = db.prepare(`
+    SELECT u.display_name, COUNT(DISTINCT t.id) as trip_count,
+           COALESCE(SUM(er.total_amount),0) as total_amount
+    FROM business_trips t
+    LEFT JOIN users u ON t.user_id = u.id
+    LEFT JOIN expense_reports er ON er.trip_id = t.id AND er.status='paid'
+    ${baseWhere}
+    GROUP BY t.user_id ORDER BY total_amount DESC LIMIT 10
+  `).all(...p);
+
+  // 小组费用对比
+  const byGroup = db.prepare(`
+    SELECT g.name as group_name, COUNT(DISTINCT t.id) as trip_count,
+           COALESCE(SUM(er.total_amount),0) as total_amount
+    FROM business_trips t
+    LEFT JOIN users u ON t.user_id = u.id
+    LEFT JOIN groups g ON u.group_id = g.id
+    LEFT JOIN expense_reports er ON er.trip_id = t.id AND er.status='paid'
+    WHERE t.status IN ('approved','completed')
+    GROUP BY u.group_id ORDER BY total_amount DESC
+  `).all();
+
+  // 重点客户预警：relationship_level in (vip,key)，超过60天未有出差互动
+  const alerts = db.prepare(`
+    SELECT p.id, p.name, p.company, p.current_company, p.relationship_level,
+           MAX(t.end_date) as last_trip_date,
+           CAST(julianday('now') - julianday(MAX(t.end_date)) AS INTEGER) as days_since
+    FROM persons p
+    LEFT JOIN business_trips t ON (
+      t.related_persons LIKE '%,' || p.id || ',%'
+      OR t.related_persons LIKE p.id || ',%'
+      OR t.related_persons LIKE '%,' || p.id
+      OR t.related_persons = CAST(p.id AS TEXT)
+    ) AND t.status IN ('approved','completed')
+    WHERE p.relationship_level IN ('vip','key')
+    GROUP BY p.id
+    HAVING last_trip_date IS NULL OR days_since > 60
+    ORDER BY days_since DESC
+    LIMIT 20
+  `).all();
+
+  res.json({ monthly, byType, byUser, byGroup, alerts });
 });
 
 if (process.env.NODE_ENV === 'production') {

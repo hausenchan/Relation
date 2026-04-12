@@ -126,3 +126,36 @@ export const companyDynamicsApi = {
   update: (id, data) => api.put(`/company_dynamics/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/company_dynamics/${id}`).then(r => r.data),
 };
+
+export const groupsApi = {
+  list: () => api.get('/groups').then(r => r.data),
+  create: (data) => api.post('/groups', data).then(r => r.data),
+  update: (id, data) => api.put(`/groups/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/groups/${id}`).then(r => r.data),
+};
+
+export const tripsApi = {
+  list: (params) => api.get('/trips', { params }).then(r => r.data),
+  get: (id) => api.get(`/trips/${id}`).then(r => r.data),
+  create: (data) => api.post('/trips', data).then(r => r.data),
+  update: (id, data) => api.put(`/trips/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/trips/${id}`).then(r => r.data),
+  submit: (id) => api.post(`/trips/${id}/submit`).then(r => r.data),
+  approve: (id, data) => api.post(`/trips/${id}/approve`, data).then(r => r.data),
+  complete: (id) => api.post(`/trips/${id}/complete`).then(r => r.data),
+  getExpenses: (id) => api.get(`/trips/${id}/expenses`).then(r => r.data),
+  addExpense: (id, data) => api.post(`/trips/${id}/expenses`, data).then(r => r.data),
+  getReport: (id) => api.get(`/trips/${id}/report`).then(r => r.data),
+  createReport: (id) => api.post(`/trips/${id}/report`).then(r => r.data),
+  stats: (params) => api.get('/trips/stats/summary', { params }).then(r => r.data),
+};
+
+export const expensesApi = {
+  update: (id, data) => api.put(`/trip_expenses/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/trip_expenses/${id}`).then(r => r.data),
+};
+
+export const reportsApi = {
+  submit: (id) => api.post(`/reports/${id}/submit`).then(r => r.data),
+  approve: (id, data) => api.post(`/reports/${id}/approve`, data).then(r => r.data),
+};
