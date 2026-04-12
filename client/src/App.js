@@ -4,7 +4,9 @@ import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Ty
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
   AppstoreOutlined, BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
-  GiftOutlined, CalendarOutlined, AuditOutlined, CarOutlined, RiseOutlined
+  GiftOutlined, CalendarOutlined, AuditOutlined, CarOutlined, RiseOutlined,
+  ShopOutlined, RocketOutlined, CodeOutlined, FundOutlined, ScheduleOutlined,
+  BulbOutlined, CheckSquareOutlined, ClusterOutlined, ApartmentOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -100,27 +102,58 @@ function AppLayout() {
   ].filter(Boolean);
 
   const menuItems = [
-    { key: 'crm', icon: <AppstoreOutlined />, label: '人脉管理助手', children: crmChildren },
-    canAccessModule('companies') && {
-      key: 'research', icon: <BankOutlined />, label: '公司研究助手',
-      children: [{ key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> }],
-    },
-    { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftChildren },
+    // ===== 中台 =====
     {
-      key: 'trip', icon: <CarOutlined />, label: '出差管理',
+      key: 'hub', icon: <ApartmentOutlined />, label: '中台',
       children: [
-        {
-          key: '/trips', icon: <CarOutlined />,
-          label: (
-            <span>
-              <Link to="/trips">出差申请</Link>
-              {pendingTripCount > 0 && <Badge count={pendingTripCount} size="small" style={{ marginLeft: 8 }} />}
-            </span>
-          ),
+        { key: 'crm', icon: <AppstoreOutlined />, label: '人脉管理助手', children: crmChildren },
+        canAccessModule('companies') && {
+          key: 'research', icon: <BankOutlined />, label: '公司研究助手',
+          children: [{ key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> }],
         },
-        { key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link> },
+      ].filter(Boolean),
+    },
+    // ===== 商务部 =====
+    {
+      key: 'biz', icon: <ShopOutlined />, label: '商务部',
+      children: [
+        { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftChildren },
+        {
+          key: 'trip', icon: <CarOutlined />, label: '出差管理',
+          children: [
+            {
+              key: '/trips', icon: <CarOutlined />,
+              label: (
+                <span>
+                  <Link to="/trips">出差申请</Link>
+                  {pendingTripCount > 0 && <Badge count={pendingTripCount} size="small" style={{ marginLeft: 8 }} />}
+                </span>
+              ),
+            },
+            { key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link> },
+          ],
+        },
       ],
     },
+    // ===== 产运部 =====
+    {
+      key: 'product', icon: <RocketOutlined />, label: '产运部',
+      children: [
+        { key: '/biz-strategy', icon: <FundOutlined />, label: <Link to="/biz-strategy">商业化策略管理</Link> },
+        { key: '/growth-goals', icon: <RiseOutlined />, label: <Link to="/growth-goals">增长目标管理</Link> },
+        { key: '/plans', icon: <ScheduleOutlined />, label: <Link to="/plans">计划管理</Link> },
+      ],
+    },
+    // ===== 研发部 =====
+    {
+      key: 'rd', icon: <CodeOutlined />, label: '研发部',
+      children: [
+        { key: '/requirements', icon: <BulbOutlined />, label: <Link to="/requirements">需求管理</Link> },
+        { key: '/weekly-tasks', icon: <CheckSquareOutlined />, label: <Link to="/weekly-tasks">周任务管理</Link> },
+        { key: '/infrastructure', icon: <ClusterOutlined />, label: <Link to="/infrastructure">基建管理</Link> },
+      ],
+    },
+    // ===== 系统管理 =====
     user?.role === 'admin' && {
       key: 'system', icon: <SettingOutlined />, label: '系统管理',
       children: [{ key: '/users', icon: <UserOutlined />, label: <Link to="/users">用户管理</Link> }],
@@ -159,7 +192,7 @@ function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={['crm', 'research', 'gift', 'trip', 'system']}
+          defaultOpenKeys={['hub', 'crm', 'research', 'biz', 'gift', 'trip', 'product', 'rd', 'system']}
           items={menuItems}
           style={{ marginTop: 8 }}
         />
