@@ -505,7 +505,7 @@ function PersonnelTab({ companyId, companyName, entityId }) {
 }
 
 // ==================== 产品 Tab ====================
-function ProductsTab({ companyId, entityId }) {
+function ProductsTab({ companyId, entityId, entities = [] }) {
   const [data, setData] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -520,12 +520,23 @@ function ProductsTab({ companyId, entityId }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const openAdd = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
+  const openAdd = () => {
+    setEditing(null);
+    form.resetFields();
+    // 如果是在某个主体下打开，预填主体
+    if (entityId != null) form.setFieldsValue({ entity_id: entityId });
+    setModalOpen(true);
+  };
   const openEdit = (r) => { setEditing(r); form.setFieldsValue(r); setModalOpen(true); };
 
   const handleSave = async () => {
     const values = await form.validateFields();
-    const payload = { ...values, company_id: companyId, entity_id: entityId ?? null };
+    // entity_id 优先从表单取，不传则保留 entityId（分主体视图）
+    const payload = {
+      ...values,
+      company_id: companyId,
+      entity_id: values.entity_id ?? entityId ?? null,
+    };
     if (editing) { await companyProductsApi.update(editing.id, payload); message.success('已更新'); }
     else { await companyProductsApi.create(payload); message.success('已添加'); }
     setModalOpen(false);
@@ -537,6 +548,9 @@ function ProductsTab({ companyId, entityId }) {
     load();
   };
 
+  // entity_id -> 主体名称 map
+  const entityNameMap = Object.fromEntries(entities.map(e => [e.id, e.name]));
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
@@ -545,39 +559,45 @@ function ProductsTab({ companyId, entityId }) {
 
       {data.length === 0 ? <Empty description="暂无产品信息" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
         <Row gutter={[12, 12]}>
-          {data.map(p => (
-            <Col span={12} key={p.id}>
-              <Card
-                size="small"
-                title={
-                  <Space>
-                    <AppstoreOutlined />
-                    <Text strong>{p.name}</Text>
-                    {p.category && <Tag>{p.category}</Tag>}
-                  </Space>
-                }
-                extra={
-                  <Space>
-                    <Tag color={productStatusMap[p.status]?.color}>{productStatusMap[p.status]?.label || p.status}</Tag>
-                    <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(p)} />
-                    <Popconfirm title="确认删除？" onConfirm={() => handleDelete(p.id)}>
-                      <Button size="small" danger icon={<DeleteOutlined />} />
-                    </Popconfirm>
-                  </Space>
-                }
-              >
-                {p.launch_date && <Text type="secondary" style={{ fontSize: 12 }}>上线：{p.launch_date}</Text>}
-                {p.description && <Paragraph style={{ marginTop: 6, marginBottom: 4, fontSize: 13 }}>{p.description}</Paragraph>}
-                {p.target_users && <div style={{ fontSize: 12 }}><Text type="secondary">目标用户：</Text>{p.target_users}</div>}
-                {p.core_features && (
-                  <div style={{ marginTop: 6 }}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>核心功能：</Text>
-                    <Text style={{ fontSize: 12 }}>{p.core_features}</Text>
-                  </div>
-                )}
-              </Card>
-            </Col>
-          ))}
+          {data.map(p => {
+            const entityName = p.entity_id ? entityNameMap[p.entity_id] : null;
+            return (
+              <Col span={12} key={p.id}>
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      <AppstoreOutlined />
+                      <Text strong>{p.name}</Text>
+                      {p.category && <Tag>{p.category}</Tag>}
+                    </Space>
+                  }
+                  extra={
+                    <Space>
+                      {entityName && (
+                        <Tag color="geekblue" style={{ fontSize: 11 }}>{entityName}</Tag>
+                      )}
+                      <Tag color={productStatusMap[p.status]?.color}>{productStatusMap[p.status]?.label || p.status}</Tag>
+                      <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(p)} />
+                      <Popconfirm title="确认删除？" onConfirm={() => handleDelete(p.id)}>
+                        <Button size="small" danger icon={<DeleteOutlined />} />
+                      </Popconfirm>
+                    </Space>
+                  }
+                >
+                  {p.launch_date && <Text type="secondary" style={{ fontSize: 12 }}>上线：{p.launch_date}</Text>}
+                  {p.description && <Paragraph style={{ marginTop: 6, marginBottom: 4, fontSize: 13 }}>{p.description}</Paragraph>}
+                  {p.target_users && <div style={{ fontSize: 12 }}><Text type="secondary">目标用户：</Text>{p.target_users}</div>}
+                  {p.core_features && (
+                    <div style={{ marginTop: 6 }}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>核心功能：</Text>
+                      <Text style={{ fontSize: 12 }}>{p.core_features}</Text>
+                    </div>
+                  )}
+                </Card>
+              </Col>
+            );
+          })}
         </Row>
       )}
 
@@ -609,6 +629,20 @@ function ProductsTab({ companyId, entityId }) {
                 </Select>
               </Form.Item>
             </Col>
+            {entities.length > 0 && (
+              <Col span={24}>
+                <Form.Item label="所属主体" name="entity_id">
+                  <Select allowClear placeholder="不选则不归属某个主体">
+                    {entities.map(e => (
+                      <Option key={e.id} value={e.id}>
+                        {e.name}
+                        {e.reg_name && <Text type="secondary" style={{ fontSize: 11 }}> · {e.reg_name}</Text>}
+                      </Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              </Col>
+            )}
             <Col span={12}>
               <Form.Item label="上线时间" name="launch_date">
                 <Input placeholder="如：2023-06" />
@@ -1220,7 +1254,7 @@ export default function Companies() {
                       {
                         key: 'products',
                         label: <span><AppstoreOutlined /> 全部产品</span>,
-                        children: <ProductsTab companyId={current.id} />,
+                        children: <ProductsTab companyId={current.id} entities={entities} />,
                       },
                       {
                         key: 'dynamics',
@@ -1290,6 +1324,7 @@ export default function Companies() {
                           <ProductsTab
                             companyId={current.id}
                             entityId={entity.id}
+                            entities={entities}
                           />
                         ),
                       },

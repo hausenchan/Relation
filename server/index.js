@@ -2,18 +2,56 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const Database = require('better-sqlite3');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
 
 app.use(cors());
 app.use(express.json());
+
+// 除登录接口外，所有 /api 路由都需要 JWT 鉴权
+app.use('/api', (req, res, next) => {
+  if (req.path === '/auth/login') return next();
+  return auth(req, res, next);
+});
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/build')));
 }
 
 const db = new Database(path.join(__dirname, 'data.db'));
+
+// =========== 用户表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    display_name TEXT,
+    role TEXT NOT NULL DEFAULT 'member',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_login DATETIME
+  );
+
+  CREATE TABLE IF NOT EXISTS user_module_perms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    module TEXT NOT NULL,
+    can_read INTEGER DEFAULT 1,
+    can_write INTEGER DEFAULT 0,
+    UNIQUE(user_id, module)
+  );
+`);
+
+// 初始化默认管理员账号（admin / admin123）
+const adminExists = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
+if (!adminExists) {
+  const hash = bcrypt.hashSync('admin123', 10);
+  db.prepare("INSERT INTO users (username, password_hash, display_name, role) VALUES ('admin', ?, '超级管理员', 'admin')").run(hash);
+}
 
 // =========== 建表 ===========
 db.exec(`
@@ -180,6 +218,9 @@ const existingCols = db.prepare("PRAGMA table_info(persons)").all().map(c => c.n
 if (!existingCols.includes('weight')) {
   db.exec("ALTER TABLE persons ADD COLUMN weight TEXT DEFAULT 'medium'");
 }
+if (!existingCols.includes('created_by')) {
+  db.exec("ALTER TABLE persons ADD COLUMN created_by INTEGER DEFAULT NULL");
+}
 
 const cpCols = db.prepare("PRAGMA table_info(company_personnel)").all().map(c => c.name);
 if (!cpCols.includes('manager_id')) {
@@ -194,11 +235,134 @@ if (!prCols.includes('entity_id')) {
   db.exec("ALTER TABLE company_products ADD COLUMN entity_id INTEGER DEFAULT NULL");
 }
 
+const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.name);
+if (!companyCols.includes('created_by')) {
+  db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");
+}
+
+// =========== JWT 鉴权中间件 ===========
+function auth(req, res, next) {
+  const header = req.headers['authorization'];
+  if (!header) return res.status(401).json({ error: '未登录' });
+  const token = header.replace('Bearer ', '');
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Token 无效或已过期' });
+  }
+}
+
+// 仅 admin 可访问
+function adminOnly(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '无权限' });
+  next();
+}
+
+// 只读校验（readonly/guest 不能写）
+function canWrite(req, res, next) {
+  if (req.user.role === 'readonly') return res.status(403).json({ error: '只读账号无法操作' });
+  if (req.user.role === 'guest') return res.status(403).json({ error: '访客无法操作' });
+  next();
+}
+
+// =========== 认证 API ===========
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: '请输入用户名和密码' });
+  const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    return res.status(401).json({ error: '用户名或密码错误' });
+  }
+  db.prepare("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
+  const token = jwt.sign(
+    { id: user.id, username: user.username, display_name: user.display_name, role: user.role },
+    JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+  // 查模块权限
+  const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
+  res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role, modulePerms } });
+});
+
+app.get('/api/auth/me', auth, (req, res) => {
+  const user = db.prepare('SELECT id, username, display_name, role, last_login FROM users WHERE id = ?').get(req.user.id);
+  const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(req.user.id);
+  res.json({ ...user, modulePerms });
+});
+
+app.post('/api/auth/logout', auth, (req, res) => {
+  res.json({ success: true });
+});
+
+app.put('/api/auth/password', auth, (req, res) => {
+  const { old_password, new_password } = req.body;
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  if (!bcrypt.compareSync(old_password, user.password_hash)) {
+    return res.status(400).json({ error: '旧密码错误' });
+  }
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.user.id);
+  res.json({ success: true });
+});
+
+// =========== 用户管理 API（admin only）===========
+app.get('/api/users', auth, adminOnly, (req, res) => {
+  const users = db.prepare('SELECT id, username, display_name, role, created_at, last_login FROM users ORDER BY created_at ASC').all();
+  const perms = db.prepare('SELECT * FROM user_module_perms').all();
+  res.json(users.map(u => ({ ...u, modulePerms: perms.filter(p => p.user_id === u.id) })));
+});
+
+app.post('/api/users', auth, adminOnly, (req, res) => {
+  const { username, password, display_name, role, modulePerms } = req.body;
+  if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
+  const hash = bcrypt.hashSync(password, 10);
+  try {
+    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role) VALUES (?,?,?,?)").run(username, hash, display_name, role || 'member');
+    if (role === 'guest' && modulePerms?.length) {
+      const ins = db.prepare("INSERT OR REPLACE INTO user_module_perms (user_id, module, can_read, can_write) VALUES (?,?,?,?)");
+      modulePerms.forEach(p => ins.run(r.lastInsertRowid, p.module, p.can_read ? 1 : 0, p.can_write ? 1 : 0));
+    }
+    res.json({ id: r.lastInsertRowid });
+  } catch {
+    res.status(400).json({ error: '用户名已存在' });
+  }
+});
+
+app.put('/api/users/:id', auth, adminOnly, (req, res) => {
+  const { display_name, role, password, modulePerms } = req.body;
+  if (password) {
+    db.prepare('UPDATE users SET display_name=?, role=?, password_hash=? WHERE id=?').run(display_name, role, bcrypt.hashSync(password, 10), req.params.id);
+  } else {
+    db.prepare('UPDATE users SET display_name=?, role=? WHERE id=?').run(display_name, role, req.params.id);
+  }
+  if (role === 'guest') {
+    db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
+    if (modulePerms?.length) {
+      const ins = db.prepare("INSERT OR REPLACE INTO user_module_perms (user_id, module, can_read, can_write) VALUES (?,?,?,?)");
+      modulePerms.forEach(p => ins.run(req.params.id, p.module, p.can_read ? 1 : 0, p.can_write ? 1 : 0));
+    }
+  }
+  res.json({ success: true });
+});
+
+app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
+  if (parseInt(req.params.id) === req.user.id) return res.status(400).json({ error: '不能删除自己' });
+  db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
 // =========== 人脉 API ===========
 app.get('/api/persons', (req, res) => {
   const { search, person_category, relation_type, potential_level, recruit_status, intent_level } = req.query;
   let query = 'SELECT * FROM persons WHERE 1=1';
   const params = [];
+
+  // member 只能看自己录入的
+  if (req.user.role === 'member') {
+    query += ' AND (created_by = ? OR created_by IS NULL)';
+    params.push(req.user.id);
+  }
 
   if (search) {
     query += ' AND (name LIKE ? OR company LIKE ? OR current_company LIKE ? OR phone LIKE ? OR tags LIKE ? OR skills LIKE ?)';
@@ -221,7 +385,7 @@ app.get('/api/persons/:id', (req, res) => {
   res.json(p);
 });
 
-app.post('/api/persons', (req, res) => {
+app.post('/api/persons', canWrite, (req, res) => {
   const {
     name, person_category, relation_types, city, company, position, industry,
     phone, email, wechat, birthday, address, tags, notes, resources, demands,
@@ -236,20 +400,25 @@ app.post('/api/persons', (req, res) => {
       relationship_level, client_status,
       talent_type, current_company, current_position, target_position,
       skills, experience_years, education, recruit_status, intent_level,
-      potential_level, expected_salary, source, heart, brain, mouth, hand, weight)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      potential_level, expected_salary, source, heart, brain, mouth, hand, weight, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     name, person_category || 'social', relation_types || '', city,
     company, position, industry, phone, email, wechat, birthday, address, tags, notes,
     resources, demands, relationship_level || 'normal', client_status || 'active',
     talent_type || 'external', current_company, current_position, target_position,
     skills, experience_years, education, recruit_status || 'potential', intent_level || 'low',
-    potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium'
+    potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium', req.user.id
   );
   res.json({ id: result.lastInsertRowid });
 });
 
-app.put('/api/persons/:id', (req, res) => {
+app.put('/api/persons/:id', canWrite, (req, res) => {
+  // member 只能改自己录入的
+  if (req.user.role === 'member') {
+    const p = db.prepare('SELECT created_by FROM persons WHERE id = ?').get(req.params.id);
+    if (p && p.created_by && p.created_by !== req.user.id) return res.status(403).json({ error: '无权修改他人录入的数据' });
+  }
   const {
     name, person_category, relation_types, city, company, position, industry,
     phone, email, wechat, birthday, address, tags, notes, resources, demands,
@@ -279,11 +448,14 @@ app.put('/api/persons/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/persons/:id', (req, res) => {
+app.delete('/api/persons/:id', canWrite, (req, res) => {
+  if (req.user.role === 'member') {
+    const p = db.prepare('SELECT created_by FROM persons WHERE id = ?').get(req.params.id);
+    if (p && p.created_by && p.created_by !== req.user.id) return res.status(403).json({ error: '无权删除他人录入的数据' });
+  }
   db.prepare('DELETE FROM persons WHERE id = ?').run(req.params.id);
   db.prepare('DELETE FROM interactions WHERE person_id = ?').run(req.params.id);
   db.prepare('DELETE FROM reminders WHERE person_id = ?').run(req.params.id);
-  // 解除公司人员的人脉库关联
   db.prepare('UPDATE company_personnel SET person_id = NULL WHERE person_id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -556,16 +728,16 @@ app.get('/api/companies/:id', (req, res) => {
   res.json(c);
 });
 
-app.post('/api/companies', (req, res) => {
+app.post('/api/companies', canWrite, (req, res) => {
   const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes } = req.body;
   const r = db.prepare(`
-    INSERT INTO companies (name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(name, category || 'competitor', industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes);
+    INSERT INTO companies (name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(name, category || 'competitor', industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, req.user.id);
   res.json({ id: r.lastInsertRowid });
 });
 
-app.put('/api/companies/:id', (req, res) => {
+app.put('/api/companies/:id', canWrite, (req, res) => {
   const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes } = req.body;
   db.prepare(`
     UPDATE companies SET name=?, category=?, industry=?, scale=?, founded_year=?, hq_city=?, website=?,
