@@ -215,11 +215,13 @@ if (migrated === 0) {
 
 // =========== 动态加列 ===========
 const existingCols = db.prepare("PRAGMA table_info(persons)").all().map(c => c.name);
-if (!existingCols.includes('weight')) {
-  db.exec("ALTER TABLE persons ADD COLUMN weight TEXT DEFAULT 'medium'");
-}
-if (!existingCols.includes('created_by')) {
-  db.exec("ALTER TABLE persons ADD COLUMN created_by INTEGER DEFAULT NULL");
+if (existingCols.length > 0) {
+  if (!existingCols.includes('weight')) {
+    db.exec("ALTER TABLE persons ADD COLUMN weight TEXT DEFAULT 'medium'");
+  }
+  if (!existingCols.includes('created_by')) {
+    db.exec("ALTER TABLE persons ADD COLUMN created_by INTEGER DEFAULT NULL");
+  }
 }
 
 const cpCols = db.prepare("PRAGMA table_info(company_personnel)").all().map(c => c.name);
@@ -238,7 +240,7 @@ if (prCols.length > 0 && !prCols.includes('entity_id')) {
 }
 
 const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.name);
-if (!companyCols.includes('created_by')) {
+if (companyCols.length > 0 && !companyCols.includes('created_by')) {
   db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");
 }
 
