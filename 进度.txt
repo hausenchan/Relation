@@ -1,0 +1,42 @@
+公司研究助手开发进度
+======================
+
+任务列表：
+✅ #4 设计并创建数据库表结构 - 已完成
+✅ #5 添加后端 API - 已完成
+✅ #7 接入路由和 API 层 - 已完成
+✅ #6 开发前端 Companies 页面 - 已完成
+
+已完成工作：
+1. 后端数据库表设计（4张表）
+   - companies: 公司主表
+   - company_personnel: 人员架构表（含中层管理者）
+   - company_products: 产品表（支持一个公司多个产品）
+   - company_dynamics: 动向记录表（人才动向/产品动向等）
+
+2. 后端 API 开发（完整 CRUD）
+   - 公司 API: 增删改查、筛选
+   - 人员 API: 增删改查、转为人脉库（/api/company_personnel/:id/to_person）
+   - 产品 API: 增删改查
+   - 动向 API: 增删改查、按类型筛选
+
+3. 前端基础设施
+   - API 层封装完成（companiesApi、companyPersonnelApi、companyProductsApi、companyDynamicsApi）
+   - App.js 菜单和路由配置完成（新增“公司研究助手”一级菜单）
+
+4. Companies 页面开发完成
+   - 公司列表 + 搜索/分类筛选
+   - 双击行进入详情
+   - 详情 Drawer，4个 Tab：
+     - 基本信息
+     - 人员架构（支持加入人脉库）
+     - 产品矩阵（多产品）
+     - 动向记录（时间线，支持人才/产品动向）
+   - 各 Tab 内均支持新增/编辑/删除
+
+5. 验证状态
+   - 后端已重启
+   - 前端 build 编译通过（Compiled successfully）
+
+当前状态：
+🎉 公司研究助手首版开发完成，可直接使用
