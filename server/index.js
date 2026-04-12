@@ -954,7 +954,7 @@ app.delete('/api/company_dynamics/:id', (req, res) => {
 });
 
 if (process.env.NODE_ENV === 'production') {
-  app.get('*', (req, res) => {
+  app.get('/{*path}', (req, res) => {
     res.sendFile(path.join(__dirname, '../client/build/index.html'));
   });
 }
