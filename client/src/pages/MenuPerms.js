@@ -9,74 +9,46 @@ const { Title, Text } = Typography;
 
 // 与 App.js 中完全一致的菜单树定义（不含 admin-only 的系统管理）
 const MENU_TREE = [
+  { title: '工作台', key: '/' },
   {
-    title: '商务部',
-    key: 'biz',
+    title: '目标与计划',
+    key: 'goal-plan',
     children: [
-      {
-        title: '人脉管理',
-        key: 'crm',
-        children: [
-          { title: '工作台', key: '/' },
-          { title: '人脉管理', key: '/persons' },
-          { title: '互动记录', key: '/interactions' },
-          { title: '提醒事项', key: '/reminders' },
-        ],
-      },
-      {
-        title: '商机管理',
-        key: 'opportunity',
-        children: [
-          { title: '商机管理', key: '/opportunities' },
-          { title: '待跟进任务', key: '/follow-up-tasks' },
-        ],
-      },
-      {
-        title: '商务任务管理',
-        key: 'tasks',
-        children: [
-          { title: '我的任务', key: '/my-tasks' },
-          { title: '任务看板', key: '/task-board' },
-        ],
-      },
-      { title: '预算管理', key: '/budgets' },
-      {
-        title: '送礼管理',
-        key: 'gift',
-        children: [
-          { title: '送礼计划', key: '/gift-plans' },
-          { title: '审核与记录', key: '/gift-review' },
-          { title: '礼品库', key: '/gifts' },
-        ],
-      },
-      {
-        title: '出差管理',
-        key: 'trip',
-        children: [
-          { title: '出差申请', key: '/trips' },
-          { title: '费用统计', key: '/trip-stats' },
-        ],
-      },
-      { title: '公司研究', key: '/companies' },
+      { title: '目标管理', key: '/goals' },
+      { title: '周报管理', key: '/weekly-reports' },
     ],
   },
   {
-    title: '产运部',
-    key: 'product',
+    title: '业务流转',
+    key: 'biz-flow',
     children: [
-      { title: '公司研究', key: '/companies' },
-      { title: '商业化策略管理', key: '/biz-strategy' },
-      { title: '增长目标管理', key: '/growth-goals' },
-      { title: '计划管理', key: '/plans' },
+      { title: '线索池', key: '/leads' },
+      { title: '策略管理', key: '/strategies' },
+      { title: '研发任务', key: '/dev-tasks' },
     ],
   },
   {
-    title: '研发部',
-    key: 'rd',
+    title: '商务协作',
+    key: 'biz-coop',
     children: [
-      { title: '需求管理', key: '/requirements' },
-      { title: '周任务管理', key: '/weekly-tasks' },
-      { title: '基建管理', key: '/infrastructure' },
+      { title: '人脉管理', key: '/persons' },
+      { title: '互动记录', key: '/interactions' },
+      { title: '提醒事项', key: '/reminders' },
+      { title: '公司研究', key: '/companies' },
+      { title: '商机管理', key: '/opportunities' },
+      { title: '待跟进任务', key: '/follow-up-tasks' },
+    ],
+  },
+  {
+    title: '团队管理',
+    key: 'team-mgmt',
+    children: [
+      { title: '任务看板', key: '/task-board' },
+      { title: '送礼计划', key: '/gift-plans' },
+      { title: '审核与记录', key: '/gift-review' },
+      { title: '礼品库', key: '/gifts' },
+      { title: '出差申请', key: '/trips' },
+      { title: '费用统计', key: '/trip-stats' },
     ],
   },
 ];

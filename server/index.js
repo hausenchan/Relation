@@ -12,6 +12,19 @@ const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
 app.use(cors());
 app.use(express.json());
 
+// JWT 鉴权中间件
+function auth(req, res, next) {
+  const header = req.headers['authorization'];
+  if (!header) return res.status(401).json({ error: '未登录' });
+  const token = header.replace('Bearer ', '');
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    next();
+  } catch {
+    res.status(401).json({ error: 'Token 无效或已过期' });
+  }
+}
+
 // 除登录接口外，所有 /api 路由都需要 JWT 鉴权
 app.use('/api', (req, res, next) => {
   if (req.path === '/auth/login') return next();
@@ -603,19 +616,6 @@ app.put('/api/gift_records/:id', (req, res) => {
   updateAndLog();
   res.json({ success: true });
 });
-
-// =========== JWT 鉴权中间件 ===========
-function auth(req, res, next) {
-  const header = req.headers['authorization'];
-  if (!header) return res.status(401).json({ error: '未登录' });
-  const token = header.replace('Bearer ', '');
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-    next();
-  } catch {
-    res.status(401).json({ error: 'Token 无效或已过期' });
-  }
-}
 
 // 仅 admin 可访问
 function adminOnly(req, res, next) {
@@ -2403,6 +2403,694 @@ app.get('/api/trips/stats/summary', (req, res) => {
   `).all();
 
   res.json({ monthly, byType, byUser, byGroup, alerts });
+});
+
+// =========== 目标管理 API ===========
+// 获取目标列表
+app.get('/api/goals', (req, res) => {
+  const { department, quarter, status } = req.query;
+  const { id: userId, role } = req.user;
+
+  let q = 'SELECT g.*, u.display_name as owner_name FROM goals g LEFT JOIN users u ON g.owner_id = u.id WHERE 1=1';
+  const params = [];
+
+  // 角色过滤：member 只看自己的，leader 看本组的，sales_director 看辖区的，admin 看全部
+  if (role === 'member') {
+    q += ' AND g.owner_id = ?';
+    params.push(userId);
+  } else if (role === 'leader') {
+    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
+    if (myUser?.team_id) {
+      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+      q += ` AND g.owner_id IN (${members.map(() => '?').join(',')})`;
+      params.push(...members);
+    } else {
+      q += ' AND g.owner_id = ?';
+      params.push(userId);
+    }
+  } else if (role === 'sales_director') {
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
+    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
+    if (allTeamIds.length > 0) {
+      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+      q += ` AND g.owner_id IN (${members.map(() => '?').join(',')})`;
+      params.push(...members);
+    }
+  }
+
+  if (department) { q += ' AND g.department = ?'; params.push(department); }
+  if (quarter) { q += ' AND g.quarter = ?'; params.push(quarter); }
+  if (status) { q += ' AND g.status = ?'; params.push(status); }
+
+  q += ' ORDER BY g.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+// 创建目标
+app.post('/api/goals', (req, res) => {
+  const { title, description, owner_id, department, quarter, deadline } = req.body;
+  if (!title || !owner_id) return res.status(400).json({ error: '标题和负责人必填' });
+
+  const result = db.prepare(`
+    INSERT INTO goals (title, description, owner_id, department, quarter, deadline)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(title, description, owner_id, department, quarter, deadline);
+
+  res.json({ id: result.lastInsertRowid });
+});
+
+// 更新目标
+app.put('/api/goals/:id', (req, res) => {
+  const { id } = req.params;
+  const { title, description, owner_id, department, quarter, deadline, progress, status } = req.body;
+
+  db.prepare(`
+    UPDATE goals SET
+      title = COALESCE(?, title),
+      description = COALESCE(?, description),
+      owner_id = COALESCE(?, owner_id),
+      department = COALESCE(?, department),
+      quarter = COALESCE(?, quarter),
+      deadline = COALESCE(?, deadline),
+      progress = COALESCE(?, progress),
+      status = COALESCE(?, status),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(title, description, owner_id, department, quarter, deadline, progress, status, id);
+
+  res.json({ success: true });
+});
+
+// 删除目标
+app.delete('/api/goals/:id', (req, res) => {
+  const { id } = req.params;
+  db.prepare('DELETE FROM goals WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// =========== 周报管理 API ===========
+// 获取周报列表
+app.get('/api/weekly-reports', (req, res) => {
+  const { week_start, department } = req.query;
+  const { id: userId, role } = req.user;
+
+  let q = `
+    SELECT wr.*, u.display_name as user_name, u.department, u.role as user_role
+    FROM weekly_reports wr
+    LEFT JOIN users u ON wr.user_id = u.id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  // 角色过滤
+  if (role === 'member') {
+    // 普通成员只能看自己的
+    q += ' AND wr.user_id = ?';
+    params.push(userId);
+  } else if (role === 'leader') {
+    // 组长看本组成员的周报
+    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
+    if (myUser?.team_id) {
+      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+      q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
+      params.push(...members);
+    } else {
+      q += ' AND wr.user_id = ?';
+      params.push(userId);
+    }
+  } else if (role === 'sales_director') {
+    // 总监看辖区内的周报
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
+    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
+    if (allTeamIds.length > 0) {
+      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+      q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
+      params.push(...members);
+    }
+  }
+  // admin 看全部，不加过滤
+
+  if (week_start) { q += ' AND wr.week_start = ?'; params.push(week_start); }
+  if (department) { q += ' AND u.department = ?'; params.push(department); }
+
+  q += ' ORDER BY wr.week_start DESC, u.display_name ASC';
+  res.json(db.prepare(q).all(...params));
+});
+
+// 创建或更新周报
+app.post('/api/weekly-reports', (req, res) => {
+  const { user_id, week_start, week_end, completed, next_week_plan, risks } = req.body;
+  const { id: currentUserId, role } = req.user;
+
+  if (!user_id || !week_start || !week_end) {
+    return res.status(400).json({ error: '用户、周起止日期必填' });
+  }
+
+  // 权限检查：只能写自己的周报，除非是 admin
+  if (role !== 'admin' && user_id !== currentUserId) {
+    return res.status(403).json({ error: '无权限' });
+  }
+
+  // 检查是否已存在
+  const existing = db.prepare('SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?').get(user_id, week_start);
+
+  if (existing) {
+    // 更新
+    db.prepare(`
+      UPDATE weekly_reports SET
+        week_end = ?,
+        completed = ?,
+        next_week_plan = ?,
+        risks = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(week_end, completed, next_week_plan, risks, existing.id);
+    res.json({ id: existing.id, updated: true });
+  } else {
+    // 新建
+    const result = db.prepare(`
+      INSERT INTO weekly_reports (user_id, week_start, week_end, completed, next_week_plan, risks)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(user_id, week_start, week_end, completed, next_week_plan, risks);
+    res.json({ id: result.lastInsertRowid, created: true });
+  }
+});
+
+// 删除周报
+app.delete('/api/weekly-reports/:id', (req, res) => {
+  const { id } = req.params;
+  const { role } = req.user;
+
+  if (role !== 'admin') {
+    return res.status(403).json({ error: '仅管理员可删除' });
+  }
+
+  db.prepare('DELETE FROM weekly_reports WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// 获取需要写周报的用户列表
+app.get('/api/weekly-reports/writers', (req, res) => {
+  const { role } = req.user;
+
+  if (role !== 'admin') {
+    return res.status(403).json({ error: '仅管理员可访问' });
+  }
+
+  const writers = db.prepare(`
+    SELECT id, username, display_name, department, role, need_weekly_report
+    FROM users
+    WHERE role IN ('leader', 'sales_director') OR need_weekly_report = 1
+    ORDER BY department, display_name
+  `).all();
+
+  res.json(writers);
+});
+
+// 更新用户周报权限（老板指定普通成员写周报）
+app.put('/api/users/:id/weekly-report', (req, res) => {
+  const { id } = req.params;
+  const { need_weekly_report } = req.body;
+  const { role } = req.user;
+
+  if (role !== 'admin') {
+    return res.status(403).json({ error: '仅管理员可操作' });
+  }
+
+  db.prepare('UPDATE users SET need_weekly_report = ? WHERE id = ?').run(need_weekly_report ? 1 : 0, id);
+  res.json({ success: true });
+});
+
+// =========== 线索池 API ===========
+// 获取线索列表
+app.get('/api/leads', (req, res) => {
+  const { status, assignee_id, priority, source_type } = req.query;
+  const { id: userId, role } = req.user;
+
+  let q = 'SELECT l.*, u.display_name as assignee_name, c.display_name as creator_name FROM leads l LEFT JOIN users u ON l.assignee_id = u.id LEFT JOIN users c ON l.created_by = c.id WHERE 1=1';
+  const params = [];
+
+  // 角色过滤
+  if (role === 'member') {
+    q += ' AND (l.assignee_id = ? OR l.created_by = ?)';
+    params.push(userId, userId);
+  } else if (role === 'leader') {
+    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
+    if (myUser?.team_id) {
+      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+      q += ` AND (l.assignee_id IN (${members.map(() => '?').join(',')}) OR l.created_by IN (${members.map(() => '?').join(',')}))`;
+      params.push(...members, ...members);
+    } else {
+      q += ' AND (l.assignee_id = ? OR l.created_by = ?)';
+      params.push(userId, userId);
+    }
+  } else if (role === 'sales_director') {
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
+    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
+    if (allTeamIds.length > 0) {
+      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+      q += ` AND (l.assignee_id IN (${members.map(() => '?').join(',')}) OR l.created_by IN (${members.map(() => '?').join(',')}))`;
+      params.push(...members, ...members);
+    }
+  }
+
+  if (status) { q += ' AND l.status = ?'; params.push(status); }
+  if (assignee_id) { q += ' AND l.assignee_id = ?'; params.push(assignee_id); }
+  if (priority) { q += ' AND l.priority = ?'; params.push(priority); }
+  if (source_type) { q += ' AND l.source_type = ?'; params.push(source_type); }
+
+  q += ' ORDER BY l.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+// 获取单个线索详情（含关联的策略和研发任务）
+app.get('/api/leads/:id', (req, res) => {
+  const { id } = req.params;
+
+  const lead = db.prepare(`
+    SELECT l.*, u.display_name as assignee_name, c.display_name as creator_name
+    FROM leads l
+    LEFT JOIN users u ON l.assignee_id = u.id
+    LEFT JOIN users c ON l.created_by = c.id
+    WHERE l.id = ?
+  `).get(id);
+
+  if (!lead) return res.status(404).json({ error: '线索不存在' });
+
+  // 获取关联的策略
+  const strategies = db.prepare(`
+    SELECT s.*, u.display_name as owner_name
+    FROM strategies s
+    LEFT JOIN users u ON s.owner_id = u.id
+    WHERE s.source_type = 'lead' AND s.source_id = ?
+    ORDER BY s.created_at DESC
+  `).all(id);
+
+  // 获取关联的研发任务
+  const devTasks = db.prepare(`
+    SELECT dt.*, u.display_name as assignee_name
+    FROM dev_tasks dt
+    LEFT JOIN users u ON dt.assignee_id = u.id
+    WHERE dt.source_type = 'lead' AND dt.source_id = ?
+    ORDER BY dt.created_at DESC
+  `).all(id);
+
+  res.json({ ...lead, strategies, devTasks });
+});
+
+// 创建线索
+app.post('/api/leads', (req, res) => {
+  const { title, source, source_type, contact_person, contact_company, contact_info, description, assignee_id, priority } = req.body;
+  const { id: userId } = req.user;
+
+  if (!title) return res.status(400).json({ error: '线索标题必填' });
+
+  const result = db.prepare(`
+    INSERT INTO leads (title, source, source_type, contact_person, contact_company, contact_info, description, assignee_id, priority, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, assignee_id, priority, userId);
+
+  // 如果指定了负责人，发送通知
+  if (assignee_id && assignee_id !== userId) {
+    createNotification(
+      assignee_id,
+      'lead_assigned',
+      '新线索分配',
+      `您被分配了新线索：${title}`,
+      `/leads`
+    );
+  }
+
+  res.json({ id: result.lastInsertRowid });
+});
+
+// 更新线索
+app.put('/api/leads/:id', (req, res) => {
+  const { id } = req.params;
+  const { title, source, source_type, contact_person, contact_company, contact_info, description, status, assignee_id, priority } = req.body;
+
+  db.prepare(`
+    UPDATE leads SET
+      title = COALESCE(?, title),
+      source = COALESCE(?, source),
+      source_type = COALESCE(?, source_type),
+      contact_person = COALESCE(?, contact_person),
+      contact_company = COALESCE(?, contact_company),
+      contact_info = COALESCE(?, contact_info),
+      description = COALESCE(?, description),
+      status = COALESCE(?, status),
+      assignee_id = COALESCE(?, assignee_id),
+      priority = COALESCE(?, priority),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, status, assignee_id, priority, id);
+
+  res.json({ success: true });
+});
+
+// 删除线索
+app.delete('/api/leads/:id', (req, res) => {
+  const { id } = req.params;
+  db.prepare('DELETE FROM leads WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// =========== 策略管理 API ===========
+// 获取策略列表
+app.get('/api/strategies', (req, res) => {
+  const { dimension, role_type, status } = req.query;
+  const { id: userId, role } = req.user;
+
+  let q = `
+    SELECT s.*, u.display_name as owner_name,
+      CASE
+        WHEN s.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = s.source_id)
+        ELSE NULL
+      END as source_title
+    FROM strategies s
+    LEFT JOIN users u ON s.owner_id = u.id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  // 角色过滤
+  if (role === 'member') {
+    q += ' AND s.owner_id = ?';
+    params.push(userId);
+  } else if (role === 'leader') {
+    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
+    if (myUser?.team_id) {
+      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+      q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
+      params.push(...members);
+    } else {
+      q += ' AND s.owner_id = ?';
+      params.push(userId);
+    }
+  } else if (role === 'sales_director') {
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
+    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
+    if (allTeamIds.length > 0) {
+      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+      q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
+      params.push(...members);
+    }
+  }
+
+  if (dimension) { q += ' AND s.dimension = ?'; params.push(dimension); }
+  if (role_type) { q += ' AND s.role_type = ?'; params.push(role_type); }
+  if (status) { q += ' AND s.status = ?'; params.push(status); }
+
+  q += ' ORDER BY s.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+// 获取单个策略详情（含关联的研发任务）
+app.get('/api/strategies/:id', (req, res) => {
+  const { id } = req.params;
+
+  const strategy = db.prepare(`
+    SELECT s.*, u.display_name as owner_name,
+      CASE
+        WHEN s.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = s.source_id)
+        ELSE NULL
+      END as source_title
+    FROM strategies s
+    LEFT JOIN users u ON s.owner_id = u.id
+    WHERE s.id = ?
+  `).get(id);
+
+  if (!strategy) return res.status(404).json({ error: '策略不存在' });
+
+  // 获取关联的研发任务
+  const devTasks = db.prepare(`
+    SELECT dt.*, u.display_name as assignee_name
+    FROM dev_tasks dt
+    LEFT JOIN users u ON dt.assignee_id = u.id
+    WHERE dt.source_type = 'strategy' AND dt.source_id = ?
+    ORDER BY dt.created_at DESC
+  `).all(id);
+
+  res.json({ ...strategy, devTasks });
+});
+
+// 创建策略
+app.post('/api/strategies', (req, res) => {
+  const { title, dimension, role_type, description, owner_id, source_type, source_id } = req.body;
+  if (!title || !dimension) return res.status(400).json({ error: '标题和维度必填' });
+
+  const result = db.prepare(`
+    INSERT INTO strategies (title, dimension, role_type, description, owner_id, source_type, source_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(title, dimension, role_type, description, owner_id, source_type, source_id);
+
+  res.json({ id: result.lastInsertRowid });
+});
+
+// 更新策略
+app.put('/api/strategies/:id', (req, res) => {
+  const { id } = req.params;
+  const { title, dimension, role_type, description, owner_id, status, source_type, source_id } = req.body;
+
+  db.prepare(`
+    UPDATE strategies SET
+      title = COALESCE(?, title),
+      dimension = COALESCE(?, dimension),
+      role_type = COALESCE(?, role_type),
+      description = COALESCE(?, description),
+      owner_id = COALESCE(?, owner_id),
+      status = COALESCE(?, status),
+      source_type = COALESCE(?, source_type),
+      source_id = COALESCE(?, source_id),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(title, dimension, role_type, description, owner_id, status, source_type, source_id, id);
+
+  res.json({ success: true });
+});
+
+// 删除策略
+app.delete('/api/strategies/:id', (req, res) => {
+  const { id } = req.params;
+  db.prepare('DELETE FROM strategies WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// =========== 研发任务 API ===========
+// 获取研发任务列表
+app.get('/api/dev-tasks', (req, res) => {
+  const { status, assignee_id, priority, source_type } = req.query;
+  const { id: userId, role } = req.user;
+
+  let q = `
+    SELECT dt.*,
+      u.display_name as assignee_name,
+      c.display_name as creator_name,
+      CASE
+        WHEN dt.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = dt.source_id)
+        WHEN dt.source_type = 'strategy' THEN (SELECT title FROM strategies WHERE id = dt.source_id)
+        ELSE NULL
+      END as source_title
+    FROM dev_tasks dt
+    LEFT JOIN users u ON dt.assignee_id = u.id
+    LEFT JOIN users c ON dt.created_by = c.id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  // 角色过滤
+  if (role === 'member') {
+    q += ' AND (dt.assignee_id = ? OR dt.created_by = ?)';
+    params.push(userId, userId);
+  } else if (role === 'leader') {
+    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
+    if (myUser?.team_id) {
+      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+      q += ` AND (dt.assignee_id IN (${members.map(() => '?').join(',')}) OR dt.created_by IN (${members.map(() => '?').join(',')}))`;
+      params.push(...members, ...members);
+    } else {
+      q += ' AND (dt.assignee_id = ? OR dt.created_by = ?)';
+      params.push(userId, userId);
+    }
+  } else if (role === 'sales_director') {
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
+    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
+    if (allTeamIds.length > 0) {
+      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+      q += ` AND (dt.assignee_id IN (${members.map(() => '?').join(',')}) OR dt.created_by IN (${members.map(() => '?').join(',')}))`;
+      params.push(...members, ...members);
+    }
+  }
+
+  if (status) { q += ' AND dt.status = ?'; params.push(status); }
+  if (assignee_id) { q += ' AND dt.assignee_id = ?'; params.push(assignee_id); }
+  if (priority) { q += ' AND dt.priority = ?'; params.push(priority); }
+  if (source_type) { q += ' AND dt.source_type = ?'; params.push(source_type); }
+
+  q += ' ORDER BY dt.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+// 创建研发任务
+app.post('/api/dev-tasks', (req, res) => {
+  const { title, description, source_type, source_id, assignee_id, priority, estimated_hours, start_date, due_date } = req.body;
+  const { id: userId } = req.user;
+
+  if (!title) return res.status(400).json({ error: '任务标题必填' });
+
+  const result = db.prepare(`
+    INSERT INTO dev_tasks (title, description, source_type, source_id, assignee_id, priority, estimated_hours, start_date, due_date, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, description, source_type, source_id, assignee_id, priority, estimated_hours, start_date, due_date, userId);
+
+  // 如果指定了负责人，发送通知
+  if (assignee_id && assignee_id !== userId) {
+    createNotification(
+      assignee_id,
+      'dev_task_assigned',
+      '新研发任务分配',
+      `您被分配了新研发任务：${title}`,
+      `/dev-tasks`
+    );
+  }
+
+  res.json({ id: result.lastInsertRowid });
+});
+
+// 更新研发任务
+app.put('/api/dev-tasks/:id', (req, res) => {
+  const { id } = req.params;
+  const { title, description, source_type, source_id, assignee_id, status, priority, estimated_hours, actual_hours, start_date, due_date, completed_date } = req.body;
+  const { id: userId } = req.user;
+
+  // 获取旧任务信息
+  const oldTask = db.prepare('SELECT * FROM dev_tasks WHERE id = ?').get(id);
+
+  db.prepare(`
+    UPDATE dev_tasks SET
+      title = COALESCE(?, title),
+      description = COALESCE(?, description),
+      source_type = COALESCE(?, source_type),
+      source_id = COALESCE(?, source_id),
+      assignee_id = COALESCE(?, assignee_id),
+      status = COALESCE(?, status),
+      priority = COALESCE(?, priority),
+      estimated_hours = COALESCE(?, estimated_hours),
+      actual_hours = COALESCE(?, actual_hours),
+      start_date = COALESCE(?, start_date),
+      due_date = COALESCE(?, due_date),
+      completed_date = COALESCE(?, completed_date),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(title, description, source_type, source_id, assignee_id, status, priority, estimated_hours, actual_hours, start_date, due_date, completed_date, id);
+
+  // 如果负责人变更，通知新负责人
+  if (assignee_id && assignee_id !== oldTask.assignee_id && assignee_id !== userId) {
+    createNotification(
+      assignee_id,
+      'dev_task_assigned',
+      '研发任务重新分配',
+      `您被分配了研发任务：${oldTask.title}`,
+      `/dev-tasks`
+    );
+  }
+
+  // 如果任务完成，通知创建人
+  if (status === 'completed' && oldTask.status !== 'completed' && oldTask.created_by && oldTask.created_by !== userId) {
+    createNotification(
+      oldTask.created_by,
+      'dev_task_completed',
+      '研发任务已完成',
+      `研发任务已完成：${oldTask.title}`,
+      `/dev-tasks`
+    );
+  }
+
+  res.json({ success: true });
+});
+
+// 删除研发任务
+app.delete('/api/dev-tasks/:id', (req, res) => {
+  const { id } = req.params;
+  db.prepare('DELETE FROM dev_tasks WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// 获取可关联的线索列表（用于研发任务来源选择）
+app.get('/api/leads/simple', (req, res) => {
+  const leads = db.prepare('SELECT id, title, status FROM leads WHERE status != ? ORDER BY created_at DESC LIMIT 100').all('closed');
+  res.json(leads);
+});
+
+// 获取可关联的策略列表（用于研发任务来源选择）
+app.get('/api/strategies/simple', (req, res) => {
+  const strategies = db.prepare('SELECT id, title, dimension FROM strategies WHERE status = ? ORDER BY created_at DESC LIMIT 100').all('active');
+  res.json(strategies);
+});
+
+// =========== 通知系统 API ===========
+// 创建通知（内部函数）
+function createNotification(userId, type, title, content, link) {
+  db.prepare(`
+    INSERT INTO notifications (user_id, type, title, content, link)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(userId, type, title, content, link);
+}
+
+// 获取当前用户的通知列表
+app.get('/api/notifications', (req, res) => {
+  const { id: userId } = req.user;
+  const { is_read, limit = 50 } = req.query;
+
+  let q = 'SELECT * FROM notifications WHERE user_id = ?';
+  const params = [userId];
+
+  if (is_read !== undefined) {
+    q += ' AND is_read = ?';
+    params.push(is_read === 'true' ? 1 : 0);
+  }
+
+  q += ' ORDER BY created_at DESC LIMIT ?';
+  params.push(parseInt(limit));
+
+  res.json(db.prepare(q).all(...params));
+});
+
+// 获取未读通知数量
+app.get('/api/notifications/unread-count', (req, res) => {
+  const { id: userId } = req.user;
+  const result = db.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').get(userId);
+  res.json({ count: result.count });
+});
+
+// 标记通知为已读
+app.put('/api/notifications/:id/read', (req, res) => {
+  const { id } = req.params;
+  const { id: userId } = req.user;
+
+  db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?').run(id, userId);
+  res.json({ success: true });
+});
+
+// 标记所有通知为已读
+app.put('/api/notifications/read-all', (req, res) => {
+  const { id: userId } = req.user;
+  db.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0').run(userId);
+  res.json({ success: true });
+});
+
+// 删除通知
+app.delete('/api/notifications/:id', (req, res) => {
+  const { id } = req.params;
+  const { id: userId } = req.user;
+
+  db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?').run(id, userId);
+  res.json({ success: true });
 });
 
 // SPA fallback - 必须放在所有 API 路由之后

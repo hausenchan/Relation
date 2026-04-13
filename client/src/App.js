@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
-import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Typography, Modal, Form, Input, message } from 'antd';
+import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
-  AppstoreOutlined, BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
+  BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
   GiftOutlined, CalendarOutlined, AuditOutlined, CarOutlined, RiseOutlined,
-  ShopOutlined, RocketOutlined, CodeOutlined, FundOutlined, ScheduleOutlined,
-  BulbOutlined, CheckSquareOutlined, ClusterOutlined, ApartmentOutlined, LockOutlined,
-  ThunderboltOutlined, MenuOutlined
+  ApartmentOutlined, LockOutlined, ThunderboltOutlined, MenuOutlined,
+  CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
+  BranchesOutlined, SolutionOutlined, ToolOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
+
+const { Header, Sider, Content } = Layout;
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Persons from './pages/Persons';
@@ -29,10 +31,24 @@ import Opportunities from './pages/Opportunities';
 import FollowUpTasks from './pages/FollowUpTasks';
 import MyTasks from './pages/MyTasks';
 import TaskBoard from './pages/TaskBoard';
-import Budgets from './pages/Budgets';
+import Goals from './pages/Goals';
+import WeeklyReports from './pages/WeeklyReports';
+import Leads from './pages/Leads';
+import Strategies from './pages/Strategies';
+import DevTasks from './pages/DevTasks';
+import NotificationBell from './components/NotificationBell';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
 
-const { Sider, Content } = Layout;
+// 占位页面（待开发模块）
+function ComingSoon({ title }) {
+  return (
+    <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
+      <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
+      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>{title}</div>
+      <div>该模块正在开发中，敬请期待</div>
+    </div>
+  );
+}
 
 const roleLabel = { admin: '管理员', leader: '组长', member: '成员', readonly: '只读', guest: '访客', sales_director: '商务总监' };
 const roleColor = { admin: '#ff4d4f', leader: '#fa541c', member: '#1677ff', readonly: '#888', guest: '#fa8c16', sales_director: '#722ed1' };
@@ -64,6 +80,7 @@ function AppLayout() {
   const [pwdModalOpen, setPwdModalOpen] = useState(false);
   const [pwdForm] = Form.useForm();
   const [pwdLoading, setPwdLoading] = useState(false);
+  const menuScrollRef = React.useRef(null);
 
   useEffect(() => {
     if (!user) return;
@@ -102,11 +119,27 @@ function AppLayout() {
 
   const selectedKey = '/' + location.pathname.split('/')[1];
 
-  // 人脉管理（商务部专属）
-  const crmChildren = [
-    canAccessMenu('/') && { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
-    canAccessMenu('/persons') && canAccessModule('persons') && { key: '/persons', icon: <TeamOutlined />, label: <Link to="/persons">人脉管理</Link> },
-    canAccessMenu('/interactions') && canAccessModule('interactions') && { key: '/interactions', icon: <MessageOutlined />, label: <Link to="/interactions">互动记录</Link> },
+  // ── 目标与计划 ──────────────────────────────────────────────
+  const goalChildren = [
+    { key: '/goals', icon: <AimOutlined />, label: <Link to="/goals">目标管理</Link> },
+    { key: '/weekly-reports', icon: <FileTextOutlined />, label: <Link to="/weekly-reports">周报管理</Link> },
+  ];
+
+  // ── 业务流转 ────────────────────────────────────────────────
+  const bizFlowChildren = [
+    { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">线索池</Link> },
+    { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略管理</Link> },
+    { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">研发任务</Link> },
+  ];
+
+  // ── 商务协作 ────────────────────────────────────────────────
+  const bizCoopChildren = [
+    canAccessMenu('/persons') && canAccessModule('persons') && {
+      key: '/persons', icon: <TeamOutlined />, label: <Link to="/persons">人脉管理</Link>,
+    },
+    canAccessMenu('/interactions') && canAccessModule('interactions') && {
+      key: '/interactions', icon: <MessageOutlined />, label: <Link to="/interactions">互动记录</Link>,
+    },
     canAccessMenu('/reminders') && canAccessModule('reminders') && {
       key: '/reminders', icon: <BellOutlined />,
       label: (
@@ -116,11 +149,12 @@ function AppLayout() {
         </span>
       ),
     },
-  ].filter(Boolean);
-
-  // 商机管理（商务部专属）
-  const opportunityChildren = [
-    canAccessMenu('/opportunities') && { key: '/opportunities', icon: <RiseOutlined />, label: <Link to="/opportunities">商机管理</Link> },
+    canAccessMenu('/companies') && canAccessModule('companies') && {
+      key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link>,
+    },
+    canAccessMenu('/opportunities') && {
+      key: '/opportunities', icon: <RiseOutlined />, label: <Link to="/opportunities">商机管理</Link>,
+    },
     {
       key: '/follow-up-tasks', icon: <ThunderboltOutlined />,
       label: (
@@ -132,26 +166,15 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
-  // 商务任务管理（商务部专属）
-  const taskChildren = [
-    {
-      key: '/my-tasks', icon: <CheckSquareOutlined />,
-      label: (
-        <span>
-          <Link to="/my-tasks">我的任务</Link>
-          {todayTaskCount > 0 && <Badge count={todayTaskCount} size="small" style={{ marginLeft: 8 }} />}
-        </span>
-      ),
-    },
+  // ── 团队管理 ────────────────────────────────────────────────
+  const teamChildren = [
     ['leader', 'sales_director', 'admin'].includes(user?.role) && {
-      key: '/task-board', icon: <ApartmentOutlined />,
-      label: <Link to="/task-board">任务看板</Link>,
+      key: '/task-board', icon: <ApartmentOutlined />, label: <Link to="/task-board">任务看板</Link>,
     },
-  ].filter(Boolean);
-
-  // 送礼管理（商务部专属）
-  const giftChildren = [
-    canAccessMenu('/gift-plans') && { key: '/gift-plans', icon: <CalendarOutlined />, label: <Link to="/gift-plans">送礼计划</Link> },
+    // 送礼管理子菜单
+    canAccessMenu('/gift-plans') && {
+      key: '/gift-plans', icon: <CalendarOutlined />, label: <Link to="/gift-plans">送礼计划</Link>,
+    },
     canAccessMenu('/gift-review') && {
       key: '/gift-review', icon: <AuditOutlined />,
       label: (
@@ -161,11 +184,10 @@ function AppLayout() {
         </span>
       ),
     },
-    canAccessMenu('/gifts') && (user?.role === 'admin') && { key: '/gifts', icon: <GiftOutlined />, label: <Link to="/gifts">礼品库</Link> },
-  ].filter(Boolean);
-
-  // 出差管理（商务部专属）
-  const tripChildren = [
+    canAccessMenu('/gifts') && user?.role === 'admin' && {
+      key: '/gifts', icon: <GiftOutlined />, label: <Link to="/gifts">礼品库</Link>,
+    },
+    // 出差管理
     canAccessMenu('/trips') && {
       key: '/trips', icon: <CarOutlined />,
       label: (
@@ -175,49 +197,35 @@ function AppLayout() {
         </span>
       ),
     },
-    canAccessMenu('/trip-stats') && { key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link> },
-  ].filter(Boolean);
-
-  // 产运部功能
-  const productChildren = [
-    canAccessMenu('/companies') && canAccessModule('companies') && { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> },
-    canAccessMenu('/biz-strategy') && { key: '/biz-strategy', icon: <FundOutlined />, label: <Link to="/biz-strategy">商业化策略管理</Link> },
-    canAccessMenu('/growth-goals') && { key: '/growth-goals', icon: <RiseOutlined />, label: <Link to="/growth-goals">增长目标管理</Link> },
-    canAccessMenu('/plans') && { key: '/plans', icon: <ScheduleOutlined />, label: <Link to="/plans">计划管理</Link> },
-  ].filter(Boolean);
-
-  // 研发部功能
-  const rdChildren = [
-    canAccessMenu('/requirements') && { key: '/requirements', icon: <BulbOutlined />, label: <Link to="/requirements">需求管理</Link> },
-    canAccessMenu('/weekly-tasks') && { key: '/weekly-tasks', icon: <CheckSquareOutlined />, label: <Link to="/weekly-tasks">周任务管理</Link> },
-    canAccessMenu('/infrastructure') && { key: '/infrastructure', icon: <ClusterOutlined />, label: <Link to="/infrastructure">基建管理</Link> },
+    canAccessMenu('/trip-stats') && {
+      key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link>,
+    },
   ].filter(Boolean);
 
   const menuItems = [
-    // 商务部
-    (crmChildren.length > 0 || opportunityChildren.length > 0 || taskChildren.length > 0 || giftChildren.length > 0 || tripChildren.length > 0 || canAccessMenu('/companies') || canAccessMenu('/budgets')) && {
-      key: 'biz', icon: <ShopOutlined />, label: '商务部',
-      children: [
-        crmChildren.length > 0 && { key: 'crm', icon: <AppstoreOutlined />, label: '人脉管理', children: crmChildren },
-        opportunityChildren.length > 0 && { key: 'opportunity', icon: <RiseOutlined />, label: '商机管理', children: opportunityChildren },
-        taskChildren.length > 0 && { key: 'tasks', icon: <CheckSquareOutlined />, label: '商务任务管理', children: taskChildren },
-        canAccessMenu('/budgets') && { key: '/budgets', icon: <FundOutlined />, label: <Link to="/budgets">预算管理</Link> },
-        giftChildren.length > 0 && { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftChildren },
-        tripChildren.length > 0 && { key: 'trip', icon: <CarOutlined />, label: '出差管理', children: tripChildren },
-        canAccessMenu('/companies') && canAccessModule('companies') && { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> },
-      ].filter(Boolean),
+    // 工作台
+    { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
+    // 目标与计划
+    {
+      key: 'goal-plan', icon: <AimOutlined />, label: '目标与计划',
+      children: goalChildren,
     },
-    // 产运部
-    productChildren.length > 0 && {
-      key: 'product', icon: <RocketOutlined />, label: '产运部',
-      children: productChildren,
+    // 业务流转
+    {
+      key: 'biz-flow', icon: <BranchesOutlined />, label: '业务流转',
+      children: bizFlowChildren,
     },
-    // 研发部
-    rdChildren.length > 0 && {
-      key: 'rd', icon: <CodeOutlined />, label: '研发部',
-      children: rdChildren,
+    // 商务协作
+    bizCoopChildren.length > 0 && {
+      key: 'biz-coop', icon: <SolutionOutlined />, label: '商务协作',
+      children: bizCoopChildren,
     },
-    // 系统管理
+    // 团队管理
+    teamChildren.length > 0 && {
+      key: 'team-mgmt', icon: <TeamOutlined />, label: '团队管理',
+      children: teamChildren,
+    },
+    // 系统管理（仅 admin）
     user?.role === 'admin' && {
       key: 'system', icon: <SettingOutlined />, label: '系统管理',
       children: [
@@ -283,10 +291,10 @@ function AppLayout() {
         </Form>
       </Modal>
 
-      <Sider breakpoint="lg" collapsedWidth="0" style={{ background: '#0a0a1a' }}>
+      <Sider breakpoint="lg" collapsedWidth="0" style={{ background: '#0a0a1a', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
         <div style={{
           height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0 16px', gap: 10,
+          borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0 16px', gap: 10, flexShrink: 0,
         }}>
           {/* 迷你 Logo SVG */}
           <svg width="28" height="28" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -305,17 +313,41 @@ function AppLayout() {
             <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', background: 'linear-gradient(90deg,#ff6a00,#ee0979)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>AI赋能 · 协同提效</div>
           </div>
         </div>
-        <Menu
-          theme="dark"
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          defaultOpenKeys={['biz', 'crm', 'opportunity', 'tasks', 'gift', 'trip', 'product', 'rd', 'system']}
-          items={menuItems}
-          style={{ marginTop: 8, background: '#0a0a1a' }}
-        />
+        <div
+          ref={menuScrollRef}
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            paddingBottom: 16,
+            scrollBehavior: 'smooth',
+          }}
+          className="menu-scroll-container"
+        >
+          <Menu
+            theme="dark"
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            defaultOpenKeys={['goal-plan', 'biz-flow', 'biz-coop', 'team-mgmt', 'system']}
+            items={menuItems}
+            style={{ marginTop: 8, background: '#0a0a1a', border: 'none', height: 'auto' }}
+            onOpenChange={(openKeys) => {
+              // 当展开菜单时，自动滚动到对应位置
+              if (openKeys.length > 0 && menuScrollRef.current) {
+                setTimeout(() => {
+                  const lastOpenKey = openKeys[openKeys.length - 1];
+                  const menuItem = document.querySelector(`[data-menu-id$="${lastOpenKey}"]`);
+                  if (menuItem) {
+                    menuItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }
+                }, 100);
+              }
+            }}
+          />
+        </div>
 
         {/* 底部用户信息 */}
-        <div style={{ position: 'absolute', bottom: 0, width: '100%', borderTop: '1px solid rgba(255,255,255,0.08)', padding: '12px 16px' }}>
+        <div style={{ flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.08)', padding: '12px 16px', background: '#0a0a1a' }}>
           <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="topLeft" trigger={['click']}>
             <Space style={{ cursor: 'pointer', width: '100%' }}>
               <Avatar size={30} style={{ background: roleColor[user?.role], fontSize: 13 }}>
@@ -335,6 +367,9 @@ function AppLayout() {
       </Sider>
 
       <Layout>
+        <Header style={{ background: '#fff', padding: '0 24px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', boxShadow: '0 1px 4px rgba(0,21,41,.08)' }}>
+          <NotificationBell />
+        </Header>
         <Content style={{ margin: '16px', padding: '16px', background: '#fff', borderRadius: 8, minHeight: 280 }}>
           <Routes>
             <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
@@ -354,7 +389,12 @@ function AppLayout() {
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
             <Route path="/my-tasks" element={<PrivateRoute><MyTasks /></PrivateRoute>} />
             <Route path="/task-board" element={<PrivateRoute><TaskBoard /></PrivateRoute>} />
-            <Route path="/budgets" element={<PrivateRoute><Budgets /></PrivateRoute>} />
+            {/* 待开发模块占位 */}
+            <Route path="/goals" element={<PrivateRoute><Goals /></PrivateRoute>} />
+            <Route path="/weekly-reports" element={<PrivateRoute><WeeklyReports /></PrivateRoute>} />
+            <Route path="/leads" element={<PrivateRoute><Leads /></PrivateRoute>} />
+            <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
+            <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
           </Routes>
         </Content>
       </Layout>
