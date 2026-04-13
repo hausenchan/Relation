@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
   Typography, Drawer, Tabs, Popconfirm, message, Tooltip, Divider,
-  Timeline, Card, Badge, Empty, Descriptions, Segmented
+  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, BankOutlined,
