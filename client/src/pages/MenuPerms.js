@@ -37,6 +37,22 @@ const MENU_TREE = [
     key: 'biz',
     children: [
       {
+        title: '商机管理',
+        key: 'opportunity',
+        children: [
+          { title: '商机管理', key: '/opportunities' },
+          { title: '待跟进任务', key: '/follow-up-tasks' },
+        ],
+      },
+      {
+        title: '商务任务管理',
+        key: 'tasks',
+        children: [
+          { title: '我的任务', key: '/my-tasks' },
+          { title: '任务看板', key: '/task-board' },
+        ],
+      },
+      {
         title: '送礼管理',
         key: 'gift',
         children: [
