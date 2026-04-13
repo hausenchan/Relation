@@ -687,6 +687,7 @@ function CompetitorResearchTab({ companyId }) {
   const [data, setData] = useState([]);
   const [users, setUsers] = useState([]);
   const [filterImportance, setFilterImportance] = useState('');
+  const [filterHasOpportunity, setFilterHasOpportunity] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
@@ -696,8 +697,10 @@ function CompetitorResearchTab({ companyId }) {
     const res = await competitorResearchApi.list(params);
     let filtered = res;
     if (filterImportance) filtered = filtered.filter(r => r.importance === filterImportance);
+    if (filterHasOpportunity === 'yes') filtered = filtered.filter(r => r.opportunity_title && r.opportunity_title.trim() !== '');
+    if (filterHasOpportunity === 'no') filtered = filtered.filter(r => !r.opportunity_title || r.opportunity_title.trim() === '');
     setData(filtered);
-  }, [companyId, filterImportance]);
+  }, [companyId, filterImportance, filterHasOpportunity]);
 
   useEffect(() => {
     load();
@@ -733,6 +736,13 @@ function CompetitorResearchTab({ companyId }) {
         return <Tag color={m.color}>{m.label}</Tag>;
       },
     },
+    {
+      title: '是否有商机',
+      dataIndex: 'opportunity_title',
+      width: 100,
+      align: 'center',
+      render: (v) => v && v.trim() !== '' ? <Tag color="green">✓</Tag> : <Tag color="default">-</Tag>,
+    },
     { title: '金额', dataIndex: 'amount', width: 100, render: (v) => v ? `¥${v}` : '-' },
     { title: '结果', dataIndex: 'outcome', ellipsis: true },
     { title: '下次行动', dataIndex: 'next_action', ellipsis: true },
@@ -754,15 +764,27 @@ function CompetitorResearchTab({ companyId }) {
   return (
     <div>
       <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Select
-          placeholder="全部重要程度"
-          allowClear
-          style={{ width: 140 }}
-          value={filterImportance || undefined}
-          onChange={v => setFilterImportance(v || '')}
-        >
-          {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
-        </Select>
+        <Space>
+          <Select
+            placeholder="全部重要程度"
+            allowClear
+            style={{ width: 140 }}
+            value={filterImportance || undefined}
+            onChange={v => setFilterImportance(v || '')}
+          >
+            {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+          </Select>
+          <Select
+            placeholder="是否有商机"
+            allowClear
+            style={{ width: 140 }}
+            value={filterHasOpportunity || undefined}
+            onChange={v => setFilterHasOpportunity(v || '')}
+          >
+            <Option value="yes">有商机</Option>
+            <Option value="no">无商机</Option>
+          </Select>
+        </Space>
         <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加记录</Button>
       </div>
 
