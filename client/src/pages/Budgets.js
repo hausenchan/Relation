@@ -15,10 +15,11 @@ const { Option } = Select;
 const { TextArea } = Input;
 
 const statusMap = {
-  new_entry: { label: '新入口', color: 'blue' },
+  new_entry: { label: '已入库', color: 'blue' },
   testing:   { label: '测试中', color: 'orange' },
   tested:    { label: '已测通', color: 'green' },
   scaled:    { label: '已放大', color: 'purple' },
+  abandoned: { label: '暂放弃', color: 'default' },
 };
 
 const potentialMap = {
