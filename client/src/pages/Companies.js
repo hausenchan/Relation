@@ -8,7 +8,7 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, BankOutlined,
   UserOutlined, AppstoreOutlined, ThunderboltOutlined,
   UserAddOutlined, LinkOutlined, GlobalOutlined, TeamOutlined,
-  ApartmentOutlined, UnorderedListOutlined
+  ApartmentOutlined, UnorderedListOutlined, RiseOutlined
 } from '@ant-design/icons';
 import { Tree, TreeNode } from 'react-organizational-chart';
 import {
