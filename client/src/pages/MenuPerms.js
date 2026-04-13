@@ -10,11 +10,11 @@ const { Title, Text } = Typography;
 // 与 App.js 中完全一致的菜单树定义（不含 admin-only 的系统管理）
 const MENU_TREE = [
   {
-    title: '中台',
-    key: 'hub',
+    title: '商务部',
+    key: 'biz',
     children: [
       {
-        title: '人脉管理助手',
+        title: '人脉管理',
         key: 'crm',
         children: [
           { title: '工作台', key: '/' },
@@ -23,19 +23,6 @@ const MENU_TREE = [
           { title: '提醒事项', key: '/reminders' },
         ],
       },
-      {
-        title: '公司研究助手',
-        key: 'research',
-        children: [
-          { title: '公司研究', key: '/companies' },
-        ],
-      },
-    ],
-  },
-  {
-    title: '商务部',
-    key: 'biz',
-    children: [
       {
         title: '商机管理',
         key: 'opportunity',
@@ -69,12 +56,14 @@ const MENU_TREE = [
           { title: '费用统计', key: '/trip-stats' },
         ],
       },
+      { title: '公司研究', key: '/companies' },
     ],
   },
   {
     title: '产运部',
     key: 'product',
     children: [
+      { title: '公司研究', key: '/companies' },
       { title: '商业化策略管理', key: '/biz-strategy' },
       { title: '增长目标管理', key: '/growth-goals' },
       { title: '计划管理', key: '/plans' },

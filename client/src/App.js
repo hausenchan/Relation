@@ -101,20 +101,11 @@ function AppLayout() {
 
   const selectedKey = '/' + location.pathname.split('/')[1];
 
+  // 人脉管理（商务部专属）
   const crmChildren = [
     canAccessMenu('/') && { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
     canAccessMenu('/persons') && canAccessModule('persons') && { key: '/persons', icon: <TeamOutlined />, label: <Link to="/persons">人脉管理</Link> },
     canAccessMenu('/interactions') && canAccessModule('interactions') && { key: '/interactions', icon: <MessageOutlined />, label: <Link to="/interactions">互动记录</Link> },
-    canAccessMenu('/opportunities') && { key: '/opportunities', icon: <RiseOutlined />, label: <Link to="/opportunities">商机管理</Link> },
-    {
-      key: '/follow-up-tasks', icon: <ThunderboltOutlined />,
-      label: (
-        <span>
-          <Link to="/follow-up-tasks">待跟进任务</Link>
-          {followUpCount > 0 && <Badge count={followUpCount} size="small" style={{ marginLeft: 8 }} />}
-        </span>
-      ),
-    },
     canAccessMenu('/reminders') && canAccessModule('reminders') && {
       key: '/reminders', icon: <BellOutlined />,
       label: (
@@ -126,25 +117,21 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
-  const giftChildren = [
-    canAccessMenu('/gift-plans') && { key: '/gift-plans', icon: <CalendarOutlined />, label: <Link to="/gift-plans">送礼计划</Link> },
-    canAccessMenu('/gift-review') && {
-      key: '/gift-review', icon: <AuditOutlined />,
+  // 商机管理（商务部专属）
+  const opportunityChildren = [
+    canAccessMenu('/opportunities') && { key: '/opportunities', icon: <RiseOutlined />, label: <Link to="/opportunities">商机管理</Link> },
+    {
+      key: '/follow-up-tasks', icon: <ThunderboltOutlined />,
       label: (
         <span>
-          <Link to="/gift-review">审核与记录</Link>
-          {pendingGiftCount > 0 && <Badge count={pendingGiftCount} size="small" style={{ marginLeft: 8 }} />}
+          <Link to="/follow-up-tasks">待跟进任务</Link>
+          {followUpCount > 0 && <Badge count={followUpCount} size="small" style={{ marginLeft: 8 }} />}
         </span>
       ),
     },
-    canAccessMenu('/gifts') && (user?.role === 'admin') && { key: '/gifts', icon: <GiftOutlined />, label: <Link to="/gifts">礼品库</Link> },
   ].filter(Boolean);
 
-  const filterGroup = (children) => children.filter(Boolean);
-
-  const crmGroup = filterGroup(crmChildren);
-  const giftGroup = filterGroup(giftChildren);
-
+  // 商务任务管理（商务部专属）
   const taskChildren = [
     {
       key: '/my-tasks', icon: <CheckSquareOutlined />,
@@ -161,6 +148,22 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
+  // 送礼管理（商务部专属）
+  const giftChildren = [
+    canAccessMenu('/gift-plans') && { key: '/gift-plans', icon: <CalendarOutlined />, label: <Link to="/gift-plans">送礼计划</Link> },
+    canAccessMenu('/gift-review') && {
+      key: '/gift-review', icon: <AuditOutlined />,
+      label: (
+        <span>
+          <Link to="/gift-review">审核与记录</Link>
+          {pendingGiftCount > 0 && <Badge count={pendingGiftCount} size="small" style={{ marginLeft: 8 }} />}
+        </span>
+      ),
+    },
+    canAccessMenu('/gifts') && (user?.role === 'admin') && { key: '/gifts', icon: <GiftOutlined />, label: <Link to="/gifts">礼品库</Link> },
+  ].filter(Boolean);
+
+  // 出差管理（商务部专属）
   const tripChildren = [
     canAccessMenu('/trips') && {
       key: '/trips', icon: <CarOutlined />,
@@ -174,52 +177,45 @@ function AppLayout() {
     canAccessMenu('/trip-stats') && { key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link> },
   ].filter(Boolean);
 
+  // 产运部功能
   const productChildren = [
+    canAccessMenu('/companies') && canAccessModule('companies') && { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> },
     canAccessMenu('/biz-strategy') && { key: '/biz-strategy', icon: <FundOutlined />, label: <Link to="/biz-strategy">商业化策略管理</Link> },
     canAccessMenu('/growth-goals') && { key: '/growth-goals', icon: <RiseOutlined />, label: <Link to="/growth-goals">增长目标管理</Link> },
     canAccessMenu('/plans') && { key: '/plans', icon: <ScheduleOutlined />, label: <Link to="/plans">计划管理</Link> },
   ].filter(Boolean);
 
+  // 研发部功能
   const rdChildren = [
     canAccessMenu('/requirements') && { key: '/requirements', icon: <BulbOutlined />, label: <Link to="/requirements">需求管理</Link> },
     canAccessMenu('/weekly-tasks') && { key: '/weekly-tasks', icon: <CheckSquareOutlined />, label: <Link to="/weekly-tasks">周任务管理</Link> },
     canAccessMenu('/infrastructure') && { key: '/infrastructure', icon: <ClusterOutlined />, label: <Link to="/infrastructure">基建管理</Link> },
   ].filter(Boolean);
 
-  const researchChildren = [
-    canAccessMenu('/companies') && canAccessModule('companies') && { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> },
-  ].filter(Boolean);
-
   const menuItems = [
-    (crmGroup.length > 0 || researchChildren.length > 0) && {
-      key: 'hub', icon: <ApartmentOutlined />, label: '中台',
-      children: [
-        crmGroup.length > 0 && { key: 'crm', icon: <AppstoreOutlined />, label: '人脉管理助手', children: crmGroup },
-        researchChildren.length > 0 && {
-          key: 'research', icon: <BankOutlined />, label: '公司研究助手',
-          children: researchChildren,
-        },
-      ].filter(Boolean),
-    },
-    (giftGroup.length > 0 || tripChildren.length > 0 || taskChildren.length > 0) && {
+    // 商务部
+    (crmChildren.length > 0 || opportunityChildren.length > 0 || taskChildren.length > 0 || giftChildren.length > 0 || tripChildren.length > 0 || canAccessMenu('/companies')) && {
       key: 'biz', icon: <ShopOutlined />, label: '商务部',
       children: [
+        crmChildren.length > 0 && { key: 'crm', icon: <AppstoreOutlined />, label: '人脉管理', children: crmChildren },
+        opportunityChildren.length > 0 && { key: 'opportunity', icon: <RiseOutlined />, label: '商机管理', children: opportunityChildren },
         taskChildren.length > 0 && { key: 'tasks', icon: <CheckSquareOutlined />, label: '商务任务管理', children: taskChildren },
-        giftGroup.length > 0 && { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftGroup },
-        tripChildren.length > 0 && {
-          key: 'trip', icon: <CarOutlined />, label: '出差管理',
-          children: tripChildren,
-        },
+        giftChildren.length > 0 && { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftChildren },
+        tripChildren.length > 0 && { key: 'trip', icon: <CarOutlined />, label: '出差管理', children: tripChildren },
+        canAccessMenu('/companies') && canAccessModule('companies') && { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> },
       ].filter(Boolean),
     },
+    // 产运部
     productChildren.length > 0 && {
       key: 'product', icon: <RocketOutlined />, label: '产运部',
       children: productChildren,
     },
+    // 研发部
     rdChildren.length > 0 && {
       key: 'rd', icon: <CodeOutlined />, label: '研发部',
       children: rdChildren,
     },
+    // 系统管理
     user?.role === 'admin' && {
       key: 'system', icon: <SettingOutlined />, label: '系统管理',
       children: [
@@ -311,7 +307,7 @@ function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={['hub', 'crm', 'research', 'biz', 'tasks', 'gift', 'trip', 'product', 'rd', 'system']}
+          defaultOpenKeys={['biz', 'crm', 'opportunity', 'tasks', 'gift', 'trip', 'product', 'rd', 'system']}
           items={menuItems}
           style={{ marginTop: 8, background: '#0a0a1a' }}
         />
