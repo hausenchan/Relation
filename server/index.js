@@ -1124,8 +1124,11 @@ app.delete('/api/interactions/:id', (req, res) => {
 app.get('/api/opportunities', (req, res) => {
   const { status, assignee } = req.query;
   const { id: me, role } = req.user;
-  let query = `
+
+  // 从 interactions 表获取商机
+  let query1 = `
     SELECT i.*,
+      'interaction' as source_type,
       p.name as person_name, p.company, p.city, p.current_company, p.person_category,
       u.display_name as assignee_name,
       ub.display_name as created_by_name
@@ -1135,44 +1138,87 @@ app.get('/api/opportunities', (req, res) => {
     LEFT JOIN users ub ON i.created_by = ub.id
     WHERE i.opportunity_title IS NOT NULL AND i.opportunity_title != ''
   `;
-  const params = [];
+  const params1 = [];
 
   // 按角色过滤
   const visibleIds = getVisibleUserIds(me, role);
   if (visibleIds !== null) {
-    query += ` AND (i.created_by IN (${visibleIds.map(() => '?').join(',')}) OR i.opportunity_assignee IN (${visibleIds.map(() => '?').join(',')}))`;
-    params.push(...visibleIds, ...visibleIds);
+    query1 += ` AND (i.created_by IN (${visibleIds.map(() => '?').join(',')}) OR i.opportunity_assignee IN (${visibleIds.map(() => '?').join(',')}))`;
+    params1.push(...visibleIds, ...visibleIds);
   }
 
-  if (status) { query += ' AND i.opportunity_status = ?'; params.push(status); }
-  if (assignee) { query += ' AND i.opportunity_assignee = ?'; params.push(assignee); }
-  query += ' ORDER BY i.date DESC';
-  res.json(db.prepare(query).all(...params));
+  if (status) { query1 += ' AND i.opportunity_status = ?'; params1.push(status); }
+  if (assignee) { query1 += ' AND i.opportunity_assignee = ?'; params1.push(assignee); }
+
+  // 从 competitor_research 表获取商机
+  let query2 = `
+    SELECT cr.*,
+      'competitor_research' as source_type,
+      c.name as company_name,
+      NULL as person_name, NULL as company, NULL as city, NULL as current_company, NULL as person_category,
+      u.display_name as assignee_name,
+      NULL as created_by, NULL as created_by_name
+    FROM competitor_research cr
+    LEFT JOIN companies c ON cr.company_id = c.id
+    LEFT JOIN users u ON cr.opportunity_assignee = u.id
+    WHERE cr.opportunity_title IS NOT NULL AND cr.opportunity_title != ''
+  `;
+  const params2 = [];
+
+  if (status) { query2 += ' AND cr.opportunity_status = ?'; params2.push(status); }
+  if (assignee) { query2 += ' AND cr.opportunity_assignee = ?'; params2.push(assignee); }
+
+  const results1 = db.prepare(query1).all(...params1);
+  const results2 = db.prepare(query2).all(...params2);
+
+  // 合并结果并按日期排序
+  const combined = [...results1, ...results2].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  res.json(combined);
 });
 
-app.put('/api/opportunities/:interaction_id', (req, res) => {
-  const { opportunity_status, opportunity_assignee, opportunity_note, opportunity_title } = req.body;
-  const original = db.prepare('SELECT * FROM interactions WHERE id = ?').get(req.params.interaction_id);
-  if (!original) return res.status(404).json({ error: '未找到' });
+app.put('/api/opportunities/:id', (req, res) => {
+  const { opportunity_status, opportunity_assignee, opportunity_note, opportunity_title, source_type } = req.body;
 
-  db.prepare(`
-    UPDATE interactions SET opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
-    WHERE id=?
-  `).run(
-    opportunity_title ?? original.opportunity_title,
-    opportunity_status ?? original.opportunity_status,
-    opportunity_assignee ?? original.opportunity_assignee,
-    opportunity_note ?? original.opportunity_note,
-    req.params.interaction_id
-  );
+  // 根据来源类型更新不同的表
+  if (source_type === 'competitor_research') {
+    const original = db.prepare('SELECT * FROM competitor_research WHERE id = ?').get(req.params.id);
+    if (!original) return res.status(404).json({ error: '未找到' });
 
-  // 若更改了指派人，同步更新对应的 follow_up_tasks（未完成的）
-  if (opportunity_assignee && opportunity_assignee !== original.opportunity_assignee) {
     db.prepare(`
-      UPDATE follow_up_tasks SET assigned_to=?, updated_at=CURRENT_TIMESTAMP
-      WHERE interaction_id=? AND status != 'done'
-    `).run(opportunity_assignee, req.params.interaction_id);
+      UPDATE competitor_research SET opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
+      WHERE id=?
+    `).run(
+      opportunity_title ?? original.opportunity_title,
+      opportunity_status ?? original.opportunity_status,
+      opportunity_assignee ?? original.opportunity_assignee,
+      opportunity_note ?? original.opportunity_note,
+      req.params.id
+    );
+  } else {
+    // 默认处理 interactions
+    const original = db.prepare('SELECT * FROM interactions WHERE id = ?').get(req.params.id);
+    if (!original) return res.status(404).json({ error: '未找到' });
+
+    db.prepare(`
+      UPDATE interactions SET opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
+      WHERE id=?
+    `).run(
+      opportunity_title ?? original.opportunity_title,
+      opportunity_status ?? original.opportunity_status,
+      opportunity_assignee ?? original.opportunity_assignee,
+      opportunity_note ?? original.opportunity_note,
+      req.params.id
+    );
+
+    // 若更改了指派人，同步更新对应的 follow_up_tasks（未完成的）
+    if (opportunity_assignee && opportunity_assignee !== original.opportunity_assignee) {
+      db.prepare(`
+        UPDATE follow_up_tasks SET assigned_to=?, updated_at=CURRENT_TIMESTAMP
+        WHERE interaction_id=? AND status != 'done'
+      `).run(opportunity_assignee, req.params.id);
+    }
   }
+
   res.json({ success: true });
 });
 

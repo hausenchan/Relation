@@ -58,7 +58,7 @@ export default function Opportunities() {
 
   const handleSave = async () => {
     const values = await editForm.validateFields();
-    await opportunitiesApi.update(editTarget.id, values);
+    await opportunitiesApi.update(editTarget.id, { ...values, source_type: editTarget.source_type });
     message.success('更新成功');
     setEditModalOpen(false);
     load();
@@ -66,16 +66,32 @@ export default function Opportunities() {
 
   const columns = [
     {
-      title: '人脉',
-      render: (_, r) => (
-        <Space size={4}>
-          <UserOutlined style={{ color: '#888' }} />
-          <Text strong>{r.person_name}</Text>
-          {(r.company || r.current_company) && (
-            <Text type="secondary" style={{ fontSize: 12 }}>({r.company || r.current_company})</Text>
-          )}
-        </Space>
-      ),
+      title: '来源',
+      dataIndex: 'source_type',
+      width: 100,
+      render: (v) => v === 'competitor_research' ? <Tag color="orange">竞品研究</Tag> : <Tag color="blue">互动记录</Tag>,
+    },
+    {
+      title: '关联对象',
+      render: (_, r) => {
+        if (r.source_type === 'competitor_research') {
+          return (
+            <Space size={4}>
+              <Text strong>{r.company_name || '-'}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>(公司)</Text>
+            </Space>
+          );
+        }
+        return (
+          <Space size={4}>
+            <UserOutlined style={{ color: '#888' }} />
+            <Text strong>{r.person_name}</Text>
+            {(r.company || r.current_company) && (
+              <Text type="secondary" style={{ fontSize: 12 }}>({r.company || r.current_company})</Text>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: '商机标题',
