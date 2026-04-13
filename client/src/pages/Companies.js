@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import { Tree, TreeNode } from 'react-organizational-chart';
 import {
-  companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi
+  companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi
 } from '../api';
 import dayjs from 'dayjs';
 
@@ -675,6 +675,164 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
   );
 }
 
+// ==================== 竞品研究记录 Tab ====================
+function CompetitorResearchTab({ companyId }) {
+  const [data, setData] = useState([]);
+  const [filterImportance, setFilterImportance] = useState('');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form] = Form.useForm();
+
+  const load = useCallback(async () => {
+    const params = { company_id: companyId };
+    const res = await competitorResearchApi.list(params);
+    let filtered = res;
+    if (filterImportance) filtered = filtered.filter(r => r.importance === filterImportance);
+    setData(filtered);
+  }, [companyId, filterImportance]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ date: dayjs().format('YYYY-MM-DD'), importance: 'normal' }); setModalOpen(true); };
+  const openEdit = (r) => { setEditing(r); form.setFieldsValue(r); setModalOpen(true); };
+
+  const handleSave = async () => {
+    const values = await form.validateFields();
+    const payload = { ...values, company_id: companyId };
+    if (editing) { await competitorResearchApi.update(editing.id, payload); message.success('已更新'); }
+    else { await competitorResearchApi.create(payload); message.success('已记录'); }
+    setModalOpen(false);
+    load();
+  };
+
+  const handleDelete = async (id) => {
+    await competitorResearchApi.delete(id);
+    load();
+  };
+
+  const columns = [
+    { title: '日期', dataIndex: 'date', width: 110, sorter: (a, b) => a.date.localeCompare(b.date) },
+    { title: '标题', dataIndex: 'title', ellipsis: true },
+    {
+      title: '重要程度',
+      dataIndex: 'importance',
+      width: 90,
+      render: (v) => {
+        const m = importanceMap[v] || importanceMap.normal;
+        return <Tag color={m.color}>{m.label}</Tag>;
+      },
+    },
+    { title: '金额', dataIndex: 'amount', width: 100, render: (v) => v ? `¥${v}` : '-' },
+    { title: '结果', dataIndex: 'outcome', ellipsis: true },
+    { title: '下次行动', dataIndex: 'next_action', ellipsis: true },
+    { title: '下次日期', dataIndex: 'next_action_date', width: 110 },
+    {
+      title: '操作',
+      width: 120,
+      render: (_, record) => (
+        <Space size="small">
+          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
+          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />} />
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Select
+          placeholder="全部重要程度"
+          allowClear
+          style={{ width: 140 }}
+          value={filterImportance || undefined}
+          onChange={v => setFilterImportance(v || '')}
+        >
+          {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+        </Select>
+        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加记录</Button>
+      </div>
+
+      <Table
+        dataSource={data}
+        columns={columns}
+        rowKey="id"
+        size="small"
+        pagination={{ pageSize: 10, showSizeChanger: false }}
+      />
+
+      <Modal
+        title={editing ? '编辑记录' : '添加记录'}
+        open={modalOpen}
+        onOk={handleSave}
+        onCancel={() => setModalOpen(false)}
+        width={700}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={form} layout="vertical" size="small">
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item label="日期" name="date" rules={[{ required: true }]}>
+                <Input placeholder="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="重要程度" name="importance" initialValue="normal">
+                <Select>
+                  {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item label="金额" name="amount">
+                <InputNumber style={{ width: '100%' }} placeholder="选填" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="标题" name="title" rules={[{ required: true }]}>
+                <Input placeholder="简述研究内容" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="详细内容" name="content">
+                <TextArea rows={3} placeholder="详细描述..." />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="信息来源" name="source">
+                <Input placeholder="如：官网、行业报告" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="结果" name="outcome">
+                <Input placeholder="研究结果" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="影响分析" name="impact">
+                <TextArea rows={2} placeholder="对我们的影响..." />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="下次行动" name="next_action">
+                <Input placeholder="后续跟进计划" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="下次行动日期" name="next_action_date">
+                <Input placeholder="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
+    </div>
+  );
+}
+
 // ==================== 动向 Tab ====================
 function DynamicsTab({ companyId }) {
   const [data, setData] = useState([]);
@@ -1255,6 +1413,11 @@ export default function Companies() {
                         key: 'products',
                         label: <span><AppstoreOutlined /> 全部产品</span>,
                         children: <ProductsTab companyId={current.id} entities={entities} />,
+                      },
+                      {
+                        key: 'competitor_research',
+                        label: <span><RiseOutlined /> 竞品研究记录</span>,
+                        children: <CompetitorResearchTab companyId={current.id} />,
                       },
                       {
                         key: 'dynamics',
