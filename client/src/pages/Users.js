@@ -21,7 +21,7 @@ const roleMap = {
 
 const departmentOptions = [
   { value: 'commercial', label: '商务' },
-  { value: 'operation', label: '产运' },
+  { value: 'product', label: '产品' },
   { value: 'rd', label: '研发' },
 ];
 
