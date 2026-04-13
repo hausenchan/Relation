@@ -68,8 +68,8 @@ export default function Opportunities() {
     {
       title: '来源',
       dataIndex: 'source_type',
-      width: 100,
-      render: (v) => v === 'competitor_research' ? <Tag color="orange">竞品研究</Tag> : <Tag color="blue">互动记录</Tag>,
+      width: 120,
+      render: (v) => v === 'competitor_research' ? <Tag color="orange">竞品研究记录</Tag> : <Tag color="blue">互动记录</Tag>,
     },
     {
       title: '关联对象',
