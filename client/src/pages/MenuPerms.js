@@ -39,6 +39,7 @@ const MENU_TREE = [
           { title: '任务看板', key: '/task-board' },
         ],
       },
+      { title: '预算管理', key: '/budgets' },
       {
         title: '送礼管理',
         key: 'gift',

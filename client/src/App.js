@@ -29,6 +29,7 @@ import Opportunities from './pages/Opportunities';
 import FollowUpTasks from './pages/FollowUpTasks';
 import MyTasks from './pages/MyTasks';
 import TaskBoard from './pages/TaskBoard';
+import Budgets from './pages/Budgets';
 import CompetitorResearch from './pages/CompetitorResearch';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
 
@@ -196,12 +197,13 @@ function AppLayout() {
 
   const menuItems = [
     // 商务部
-    (crmChildren.length > 0 || opportunityChildren.length > 0 || taskChildren.length > 0 || giftChildren.length > 0 || tripChildren.length > 0 || canAccessMenu('/companies')) && {
+    (crmChildren.length > 0 || opportunityChildren.length > 0 || taskChildren.length > 0 || giftChildren.length > 0 || tripChildren.length > 0 || canAccessMenu('/companies') || canAccessMenu('/budgets')) && {
       key: 'biz', icon: <ShopOutlined />, label: '商务部',
       children: [
         crmChildren.length > 0 && { key: 'crm', icon: <AppstoreOutlined />, label: '人脉管理', children: crmChildren },
         opportunityChildren.length > 0 && { key: 'opportunity', icon: <RiseOutlined />, label: '商机管理', children: opportunityChildren },
         taskChildren.length > 0 && { key: 'tasks', icon: <CheckSquareOutlined />, label: '商务任务管理', children: taskChildren },
+        canAccessMenu('/budgets') && { key: '/budgets', icon: <FundOutlined />, label: <Link to="/budgets">预算管理</Link> },
         giftChildren.length > 0 && { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftChildren },
         tripChildren.length > 0 && { key: 'trip', icon: <CarOutlined />, label: '出差管理', children: tripChildren },
         canAccessMenu('/companies') && canAccessModule('companies') && { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> },
@@ -355,6 +357,7 @@ function AppLayout() {
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
             <Route path="/my-tasks" element={<PrivateRoute><MyTasks /></PrivateRoute>} />
             <Route path="/task-board" element={<PrivateRoute><TaskBoard /></PrivateRoute>} />
+            <Route path="/budgets" element={<PrivateRoute><Budgets /></PrivateRoute>} />
           </Routes>
         </Content>
       </Layout>

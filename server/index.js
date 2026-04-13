@@ -329,6 +329,30 @@ db.exec(`
   );
 `);
 
+// =========== 预算管理表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS budgets (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                  TEXT NOT NULL,
+    source                TEXT,
+    platform              TEXT,
+    method                TEXT,
+    target                TEXT,
+    has_monetization_bd   INTEGER DEFAULT 0,
+    ad_format             TEXT,
+    market_size           TEXT,
+    competitor_scale      TEXT,
+    potential_level       TEXT DEFAULT 'medium',
+    test_start_date       TEXT,
+    status                TEXT DEFAULT 'new_entry',
+    update_notes          TEXT,
+    created_by            INTEGER NOT NULL,
+    team_id               INTEGER,
+    created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 // users 表加 leader_id / department / team_id
 const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
 if (userCols.length > 0) {
@@ -1406,6 +1430,136 @@ app.delete('/api/tasks/:id', (req, res) => {
   // 同时删除子任务
   db.prepare('DELETE FROM tasks WHERE parent_id = ?').run(req.params.id);
   db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// =========== 预算管理 API ===========
+
+// 获取预算列表（按角色过滤）
+app.get('/api/budgets', (req, res) => {
+  const { status, potential_level } = req.query;
+  const { id: me, role } = req.user;
+
+  let q = `
+    SELECT b.*,
+      u.display_name as created_by_name,
+      tm.name as team_name
+    FROM budgets b
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN teams tm ON b.team_id = tm.id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  // 角色数据过滤
+  if (role === 'member') {
+    q += ' AND b.created_by = ?';
+    params.push(me);
+  } else if (role === 'leader') {
+    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(me);
+    if (myUser?.team_id) {
+      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+      const ids = [...new Set([me, ...members])];
+      q += ` AND b.created_by IN (${ids.map(() => '?').join(',')})`;
+      params.push(...ids);
+    } else {
+      q += ' AND b.created_by = ?';
+      params.push(me);
+    }
+  } else if (role === 'sales_director') {
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(me).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(me).map(r => r.id);
+    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
+    if (allTeamIds.length > 0) {
+      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+      const ids = [...new Set([me, ...members])];
+      q += ` AND b.created_by IN (${ids.map(() => '?').join(',')})`;
+      params.push(...ids);
+    }
+  }
+  // admin: 不过滤
+
+  if (status) { q += ' AND b.status = ?'; params.push(status); }
+  if (potential_level) { q += ' AND b.potential_level = ?'; params.push(potential_level); }
+
+  q += ' ORDER BY b.created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+// 创建预算
+app.post('/api/budgets', canWrite, (req, res) => {
+  const {
+    name, source, platform, method, target, has_monetization_bd,
+    ad_format, market_size, competitor_scale, potential_level,
+    test_start_date, status, update_notes
+  } = req.body;
+
+  if (!name) return res.status(400).json({ error: '预算名称必填' });
+
+  const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(req.user.id);
+  const r = db.prepare(`
+    INSERT INTO budgets (
+      name, source, platform, method, target, has_monetization_bd,
+      ad_format, market_size, competitor_scale, potential_level,
+      test_start_date, status, update_notes, created_by, team_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    name, source, platform, method, target, has_monetization_bd ? 1 : 0,
+    ad_format, market_size, competitor_scale, potential_level || 'medium',
+    test_start_date, status || 'new_entry', update_notes, req.user.id, myUser?.team_id
+  );
+  res.json({ id: r.lastInsertRowid });
+});
+
+// 更新预算
+app.put('/api/budgets/:id', canWrite, (req, res) => {
+  const budget = db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id);
+  if (!budget) return res.status(404).json({ error: '未找到' });
+
+  const { id: me, role } = req.user;
+  // 只有创建人或管理员可修改
+  if (budget.created_by !== me && role !== 'admin' && role !== 'sales_director') {
+    return res.status(403).json({ error: '无权修改此预算' });
+  }
+
+  const {
+    name, source, platform, method, target, has_monetization_bd,
+    ad_format, market_size, competitor_scale, potential_level,
+    test_start_date, status, update_notes
+  } = req.body;
+
+  db.prepare(`
+    UPDATE budgets SET
+      name=?, source=?, platform=?, method=?, target=?, has_monetization_bd=?,
+      ad_format=?, market_size=?, competitor_scale=?, potential_level=?,
+      test_start_date=?, status=?, update_notes=?, updated_at=CURRENT_TIMESTAMP
+    WHERE id=?
+  `).run(
+    name ?? budget.name,
+    source ?? budget.source,
+    platform ?? budget.platform,
+    method ?? budget.method,
+    target ?? budget.target,
+    has_monetization_bd !== undefined ? (has_monetization_bd ? 1 : 0) : budget.has_monetization_bd,
+    ad_format ?? budget.ad_format,
+    market_size ?? budget.market_size,
+    competitor_scale ?? budget.competitor_scale,
+    potential_level ?? budget.potential_level,
+    test_start_date ?? budget.test_start_date,
+    status ?? budget.status,
+    update_notes ?? budget.update_notes,
+    req.params.id
+  );
+  res.json({ success: true });
+});
+
+// 删除预算
+app.delete('/api/budgets/:id', canWrite, (req, res) => {
+  const budget = db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id);
+  if (!budget) return res.status(404).json({ error: '未找到' });
+  const { id: me, role } = req.user;
+  if (budget.created_by !== me && role !== 'admin') return res.status(403).json({ error: '无权删除' });
+  db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
