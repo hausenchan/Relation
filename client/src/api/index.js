@@ -149,6 +149,13 @@ export const companyDynamicsApi = {
   delete: (id) => api.delete(`/company_dynamics/${id}`).then(r => r.data),
 };
 
+export const competitorResearchApi = {
+  list: (params) => api.get('/competitor_research', { params }).then(r => r.data),
+  create: (data) => api.post('/competitor_research', data).then(r => r.data),
+  update: (id, data) => api.put(`/competitor_research/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/competitor_research/${id}`).then(r => r.data),
+};
+
 export const groupsApi = {
   list: () => api.get('/groups').then(r => r.data),
   create: (data) => api.post('/groups', data).then(r => r.data),

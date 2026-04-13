@@ -29,6 +29,7 @@ import Opportunities from './pages/Opportunities';
 import FollowUpTasks from './pages/FollowUpTasks';
 import MyTasks from './pages/MyTasks';
 import TaskBoard from './pages/TaskBoard';
+import CompetitorResearch from './pages/CompetitorResearch';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
 
 const { Sider, Content } = Layout;
@@ -180,6 +181,7 @@ function AppLayout() {
   // 产运部功能
   const productChildren = [
     canAccessMenu('/companies') && canAccessModule('companies') && { key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link> },
+    canAccessMenu('/competitor-research') && canAccessModule('companies') && { key: '/competitor-research', icon: <RiseOutlined />, label: <Link to="/competitor-research">竞品研究记录</Link> },
     canAccessMenu('/biz-strategy') && { key: '/biz-strategy', icon: <FundOutlined />, label: <Link to="/biz-strategy">商业化策略管理</Link> },
     canAccessMenu('/growth-goals') && { key: '/growth-goals', icon: <RiseOutlined />, label: <Link to="/growth-goals">增长目标管理</Link> },
     canAccessMenu('/plans') && { key: '/plans', icon: <ScheduleOutlined />, label: <Link to="/plans">计划管理</Link> },
@@ -340,6 +342,7 @@ function AppLayout() {
             <Route path="/interactions" element={<PrivateRoute module="interactions"><Interactions /></PrivateRoute>} />
             <Route path="/reminders" element={<PrivateRoute module="reminders"><Reminders /></PrivateRoute>} />
             <Route path="/companies" element={<PrivateRoute module="companies"><Companies /></PrivateRoute>} />
+            <Route path="/competitor-research" element={<PrivateRoute module="companies"><CompetitorResearch /></PrivateRoute>} />
             <Route path="/gifts" element={<PrivateRoute><Gifts /></PrivateRoute>} />
             <Route path="/gift-plans" element={<PrivateRoute><GiftPlans /></PrivateRoute>} />
             <Route path="/gift-review" element={<PrivateRoute><GiftReview /></PrivateRoute>} />

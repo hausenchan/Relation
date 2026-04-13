@@ -1788,6 +1788,58 @@ app.delete('/api/company_dynamics/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// =========== 竞品研究记录 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS competitor_research (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    importance TEXT DEFAULT 'normal',
+    content TEXT,
+    source TEXT,
+    impact TEXT,
+    amount REAL,
+    outcome TEXT,
+    next_action TEXT,
+    next_action_date TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+app.get('/api/competitor_research', (req, res) => {
+  const { company_id } = req.query;
+  let q = 'SELECT * FROM competitor_research WHERE 1=1';
+  const params = [];
+  if (company_id) { q += ' AND company_id = ?'; params.push(company_id); }
+  q += ' ORDER BY date DESC, created_at DESC';
+  res.json(db.prepare(q).all(...params));
+});
+
+app.post('/api/competitor_research', (req, res) => {
+  const { company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date } = req.body;
+  const r = db.prepare(`
+    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, next_action, next_action_date);
+  db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
+  res.json({ id: r.lastInsertRowid });
+});
+
+app.put('/api/competitor_research/:id', (req, res) => {
+  const { date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date } = req.body;
+  db.prepare(`
+    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, next_action=?, next_action_date=?
+    WHERE id=?
+  `).run(date, title, importance, content, source, impact, amount || null, outcome, next_action, next_action_date, req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/competitor_research/:id', (req, res) => {
+  db.prepare('DELETE FROM competitor_research WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
 // =========== 出差管理建表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS groups (
