@@ -2149,8 +2149,9 @@ app.get('/api/trips/stats/summary', (req, res) => {
   res.json({ monthly, byType, byUser, byGroup, alerts });
 });
 
+// SPA fallback - 必须放在所有 API 路由之后
 if (process.env.NODE_ENV === 'production') {
-  app.get('/{*path}', (req, res) => {
+  app.use((req, res) => {
     res.sendFile(path.join(__dirname, '../client/build/index.html'));
   });
 }
