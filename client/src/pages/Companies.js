@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
   Typography, Drawer, Tabs, Popconfirm, message, Tooltip, Divider,
-  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber
+  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber, Collapse
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, BankOutlined,
@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import { Tree, TreeNode } from 'react-organizational-chart';
 import {
-  companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi
+  companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi, usersApi
 } from '../api';
 import dayjs from 'dayjs';
 
@@ -59,6 +59,13 @@ const dynamicTypeMap = {
   product: { label: '产品动向', color: 'blue',   icon: <AppstoreOutlined /> },
   business:{ label: '业务动向', color: 'orange', icon: <ThunderboltOutlined /> },
   other:   { label: '其他',     color: 'default', icon: <ThunderboltOutlined /> },
+};
+
+const opportunityStatusMap = {
+  new: { label: '新商机', color: 'blue' },
+  following: { label: '跟进中', color: 'orange' },
+  won: { label: '已成交', color: 'green' },
+  lost: { label: '已关闭', color: 'default' },
 };
 
 const importanceMap = {
@@ -678,6 +685,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
 // ==================== 竞品研究记录 Tab ====================
 function CompetitorResearchTab({ companyId }) {
   const [data, setData] = useState([]);
+  const [users, setUsers] = useState([]);
   const [filterImportance, setFilterImportance] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -691,7 +699,10 @@ function CompetitorResearchTab({ companyId }) {
     setData(filtered);
   }, [companyId, filterImportance]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    usersApi.list().then(setUsers);
+  }, [load]);
 
   const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ date: dayjs().format('YYYY-MM-DD'), importance: 'normal' }); setModalOpen(true); };
   const openEdit = (r) => { setEditing(r); form.setFieldsValue(r); setModalOpen(true); };
@@ -827,6 +838,54 @@ function CompetitorResearchTab({ companyId }) {
               </Form.Item>
             </Col>
           </Row>
+
+          <Divider style={{ margin: '8px 0' }} />
+          <Collapse
+            ghost
+            items={[{
+              key: 'opp',
+              label: <span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>,
+              children: (
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item label="商机标题" name="opportunity_title">
+                      <Input placeholder="简述商机，如：XX采购合作意向" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item label="商机状态" name="opportunity_status" initialValue="new">
+                      <Select allowClear placeholder="选择状态">
+                        {Object.entries(opportunityStatusMap).map(([k, v]) => (
+                          <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                  <Col span={24}>
+                    <Form.Item label="指派跟进人" name="opportunity_assignee">
+                      <Select
+                        allowClear
+                        showSearch
+                        placeholder="选择系统用户（指派后对方会收到跟进任务）"
+                        filterOption={(input, option) =>
+                          (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                        }
+                        options={users.map(u => ({
+                          value: u.id,
+                          label: `${u.display_name || u.username}`,
+                        }))}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col span={24}>
+                    <Form.Item label="商机补充说明" name="opportunity_note">
+                      <TextArea rows={2} placeholder="背景、需求或其他说明" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              ),
+            }]}
+          />
         </Form>
       </Modal>
     </div>

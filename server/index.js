@@ -1957,6 +1957,10 @@ db.exec(`
     outcome TEXT,
     next_action TEXT,
     next_action_date TEXT,
+    opportunity_title TEXT,
+    opportunity_status TEXT,
+    opportunity_assignee INTEGER,
+    opportunity_note TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
@@ -1971,21 +1975,21 @@ app.get('/api/competitor_research', (req, res) => {
 });
 
 app.post('/api/competitor_research', (req, res) => {
-  const { company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date } = req.body;
+  const { company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
   const r = db.prepare(`
-    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, next_action, next_action_date);
+    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note);
   db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/competitor_research/:id', (req, res) => {
-  const { date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date } = req.body;
+  const { date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
   db.prepare(`
-    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, next_action=?, next_action_date=?
+    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
     WHERE id=?
-  `).run(date, title, importance, content, source, impact, amount || null, outcome, next_action, next_action_date, req.params.id);
+  `).run(date, title, importance, content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, req.params.id);
   res.json({ success: true });
 });
 
