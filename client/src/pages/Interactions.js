@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Typography, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined } from '@ant-design/icons';
-import { interactionsApi, personsApi } from '../api';
+import { Table, Select, Tag, Space, Typography, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined } from '@ant-design/icons';
+import { interactionsApi, personsApi, usersApi } from '../api';
 import dayjs from 'dayjs';
 
 const { Title } = Typography;
@@ -31,6 +31,13 @@ const categoryMap = {
   social:   { label: '社交圈', color: 'purple' },
 };
 
+const opportunityStatusMap = {
+  new: { label: '新商机', color: 'blue' },
+  following: { label: '跟进中', color: 'orange' },
+  won: { label: '已成交', color: 'green' },
+  lost: { label: '已关闭', color: 'default' },
+};
+
 export default function Interactions() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -40,6 +47,7 @@ export default function Interactions() {
   const [filterImportance, setFilterImportance] = useState('');
   const [dateRange, setDateRange] = useState(null); // { start, end, label }
   const [customPickerOpen, setCustomPickerOpen] = useState(false);
+  const [users, setUsers] = useState([]);
 
   // 快捷日期选项
   const DATE_SHORTCUTS = [
@@ -72,6 +80,7 @@ export default function Interactions() {
 
   useEffect(() => {
     personsApi.list({}).then(setPersons);
+    usersApi.listSimple().then(setUsers).catch(() => {});
   }, []);
 
   const handleDelete = async (id) => {
@@ -92,6 +101,7 @@ export default function Interactions() {
       ...record,
       date: record.date ? dayjs(record.date) : null,
       next_action_date: record.next_action_date ? dayjs(record.next_action_date) : null,
+      opportunity_assignee: record.opportunity_assignee || undefined,
     });
     setModalOpen(true);
   };
@@ -155,6 +165,19 @@ export default function Interactions() {
     { title: '结果', dataIndex: 'outcome', ellipsis: true },
     { title: '下次跟进', dataIndex: 'next_action', ellipsis: true },
     { title: '跟进日期', dataIndex: 'next_action_date' },
+    {
+      title: '商机',
+      render: (_, r) => {
+        if (!r.opportunity_title) return null;
+        const s = opportunityStatusMap[r.opportunity_status] || { label: r.opportunity_status, color: 'default' };
+        return (
+          <Space size={4} wrap>
+            <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
+            <Tag color={s.color}>{s.label}</Tag>
+          </Space>
+        );
+      },
+    },
     {
       title: '操作',
       render: (_, r) => (
@@ -339,6 +362,54 @@ export default function Interactions() {
               </Form.Item>
             </Col>
           </Row>
+
+          <Divider style={{ margin: '8px 0' }} />
+          <Collapse
+            ghost
+            items={[{
+              key: 'opp',
+              label: <span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>,
+              children: (
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item label="商机标题" name="opportunity_title">
+                      <Input placeholder="简述商机，如：XX采购合作意向" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item label="商机状态" name="opportunity_status" initialValue="new">
+                      <Select allowClear placeholder="选择状态">
+                        {Object.entries(opportunityStatusMap).map(([k, v]) => (
+                          <Select.Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Select.Option>
+                        ))}
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                  <Col span={24}>
+                    <Form.Item label="指派跟进人" name="opportunity_assignee">
+                      <Select
+                        allowClear
+                        showSearch
+                        placeholder="选择系统用户（指派后对方会收到跟进任务）"
+                        filterOption={(input, option) =>
+                          (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                        }
+                        options={users.map(u => ({
+                          value: u.id,
+                          label: `${u.display_name || u.username}`,
+                        }))}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col span={24}>
+                    <Form.Item label="商机补充说明" name="opportunity_note">
+                      <Input.TextArea rows={2} placeholder="背景、需求或其他说明" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              ),
+            }]}
+          />
         </Form>
       </Modal>
     </div>

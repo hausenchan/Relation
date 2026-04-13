@@ -6,29 +6,47 @@
 1. 人脉管理助手（工作台、人脉管理、互动记录、提醒事项）
 2. 公司研究助手（公司研究、人员架构图、产品矩阵、动向记录、研究摘要）
 3. 用户登录/权限系统（JWT鉴权、角色管理）
-4. 出差管理模块（见下方进行中）
-
-🔄 进行中
----------
-5. 出差管理模块
-   - 小组管理（groups 表，admin 配置）
-   - users 表新增 group_id 字段
-   - 新增 leader 角色
-   - 出差申请单（business_trips 表）
-   - 报销费用明细（trip_expenses 表）
-   - 报销单（expense_reports 表）
-   - 页面：我的出差、审批中心、费用统计
+4. 出差管理模块（小组管理、出差申请、费用明细、报销单、费用统计）
+5. 送礼管理模块（礼品库、送礼计划、申请审核、送礼记录）
+6. 权限与组织架构升级（2026-04-13 完成）
+   - 新增 teams 表（商务/产运/研发小组管理）
+   - 新增 director_teams 表（总监管辖小组关系）
+   - users 表新增 department、team_id 字段
+   - persons 表新增 assigned_to 字段（人脉指派）
+   - 新增 sales_director（商务总监）角色
+   - 所有角色密码自改功能（顶部用户菜单）
+   - 管理员可重置任意用户密码
+   - 数据可见范围按角色过滤（persons/gift_requests/gift_records/trips）
+   - 人脉指派功能（组长/总监可用）
+7. 商机管理 + 待跟进任务模块（2026-04-13）
+   [DB] interactions 表新增 opportunity_title/status/assignee/note/created_by 字段
+   [DB] 新建 follow_up_tasks 表（支持状态流转、完成备注、来源互动关联）
+   [后端] /api/users/simple 接口（全员可访问，用于指派选人）
+   [后端] interactions POST/PUT 支持商机字段，保存时自动创建待跟进任务
+   [后端] /api/opportunities 商机管理 API（含角色数据过滤）
+   [后端] /api/follow-up-tasks 列表/计数/更新 API
+   [前端] 互动记录表单底部加商机信息折叠区（商机标题/状态/指派人/说明）
+   [前端] 互动记录列表新增"商机"列（显示标题和状态Tag）
+   [前端] /opportunities 商机管理页面（筛选/展开详情/编辑/抽屉查看）
+   [前端] /follow-up-tasks 待跟进任务页面（Tab筛选/开始跟进/完成操作/详情抽屉）
+   [前端] 侧边栏待跟进任务 Badge（路由变化时实时刷新）
 
 📌 待开发（已规划）
 ------------------
-6. 票据附件上传
+8. 商务任务管理模块
+   - tasks 表（支持多层拆解 parent_id/depth）
+   - 后端 API（含角色权限过滤）
+   - /my-tasks 我的任务页面（所有商务角色，自建+被指派）
+   - /task-board 任务看板（总监/组长视角，按小组/成员分组）
+   - 侧边栏 Badge（今日未完成任务数）
+
+9. 票据附件上传
    - 说明：报销单支持上传票据图片/PDF
    - 存储方案：待定（本地挂载目录 or OSS/云存储）
    - 优先级：中，本期暂缓，待存储方案确定后开发
 
-7. 出差频次建议
+10. 出差频次建议
    - 重点提示：某重要客户超过2个月未出差拜访，在费用统计页面显示预警
-   - 判断条件：人脉管理中标记为"重要"的客户（relationship_level=key 或 vip）
    - 优先级：中，本期暂缓
 
 🗒️ 技术说明
@@ -36,7 +54,8 @@
 - 前端：React 18 + Ant Design 5
 - 后端：Express.js + better-sqlite3（本地 SQLite）
 - 数据存储：server/data.db
-- 启动后端：cd server && node index.js
+- 启动后端：node server/index.js（项目根目录）
 - 启动前端：cd client && npm start
+- 同时启动：npm run dev（根目录）
 - 关闭服务：lsof -ti:3000,3001 | xargs kill -9
 - Docker 部署：docker build -t relation-manager . && docker run -d -p 3001:3001 -v $(pwd)/server/data.db:/app/server/data.db --restart=always --name relation-manager relation-manager

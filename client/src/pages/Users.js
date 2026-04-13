@@ -3,20 +3,27 @@ import {
   Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm,
   message, Typography, Checkbox, Divider, Tooltip
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, UserOutlined } from '@ant-design/icons';
-import { usersApi, authApi } from '../api';
+import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, UserOutlined, LockOutlined } from '@ant-design/icons';
+import { usersApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
 
 const roleMap = {
-  admin:    { label: '超级管理员', color: 'red' },
-  leader:   { label: '商务组长',   color: 'volcano' },
-  member:   { label: '普通成员',   color: 'blue' },
-  readonly: { label: '只读访客',   color: 'default' },
-  guest:    { label: '按模块授权', color: 'orange' },
+  admin:          { label: '超级管理员', color: 'red' },
+  sales_director: { label: '商务总监',   color: 'purple' },
+  leader:         { label: '组长',       color: 'volcano' },
+  member:         { label: '普通成员',   color: 'blue' },
+  readonly:       { label: '只读',       color: 'default' },
+  guest:          { label: '按模块授权', color: 'orange' },
 };
+
+const departmentOptions = [
+  { value: 'commercial', label: '商务' },
+  { value: 'operation', label: '产运' },
+  { value: 'rd', label: '研发' },
+];
 
 const MODULE_LIST = [
   { key: 'persons',      label: '人脉管理' },
@@ -28,19 +35,25 @@ const MODULE_LIST = [
 export default function UsersPage() {
   const { user: currentUser } = useAuth();
   const [data, setData] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [pwdModalOpen, setPwdModalOpen] = useState(false);
+  const [resetPwdTarget, setResetPwdTarget] = useState(null);
   const [form] = Form.useForm();
-  const [pwdForm] = Form.useForm();
+  const [resetPwdForm] = Form.useForm();
   const role = Form.useWatch('role', form);
+  const department = Form.useWatch('department', form);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await usersApi.list();
-    setData(res);
-    setLoading(false);
+    try {
+      const [users, teamList] = await Promise.all([usersApi.list(), teamsApi.list()]);
+      setData(users);
+      setTeams(teamList);
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -57,6 +70,8 @@ export default function UsersPage() {
     form.setFieldsValue({
       display_name: r.display_name,
       role: r.role,
+      department: r.department,
+      team_id: r.team_id || undefined,
       leader_id: r.leader_id || undefined,
       modulePerms: r.modulePerms?.reduce((acc, p) => {
         acc[p.module] = { can_read: p.can_read === 1, can_write: p.can_write === 1 };
@@ -68,41 +83,58 @@ export default function UsersPage() {
 
   const handleSave = async () => {
     const values = await form.validateFields();
-    const modulePerms = role === 'guest'
+    const modulePerms = values.role === 'guest'
       ? MODULE_LIST.map(m => ({
           module: m.key,
           can_read: values.modulePerms?.[m.key]?.can_read ? 1 : 0,
           can_write: values.modulePerms?.[m.key]?.can_write ? 1 : 0,
         }))
       : [];
-    const payload = { ...values, modulePerms };
-    if (editing) {
-      await usersApi.update(editing.id, payload);
-      message.success('已更新');
-    } else {
-      await usersApi.create(payload);
-      message.success('已创建');
+    const payload = {
+      ...values,
+      modulePerms,
+      team_id: values.team_id || null,
+      leader_id: values.leader_id || null,
+      department: values.department || null,
+    };
+    try {
+      if (editing) {
+        await usersApi.update(editing.id, payload);
+        message.success('已更新');
+      } else {
+        await usersApi.create(payload);
+        message.success('已创建');
+      }
+      setModalOpen(false);
+      load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '操作失败');
     }
-    setModalOpen(false);
-    load();
   };
 
   const handleDelete = async (id) => {
-    await usersApi.delete(id);
-    message.success('已删除');
-    load();
-  };
-
-  const handleChangePassword = async (values) => {
     try {
-      await authApi.changePassword({ old_password: values.old_password, new_password: values.new_password });
-      message.success('密码修改成功');
-      setPwdModalOpen(false);
-      pwdForm.resetFields();
-    } catch (err) {
-      message.error(err.response?.data?.error || '修改失败');
+      await usersApi.delete(id);
+      message.success('已删除');
+      load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '删除失败');
     }
   };
+
+  const handleResetPwd = async (values) => {
+    try {
+      await usersApi.resetPassword(resetPwdTarget.id, { new_password: values.new_password });
+      message.success(`已重置 ${resetPwdTarget.display_name || resetPwdTarget.username} 的密码`);
+      setResetPwdTarget(null);
+      resetPwdForm.resetFields();
+    } catch (e) {
+      message.error(e.response?.data?.error || '重置失败');
+    }
+  };
+
+  // 根据部门过滤小组
+  const filteredTeams = department ? teams.filter(t => t.department === department) : teams;
 
   const columns = [
     { title: '用户名', dataIndex: 'username', render: v => <Text strong>{v}</Text> },
@@ -112,28 +144,17 @@ export default function UsersPage() {
       render: v => { const m = roleMap[v]; return m ? <Tag color={m.color}>{m.label}</Tag> : v; },
     },
     {
-      title: '归属组长', dataIndex: 'leader_id',
+      title: '部门',
+      dataIndex: 'department',
       render: v => {
-        if (!v) return <Text type="secondary" style={{ fontSize: 12 }}>-</Text>;
-        const leader = data.find(u => u.id === v);
-        return leader ? <Tag color="volcano">{leader.display_name || leader.username}</Tag> : '-';
+        const opt = departmentOptions.find(o => o.value === v);
+        return opt ? <Tag>{opt.label}</Tag> : <Text type="secondary">-</Text>;
       },
     },
     {
-      title: '模块权限', dataIndex: 'modulePerms',
-      render: (perms, r) => {
-        if (r.role !== 'guest') return <Text type="secondary" style={{ fontSize: 12 }}>按角色</Text>;
-        return (
-          <Space size={2} wrap>
-            {perms?.filter(p => p.can_read).map(p => (
-              <Tag key={p.module} color={p.can_write ? 'blue' : 'default'} style={{ fontSize: 11 }}>
-                {MODULE_LIST.find(m => m.key === p.module)?.label}
-                {p.can_write ? '（读写）' : '（只读）'}
-              </Tag>
-            ))}
-          </Space>
-        );
-      },
+      title: '所属小组',
+      dataIndex: 'team_name',
+      render: v => v || <Text type="secondary" style={{ fontSize: 12 }}>-</Text>,
     },
     { title: '最近登录', dataIndex: 'last_login', render: v => v?.slice(0, 16) || '从未登录' },
     {
@@ -141,9 +162,9 @@ export default function UsersPage() {
       render: (_, r) => (
         <Space>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
-          {r.id === currentUser?.id && (
-            <Tooltip title="修改自己的密码">
-              <Button size="small" icon={<KeyOutlined />} onClick={() => setPwdModalOpen(true)}>改密码</Button>
+          {r.id !== currentUser?.id && (
+            <Tooltip title="重置该用户密码">
+              <Button size="small" icon={<LockOutlined />} onClick={() => setResetPwdTarget(r)}>重置密码</Button>
             </Tooltip>
           )}
           {r.id !== currentUser?.id && (
@@ -190,22 +211,32 @@ export default function UsersPage() {
             </Form.Item>
           )}
           <Form.Item label="角色" name="role" rules={[{ required: true }]}>
-            <Select>
+            <Select onChange={() => { form.setFieldValue('team_id', undefined); }}>
               {Object.entries(roleMap).map(([k, v]) => (
                 <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
               ))}
             </Select>
           </Form.Item>
 
-          {role === 'member' && (
-            <Form.Item label="归属组长" name="leader_id" extra="普通成员需指定所属商务组长，方便组长审核送礼申请">
-              <Select allowClear placeholder="请选择组长">
-                {data.filter(u => u.role === 'leader').map(u => (
-                  <Option key={u.id} value={u.id}>{u.display_name || u.username}</Option>
-                ))}
-              </Select>
-            </Form.Item>
-          )}
+          <Form.Item label="所属部门" name="department">
+            <Select
+              allowClear
+              placeholder="请选择部门"
+              options={departmentOptions}
+              onChange={() => form.setFieldValue('team_id', undefined)}
+            />
+          </Form.Item>
+
+          <Form.Item label="所属小组" name="team_id">
+            <Select
+              allowClear
+              showSearch
+              placeholder={department ? '请选择小组' : '请先选择部门'}
+              disabled={!department}
+              optionFilterProp="label"
+              options={filteredTeams.map(t => ({ value: t.id, label: t.name }))}
+            />
+          </Form.Item>
 
           {role === 'guest' && (
             <>
@@ -226,36 +257,34 @@ export default function UsersPage() {
         </Form>
       </Modal>
 
-      {/* 修改密码 Modal */}
+      {/* 管理员重置他人密码 Modal */}
       <Modal
-        title="修改密码"
-        open={pwdModalOpen}
-        onOk={() => pwdForm.submit()}
-        onCancel={() => { setPwdModalOpen(false); pwdForm.resetFields(); }}
-        okText="确认修改"
+        title={`重置密码 - ${resetPwdTarget?.display_name || resetPwdTarget?.username}`}
+        open={!!resetPwdTarget}
+        onOk={() => resetPwdForm.submit()}
+        onCancel={() => { setResetPwdTarget(null); resetPwdForm.resetFields(); }}
+        okText="确认重置"
         cancelText="取消"
       >
-        <Form form={pwdForm} layout="vertical" size="small" onFinish={handleChangePassword}>
-          <Form.Item label="旧密码" name="old_password" rules={[{ required: true }]}>
-            <Input.Password />
-          </Form.Item>
-          <Form.Item label="新密码" name="new_password" rules={[{ required: true, min: 6, message: '至少6位' }]}>
-            <Input.Password />
+        <Form form={resetPwdForm} layout="vertical" onFinish={handleResetPwd} style={{ marginTop: 16 }}>
+          <Form.Item name="new_password" label="新密码" rules={[{ required: true, min: 6, message: '至少6位' }]}>
+            <Input.Password placeholder="请输入新密码（至少6位）" />
           </Form.Item>
           <Form.Item
-            label="确认新密码"
             name="confirm_password"
+            label="确认新密码"
+            dependencies={['new_password']}
             rules={[
               { required: true },
               ({ getFieldValue }) => ({
                 validator(_, value) {
                   if (!value || getFieldValue('new_password') === value) return Promise.resolve();
-                  return Promise.reject('两次密码不一致');
+                  return Promise.reject(new Error('两次密码不一致'));
                 },
               }),
             ]}
           >
-            <Input.Password />
+            <Input.Password placeholder="请再次输入新密码" />
           </Form.Item>
         </Form>
       </Modal>

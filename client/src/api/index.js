@@ -31,9 +31,19 @@ export const authApi = {
 
 export const usersApi = {
   list: () => api.get('/users').then(r => r.data),
+  listSimple: () => api.get('/users/simple').then(r => r.data),
   create: (data) => api.post('/users', data).then(r => r.data),
   update: (id, data) => api.put(`/users/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/users/${id}`).then(r => r.data),
+  resetPassword: (id, data) => api.put(`/users/${id}/reset-password`, data).then(r => r.data),
+  getDirectorTeams: (id) => api.get(`/users/${id}/director-teams`).then(r => r.data),
+};
+
+export const teamsApi = {
+  list: (params) => api.get('/teams', { params }).then(r => r.data),
+  create: (data) => api.post('/teams', data).then(r => r.data),
+  update: (id, data) => api.put(`/teams/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/teams/${id}`).then(r => r.data),
 };
 
 export const personsApi = {
@@ -43,6 +53,7 @@ export const personsApi = {
   update: (id, data) => api.put(`/persons/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/persons/${id}`).then(r => r.data),
   import: (rows) => api.post('/persons/import', rows).then(r => r.data),
+  assign: (id, data) => api.put(`/persons/${id}/assign`, data).then(r => r.data),
 };
 
 export const interactionsApi = {
@@ -50,6 +61,17 @@ export const interactionsApi = {
   create: (data) => api.post('/interactions', data).then(r => r.data),
   update: (id, data) => api.put(`/interactions/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/interactions/${id}`).then(r => r.data),
+};
+
+export const opportunitiesApi = {
+  list: (params) => api.get('/opportunities', { params }).then(r => r.data),
+  update: (interactionId, data) => api.put(`/opportunities/${interactionId}`, data).then(r => r.data),
+};
+
+export const followUpTasksApi = {
+  list: (params) => api.get('/follow-up-tasks', { params }).then(r => r.data),
+  count: () => api.get('/follow-up-tasks/count').then(r => r.data),
+  update: (id, data) => api.put(`/follow-up-tasks/${id}`, data).then(r => r.data),
 };
 
 export const remindersApi = {
@@ -158,4 +180,18 @@ export const expensesApi = {
 export const reportsApi = {
   submit: (id) => api.post(`/reports/${id}/submit`).then(r => r.data),
   approve: (id, data) => api.post(`/reports/${id}/approve`, data).then(r => r.data),
+};
+
+export const menuPermsApi = {
+  get: (userId) => api.get(`/admin/menu-perms/${userId}`).then(r => r.data),
+  save: (userId, menuKeys) => api.put(`/admin/menu-perms/${userId}`, { menuKeys }).then(r => r.data),
+};
+
+export const tasksApi = {
+  list: (params) => api.get('/tasks', { params }).then(r => r.data),
+  count: () => api.get('/tasks/count').then(r => r.data),
+  board: (params) => api.get('/tasks/board', { params }).then(r => r.data),
+  create: (data) => api.post('/tasks', data).then(r => r.data),
+  update: (id, data) => api.put(`/tasks/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/tasks/${id}`).then(r => r.data),
 };
