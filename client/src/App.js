@@ -27,7 +27,9 @@ import TripStats from './pages/TripStats';
 import MenuPerms from './pages/MenuPerms';
 import Opportunities from './pages/Opportunities';
 import FollowUpTasks from './pages/FollowUpTasks';
-import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi } from './api';
+import MyTasks from './pages/MyTasks';
+import TaskBoard from './pages/TaskBoard';
+import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
 
 const { Sider, Content } = Layout;
 
@@ -57,6 +59,7 @@ function AppLayout() {
   const [pendingGiftCount, setPendingGiftCount] = useState(0);
   const [pendingTripCount, setPendingTripCount] = useState(0);
   const [followUpCount, setFollowUpCount] = useState(0);
+  const [todayTaskCount, setTodayTaskCount] = useState(0);
   const [pwdModalOpen, setPwdModalOpen] = useState(false);
   const [pwdForm] = Form.useForm();
   const [pwdLoading, setPwdLoading] = useState(false);
@@ -78,6 +81,8 @@ function AppLayout() {
     }
     // 待跟进任务数量（所有角色）
     followUpTasksApi.count().then(r => setFollowUpCount(r.count)).catch(() => {});
+    // 今日未完成商务任务数（所有商务角色）
+    tasksApi.count().then(r => setTodayTaskCount(r.count)).catch(() => {});
   }, [location, user]);
 
   const handleChangePwd = async (values) => {
@@ -140,6 +145,22 @@ function AppLayout() {
   const crmGroup = filterGroup(crmChildren);
   const giftGroup = filterGroup(giftChildren);
 
+  const taskChildren = [
+    {
+      key: '/my-tasks', icon: <CheckSquareOutlined />,
+      label: (
+        <span>
+          <Link to="/my-tasks">我的任务</Link>
+          {todayTaskCount > 0 && <Badge count={todayTaskCount} size="small" style={{ marginLeft: 8 }} />}
+        </span>
+      ),
+    },
+    ['leader', 'sales_director', 'admin'].includes(user?.role) && {
+      key: '/task-board', icon: <ApartmentOutlined />,
+      label: <Link to="/task-board">任务看板</Link>,
+    },
+  ].filter(Boolean);
+
   const tripChildren = [
     canAccessMenu('/trips') && {
       key: '/trips', icon: <CarOutlined />,
@@ -180,9 +201,10 @@ function AppLayout() {
         },
       ].filter(Boolean),
     },
-    (giftGroup.length > 0 || tripChildren.length > 0) && {
+    (giftGroup.length > 0 || tripChildren.length > 0 || taskChildren.length > 0) && {
       key: 'biz', icon: <ShopOutlined />, label: '商务部',
       children: [
+        taskChildren.length > 0 && { key: 'tasks', icon: <CheckSquareOutlined />, label: '商务任务管理', children: taskChildren },
         giftGroup.length > 0 && { key: 'gift', icon: <GiftOutlined />, label: '送礼管理', children: giftGroup },
         tripChildren.length > 0 && {
           key: 'trip', icon: <CarOutlined />, label: '出差管理',
@@ -289,7 +311,7 @@ function AppLayout() {
           theme="dark"
           mode="inline"
           selectedKeys={[selectedKey]}
-          defaultOpenKeys={['hub', 'crm', 'research', 'biz', 'gift', 'trip', 'product', 'rd', 'system']}
+          defaultOpenKeys={['hub', 'crm', 'research', 'biz', 'tasks', 'gift', 'trip', 'product', 'rd', 'system']}
           items={menuItems}
           style={{ marginTop: 8, background: '#0a0a1a' }}
         />
@@ -332,6 +354,8 @@ function AppLayout() {
             <Route path="/menu-perms" element={<PrivateRoute><MenuPerms /></PrivateRoute>} />
             <Route path="/opportunities" element={<PrivateRoute><Opportunities /></PrivateRoute>} />
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
+            <Route path="/my-tasks" element={<PrivateRoute><MyTasks /></PrivateRoute>} />
+            <Route path="/task-board" element={<PrivateRoute><TaskBoard /></PrivateRoute>} />
           </Routes>
         </Content>
       </Layout>
