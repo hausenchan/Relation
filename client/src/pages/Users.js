@@ -17,11 +17,15 @@ const roleMap = {
   member:         { label: '普通成员',   color: 'blue' },
   readonly:       { label: '只读',       color: 'default' },
   guest:          { label: '按模块授权', color: 'orange' },
+  ceo:            { label: 'CEO',        color: 'gold' },
+  coo:            { label: 'COO',        color: 'gold' },
+  cto:            { label: 'CTO',        color: 'gold' },
+  cmo:            { label: 'CMO',        color: 'gold' },
 };
 
 const departmentOptions = [
   { value: 'commercial', label: '商务' },
-  { value: 'product', label: '产品' },
+  { value: 'operation', label: '产运' },
   { value: 'rd', label: '研发' },
 ];
 

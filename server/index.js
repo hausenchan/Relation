@@ -9,6 +9,9 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
 
+const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const isAdmin = (role) => ADMIN_ROLES.has(role);
+
 app.use(cors());
 app.use(express.json());
 
@@ -572,14 +575,14 @@ app.delete('/api/gift_requests/:id', canWrite, (req, res) => {
   const req_ = db.prepare('SELECT * FROM gift_requests WHERE id = ?').get(req.params.id);
   if (!req_) return res.status(404).json({ error: '未找到' });
   if (req_.status !== 'pending') return res.status(400).json({ error: '只能撤回待审核的申请' });
-  if (req_.requester_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: '无权操作' });
+  if (req_.requester_id !== req.user.id && !isAdmin(req.user.role)) return res.status(403).json({ error: '无权操作' });
   db.prepare('DELETE FROM gift_requests WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
 // 审核申请（leader / sales_director / admin）
 app.post('/api/gift_requests/:id/review', (req, res) => {
-  if (req.user.role !== 'leader' && req.user.role !== 'admin' && req.user.role !== 'sales_director') return res.status(403).json({ error: '无审核权限' });
+  if (req.user.role !== 'leader' && !isAdmin(req.user.role) && req.user.role !== 'sales_director') return res.status(403).json({ error: '无审核权限' });
   const { action, review_note } = req.body; // action: approve | reject
   const request = db.prepare('SELECT * FROM gift_requests WHERE id = ?').get(req.params.id);
   if (!request) return res.status(404).json({ error: '未找到' });
@@ -634,7 +637,7 @@ app.put('/api/gift_records/:id', (req, res) => {
   const { status, feedback, rating, send_date } = req.body;
   const record = db.prepare('SELECT * FROM gift_records WHERE id = ?').get(req.params.id);
   if (!record) return res.status(404).json({ error: '未找到' });
-  if (record.sender_id !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'leader') {
+  if (record.sender_id !== req.user.id && !isAdmin(req.user.role) && req.user.role !== 'leader') {
     return res.status(403).json({ error: '无权操作' });
   }
 
@@ -661,7 +664,7 @@ app.put('/api/gift_records/:id', (req, res) => {
 
 // 仅 admin 可访问
 function adminOnly(req, res, next) {
-  if (req.user.role !== 'admin') return res.status(403).json({ error: '无权限' });
+  if (!isAdmin(req.user.role)) return res.status(403).json({ error: '无权限' });
   next();
 }
 
@@ -674,7 +677,7 @@ function canWrite(req, res, next) {
 
 // 获取当前用户可见的所有用户ID列表（用于数据过滤）
 function getVisibleUserIds(userId, role) {
-  if (role === 'admin') return null; // null 表示不限制，看全部
+  if (isAdmin(role)) return null; // null 表示不限制，看全部
 
   if (role === 'sales_director') {
     // 自己 + 自己带的组的成员 + 下辖所有leader带的组的成员
@@ -1016,7 +1019,7 @@ app.delete('/api/persons/:id', canWrite, (req, res) => {
 // 人脉指派（组长/admin/sales_director 可用）
 app.put('/api/persons/:id/assign', auth, (req, res) => {
   const { role } = req.user;
-  if (role !== 'admin' && role !== 'leader' && role !== 'sales_director') {
+  if (!isAdmin(role) && role !== 'leader' && role !== 'sales_director') {
     return res.status(403).json({ error: '无指派权限' });
   }
   const { assigned_to } = req.body;
@@ -1299,7 +1302,7 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
   const { status, done_note, due_date } = req.body;
   const task = db.prepare('SELECT * FROM follow_up_tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
-  if (task.assigned_to !== req.user.id && req.user.role !== 'admin') {
+  if (task.assigned_to !== req.user.id && !isAdmin(req.user.role)) {
     return res.status(403).json({ error: '无权操作' });
   }
   const doneAt = status === 'done' ? new Date().toISOString() : task.done_at;
@@ -1393,7 +1396,7 @@ app.get('/api/tasks/board', (req, res) => {
 
   // 获取可见成员
   let visibleIds;
-  if (role === 'admin') {
+  if (isAdmin(role)) {
     visibleIds = db.prepare('SELECT id FROM users WHERE role != ?').all('readonly').map(u => u.id);
   } else if (role === 'leader') {
     const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(me);
@@ -1489,7 +1492,7 @@ app.put('/api/tasks/:id', (req, res) => {
 
   const { id: me, role } = req.user;
   // 只有被指派人或创建人可修改
-  if (task.assigned_to !== me && task.created_by !== me && role !== 'admin' && role !== 'sales_director') {
+  if (task.assigned_to !== me && task.created_by !== me && !isAdmin(role) && role !== 'sales_director') {
     return res.status(403).json({ error: '无权修改此任务' });
   }
 
@@ -1514,8 +1517,8 @@ app.delete('/api/tasks/:id', (req, res) => {
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
   const { id: me, role } = req.user;
-  if (task.created_by !== me && role !== 'admin') return res.status(403).json({ error: '无权删除' });
-  if (task.status !== 'pending' && role !== 'admin') return res.status(400).json({ error: '只能删除待处理的任务' });
+  if (task.created_by !== me && !isAdmin(role)) return res.status(403).json({ error: '无权删除' });
+  if (task.status !== 'pending' && !isAdmin(role)) return res.status(400).json({ error: '只能删除待处理的任务' });
   // 同时删除子任务
   db.prepare('DELETE FROM tasks WHERE parent_id = ?').run(req.params.id);
   db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
@@ -1607,7 +1610,7 @@ app.put('/api/budgets/:id', canWrite, (req, res) => {
 
   const { id: me, role } = req.user;
   // 只有创建人或管理员可修改
-  if (budget.created_by !== me && role !== 'admin' && role !== 'sales_director') {
+  if (budget.created_by !== me && !isAdmin(role) && role !== 'sales_director') {
     return res.status(403).json({ error: '无权修改此预算' });
   }
 
@@ -1647,7 +1650,7 @@ app.delete('/api/budgets/:id', canWrite, (req, res) => {
   const budget = db.prepare('SELECT * FROM budgets WHERE id = ?').get(req.params.id);
   if (!budget) return res.status(404).json({ error: '未找到' });
   const { id: me, role } = req.user;
-  if (budget.created_by !== me && role !== 'admin') return res.status(403).json({ error: '无权删除' });
+  if (budget.created_by !== me && !isAdmin(role)) return res.status(403).json({ error: '无权删除' });
   db.prepare('DELETE FROM budgets WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -2177,7 +2180,7 @@ app.delete('/api/groups/:id', (req, res) => {
 // 权限辅助：是否可操作该申请（本人 or leader/admin）
 function canAccessTrip(req, tripUserId) {
   const { id, role } = req.user;
-  return role === 'admin' || role === 'leader' || role === 'sales_director' || id === tripUserId;
+  return isAdmin(role) || role === 'leader' || role === 'sales_director' || id === tripUserId;
 }
 
 app.get('/api/trips', (req, res) => {
@@ -2238,7 +2241,7 @@ app.post('/api/trips', (req, res) => {
 app.put('/api/trips/:id', (req, res) => {
   const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '未找到' });
-  if (t.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: '无权限' });
+  if (t.user_id !== req.user.id && !isAdmin(req.user.role)) return res.status(403).json({ error: '无权限' });
   if (!['draft', 'rejected'].includes(t.status)) return res.status(400).json({ error: '当前状态不可编辑' });
   const { destinations, start_date, end_date, purpose, related_persons, estimated_cost } = req.body;
   db.prepare(`
@@ -2260,7 +2263,7 @@ app.post('/api/trips/:id/submit', (req, res) => {
 // 审批
 app.post('/api/trips/:id/approve', (req, res) => {
   const { role } = req.user;
-  if (role !== 'admin' && role !== 'leader' && role !== 'sales_director') return res.status(403).json({ error: '无审批权限' });
+  if (!isAdmin(role) && role !== 'leader' && role !== 'sales_director') return res.status(403).json({ error: '无审批权限' });
   const { action, note } = req.body; // action: approved | rejected
   if (!['approved', 'rejected'].includes(action)) return res.status(400).json({ error: '无效操作' });
   db.prepare(`
@@ -2274,14 +2277,14 @@ app.post('/api/trips/:id/approve', (req, res) => {
 app.post('/api/trips/:id/complete', (req, res) => {
   const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
   if (!t) return res.status(404).json({ error: '未找到' });
-  if (t.user_id !== req.user.id && req.user.role !== 'admin') return res.status(403).json({ error: '无权限' });
+  if (t.user_id !== req.user.id && !isAdmin(req.user.role)) return res.status(403).json({ error: '无权限' });
   db.prepare("UPDATE business_trips SET status='completed', updated_at=CURRENT_TIMESTAMP WHERE id=?").run(req.params.id);
   res.json({ success: true });
 });
 
 app.delete('/api/trips/:id', (req, res) => {
   const t = db.prepare('SELECT * FROM business_trips WHERE id=?').get(req.params.id);
-  if (!t || (t.user_id !== req.user.id && req.user.role !== 'admin')) return res.status(403).json({ error: '无权限' });
+  if (!t || (t.user_id !== req.user.id && !isAdmin(req.user.role))) return res.status(403).json({ error: '无权限' });
   if (t.status === 'approved') return res.status(400).json({ error: '已审批的申请不可删除' });
   db.prepare('DELETE FROM trip_expenses WHERE trip_id=?').run(req.params.id);
   db.prepare('DELETE FROM expense_reports WHERE trip_id=?').run(req.params.id);
@@ -2356,7 +2359,7 @@ app.post('/api/reports/:id/submit', (req, res) => {
 // 审批报销
 app.post('/api/reports/:id/approve', (req, res) => {
   const { role } = req.user;
-  if (role !== 'admin' && role !== 'leader') return res.status(403).json({ error: '无审批权限' });
+  if (!isAdmin(role) && role !== 'leader') return res.status(403).json({ error: '无审批权限' });
   const { action, note } = req.body;
   const status = action === 'approved' ? 'paid' : 'rejected';
   db.prepare(`UPDATE expense_reports SET status=?, approve_note=?, approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
@@ -2619,7 +2622,7 @@ app.post('/api/weekly-reports', (req, res) => {
   }
 
   // 权限检查：只能写自己的周报，除非是 admin
-  if (role !== 'admin' && user_id !== currentUserId) {
+  if (!isAdmin(role) && user_id !== currentUserId) {
     return res.status(403).json({ error: '无权限' });
   }
 
@@ -2653,7 +2656,7 @@ app.delete('/api/weekly-reports/:id', (req, res) => {
   const { id } = req.params;
   const { role } = req.user;
 
-  if (role !== 'admin') {
+  if (!isAdmin(role)) {
     return res.status(403).json({ error: '仅管理员可删除' });
   }
 
@@ -2665,7 +2668,7 @@ app.delete('/api/weekly-reports/:id', (req, res) => {
 app.get('/api/weekly-reports/writers', (req, res) => {
   const { role } = req.user;
 
-  if (role !== 'admin') {
+  if (!isAdmin(role)) {
     return res.status(403).json({ error: '仅管理员可访问' });
   }
 
@@ -2685,7 +2688,7 @@ app.put('/api/users/:id/weekly-report', (req, res) => {
   const { need_weekly_report } = req.body;
   const { role } = req.user;
 
-  if (role !== 'admin') {
+  if (!isAdmin(role)) {
     return res.status(403).json({ error: '仅管理员可操作' });
   }
 
@@ -3168,8 +3171,9 @@ app.delete('/api/notifications/:id', (req, res) => {
 // =========== 公司经营模块 API ===========
 // 权限中间件：仅高管可访问
 function requireExecutive(req, res, next) {
-  const { executive_role } = req.user;
-  if (!executive_role || !['ceo', 'coo', 'cto', 'cmo'].includes(executive_role)) {
+  const { executive_role, role } = req.user;
+  const execRoles = ['ceo', 'coo', 'cto', 'cmo'];
+  if (!execRoles.includes(executive_role) && !execRoles.includes(role)) {
     return res.status(403).json({ error: '仅高管可访问此模块' });
   }
   next();

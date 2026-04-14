@@ -11,9 +11,8 @@ function MidongLogo({ size = 72 }) {
     <svg width={size} height={size} viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="lg1" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#ff6a00" />
-          <stop offset="50%" stopColor="#ee0979" />
-          <stop offset="100%" stopColor="#1677ff" />
+          <stop offset="0%" stopColor="#07C160" />
+          <stop offset="100%" stopColor="#06AD56" />
         </linearGradient>
         <linearGradient id="lg2" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#fff" stopOpacity="0.95" />
@@ -89,7 +88,7 @@ export default function Login() {
           <div style={{ marginBottom: 14 }}>
             <MidongLogo size={76} />
           </div>
-          <Title level={2} style={{ margin: 0, fontSize: 28, letterSpacing: 4, background: 'linear-gradient(90deg, #ff6a00, #ee0979, #1677ff)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+          <Title level={2} style={{ margin: 0, fontSize: 28, letterSpacing: 4, color: '#07C160' }}>
             幂动小智
           </Title>
           <div style={{ marginTop: 6, fontSize: 12, letterSpacing: 3, color: '#999', fontWeight: 400 }}>
@@ -112,8 +111,8 @@ export default function Login() {
               block
               style={{
                 height: 46, fontSize: 16, borderRadius: 8, border: 'none',
-                background: 'linear-gradient(90deg, #ff6a00, #ee0979)',
-                boxShadow: '0 4px 20px rgba(238,9,121,0.4)',
+                background: '#07C160',
+                boxShadow: '0 4px 20px rgba(7,193,96,0.4)',
               }}
             >
               登 录
