@@ -417,6 +417,9 @@ if (userCols.length > 0) {
   if (!userCols.includes('team_id')) {
     db.exec("ALTER TABLE users ADD COLUMN team_id INTEGER DEFAULT NULL");
   }
+  if (!userCols.includes('executive_role')) {
+    db.exec("ALTER TABLE users ADD COLUMN executive_role TEXT DEFAULT NULL");
+  }
 }
 
 // =========== 送礼模块建表 ===========
