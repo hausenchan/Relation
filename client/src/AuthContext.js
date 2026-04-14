@@ -1,13 +1,38 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { authApi } from './api';
 
 const AuthContext = createContext(null);
+const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2小时
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
   });
   const [loading, setLoading] = useState(true);
+  const idleTimer = useRef(null);
+
+  const doLogout = useCallback(() => {
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    setUser(null);
+    window.location.href = '/login';
+  }, []);
+
+  // 无操作超时检测
+  useEffect(() => {
+    if (!user) return;
+    const reset = () => {
+      clearTimeout(idleTimer.current);
+      idleTimer.current = setTimeout(doLogout, IDLE_TIMEOUT);
+    };
+    const events = ['mousemove', 'keydown', 'click', 'scroll'];
+    events.forEach(e => window.addEventListener(e, reset));
+    reset();
+    return () => {
+      clearTimeout(idleTimer.current);
+      events.forEach(e => window.removeEventListener(e, reset));
+    };
+  }, [user, doLogout]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -28,9 +53,7 @@ export function AuthProvider({ children }) {
 
   const logout = async () => {
     try { await authApi.logout(); } catch {}
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setUser(null);
+    doLogout();
   };
 
   // 检查模块访问权限

@@ -21,7 +21,13 @@ function auth(req, res, next) {
   if (!header) return res.status(401).json({ error: '未登录' });
   const token = header.replace('Bearer ', '');
   try {
-    req.user = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
+    // 验证 password_version，改密码后旧 token 失效
+    const user = db.prepare('SELECT password_version FROM users WHERE id = ?').get(decoded.id);
+    if (!user || (user.password_version || 0) !== (decoded.pwv || 0)) {
+      return res.status(401).json({ error: '登录已失效，请重新登录' });
+    }
+    req.user = decoded;
     next();
   } catch {
     res.status(401).json({ error: 'Token 无效或已过期' });
@@ -423,6 +429,9 @@ if (userCols.length > 0) {
   if (!userCols.includes('executive_role')) {
     db.exec("ALTER TABLE users ADD COLUMN executive_role TEXT DEFAULT NULL");
   }
+  if (!userCols.includes('password_version')) {
+    db.exec("ALTER TABLE users ADD COLUMN password_version INTEGER DEFAULT 0");
+  }
 }
 
 // =========== 送礼模块建表 ===========
@@ -725,9 +734,9 @@ app.post('/api/auth/login', (req, res) => {
   }
   db.prepare("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
   const token = jwt.sign(
-    { id: user.id, username: user.username, display_name: user.display_name, role: user.role },
+    { id: user.id, username: user.username, display_name: user.display_name, role: user.role, pwv: user.password_version || 0 },
     JWT_SECRET,
-    { expiresIn: '7d' }
+    { expiresIn: '8h' }
   );
   // 查模块权限
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
@@ -751,7 +760,7 @@ app.put('/api/auth/password', auth, (req, res) => {
   if (!bcrypt.compareSync(old_password, user.password_hash)) {
     return res.status(400).json({ error: '旧密码错误' });
   }
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.user.id);
+  db.prepare('UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.user.id);
   res.json({ success: true });
 });
 
@@ -759,7 +768,7 @@ app.put('/api/auth/password', auth, (req, res) => {
 app.put('/api/users/:id/reset-password', auth, adminOnly, (req, res) => {
   const { new_password } = req.body;
   if (!new_password) return res.status(400).json({ error: '新密码必填' });
-  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.params.id);
+  db.prepare('UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.params.id);
   res.json({ success: true });
 });
 

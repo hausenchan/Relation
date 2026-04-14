@@ -157,11 +157,6 @@ export default function Interactions() {
         return <Tag color={m.color}>{m.label}</Tag>;
       },
     },
-    {
-      title: '金额',
-      dataIndex: 'amount',
-      render: v => v ? `¥${v}` : '-',
-    },
     { title: '结果', dataIndex: 'outcome', ellipsis: true },
     { title: '下次跟进', dataIndex: 'next_action', ellipsis: true },
     { title: '跟进日期', dataIndex: 'next_action_date' },
@@ -318,14 +313,6 @@ export default function Interactions() {
                 </Select>
               </Form.Item>
             </Col>
-            {/* 餐饮时显示金额 */}
-            {interactionType === 'meal' && (
-              <Col span={8}>
-                <Form.Item label="金额（元）" name="amount">
-                  <InputNumber min={0} style={{ width: '100%' }} placeholder="餐饮费用" />
-                </Form.Item>
-              </Col>
-            )}
             {/* 送礼时显示礼物 */}
             {interactionType === 'gift' && (
               <Col span={8}>

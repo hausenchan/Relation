@@ -80,8 +80,11 @@ export default function MenuPerms() {
 
   useEffect(() => {
     usersApi.list().then(data => {
+      console.log('all users:', data);
       // 排除 admin 自身（admin 不需要配置菜单权限）
-      setUsers(data.filter(u => u.role !== 'admin'));
+      const filtered = data.filter(u => u.role !== 'admin');
+      console.log('filtered users:', filtered);
+      setUsers(filtered);
     }).catch(() => message.error('加载用户列表失败'));
   }, []);
 
