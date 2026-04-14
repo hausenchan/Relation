@@ -351,52 +351,47 @@ export default function Interactions() {
           </Row>
 
           <Divider style={{ margin: '8px 0' }} />
-          <Collapse
-            ghost
-            items={[{
-              key: 'opp',
-              label: <span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>,
-              children: (
-                <Row gutter={16}>
-                  <Col span={12}>
-                    <Form.Item label="商机标题" name="opportunity_title">
-                      <Input placeholder="简述商机，如：XX采购合作意向" />
-                    </Form.Item>
-                  </Col>
-                  <Col span={12}>
-                    <Form.Item label="商机状态" name="opportunity_status" initialValue="new">
-                      <Select allowClear placeholder="选择状态">
-                        {Object.entries(opportunityStatusMap).map(([k, v]) => (
-                          <Select.Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Select.Option>
-                        ))}
-                      </Select>
-                    </Form.Item>
-                  </Col>
-                  <Col span={24}>
-                    <Form.Item label="指派跟进人" name="opportunity_assignee">
-                      <Select
-                        allowClear
-                        showSearch
-                        placeholder="选择系统用户（指派后对方会收到跟进任务）"
-                        filterOption={(input, option) =>
-                          (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                        }
-                        options={users.map(u => ({
-                          value: u.id,
-                          label: `${u.display_name || u.username}`,
-                        }))}
-                      />
-                    </Form.Item>
-                  </Col>
-                  <Col span={24}>
-                    <Form.Item label="商机补充说明" name="opportunity_note">
-                      <Input.TextArea rows={2} placeholder="背景、需求或其他说明" />
-                    </Form.Item>
-                  </Col>
-                </Row>
-              ),
-            }]}
-          />
+          <Collapse ghost>
+            <Collapse.Panel key="opp" header={<span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>}>
+              <Row gutter={16}>
+                <Col span={12}>
+                  <Form.Item label="商机标题" name="opportunity_title">
+                    <Input placeholder="简述商机，如：XX采购合作意向" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item label="商机状态" name="opportunity_status" initialValue="new">
+                    <Select allowClear placeholder="选择状态">
+                      {Object.entries(opportunityStatusMap).map(([k, v]) => (
+                        <Select.Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Select.Option>
+                      ))}
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
+                  <Form.Item label="指派跟进人" name="opportunity_assignee">
+                    <Select
+                      allowClear
+                      showSearch
+                      placeholder="选择系统用户（指派后对方会收到跟进任务）"
+                      filterOption={(input, option) =>
+                        (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                      }
+                      options={users.map(u => ({
+                        value: u.id,
+                        label: `${u.display_name || u.username}`,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
+                  <Form.Item label="商机补充说明" name="opportunity_note">
+                    <Input.TextArea rows={2} placeholder="背景、需求或其他说明" />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </Collapse.Panel>
+          </Collapse>
         </Form>
       </Modal>
     </div>
