@@ -226,6 +226,11 @@ function AppLayout() {
       key: 'goal-plan', icon: <AimOutlined />, label: '目标与计划',
       children: goalChildren,
     },
+    // 公司经营（仅高管）
+    executiveChildren.length > 0 && {
+      key: 'executive', icon: <BankOutlined />, label: '公司经营',
+      children: executiveChildren,
+    },
     // 业务流转
     {
       key: 'biz-flow', icon: <BranchesOutlined />, label: '业务流转',
@@ -240,11 +245,6 @@ function AppLayout() {
     teamChildren.length > 0 && {
       key: 'team-mgmt', icon: <TeamOutlined />, label: '团队管理',
       children: teamChildren,
-    },
-    // 公司经营（仅高管）
-    executiveChildren.length > 0 && {
-      key: 'executive', icon: <BankOutlined />, label: '公司经营',
-      children: executiveChildren,
     },
     // 系统管理（仅 admin）
     user?.role === 'admin' && {
