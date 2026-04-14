@@ -137,6 +137,16 @@ export default function TaskBoard() {
   const inProgressTasks = boardData.reduce((sum, m) => sum + m.tasks.filter(t => t.status === 'in_progress').length, 0);
   const pendingTasks = totalTasks - doneTasks - inProgressTasks;
 
+  // 统计我指派给别人的任务
+  const myAssignedTasks = boardData.reduce((sum, m) => {
+    return sum + m.tasks.filter(t => t.created_by === user?.id && t.assigned_to !== user?.id).length;
+  }, 0);
+
+  // 统计别人指派给我的任务
+  const assignedToMeTasks = boardData.reduce((sum, m) => {
+    return sum + m.tasks.filter(t => t.assigned_to === user?.id && t.created_by !== user?.id).length;
+  }, 0);
+
   return (
     <div>
       {/* 头部 */}
@@ -158,28 +168,48 @@ export default function TaskBoard() {
 
       {/* 统计卡片 */}
       <Row gutter={12} style={{ marginBottom: 16 }}>
-        <Col span={6}>
+        <Col span={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#f0f5ff' }}>
             <Statistic title="总任务" value={totalTasks} valueStyle={{ fontSize: 20 }} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#fff7e6' }}>
             <Statistic title="进行中" value={inProgressTasks} valueStyle={{ fontSize: 20, color: '#fa8c16' }} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#fff1f0' }}>
             <Statistic title="待处理" value={pendingTasks} valueStyle={{ fontSize: 20, color: '#ff4d4f' }} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#f6ffed' }}>
             <Statistic
               title="已完成"
               value={doneTasks}
               suffix={totalTasks > 0 ? `/${totalTasks}` : ''}
               valueStyle={{ fontSize: 20, color: '#52c41a' }}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small" style={{ textAlign: 'center', background: '#e6f7ff' }}>
+            <Statistic
+              title="我指派的"
+              value={myAssignedTasks}
+              valueStyle={{ fontSize: 20, color: '#1890ff' }}
+              prefix={<UserOutlined />}
+            />
+          </Card>
+        </Col>
+        <Col span={4}>
+          <Card size="small" style={{ textAlign: 'center', background: '#fff0f6' }}>
+            <Statistic
+              title="指派给我"
+              value={assignedToMeTasks}
+              valueStyle={{ fontSize: 20, color: '#eb2f96' }}
+              prefix={<TeamOutlined />}
             />
           </Card>
         </Col>

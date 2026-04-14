@@ -4,7 +4,7 @@ import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   CheckOutlined, PlayCircleOutlined, FlagOutlined, UserOutlined,
-  RiseOutlined, ThunderboltOutlined
+  RiseOutlined, ThunderboltOutlined, FilterOutlined
 } from '@ant-design/icons';
 import { statsApi, remindersApi, tasksApi, followUpTasksApi, opportunitiesApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -54,9 +54,11 @@ export default function Dashboard() {
   const [users, setUsers] = useState([]);
   const navigate = useNavigate();
 
-  // 筛选条件
+  // 筛选条件 - 我的任务
   const [myTaskStatusFilter, setMyTaskStatusFilter] = useState(['pending', 'in_progress']);
   const [myTaskDateRange, setMyTaskDateRange] = useState(null);
+
+  // 筛选条件 - 我指派的任务
   const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState(['pending', 'in_progress']);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
 
@@ -173,6 +175,38 @@ export default function Dashboard() {
       message.error('删除失败');
     }
   };
+
+  // 筛选我的任务
+  const filteredMyTasks = myTasks.filter(t => {
+    // 状态筛选
+    if (!myTaskStatusFilter.includes(t.status)) return false;
+
+    // 时间范围筛选
+    if (myTaskDateRange && myTaskDateRange.length === 2) {
+      const taskDate = dayjs(t.date);
+      if (taskDate.isBefore(myTaskDateRange[0], 'day') || taskDate.isAfter(myTaskDateRange[1], 'day')) {
+        return false;
+      }
+    }
+
+    return true;
+  });
+
+  // 筛选我指派的任务
+  const filteredAssignedTasks = assignedTasks.filter(t => {
+    // 状态筛选
+    if (!assignedTaskStatusFilter.includes(t.status)) return false;
+
+    // 时间范围筛选
+    if (assignedTaskDateRange && assignedTaskDateRange.length === 2) {
+      const taskDate = dayjs(t.date);
+      if (taskDate.isBefore(assignedTaskDateRange[0], 'day') || taskDate.isAfter(assignedTaskDateRange[1], 'day')) {
+        return false;
+      }
+    }
+
+    return true;
+  });
 
   const taskColumns = [
     {
@@ -292,21 +326,51 @@ export default function Dashboard() {
       label: (
         <span>
           <CheckSquareOutlined /> 我的任务
-          {myTasks.length > 0 && <Badge count={myTasks.length} style={{ marginLeft: 8 }} />}
+          {filteredMyTasks.length > 0 && <Badge count={filteredMyTasks.length} style={{ marginLeft: 8 }} />}
         </span>
       ),
       children: (
         <div>
-          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text type="secondary">未来7天内的待办任务</Text>
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <Space wrap>
+              <Select
+                mode="multiple"
+                placeholder="状态筛选"
+                value={myTaskStatusFilter}
+                onChange={setMyTaskStatusFilter}
+                style={{ minWidth: 200 }}
+                options={[
+                  { label: '未开始', value: 'pending' },
+                  { label: '进行中', value: 'in_progress' },
+                  { label: '已完成', value: 'done' },
+                ]}
+              />
+              <RangePicker
+                placeholder={['开始日期', '结束日期']}
+                value={myTaskDateRange}
+                onChange={setMyTaskDateRange}
+                style={{ width: 240 }}
+              />
+              {(myTaskStatusFilter.length !== 2 || myTaskDateRange) && (
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setMyTaskStatusFilter(['pending', 'in_progress']);
+                    setMyTaskDateRange(null);
+                  }}
+                >
+                  重置筛选
+                </Button>
+              )}
+            </Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>
           </div>
           <Table
-            dataSource={myTasks}
+            dataSource={filteredMyTasks}
             columns={taskColumns}
             rowKey="id"
             loading={loading}
-            pagination={false}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             size="small"
           />
         </div>
@@ -320,20 +384,50 @@ export default function Dashboard() {
       label: (
         <span>
           <UserOutlined /> 我指派的任务
-          {assignedTasks.length > 0 && <Badge count={assignedTasks.length} style={{ marginLeft: 8 }} />}
+          {filteredAssignedTasks.length > 0 && <Badge count={filteredAssignedTasks.length} style={{ marginLeft: 8 }} />}
         </span>
       ),
       children: (
         <div>
-          <div style={{ marginBottom: 16 }}>
-            <Text type="secondary">我指派给团队成员的任务</Text>
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <Space wrap>
+              <Select
+                mode="multiple"
+                placeholder="状态筛选"
+                value={assignedTaskStatusFilter}
+                onChange={setAssignedTaskStatusFilter}
+                style={{ minWidth: 200 }}
+                options={[
+                  { label: '未开始', value: 'pending' },
+                  { label: '进行中', value: 'in_progress' },
+                  { label: '已完成', value: 'done' },
+                ]}
+              />
+              <RangePicker
+                placeholder={['开始日期', '结束日期']}
+                value={assignedTaskDateRange}
+                onChange={setAssignedTaskDateRange}
+                style={{ width: 240 }}
+              />
+              {(assignedTaskStatusFilter.length !== 2 || assignedTaskDateRange) && (
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setAssignedTaskStatusFilter(['pending', 'in_progress']);
+                    setAssignedTaskDateRange(null);
+                  }}
+                >
+                  重置筛选
+                </Button>
+              )}
+            </Space>
           </div>
           <Table
-            dataSource={assignedTasks}
+            dataSource={filteredAssignedTasks}
             columns={assignedTaskColumns}
             rowKey="id"
             loading={loading}
-            pagination={false}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             size="small"
           />
         </div>
@@ -369,6 +463,10 @@ export default function Dashboard() {
                     </Space>
                   }
                 />
+                <Space>
+                  <Tag color="default">{dayjs(item.follow_up_date).format('MM-DD')}</Tag>
+                  <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>处理</Button>
+                </Space>
               </List.Item>
             )}
           />
@@ -379,7 +477,7 @@ export default function Dashboard() {
       key: 'opportunities',
       label: (
         <span>
-          <RiseOutlined /> 我的商机
+          <RiseOutlined /> 商机任务
           {opportunities.length > 0 && <Badge count={opportunities.length} style={{ marginLeft: 8 }} />}
         </span>
       ),
@@ -394,16 +492,20 @@ export default function Dashboard() {
             renderItem={item => (
               <List.Item>
                 <List.Item.Meta
-                  title={<Text strong>{item.opportunity_title}</Text>}
+                  title={<Text strong>{item.title}</Text>}
                   description={
                     <Space>
                       <Tag color="blue">{item.person_name}</Tag>
-                      <Tag color={item.opportunity_status === 'pending' ? 'orange' : 'green'}>
-                        {item.opportunity_status === 'pending' ? '待处理' : '进行中'}
+                      <Tag color={item.opportunity_status === 'in_progress' ? 'orange' : 'default'}>
+                        {item.opportunity_status === 'pending' ? '待跟进' : '跟进中'}
                       </Tag>
                     </Space>
                   }
                 />
+                <Space>
+                  <Text type="secondary">{item.expected_amount ? `¥${item.expected_amount}` : '-'}</Text>
+                  <Button type="link" size="small" onClick={() => navigate('/opportunities')}>查看</Button>
+                </Space>
               </List.Item>
             )}
           />
@@ -413,122 +515,148 @@ export default function Dashboard() {
   );
 
   return (
-    <div>
-      <Title level={4} style={{ marginBottom: 24 }}>工作台</Title>
-
+    <div style={{ padding: 24 }}>
       {/* 统计卡片 */}
-      <Row gutter={[16, 16]}>
-        <Col xs={12} sm={6}>
-          <Card hoverable onClick={() => navigate('/persons')}>
-            <Statistic title="人脉总数" value={stats?.personCount ?? '-'} prefix={<TeamOutlined />} valueStyle={{ color: '#1677ff' }} />
-          </Card>
-        </Col>
-        <Col xs={12} sm={6}>
-          <Card hoverable onClick={() => navigate('/interactions')}>
-            <Statistic title="互动记录" value={stats?.interactionCount ?? '-'} prefix={<MessageOutlined />} valueStyle={{ color: '#722ed1' }} />
-          </Card>
-        </Col>
-        <Col xs={12} sm={6}>
-          <Card hoverable onClick={() => navigate('/reminders')}>
-            <Statistic title="待处理提醒" value={stats?.pendingReminders ?? '-'} prefix={<BellOutlined />} valueStyle={{ color: urgentReminders.length > 0 ? '#ff4d4f' : '#fa8c16' }} />
-          </Card>
-        </Col>
-        <Col xs={12} sm={6}>
+      <Row gutter={16} style={{ marginBottom: 24 }}>
+        <Col span={6}>
           <Card>
-            <Statistic title="我的任务" value={myTasks.length} prefix={<CheckSquareOutlined />} valueStyle={{ color: '#52c41a' }} />
+            <Statistic
+              title="人脉总数"
+              value={stats?.totalPersons || 0}
+              prefix={<TeamOutlined />}
+              valueStyle={{ color: '#3f8600' }}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic
+              title="本月互动"
+              value={stats?.monthlyInteractions || 0}
+              prefix={<MessageOutlined />}
+              valueStyle={{ color: '#1890ff' }}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic
+              title="待办提醒"
+              value={urgentReminders.length}
+              prefix={<BellOutlined />}
+              valueStyle={{ color: urgentReminders.length > 0 ? '#cf1322' : '#999' }}
+            />
+          </Card>
+        </Col>
+        <Col span={6}>
+          <Card>
+            <Statistic
+              title="本周任务"
+              value={myTasks.filter(t => {
+                const diff = dayjs(t.date).diff(dayjs(), 'day');
+                return diff >= 0 && diff <= 7 && t.status !== 'done';
+              }).length}
+              prefix={<CalendarOutlined />}
+              valueStyle={{ color: '#fa8c16' }}
+            />
           </Card>
         </Col>
       </Row>
 
-      {/* 任务区域 */}
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-        <Col xs={24}>
-          <Card>
-            <Tabs items={tabItems} />
-          </Card>
-        </Col>
-      </Row>
+      {/* 任务管理 Tabs */}
+      <Card style={{ marginBottom: 24 }}>
+        <Tabs items={tabItems} />
+      </Card>
 
       {/* 近期提醒 */}
-      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-        <Col xs={24}>
-          <Card title={<Space><BellOutlined style={{ color: '#ff4d4f' }} /> 近期提醒</Space>}
-            extra={<Button type="link" onClick={() => navigate('/reminders')}>全部</Button>}>
-            {reminders.length === 0 ? <Text type="secondary">暂无待处理提醒</Text> : (
-              <List
-                size="small"
-                dataSource={reminders.slice(0, 8)}
-                renderItem={item => {
-                  const diff = dayjs(item.remind_date).diff(dayjs(), 'day');
-                  const isOverdue = diff < 0;
-                  const isUrgent = diff <= 1 && diff >= 0;
-                  return (
-                    <List.Item
-                      extra={
-                        <Badge
-                          status={isOverdue ? 'error' : isUrgent ? 'warning' : 'processing'}
-                          text={isOverdue ? `逾期${Math.abs(diff)}天` : diff === 0 ? '今天' : `${diff}天后`}
-                        />
-                      }
-                    >
-                      <List.Item.Meta
-                        title={<Text strong>{item.title}</Text>}
-                        description={
-                          <Space size={4}>
-                            <Tag color="blue">{item.person_name}</Tag>
-                            <Text type="secondary" style={{ fontSize: 12 }}>
-                              <CalendarOutlined /> {item.remind_date}
-                            </Text>
-                          </Space>
-                        }
-                      />
-                    </List.Item>
-                  );
-                }}
-              />
-            )}
-          </Card>
-        </Col>
-      </Row>
+      {urgentReminders.length > 0 && (
+        <Card title="近期提醒" extra={<Button type="link" onClick={() => navigate('/reminders')}>查看全部</Button>} style={{ marginBottom: 24 }}>
+          <List
+            dataSource={urgentReminders.slice(0, 5)}
+            renderItem={item => {
+              const daysLeft = dayjs(item.remind_date).diff(dayjs(), 'day');
+              const isUrgent = daysLeft <= 1;
+              return (
+                <List.Item>
+                  <List.Item.Meta
+                    title={<Text strong>{item.title}</Text>}
+                    description={
+                      <Space>
+                        {item.person_name && <Tag color="blue">{item.person_name}</Tag>}
+                        {item.category && <Tag color={categoryMap[item.category]?.color}>{categoryMap[item.category]?.label}</Tag>}
+                      </Space>
+                    }
+                  />
+                  <Space>
+                    <Tag color={isUrgent ? 'red' : 'orange'}>
+                      {daysLeft === 0 ? '今天' : daysLeft < 0 ? `逾期${Math.abs(daysLeft)}天` : `${daysLeft}天后`}
+                    </Tag>
+                    <Button type="link" size="small" onClick={() => navigate('/reminders')}>查看</Button>
+                  </Space>
+                </List.Item>
+              );
+            }}
+          />
+        </Card>
+      )}
 
-      {/* 任务编辑弹窗 */}
+      {/* 最近互动 */}
+      {stats?.recentInteractions && stats.recentInteractions.length > 0 && (
+        <Card title="最近互动" extra={<Button type="link" onClick={() => navigate('/interactions')}>查看全部</Button>}>
+          <List
+            dataSource={stats.recentInteractions.slice(0, 5)}
+            renderItem={item => (
+              <List.Item>
+                <List.Item.Meta
+                  title={<Text strong>{item.person_name}</Text>}
+                  description={
+                    <Space>
+                      <Tag color="blue">{interactionTypeMap[item.interaction_type]}</Tag>
+                      <Text type="secondary">{item.notes}</Text>
+                    </Space>
+                  }
+                />
+                <Text type="secondary">{dayjs(item.interaction_date).format('MM-DD')}</Text>
+              </List.Item>
+            )}
+          />
+        </Card>
+      )}
+
+      {/* 任务编辑 Modal */}
       <Modal
         title={editing ? '编辑任务' : '新建任务'}
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
         onOk={handleSave}
-        width={600}
+        onCancel={() => setModalOpen(false)}
+        okText="保存"
+        cancelText="取消"
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="title" label="任务标题" rules={[{ required: true, message: '请输入任务标题' }]}>
-            <Input placeholder="请输入任务标题" />
+          <Form.Item label="任务标题" name="title" rules={[{ required: true, message: '请输入任务标题' }]}>
+            <Input placeholder="任务标题" />
           </Form.Item>
-          <Form.Item name="description" label="任务描述">
-            <Input.TextArea rows={3} placeholder="请输入任务描述" />
+          <Form.Item label="任务描述" name="description">
+            <Input.TextArea rows={3} placeholder="任务描述" />
           </Form.Item>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="date" label="日期" rules={[{ required: true, message: '请选择日期' }]}>
-                <DatePicker style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="priority" label="优先级" rules={[{ required: true }]}>
-                <Select>
-                  <Option value="high">高</Option>
-                  <Option value="medium">中</Option>
-                  <Option value="low">低</Option>
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item label="日期" name="date" rules={[{ required: true, message: '请选择日期' }]}>
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="优先级" name="priority" rules={[{ required: true }]}>
+            <Select>
+              <Option value="high"><Tag color="red">高</Tag></Option>
+              <Option value="medium"><Tag color="orange">中</Tag></Option>
+              <Option value="low"><Tag color="default">低</Tag></Option>
+            </Select>
+          </Form.Item>
           {canAssignOthers && (
-            <Form.Item name="assigned_to" label="指派给" rules={[{ required: true, message: '请选择负责人' }]}>
-              <Select placeholder="请选择负责人" showSearch optionFilterProp="children">
-                {users.map(u => (
-                  <Option key={u.id} value={u.id}>{u.display_name}</Option>
-                ))}
-              </Select>
+            <Form.Item label="指派给" name="assigned_to" rules={[{ required: true, message: '请选择负责人' }]}>
+              <Select
+                showSearch
+                placeholder="选择负责人"
+                optionFilterProp="label"
+                options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
+              />
             </Form.Item>
           )}
         </Form>
