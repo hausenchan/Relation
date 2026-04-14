@@ -36,6 +36,12 @@ import WeeklyReports from './pages/WeeklyReports';
 import Leads from './pages/Leads';
 import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
+import ExecutiveDashboard from './pages/ExecutiveDashboard';
+import ExecutiveTalents from './pages/ExecutiveTalents';
+import ExecutiveDynamics from './pages/ExecutiveDynamics';
+import ExecutiveCustomers from './pages/ExecutiveCustomers';
+import StrategicMeeting from './pages/StrategicMeeting';
+import OperationalMeeting from './pages/OperationalMeeting';
 import NotificationBell from './components/NotificationBell';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
 
@@ -71,7 +77,7 @@ function PrivateRoute({ children, module }) {
 
 function AppLayout() {
   const location = useLocation();
-  const { user, logout, canAccessModule, canAccessMenu } = useAuth();
+  const { user, logout, canAccessModule, canAccessMenu, isExecutive } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingGiftCount, setPendingGiftCount] = useState(0);
   const [pendingTripCount, setPendingTripCount] = useState(0);
@@ -202,6 +208,16 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
+  // ── 公司经营（仅高管）────────────────────────────────────────
+  const executiveChildren = isExecutive() ? [
+    { key: '/executive', icon: <DashboardOutlined />, label: <Link to="/executive">经营概览</Link> },
+    { key: '/executive/talents', icon: <UserOutlined />, label: <Link to="/executive/talents">高级人才</Link> },
+    { key: '/executive/dynamics', icon: <RiseOutlined />, label: <Link to="/executive/dynamics">竞品动态</Link> },
+    { key: '/executive/customers', icon: <TeamOutlined />, label: <Link to="/executive/customers">重点客户</Link> },
+    { key: '/executive/strategic', icon: <AimOutlined />, label: <Link to="/executive/strategic">战略月会</Link> },
+    { key: '/executive/operational', icon: <FileTextOutlined />, label: <Link to="/executive/operational">经营周会</Link> },
+  ] : [];
+
   const menuItems = [
     // 工作台
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
@@ -224,6 +240,11 @@ function AppLayout() {
     teamChildren.length > 0 && {
       key: 'team-mgmt', icon: <TeamOutlined />, label: '团队管理',
       children: teamChildren,
+    },
+    // 公司经营（仅高管）
+    executiveChildren.length > 0 && {
+      key: 'executive', icon: <BankOutlined />, label: '公司经营',
+      children: executiveChildren,
     },
     // 系统管理（仅 admin）
     user?.role === 'admin' && {
@@ -328,7 +349,7 @@ function AppLayout() {
             theme="dark"
             mode="inline"
             selectedKeys={[selectedKey]}
-            defaultOpenKeys={['goal-plan', 'biz-flow', 'biz-coop', 'team-mgmt', 'system']}
+            defaultOpenKeys={['goal-plan', 'biz-flow', 'biz-coop', 'team-mgmt', 'executive', 'system']}
             items={menuItems}
             style={{ marginTop: 8, background: '#0a0a1a', border: 'none', height: 'auto' }}
             onOpenChange={(openKeys) => {
@@ -395,6 +416,13 @@ function AppLayout() {
             <Route path="/leads" element={<PrivateRoute><Leads /></PrivateRoute>} />
             <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
+            {/* 公司经营模块（仅高管） */}
+            <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
+            <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />
+            <Route path="/executive/dynamics" element={<PrivateRoute><ExecutiveDynamics /></PrivateRoute>} />
+            <Route path="/executive/customers" element={<PrivateRoute><ExecutiveCustomers /></PrivateRoute>} />
+            <Route path="/executive/strategic" element={<PrivateRoute><StrategicMeeting /></PrivateRoute>} />
+            <Route path="/executive/operational" element={<PrivateRoute><OperationalMeeting /></PrivateRoute>} />
           </Routes>
         </Content>
       </Layout>

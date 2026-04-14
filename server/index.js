@@ -690,7 +690,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/auth/me', auth, (req, res) => {
-  const user = db.prepare('SELECT id, username, display_name, role, last_login FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, username, display_name, role, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(req.user.id);
   const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(req.user.id).map(r => r.menu_key);
   res.json({ ...user, modulePerms, menuPerms });
@@ -3090,6 +3090,296 @@ app.delete('/api/notifications/:id', (req, res) => {
   const { id: userId } = req.user;
 
   db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?').run(id, userId);
+  res.json({ success: true });
+});
+
+// =========== 公司经营模块 API ===========
+// 权限中间件：仅高管可访问
+function requireExecutive(req, res, next) {
+  const { executive_role } = req.user;
+  if (!executive_role || !['ceo', 'coo', 'cto', 'cmo'].includes(executive_role)) {
+    return res.status(403).json({ error: '仅高管可访问此模块' });
+  }
+  next();
+}
+
+// 获取高级人才列表
+app.get('/api/executive/talents', requireExecutive, (req, res) => {
+  const { potential_rating, recruit_status, intent_level } = req.query;
+
+  let query = `
+    SELECT * FROM persons
+    WHERE person_category = 'talent'
+      AND relation_types LIKE '%talent_external%'
+      AND importance IN ('high', 'vip')
+  `;
+  const params = [];
+
+  if (potential_rating) {
+    query += ' AND potential_rating = ?';
+    params.push(potential_rating);
+  }
+  if (recruit_status) {
+    query += ' AND recruit_status = ?';
+    params.push(recruit_status);
+  }
+  if (intent_level) {
+    query += ' AND intent_level = ?';
+    params.push(intent_level);
+  }
+
+  query += ' ORDER BY updated_at DESC';
+
+  const talents = db.prepare(query).all(...params);
+  res.json(talents);
+});
+
+// 获取竞争公司动态
+app.get('/api/executive/competitor-dynamics', requireExecutive, (req, res) => {
+  const { company_id, limit = 20 } = req.query;
+
+  let query = `
+    SELECT
+      cd.*,
+      c.name as company_name,
+      c.industry
+    FROM company_dynamics cd
+    LEFT JOIN companies c ON cd.company_id = c.id
+    WHERE c.category = 'competitor'
+      AND cd.importance = 'high'
+  `;
+  const params = [];
+
+  if (company_id) {
+    query += ' AND cd.company_id = ?';
+    params.push(company_id);
+  }
+
+  query += ' ORDER BY cd.date DESC LIMIT ?';
+  params.push(parseInt(limit));
+
+  const dynamics = db.prepare(query).all(...params);
+  res.json(dynamics);
+});
+
+// 获取重点客户列表
+app.get('/api/executive/key-customers', requireExecutive, (req, res) => {
+  const customers = db.prepare(`
+    SELECT
+      p.*,
+      i.date as last_interaction_date,
+      i.type as last_interaction_type,
+      i.outcome as last_interaction_result,
+      CAST(julianday('now') - julianday(i.date) AS INTEGER) as days_since_last_contact
+    FROM persons p
+    LEFT JOIN (
+      SELECT person_id, MAX(date) as max_date
+      FROM interactions
+      GROUP BY person_id
+    ) latest ON p.id = latest.person_id
+    LEFT JOIN interactions i ON p.id = i.person_id AND i.date = latest.max_date
+    WHERE p.person_category = 'business'
+      AND p.relation_types LIKE '%customer_active%'
+      AND p.importance IN ('high', 'vip')
+    ORDER BY days_since_last_contact DESC
+  `).all();
+
+  res.json(customers);
+});
+
+// 获取经营概览数据
+app.get('/api/executive/overview', requireExecutive, (req, res) => {
+  // 高级人才数量
+  const talentCount = db.prepare(`
+    SELECT COUNT(*) as count FROM persons
+    WHERE person_category = 'talent'
+      AND relation_types LIKE '%talent_external%'
+      AND importance IN ('high', 'vip')
+  `).get().count;
+
+  // 竞争动态数量（近30天）
+  const dynamicsCount = db.prepare(`
+    SELECT COUNT(*) as count FROM company_dynamics cd
+    LEFT JOIN companies c ON cd.company_id = c.id
+    WHERE c.category = 'competitor'
+      AND cd.importance = 'high'
+      AND cd.date >= date('now', '-30 days')
+  `).get().count;
+
+  // 重点客户数量
+  const customerCount = db.prepare(`
+    SELECT COUNT(*) as count FROM persons
+    WHERE person_category = 'business'
+      AND relation_types LIKE '%customer_active%'
+      AND importance IN ('high', 'vip')
+  `).get().count;
+
+  // 高级人才最近动态（最近更新的5条）
+  const recentTalents = db.prepare(`
+    SELECT name, current_company, current_position, recruit_status, intent_level, updated_at
+    FROM persons
+    WHERE person_category = 'talent'
+      AND relation_types LIKE '%talent_external%'
+      AND importance IN ('high', 'vip')
+    ORDER BY updated_at DESC
+    LIMIT 5
+  `).all();
+
+  // 竞争公司最新动态（最近5条）
+  const recentDynamics = db.prepare(`
+    SELECT
+      cd.title, cd.date, cd.type, cd.impact_analysis,
+      c.name as company_name
+    FROM company_dynamics cd
+    LEFT JOIN companies c ON cd.company_id = c.id
+    WHERE c.category = 'competitor'
+      AND cd.importance = 'high'
+    ORDER BY cd.date DESC
+    LIMIT 5
+  `).all();
+
+  // 重点客户预警（超过30天未联系）
+  const customerAlerts = db.prepare(`
+    SELECT
+      p.name, p.company,
+      i.date as last_interaction_date,
+      i.type as last_interaction_type,
+      CAST(julianday('now') - julianday(i.date) AS INTEGER) as days_since_last_contact
+    FROM persons p
+    LEFT JOIN (
+      SELECT person_id, MAX(date) as max_date
+      FROM interactions
+      GROUP BY person_id
+    ) latest ON p.id = latest.person_id
+    LEFT JOIN interactions i ON p.id = i.person_id AND i.date = latest.max_date
+    WHERE p.person_category = 'business'
+      AND p.relation_types LIKE '%customer_active%'
+      AND p.importance IN ('high', 'vip')
+      AND (i.date IS NULL OR julianday('now') - julianday(i.date) > 30)
+    ORDER BY days_since_last_contact DESC
+    LIMIT 5
+  `).all();
+
+  res.json({
+    talentCount,
+    dynamicsCount,
+    customerCount,
+    recentTalents,
+    recentDynamics,
+    customerAlerts
+  });
+});
+
+// 获取经营周报列表
+app.get('/api/executive/reports', requireExecutive, (req, res) => {
+  const { report_type, year, month } = req.query;
+
+  let query = 'SELECT * FROM executive_reports WHERE 1=1';
+  const params = [];
+
+  if (report_type) {
+    query += ' AND report_type = ?';
+    params.push(report_type);
+  }
+  if (year) {
+    query += ' AND year = ?';
+    params.push(parseInt(year));
+  }
+  if (month) {
+    query += ' AND month = ?';
+    params.push(parseInt(month));
+  }
+
+  query += ' ORDER BY meeting_date DESC';
+
+  const reports = db.prepare(query).all(...params);
+  res.json(reports);
+});
+
+// 获取单个经营周报
+app.get('/api/executive/reports/:id', requireExecutive, (req, res) => {
+  const { id } = req.params;
+  const report = db.prepare('SELECT * FROM executive_reports WHERE id = ?').get(id);
+
+  if (!report) {
+    return res.status(404).json({ error: '报告不存在' });
+  }
+
+  res.json(report);
+});
+
+// 创建经营周报
+app.post('/api/executive/reports', requireExecutive, (req, res) => {
+  const { id: userId } = req.user;
+  const {
+    report_type, meeting_date, year, month, week,
+    weekly_results, key_judgment, decision_needed, next_week_actions,
+    key_issues, decisions,
+    strategic_direction, key_focus, monthly_summary
+  } = req.body;
+
+  if (!report_type || !meeting_date || !year || !month) {
+    return res.status(400).json({ error: '缺少必填字段' });
+  }
+
+  // 获取所有高管 ID
+  const executives = db.prepare("SELECT id FROM users WHERE executive_role IS NOT NULL").all();
+  const attendees = JSON.stringify(executives.map(e => e.id));
+
+  const result = db.prepare(`
+    INSERT INTO executive_reports (
+      report_type, meeting_date, year, month, week,
+      weekly_results, key_judgment, decision_needed, next_week_actions,
+      key_issues, decisions,
+      strategic_direction, key_focus, monthly_summary,
+      attendees, last_edited_by, last_edited_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+  `).run(
+    report_type, meeting_date, year, month, week,
+    weekly_results, key_judgment, decision_needed, next_week_actions,
+    key_issues, decisions,
+    strategic_direction, key_focus, monthly_summary,
+    attendees, userId
+  );
+
+  res.json({ id: result.lastInsertRowid });
+});
+
+// 更新经营周报
+app.put('/api/executive/reports/:id', requireExecutive, (req, res) => {
+  const { id } = req.params;
+  const { id: userId } = req.user;
+  const {
+    meeting_date, year, month, week,
+    weekly_results, key_judgment, decision_needed, next_week_actions,
+    key_issues, decisions,
+    strategic_direction, key_focus, monthly_summary
+  } = req.body;
+
+  db.prepare(`
+    UPDATE executive_reports SET
+      meeting_date = ?, year = ?, month = ?, week = ?,
+      weekly_results = ?, key_judgment = ?, decision_needed = ?, next_week_actions = ?,
+      key_issues = ?, decisions = ?,
+      strategic_direction = ?, key_focus = ?, monthly_summary = ?,
+      last_edited_by = ?, last_edited_at = datetime('now'),
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    meeting_date, year, month, week,
+    weekly_results, key_judgment, decision_needed, next_week_actions,
+    key_issues, decisions,
+    strategic_direction, key_focus, monthly_summary,
+    userId, id
+  );
+
+  res.json({ success: true });
+});
+
+// 删除经营周报
+app.delete('/api/executive/reports/:id', requireExecutive, (req, res) => {
+  const { id } = req.params;
+  db.prepare('DELETE FROM executive_reports WHERE id = ?').run(id);
   res.json({ success: true });
 });
 

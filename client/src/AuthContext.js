@@ -68,8 +68,11 @@ export function AuthProvider({ children }) {
   // 是否可以指派人脉
   const canAssign = () => ['admin', 'leader', 'sales_director'].includes(user?.role);
 
+  // 是否为高管
+  const isExecutive = () => user?.executive_role && ['ceo', 'coo', 'cto', 'cmo'].includes(user.executive_role);
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, canAccessModule, canWrite, canAccessMenu, canApprove, canAssign }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, canAccessModule, canWrite, canAccessMenu, canApprove, canAssign, isExecutive }}>
       {children}
     </AuthContext.Provider>
   );
