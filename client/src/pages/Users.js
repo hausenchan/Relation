@@ -67,10 +67,20 @@ export default function UsersPage() {
 
   const openEdit = (r) => {
     setEditing(r);
+
+    // 如果用户有 team_id，自动设置 department 为该小组的 department
+    let userDepartment = r.department;
+    if (r.team_id && !userDepartment) {
+      const userTeam = teams.find(t => t.id === r.team_id);
+      if (userTeam) {
+        userDepartment = userTeam.department;
+      }
+    }
+
     form.setFieldsValue({
       display_name: r.display_name,
       role: r.role,
-      department: r.department,
+      department: userDepartment,
       team_id: r.team_id || undefined,
       leader_id: r.leader_id || undefined,
       modulePerms: r.modulePerms?.reduce((acc, p) => {
