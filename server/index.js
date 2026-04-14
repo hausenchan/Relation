@@ -2555,7 +2555,6 @@ app.delete('/api/goals/:id', (req, res) => {
   deleteGoalAndChildren(id);
   res.json({ success: true });
 });
-});
 
 // =========== 周报管理 API ===========
 // 获取周报列表
