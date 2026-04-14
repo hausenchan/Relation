@@ -686,7 +686,7 @@ app.post('/api/auth/login', (req, res) => {
   );
   // 查模块权限
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
-  res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role, modulePerms } });
+  res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role, executive_role: user.executive_role, modulePerms } });
 });
 
 app.get('/api/auth/me', auth, (req, res) => {
