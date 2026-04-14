@@ -209,3 +209,10 @@ export const budgetsApi = {
   update: (id, data) => api.put(`/budgets/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/budgets/${id}`).then(r => r.data),
 };
+
+export const goalsApi = {
+  list: (params) => api.get('/goals', { params }).then(r => r.data),
+  create: (data) => api.post('/goals', data).then(r => r.data),
+  update: (id, data) => api.put(`/goals/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/goals/${id}`).then(r => r.data),
+};
