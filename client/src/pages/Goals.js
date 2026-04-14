@@ -41,7 +41,7 @@ function Goals() {
 
   const loadUsers = async () => {
     try {
-      const data = await usersApi.list();
+      const data = await usersApi.listSimple();
       setUsers(data);
     } catch (err) {
       message.error('加载用户失败');
@@ -189,7 +189,7 @@ function Goals() {
       <div key={goal.id} style={{ marginLeft: level * 40, marginBottom: 16 }}>
         <Card
           size="small"
-          style={{ borderLeft: `4px solid ${goalTypeMap[goal.goal_type].color}` }}
+          style={{ borderLeft: `4px solid ${(goalTypeMap[goal.goal_type] || goalTypeMap.quarter).color}` }}
           title={
             <Space>
               {hasChildren && (
@@ -200,7 +200,7 @@ function Goals() {
                   onClick={() => isQuarter ? toggleQuarter(goal.id) : toggleMonth(goal.id)}
                 />
               )}
-              <Tag color={goalTypeMap[goal.goal_type].color}>{goalTypeMap[goal.goal_type].label}</Tag>
+              <Tag color={(goalTypeMap[goal.goal_type] || { color: 'default' }).color}>{(goalTypeMap[goal.goal_type] || { label: goal.goal_type }).label}</Tag>
               <span>{goal.period}</span>
               <span style={{ fontWeight: 'bold' }}>{goal.title}</span>
               {hasChildren && <Tag>{goal.child_count} 个子目标</Tag>}
@@ -208,7 +208,7 @@ function Goals() {
           }
           extra={
             <Space>
-              <Tag color={statusMap[goal.status].color}>{statusMap[goal.status].label}</Tag>
+              <Tag color={(statusMap[goal.status] || { color: 'default' }).color}>{(statusMap[goal.status] || { label: goal.status }).label}</Tag>
               <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(goal)}>详情</Button>
               <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(goal)}>编辑</Button>
               {(isQuarter || isMonth) && (
@@ -342,8 +342,8 @@ function Goals() {
         {detailRecord && (
           <Descriptions column={1} bordered>
             <Descriptions.Item label="目标类型">
-              <Tag color={goalTypeMap[detailRecord.goal_type].color}>
-                {goalTypeMap[detailRecord.goal_type].label}
+              <Tag color={(goalTypeMap[detailRecord.goal_type] || { color: 'default' }).color}>
+                {(goalTypeMap[detailRecord.goal_type] || { label: detailRecord.goal_type }).label}
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="周期">{detailRecord.period}</Descriptions.Item>
@@ -353,8 +353,8 @@ function Goals() {
             <Descriptions.Item label="部门">{detailRecord.department || '-'}</Descriptions.Item>
             <Descriptions.Item label="截止日期">{detailRecord.deadline || '-'}</Descriptions.Item>
             <Descriptions.Item label="状态">
-              <Tag color={statusMap[detailRecord.status].color}>
-                {statusMap[detailRecord.status].label}
+              <Tag color={(statusMap[detailRecord.status] || { color: 'default' }).color}>
+                {(statusMap[detailRecord.status] || { label: detailRecord.status }).label}
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="进度">
