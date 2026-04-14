@@ -208,8 +208,8 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
-  // ── 公司经营（仅高管）────────────────────────────────────────
-  const executiveChildren = isExecutive() ? [
+  // ── 公司经营（仅高管或admin）────────────────────────────────────────
+  const executiveChildren = (isExecutive() || user?.role === 'admin') ? [
     { key: '/executive', icon: <DashboardOutlined />, label: <Link to="/executive">经营概览</Link> },
     { key: '/executive/talents', icon: <UserOutlined />, label: <Link to="/executive/talents">高级人才</Link> },
     { key: '/executive/dynamics', icon: <RiseOutlined />, label: <Link to="/executive/dynamics">竞品动态</Link> },
@@ -321,9 +321,8 @@ function AppLayout() {
           <svg width="28" height="28" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
             <defs>
               <linearGradient id="slg1" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stopColor="#ff6a00" />
-                <stop offset="50%" stopColor="#ee0979" />
-                <stop offset="100%" stopColor="#1677ff" />
+                <stop offset="0%" stopColor="#07C160" />
+                <stop offset="100%" stopColor="#06AD56" />
               </linearGradient>
             </defs>
             <circle cx="36" cy="36" r="34" fill="url(#slg1)" />
@@ -331,7 +330,7 @@ function AppLayout() {
           </svg>
           <div>
             <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, letterSpacing: 2, lineHeight: '18px' }}>幂动小智</div>
-            <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', background: 'linear-gradient(90deg,#ff6a00,#ee0979)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>AI赋能 · 协同提效</div>
+            <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', color: '#07C160' }}>AI赋能 · 协同提效</div>
           </div>
         </div>
         <div
