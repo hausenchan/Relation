@@ -97,14 +97,13 @@ export default function Dashboard() {
         setAssignedTasks(assigned);
       }
 
-      // 待跟进任务
+      // 待跟进任务（商机任务）
       const followUpData = await followUpTasksApi.list({ status: 'pending' });
       setFollowUpTasks(followUpData.slice(0, 5));
 
-      // 商机任务（我负责的商机）
-      const oppsData = await opportunitiesApi.list({ assignee: user?.id });
-      const pendingOpps = oppsData.filter(o => o.opportunity_status === 'pending' || o.opportunity_status === 'in_progress');
-      setOpportunities(pendingOpps.slice(0, 5));
+      // 商机任务（所有分配给我的商机任务）
+      const allFollowUpData = await followUpTasksApi.list({ assigned_to: user?.id });
+      setOpportunities(allFollowUpData);
 
     } catch (err) {
       console.error('加载数据失败:', err);
@@ -484,8 +483,8 @@ export default function Dashboard() {
       children: (
         <div>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text type="secondary">我负责的商机</Text>
-            <Button type="link" onClick={() => navigate('/opportunities')}>查看全部</Button>
+            <Text type="secondary">分配给我的商机任务</Text>
+            <Button type="link" onClick={() => navigate('/follow-up-tasks')}>查看全部</Button>
           </div>
           <List
             dataSource={opportunities}
@@ -496,15 +495,16 @@ export default function Dashboard() {
                   description={
                     <Space>
                       <Tag color="blue">{item.person_name}</Tag>
-                      <Tag color={item.opportunity_status === 'in_progress' ? 'orange' : 'default'}>
-                        {item.opportunity_status === 'pending' ? '待跟进' : '跟进中'}
+                      {item.opportunity_title && <Tag color="orange">{item.opportunity_title}</Tag>}
+                      <Tag color={item.status === 'done' ? 'green' : item.status === 'pending' ? 'default' : 'orange'}>
+                        {item.status === 'pending' ? '待处理' : item.status === 'done' ? '已完成' : '进行中'}
                       </Tag>
                     </Space>
                   }
                 />
                 <Space>
-                  <Text type="secondary">{item.expected_amount ? `¥${item.expected_amount}` : '-'}</Text>
-                  <Button type="link" size="small" onClick={() => navigate('/opportunities')}>查看</Button>
+                  {item.due_date && <Text type="secondary">{dayjs(item.due_date).format('MM-DD')}</Text>}
+                  <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>查看</Button>
                 </Space>
               </List.Item>
             )}
