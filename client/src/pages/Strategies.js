@@ -17,6 +17,18 @@ const roleTypeMap = {
   traffic_operation: { label: '流量运营岗', color: 'cyan' },
 };
 
+const budgetGroupTypeMap = {
+  zhixiao: { label: '支小', color: 'blue' },
+  douxiao: { label: '抖小', color: 'orange' },
+  weixiao: { label: '微小', color: 'green' },
+  taoxiao: { label: '淘小', color: 'red' },
+  app: { label: 'App', color: 'purple' },
+  cpa: { label: 'CPA', color: 'cyan' },
+  h5: { label: 'H5', color: 'geekblue' },
+  cpd: { label: 'CPD', color: 'magenta' },
+  kuaiyingyong: { label: '快应用', color: 'volcano' },
+};
+
 const statusMap = {
   active: { label: '进行中', color: 'blue' },
   completed: { label: '已完成', color: 'green' },
@@ -38,6 +50,7 @@ export default function Strategies() {
   const [filters, setFilters] = useState({
     dimension: '',
     role_type: '',
+    budget_group_type: '',
     status: '',
   });
 
@@ -52,6 +65,7 @@ export default function Strategies() {
       const params = new URLSearchParams();
       if (filters.dimension) params.append('dimension', filters.dimension);
       if (filters.role_type) params.append('role_type', filters.role_type);
+      if (filters.budget_group_type) params.append('budget_group_type', filters.budget_group_type);
       if (filters.status) params.append('status', filters.status);
 
       const res = await fetch(`http://localhost:3001/api/strategies?${params}`, {
@@ -189,6 +203,17 @@ export default function Strategies() {
       },
     },
     {
+      title: '预算组类型',
+      dataIndex: 'budget_group_type',
+      key: 'budget_group_type',
+      width: 120,
+      render: (val) => {
+        if (!val) return '-';
+        const cfg = budgetGroupTypeMap[val] || { label: val, color: 'default' };
+        return <Tag color={cfg.color}>{cfg.label}</Tag>;
+      },
+    },
+    {
       title: '负责人',
       dataIndex: 'owner_name',
       key: 'owner_name',
@@ -267,6 +292,23 @@ export default function Strategies() {
             <Option value="traffic_operation">流量运营岗</Option>
           </Select>
           <Select
+            placeholder="预算组类型"
+            style={{ width: 150 }}
+            allowClear
+            value={filters.budget_group_type || undefined}
+            onChange={(val) => setFilters({ ...filters, budget_group_type: val || '' })}
+          >
+            <Option value="zhixiao">支小</Option>
+            <Option value="douxiao">抖小</Option>
+            <Option value="weixiao">微小</Option>
+            <Option value="taoxiao">淘小</Option>
+            <Option value="app">App</Option>
+            <Option value="cpa">CPA</Option>
+            <Option value="h5">H5</Option>
+            <Option value="cpd">CPD</Option>
+            <Option value="kuaiyingyong">快应用</Option>
+          </Select>
+          <Select
             placeholder="状态"
             style={{ width: 150 }}
             allowClear
@@ -342,6 +384,19 @@ export default function Strategies() {
               <Option value="traffic_operation">流量运营岗</Option>
             </Select>
           </Form.Item>
+          <Form.Item name="budget_group_type" label="预算组类型">
+            <Select placeholder="请选择预算组类型" allowClear>
+              <Option value="zhixiao">支小</Option>
+              <Option value="douxiao">抖小</Option>
+              <Option value="weixiao">微小</Option>
+              <Option value="taoxiao">淘小</Option>
+              <Option value="app">App</Option>
+              <Option value="cpa">CPA</Option>
+              <Option value="h5">H5</Option>
+              <Option value="cpd">CPD</Option>
+              <Option value="kuaiyingyong">快应用</Option>
+            </Select>
+          </Form.Item>
           <Form.Item name="owner_id" label="负责人">
             <Select placeholder="请选择负责人" showSearch optionFilterProp="children" allowClear>
               {users.map(u => <Option key={u.id} value={u.id}>{u.display_name}</Option>)}
@@ -378,6 +433,9 @@ export default function Strategies() {
               </Descriptions.Item>
               <Descriptions.Item label="岗位类型">
                 {selectedStrategy.role_type ? roleTypeMap[selectedStrategy.role_type]?.label : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="预算组类型">
+                {selectedStrategy.budget_group_type ? budgetGroupTypeMap[selectedStrategy.budget_group_type]?.label : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="负责人">{selectedStrategy.owner_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="状态">

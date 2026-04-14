@@ -372,6 +372,39 @@ db.exec(`
   );
 `);
 
+// =========== 目标管理表（三级层级：季度→月度→周）===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS goals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT NOT NULL,
+    description TEXT,
+    goal_type   TEXT NOT NULL,
+    period      TEXT NOT NULL,
+    parent_id   INTEGER DEFAULT NULL,
+    owner_id    INTEGER NOT NULL,
+    department  TEXT,
+    deadline    TEXT,
+    progress    INTEGER DEFAULT 0,
+    status      TEXT DEFAULT 'active',
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+// goals 表动态补全字段（兼容旧数据）
+const goalCols = db.prepare("PRAGMA table_info(goals)").all().map(c => c.name);
+if (goalCols.length > 0) {
+  if (!goalCols.includes('goal_type')) {
+    db.exec("ALTER TABLE goals ADD COLUMN goal_type TEXT DEFAULT 'quarter'");
+  }
+  if (!goalCols.includes('period')) {
+    db.exec("ALTER TABLE goals ADD COLUMN period TEXT DEFAULT NULL");
+  }
+  if (!goalCols.includes('parent_id')) {
+    db.exec("ALTER TABLE goals ADD COLUMN parent_id INTEGER DEFAULT NULL");
+  }
+}
+
 // users 表加 leader_id / department / team_id
 const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
 if (userCols.length > 0) {
@@ -2415,7 +2448,7 @@ app.get('/api/trips/stats/summary', (req, res) => {
 // =========== 目标管理 API ===========
 // 获取目标列表
 app.get('/api/goals', (req, res) => {
-  const { department, quarter, status } = req.query;
+  const { department, quarter, status, goal_type, period, parent_id } = req.query;
   const { id: userId, role } = req.user;
 
   let q = 'SELECT g.*, u.display_name as owner_name FROM goals g LEFT JOIN users u ON g.owner_id = u.id WHERE 1=1';
@@ -2449,20 +2482,40 @@ app.get('/api/goals', (req, res) => {
   if (department) { q += ' AND g.department = ?'; params.push(department); }
   if (quarter) { q += ' AND g.quarter = ?'; params.push(quarter); }
   if (status) { q += ' AND g.status = ?'; params.push(status); }
+  if (goal_type) { q += ' AND g.goal_type = ?'; params.push(goal_type); }
+  if (period) { q += ' AND g.period = ?'; params.push(period); }
+  if (parent_id !== undefined) {
+    if (parent_id === 'null') {
+      q += ' AND g.parent_id IS NULL';
+    } else {
+      q += ' AND g.parent_id = ?';
+      params.push(parent_id);
+    }
+  }
 
-  q += ' ORDER BY g.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  q += ' ORDER BY g.period DESC, g.created_at DESC';
+  const goals = db.prepare(q).all(...params);
+
+  // 为每个目标加载子目标数量
+  goals.forEach(g => {
+    const childCount = db.prepare('SELECT COUNT(*) as cnt FROM goals WHERE parent_id = ?').get(g.id);
+    g.child_count = childCount.cnt;
+  });
+
+  res.json(goals);
 });
 
 // 创建目标
 app.post('/api/goals', (req, res) => {
-  const { title, description, owner_id, department, quarter, deadline } = req.body;
-  if (!title || !owner_id) return res.status(400).json({ error: '标题和负责人必填' });
+  const { title, description, owner_id, department, deadline, goal_type, period, parent_id } = req.body;
+  if (!title || !owner_id || !goal_type || !period) {
+    return res.status(400).json({ error: '标题、负责人、目标类型、周期必填' });
+  }
 
   const result = db.prepare(`
-    INSERT INTO goals (title, description, owner_id, department, quarter, deadline)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(title, description, owner_id, department, quarter, deadline);
+    INSERT INTO goals (title, description, owner_id, department, deadline, goal_type, period, parent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, description, owner_id, department, deadline, goal_type, period, parent_id || null);
 
   res.json({ id: result.lastInsertRowid });
 });
@@ -2470,7 +2523,7 @@ app.post('/api/goals', (req, res) => {
 // 更新目标
 app.put('/api/goals/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, owner_id, department, quarter, deadline, progress, status } = req.body;
+  const { title, description, owner_id, department, deadline, progress, status, goal_type, period } = req.body;
 
   db.prepare(`
     UPDATE goals SET
@@ -2478,22 +2531,30 @@ app.put('/api/goals/:id', (req, res) => {
       description = COALESCE(?, description),
       owner_id = COALESCE(?, owner_id),
       department = COALESCE(?, department),
-      quarter = COALESCE(?, quarter),
       deadline = COALESCE(?, deadline),
       progress = COALESCE(?, progress),
       status = COALESCE(?, status),
+      goal_type = COALESCE(?, goal_type),
+      period = COALESCE(?, period),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, description, owner_id, department, quarter, deadline, progress, status, id);
+  `).run(title, description, owner_id, department, deadline, progress, status, goal_type, period, id);
 
   res.json({ success: true });
 });
 
-// 删除目标
+// 删除目标（级联删除子目标）
 app.delete('/api/goals/:id', (req, res) => {
   const { id } = req.params;
-  db.prepare('DELETE FROM goals WHERE id = ?').run(id);
+  // 递归删除所有子目标
+  function deleteGoalAndChildren(goalId) {
+    const children = db.prepare('SELECT id FROM goals WHERE parent_id = ?').all(goalId);
+    children.forEach(c => deleteGoalAndChildren(c.id));
+    db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
+  }
+  deleteGoalAndChildren(id);
   res.json({ success: true });
+});
 });
 
 // =========== 周报管理 API ===========
@@ -2768,7 +2829,7 @@ app.delete('/api/leads/:id', (req, res) => {
 // =========== 策略管理 API ===========
 // 获取策略列表
 app.get('/api/strategies', (req, res) => {
-  const { dimension, role_type, status } = req.query;
+  const { dimension, role_type, budget_group_type, status } = req.query;
   const { id: userId, role } = req.user;
 
   let q = `
@@ -2810,6 +2871,7 @@ app.get('/api/strategies', (req, res) => {
 
   if (dimension) { q += ' AND s.dimension = ?'; params.push(dimension); }
   if (role_type) { q += ' AND s.role_type = ?'; params.push(role_type); }
+  if (budget_group_type) { q += ' AND s.budget_group_type = ?'; params.push(budget_group_type); }
   if (status) { q += ' AND s.status = ?'; params.push(status); }
 
   q += ' ORDER BY s.created_at DESC';
@@ -2847,13 +2909,13 @@ app.get('/api/strategies/:id', (req, res) => {
 
 // 创建策略
 app.post('/api/strategies', (req, res) => {
-  const { title, dimension, role_type, description, owner_id, source_type, source_id } = req.body;
+  const { title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id } = req.body;
   if (!title || !dimension) return res.status(400).json({ error: '标题和维度必填' });
 
   const result = db.prepare(`
-    INSERT INTO strategies (title, dimension, role_type, description, owner_id, source_type, source_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(title, dimension, role_type, description, owner_id, source_type, source_id);
+    INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id);
 
   res.json({ id: result.lastInsertRowid });
 });
@@ -2861,13 +2923,14 @@ app.post('/api/strategies', (req, res) => {
 // 更新策略
 app.put('/api/strategies/:id', (req, res) => {
   const { id } = req.params;
-  const { title, dimension, role_type, description, owner_id, status, source_type, source_id } = req.body;
+  const { title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id } = req.body;
 
   db.prepare(`
     UPDATE strategies SET
       title = COALESCE(?, title),
       dimension = COALESCE(?, dimension),
       role_type = COALESCE(?, role_type),
+      budget_group_type = COALESCE(?, budget_group_type),
       description = COALESCE(?, description),
       owner_id = COALESCE(?, owner_id),
       status = COALESCE(?, status),
@@ -2875,7 +2938,7 @@ app.put('/api/strategies/:id', (req, res) => {
       source_id = COALESCE(?, source_id),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, dimension, role_type, description, owner_id, status, source_type, source_id, id);
+  `).run(title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id, id);
 
   res.json({ success: true });
 });
