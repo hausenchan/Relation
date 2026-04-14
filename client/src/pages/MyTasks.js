@@ -269,6 +269,11 @@ export default function MyTasks() {
           <Form.Item label="任务描述" name="description">
             <Input.TextArea rows={2} placeholder="详细说明（选填）" />
           </Form.Item>
+          {editing && editing.status === 'done' && (
+            <Form.Item label="任务结果" name="result">
+              <Input.TextArea rows={3} placeholder="填写任务完成情况和结果（选填）" />
+            </Form.Item>
+          )}
           <Space style={{ width: '100%' }} size={12}>
             <Form.Item label="日期" name="date" rules={[{ required: true }]} style={{ flex: 1, marginBottom: 0 }}>
               <DatePicker style={{ width: '100%' }} />
@@ -313,6 +318,9 @@ export default function MyTasks() {
             <Descriptions column={1} bordered size="small">
               <Descriptions.Item label="标题">{detailRecord.title}</Descriptions.Item>
               <Descriptions.Item label="描述">{detailRecord.description || '-'}</Descriptions.Item>
+              {detailRecord.status === 'done' && detailRecord.result && (
+                <Descriptions.Item label="任务结果">{detailRecord.result}</Descriptions.Item>
+              )}
               <Descriptions.Item label="日期">{detailRecord.date}</Descriptions.Item>
               <Descriptions.Item label="优先级">
                 <Tag color={priorityMap[detailRecord.priority]?.color}>{priorityMap[detailRecord.priority]?.label}</Tag>

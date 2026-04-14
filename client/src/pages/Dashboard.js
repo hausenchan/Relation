@@ -13,6 +13,7 @@ import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
+const { RangePicker } = DatePicker;
 
 const interactionTypeMap = {
   visit: '拜访', call: '通话', gift: '送礼', meal: '餐饮', wechat: '微信',
@@ -27,7 +28,7 @@ const categoryMap = {
 };
 
 const statusMap = {
-  pending:     { label: '待处理', color: 'default',  badge: 'default' },
+  pending:     { label: '未开始', color: 'default',  badge: 'default' },
   in_progress: { label: '进行中', color: 'orange',   badge: 'processing' },
   done:        { label: '已完成', color: 'green',    badge: 'success' },
 };
@@ -53,6 +54,12 @@ export default function Dashboard() {
   const [users, setUsers] = useState([]);
   const navigate = useNavigate();
 
+  // 筛选条件
+  const [myTaskStatusFilter, setMyTaskStatusFilter] = useState(['pending', 'in_progress']);
+  const [myTaskDateRange, setMyTaskDateRange] = useState(null);
+  const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState(['pending', 'in_progress']);
+  const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
+
   const canAssignOthers = ['admin', 'leader', 'sales_director'].includes(user?.role);
   const isLeaderOrAbove = ['admin', 'leader', 'sales_director'].includes(user?.role);
 
@@ -77,20 +84,14 @@ export default function Dashboard() {
       const remindersData = await remindersApi.list({ done: 0 });
       setReminders(remindersData);
 
-      // 我的任务（今天和未来7天）
-      const today = dayjs().format('YYYY-MM-DD');
+      // 我的任务（获取所有分配给我的任务）
       const myTasksData = await tasksApi.list({ mine: '1', parent_id: 'null' });
-      const filteredMyTasks = myTasksData.filter(t => {
-        const taskDate = dayjs(t.date);
-        const diff = taskDate.diff(dayjs(), 'day');
-        return diff >= 0 && diff <= 7 && t.status !== 'done';
-      });
-      setMyTasks(filteredMyTasks);
+      setMyTasks(myTasksData);
 
       // 我指派的任务（仅 leader 及以上）
       if (isLeaderOrAbove) {
         const allTasks = await tasksApi.list({ parent_id: 'null' });
-        const assigned = allTasks.filter(t => t.created_by === user?.id && t.assigned_to !== user?.id && t.status !== 'done');
+        const assigned = allTasks.filter(t => t.created_by === user?.id && t.assigned_to !== user?.id);
         setAssignedTasks(assigned);
       }
 

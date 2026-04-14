@@ -342,6 +342,12 @@ db.exec(`
   );
 `);
 
+// tasks 表动态补全 result 字段
+const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name);
+if (taskCols.length > 0 && !taskCols.includes('result')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN result TEXT DEFAULT NULL");
+}
+
 // =========== 预算管理表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS budgets (
@@ -1441,7 +1447,7 @@ app.post('/api/tasks', (req, res) => {
 
 // 更新任务
 app.put('/api/tasks/:id', (req, res) => {
-  const { title, description, status, priority, date } = req.body;
+  const { title, description, status, priority, date, result } = req.body;
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
 
@@ -1453,7 +1459,7 @@ app.put('/api/tasks/:id', (req, res) => {
 
   const doneAt = status === 'done' ? new Date().toISOString() : (status && status !== 'done' ? null : task.done_at);
   db.prepare(`
-    UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, done_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+    UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(
     title ?? task.title,
     description ?? task.description,
@@ -1461,6 +1467,7 @@ app.put('/api/tasks/:id', (req, res) => {
     priority ?? task.priority,
     date ?? task.date,
     doneAt,
+    result !== undefined ? result : task.result,
     req.params.id
   );
   res.json({ success: true });
