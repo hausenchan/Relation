@@ -47,6 +47,21 @@ const weightMap = {
 
 const WARN_DAYS = 30;
 
+// 屏蔽腾讯地图 SDK 产生的跨域 Script error（仅影响开发模式 overlay，不影响功能）
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (e) => {
+    if (!e.error && e.message === 'Script error.') {
+      e.stopImmediatePropagation();
+    }
+  }, true);
+  window.addEventListener('unhandledrejection', (e) => {
+    if (e.reason && typeof e.reason.message === 'string' &&
+        e.reason.message.includes('TMap')) {
+      e.preventDefault();
+    }
+  });
+}
+
 // 动态加载腾讯地图 SDK
 function loadTMapSDK() {
   return new Promise((resolve, reject) => {
