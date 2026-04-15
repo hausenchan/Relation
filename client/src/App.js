@@ -409,7 +409,7 @@ function AppLayout() {
         collapsed={collapsed}
         collapsedWidth={DS.sidebar.collapsedWidth}
         width={DS.sidebar.width}
-        style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', position: 'sticky', top: 0, borderRight: '1px solid rgba(255,255,255,0.04)' }}
+        style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', minHeight: '100vh', overflow: 'hidden', position: 'sticky', top: 0, left: 0, borderRight: '1px solid rgba(255,255,255,0.04)', alignSelf: 'stretch' }}
       >
         <div style={{
           height: DS.header.height, display: 'flex', alignItems: 'center', justifyContent: 'center',
