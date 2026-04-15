@@ -18,7 +18,7 @@ const isAdmin = (role) => ADMIN_ROLES.has(role);
 
 // ── Design system constants ──────────────────────────
 const DS = {
-  sidebar: { bg: '#0f0f23', width: 240, collapsedWidth: 64, accentColor: '#a5b4fc' },
+  sidebar: { bg: '#0f0f23', width: 180, collapsedWidth: 64, accentColor: '#a5b4fc' },
   header: { height: 56, bg: '#ffffff', border: '#e8e8ed' },
   content: { bg: '#f0f2f5', padding: 24 },
 };
@@ -53,8 +53,8 @@ const appTheme = {
       darkItemColor: 'rgba(255,255,255,0.65)',
       darkItemHoverColor: 'rgba(255,255,255,0.95)',
       darkGroupTitleColor: 'rgba(255,255,255,0.35)',
-      itemMarginInline: 8,
-      itemPaddingInline: 12,
+      itemMarginInline: 4,
+      itemPaddingInline: 8,
       itemBorderRadius: 8,
     },
     Card: { paddingLG: 20, borderRadiusLG: 12 },
@@ -413,10 +413,10 @@ function AppLayout() {
       >
         <div style={{
           height: DS.header.height, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '0 16px', gap: 10, flexShrink: 0,
+          borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '0 12px', gap: 8, flexShrink: 0,
         }}>
           {/* 迷你 Logo SVG */}
-          <svg width="28" height="28" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <svg width="24" height="24" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
             <defs>
               <linearGradient id="slg1" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
                 <stop offset="0%" stopColor="#667eea" />
@@ -428,14 +428,14 @@ function AppLayout() {
           </svg>
           {!collapsed && (
             <div>
-              <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, letterSpacing: 2, lineHeight: '18px' }}>幂动小智</div>
-              <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', color: DS.sidebar.accentColor }}>AI赋能 · 协同提效</div>
+              <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, letterSpacing: 1.5, lineHeight: '16px' }}>幂动小智</div>
+              <div style={{ fontSize: 9, letterSpacing: 1, lineHeight: '12px', color: DS.sidebar.accentColor }}>AI赋能 · 协同提效</div>
             </div>
           )}
         </div>
         {/* 搜索框 */}
         {!collapsed && (
-          <div style={{ padding: '10px 16px 4px', flexShrink: 0 }} className="sider-search">
+          <div style={{ padding: '8px 10px 4px', flexShrink: 0 }} className="sider-search">
             <Input
               placeholder="搜索菜单..."
               prefix={<SearchOutlined style={{ color: 'rgba(255,255,255,0.35)' }} />}
