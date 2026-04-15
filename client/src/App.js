@@ -320,7 +320,7 @@ function AppLayout() {
   };
 
   return (
-    <Watermark content={user?.display_name || user?.username} style={{ minHeight: '100vh' }}>
+    <Watermark content={user?.display_name || user?.username} gap={[200, 200]} font={{ color: 'rgba(0,0,0,0.06)', fontSize: 14 }} style={{ minHeight: '100vh' }}>
     <Layout style={{ minHeight: '100vh' }}>
       <Modal
         title="修改密码"
