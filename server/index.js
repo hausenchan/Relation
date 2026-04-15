@@ -319,8 +319,10 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS follow_up_tasks (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     title           TEXT NOT NULL,
-    interaction_id  INTEGER NOT NULL,
-    person_id       INTEGER NOT NULL,
+    interaction_id  INTEGER,
+    person_id       INTEGER,
+    competitor_research_id INTEGER,
+    company_id      INTEGER,
     opportunity_title TEXT,
     opportunity_note  TEXT,
     assigned_to     INTEGER NOT NULL,
@@ -333,6 +335,13 @@ db.exec(`
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+// follow_up_tasks 自动迁移
+const futCols = db.prepare("PRAGMA table_info(follow_up_tasks)").all().map(c => c.name);
+if (futCols.length > 0) {
+  if (!futCols.includes('competitor_research_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN competitor_research_id INTEGER DEFAULT NULL");
+  if (!futCols.includes('company_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN company_id INTEGER DEFAULT NULL");
+}
 
 const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.name);
 if (companyCols.length > 0 && !companyCols.includes('created_by')) {
@@ -1306,12 +1315,14 @@ app.get('/api/follow-up-tasks', (req, res) => {
       p.name as person_name, p.company, p.city, p.current_company, p.person_category,
       ua.display_name as assigned_to_name,
       ub.display_name as assigned_by_name,
-      i.type as interaction_type, i.date as interaction_date, i.description as interaction_desc, i.outcome as interaction_outcome
+      i.type as interaction_type, i.date as interaction_date, i.description as interaction_desc, i.outcome as interaction_outcome,
+      co.name as company_name
     FROM follow_up_tasks f
     LEFT JOIN persons p ON f.person_id = p.id
     LEFT JOIN users ua ON f.assigned_to = ua.id
     LEFT JOIN users ub ON f.assigned_by = ub.id
     LEFT JOIN interactions i ON f.interaction_id = i.id
+    LEFT JOIN companies co ON f.company_id = co.id
     WHERE (f.assigned_to = ? OR f.assigned_by = ?)
   `;
   const params = [me, me];
@@ -2103,6 +2114,18 @@ app.post('/api/competitor_research', (req, res) => {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note);
   db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
+
+  // 自动创建待跟进任务（商机指派）
+  if (opportunity_title && opportunity_assignee) {
+    const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(company_id);
+    const taskTitle = `${company?.name || '未知公司'} - ${opportunity_title}`;
+    db.prepare(`
+      INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
+      VALUES (?,0,0,?,?,?,?,?,?)
+    `).run(taskTitle, r.lastInsertRowid, company_id, opportunity_title, opportunity_note || null,
+      opportunity_assignee, req.user.id);
+  }
+
   res.json({ id: r.lastInsertRowid });
 });
 
@@ -2112,6 +2135,25 @@ app.put('/api/competitor_research/:id', (req, res) => {
     UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
     WHERE id=?
   `).run(date, title, importance, content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, req.params.id);
+
+  // 同步更新待跟进任务
+  if (opportunity_title && opportunity_assignee) {
+    const existing = db.prepare('SELECT id FROM follow_up_tasks WHERE competitor_research_id = ? AND status != ?').get(req.params.id, 'done');
+    if (existing) {
+      db.prepare('UPDATE follow_up_tasks SET assigned_to=?, opportunity_title=?, opportunity_note=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
+        .run(opportunity_assignee, opportunity_title, opportunity_note || null, existing.id);
+    } else {
+      const cr = db.prepare('SELECT company_id FROM competitor_research WHERE id = ?').get(req.params.id);
+      const company = cr ? db.prepare('SELECT name FROM companies WHERE id = ?').get(cr.company_id) : null;
+      const taskTitle = `${company?.name || '未知公司'} - ${opportunity_title}`;
+      db.prepare(`
+        INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
+        VALUES (?,0,0,?,?,?,?,?,?)
+      `).run(taskTitle, req.params.id, cr?.company_id || 0, opportunity_title, opportunity_note || null,
+        opportunity_assignee, req.user.id);
+    }
+  }
+
   res.json({ success: true });
 });
 

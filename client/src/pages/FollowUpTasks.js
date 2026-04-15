@@ -79,12 +79,13 @@ export default function FollowUpTasks() {
       ),
     },
     {
-      title: '关联人脉',
+      title: '关联对象',
       render: (_, r) => (
         <Space size={4}>
           <UserOutlined style={{ color: '#888' }} />
-          <Text>{r.person_name}</Text>
-          {(r.company || r.current_company) && <Text type="secondary" style={{ fontSize: 12 }}>({r.company || r.current_company})</Text>}
+          <Text>{r.person_name || r.company_name || '-'}</Text>
+          {r.person_name && (r.company || r.current_company) && <Text type="secondary" style={{ fontSize: 12 }}>({r.company || r.current_company})</Text>}
+          {!r.person_name && r.company_name && <Text type="secondary" style={{ fontSize: 12 }}>(公司)</Text>}
         </Space>
       ),
     },
@@ -196,10 +197,11 @@ export default function FollowUpTasks() {
           <Space direction="vertical" style={{ width: '100%' }} size={16}>
             <Descriptions column={1} bordered size="small">
               <Descriptions.Item label="任务标题">{detailRecord.title}</Descriptions.Item>
-              <Descriptions.Item label="关联人脉">
-                {detailRecord.person_name}
-                {(detailRecord.company || detailRecord.current_company) &&
+              <Descriptions.Item label="关联对象">
+                {detailRecord.person_name || detailRecord.company_name || '-'}
+                {detailRecord.person_name && (detailRecord.company || detailRecord.current_company) &&
                   ` (${detailRecord.company || detailRecord.current_company})`}
+                {!detailRecord.person_name && detailRecord.company_name && ' (公司)'}
               </Descriptions.Item>
               <Descriptions.Item label="商机标题">
                 {detailRecord.opportunity_title || '-'}

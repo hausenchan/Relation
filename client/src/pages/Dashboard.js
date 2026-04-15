@@ -457,13 +457,12 @@ export default function Dashboard() {
                   title={<Text strong>{item.title}</Text>}
                   description={
                     <Space>
-                      <Tag color="blue">{item.person_name}</Tag>
+                      <Tag color="blue">{item.person_name || item.company_name || '-'}</Tag>
                       {item.opportunity_title && <Tag color="orange">{item.opportunity_title}</Tag>}
                     </Space>
                   }
                 />
                 <Space>
-                  <Tag color="default">{dayjs(item.follow_up_date).format('MM-DD')}</Tag>
                   <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>处理</Button>
                 </Space>
               </List.Item>
@@ -494,7 +493,7 @@ export default function Dashboard() {
                   title={<Text strong>{item.title}</Text>}
                   description={
                     <Space>
-                      <Tag color="blue">{item.person_name}</Tag>
+                      <Tag color="blue">{item.person_name || item.company_name || '-'}</Tag>
                       {item.opportunity_title && <Tag color="orange">{item.opportunity_title}</Tag>}
                       <Tag color={item.status === 'done' ? 'green' : item.status === 'pending' ? 'default' : 'orange'}>
                         {item.status === 'pending' ? '待处理' : item.status === 'done' ? '已完成' : '进行中'}
