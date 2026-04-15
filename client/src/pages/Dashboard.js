@@ -62,7 +62,7 @@ export default function Dashboard() {
   const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState(['pending', 'in_progress']);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
 
-  const canAssignOthers = ['admin', 'leader', 'sales_director'].includes(user?.role);
+  const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const isLeaderOrAbove = ['admin', 'leader', 'sales_director'].includes(user?.role);
 
   useEffect(() => {
@@ -101,9 +101,9 @@ export default function Dashboard() {
       const followUpData = await followUpTasksApi.list({ status: 'pending' });
       setFollowUpTasks(followUpData.slice(0, 5));
 
-      // 商机任务（所有分配给我的商机任务）
+      // 商机任务（分配给我 + 我指派的）
       const allFollowUpData = await followUpTasksApi.list({});
-      setOpportunities(allFollowUpData.filter(t => t.assigned_to === user?.id));
+      setOpportunities(allFollowUpData);
 
     } catch (err) {
       console.error('加载数据失败:', err);
@@ -492,7 +492,10 @@ export default function Dashboard() {
                 <List.Item.Meta
                   title={<Text strong>{item.title}</Text>}
                   description={
-                    <Space>
+                    <Space wrap>
+                      {item.assigned_by === user?.id && item.assigned_to !== user?.id
+                        ? <Tag color="purple">我指派 → {item.assigned_to_name}</Tag>
+                        : <Tag color="cyan">指派给我</Tag>}
                       <Tag color="blue">{item.person_name || item.company_name || '-'}</Tag>
                       {item.opportunity_title && <Tag color="orange">{item.opportunity_title}</Tag>}
                       <Tag color={item.status === 'done' ? 'green' : item.status === 'pending' ? 'default' : 'orange'}>
