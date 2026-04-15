@@ -74,8 +74,8 @@ export default function Leads() {
       dataIndex: 'source_type',
       width: 110,
       render: (v) => v === 'competitor_research'
-        ? <Tag style={{ borderRadius: 6, fontSize: 12 }} color="orange">竞品研究</Tag>
-        : <Tag style={{ borderRadius: 6, fontSize: 12 }} color="blue">互动记录</Tag>,
+        ? <Tag style={{ borderRadius: 6, fontSize: 12 }} color="orange">竞研</Tag>
+        : <Tag style={{ borderRadius: 6, fontSize: 12 }} color="blue">互动</Tag>,
     },
     {
       title: '关联对象',
