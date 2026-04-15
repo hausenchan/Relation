@@ -357,7 +357,7 @@ function AppLayout() {
         collapsed={collapsed}
         collapsedWidth={56}
         width={220}
-        style={{ background: '#0a0a1a', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', position: 'relative' }}
+        style={{ background: '#0a0a1a', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', position: 'sticky', top: 0 }}
       >
         <div style={{
           height: 64, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'center',
