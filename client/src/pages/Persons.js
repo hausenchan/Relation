@@ -15,6 +15,7 @@ import InteractionForm from '../components/InteractionForm';
 import ReminderForm from '../components/ReminderForm';
 import InteractionList from '../components/InteractionList';
 import ReminderList from '../components/ReminderList';
+import PersonsMap from '../components/PersonsMap';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -793,6 +794,12 @@ export default function Persons() {
         </Space>
       </div>
 
+      <Tabs defaultActiveKey="list" items={[
+        {
+          key: 'list',
+          label: '列表视图',
+          children: (
+            <>
       {/* 第一行：通用筛选 */}
       <Space style={{ marginBottom: 12 }} wrap>
         <Input.Search
@@ -934,6 +941,15 @@ export default function Persons() {
           ),
         }}
       />
+            </>
+          ),
+        },
+        {
+          key: 'map',
+          label: '地图视图',
+          children: <PersonsMap />,
+        },
+      ]} />
 
       {/* 新增/编辑弹窗 */}
       <Modal

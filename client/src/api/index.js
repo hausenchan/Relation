@@ -54,6 +54,7 @@ export const personsApi = {
   delete: (id) => api.delete(`/persons/${id}`).then(r => r.data),
   import: (rows) => api.post('/persons/import', rows).then(r => r.data),
   assign: (id, data) => api.put(`/persons/${id}/assign`, data).then(r => r.data),
+  mapData: (params) => api.get('/persons/map', { params }).then(r => r.data),
 };
 
 export const interactionsApi = {

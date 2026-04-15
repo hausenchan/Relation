@@ -1006,6 +1006,37 @@ app.get('/api/persons', (req, res) => {
   res.json(db.prepare(query).all(...params));
 });
 
+// 人脉地图数据（精简字段 + 上次联系时间）
+app.get('/api/persons/map', (req, res) => {
+  const { city, person_category, relationship_level, weight } = req.query;
+  const { id: me, role } = req.user;
+  let query = `SELECT p.id, p.name, p.company, p.city, p.person_category, p.relationship_level, p.weight, p.phone,
+    (SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id) as last_interaction_date,
+    CAST(julianday('now') - julianday((SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id)) AS INTEGER) as days_since_contact
+    FROM persons p WHERE p.city IS NOT NULL AND p.city != ''`;
+  const params = [];
+
+  const filter = buildUserFilter(me, role, 'p');
+  if (filter.sql) { query += filter.sql; params.push(...filter.params); }
+
+  if (city) {
+    const cities = city.split(',').filter(Boolean);
+    if (cities.length === 1) {
+      query += ' AND p.city LIKE ?'; params.push(`%${cities[0]}%`);
+    } else if (cities.length > 1) {
+      const clauses = cities.map(() => 'p.city LIKE ?');
+      query += ` AND (${clauses.join(' OR ')})`;
+      cities.forEach(c => params.push(`%${c}%`));
+    }
+  }
+  if (person_category) { query += ' AND p.person_category = ?'; params.push(person_category); }
+  if (relationship_level) { query += ' AND p.relationship_level = ?'; params.push(relationship_level); }
+  if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
+
+  query += ' ORDER BY p.city, p.name';
+  res.json(db.prepare(query).all(...params));
+});
+
 app.get('/api/persons/:id', (req, res) => {
   const p = db.prepare('SELECT p.*, u1.display_name as created_by_name, u2.display_name as assigned_to_name FROM persons p LEFT JOIN users u1 ON p.created_by = u1.id LEFT JOIN users u2 ON p.assigned_to = u2.id WHERE p.id = ?').get(req.params.id);
   if (!p) return res.status(404).json({ error: '未找到' });
