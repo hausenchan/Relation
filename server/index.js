@@ -1175,7 +1175,7 @@ app.delete('/api/interactions/:id', (req, res) => {
 });
 
 // =========== 商机管理 API ===========
-app.get('/api/opportunities', (req, res) => {
+app.get('/api/opportunities', auth, (req, res) => {
   const { status, assignee } = req.query;
   const { id: me, role } = req.user;
 
