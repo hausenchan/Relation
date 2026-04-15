@@ -306,6 +306,14 @@ if (intCols.length > 0) {
   if (!intCols.includes('created_by')) db.exec("ALTER TABLE interactions ADD COLUMN created_by INTEGER DEFAULT NULL");
 }
 
+const crCols = db.prepare("PRAGMA table_info(competitor_research)").all().map(c => c.name);
+if (crCols.length > 0) {
+  if (!crCols.includes('opportunity_title')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_title TEXT DEFAULT NULL");
+  if (!crCols.includes('opportunity_status')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_status TEXT DEFAULT NULL");
+  if (!crCols.includes('opportunity_assignee')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_assignee INTEGER DEFAULT NULL");
+  if (!crCols.includes('opportunity_note')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_note TEXT DEFAULT NULL");
+}
+
 // =========== 待跟进任务表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS follow_up_tasks (
