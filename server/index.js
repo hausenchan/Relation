@@ -1037,7 +1037,8 @@ app.get('/api/persons/map', (req, res) => {
   res.json(db.prepare(query).all(...params));
 });
 
-app.get('/api/persons/:id', (req, res) => {
+app.get('/api/persons/:id', (req, res, next) => {
+  if (!/^\d+$/.test(req.params.id)) return next();
   const p = db.prepare('SELECT p.*, u1.display_name as created_by_name, u2.display_name as assigned_to_name FROM persons p LEFT JOIN users u1 ON p.created_by = u1.id LEFT JOIN users u2 ON p.assigned_to = u2.id WHERE p.id = ?').get(req.params.id);
   if (!p) return res.status(404).json({ error: '未找到' });
   res.json(p);

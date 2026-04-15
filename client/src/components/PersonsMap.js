@@ -53,7 +53,10 @@ function loadTMapSDK() {
     if (window.TMap) { resolve(window.TMap); return; }
     const script = document.createElement('script');
     script.src = `https://map.qq.com/api/gljs?v=1.exp&key=${TMAP_KEY}`;
-    script.onload = () => resolve(window.TMap);
+    script.onload = () => {
+      if (window.TMap) resolve(window.TMap);
+      else reject(new Error('TMap SDK failed to load'));
+    };
     script.onerror = reject;
     document.head.appendChild(script);
   });
@@ -70,26 +73,50 @@ export default function PersonsMap() {
   const mapInstanceRef = useRef(null);
   const markersRef = useRef([]);
   const infoWindowRef = useRef(null);
+  const destroyedRef = useRef(false);
 
   // 初始化腾讯地图
   useEffect(() => {
+    destroyedRef.current = false;
+
     loadTMapSDK().then(TMap => {
-      const map = new TMap.Map(mapRef.current, {
-        center: new TMap.LatLng(35.5, 104.0),
-        zoom: 5,
-        viewMode: '2D',
-      });
-      mapInstanceRef.current = map;
-      infoWindowRef.current = new TMap.InfoWindow({ map, enableCustom: true, offset: { x: 0, y: -20 } });
-      infoWindowRef.current.close();
-      setMapReady(true);
+      if (destroyedRef.current || !mapRef.current) return;
+      try {
+        const map = new TMap.Map(mapRef.current, {
+          center: new TMap.LatLng(35.5, 104.0),
+          zoom: 5,
+          viewMode: '2D',
+        });
+        mapInstanceRef.current = map;
+        try {
+          infoWindowRef.current = new TMap.InfoWindow({
+            map,
+            offset: { x: 0, y: -20 },
+          });
+          infoWindowRef.current.close();
+        } catch {
+          infoWindowRef.current = null;
+        }
+        setMapReady(true);
+      } catch (err) {
+        console.warn('TMap init failed:', err);
+      }
     }).catch(() => {});
 
     return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.destroy();
-        mapInstanceRef.current = null;
-      }
+      destroyedRef.current = true;
+      try {
+        markersRef.current.forEach(m => { try { m.setMap(null); } catch {} });
+        markersRef.current = [];
+        if (infoWindowRef.current) {
+          try { infoWindowRef.current.close(); } catch {}
+          infoWindowRef.current = null;
+        }
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.destroy();
+          mapInstanceRef.current = null;
+        }
+      } catch {}
     };
   }, []);
 
@@ -102,7 +129,7 @@ export default function PersonsMap() {
     if (filterWeight) params.weight = filterWeight;
     try {
       const res = await personsApi.mapData(params);
-      setData(res);
+      setData(Array.isArray(res) ? res : []);
     } catch {
       setData([]);
     }
@@ -137,93 +164,87 @@ export default function PersonsMap() {
 
   // 更新标点
   useEffect(() => {
-    if (!mapReady || !mapInstanceRef.current || !window.TMap) return;
+    if (!mapReady || !mapInstanceRef.current || !window.TMap || destroyedRef.current) return;
     const TMap = window.TMap;
     const map = mapInstanceRef.current;
 
     // 清除旧标点
-    markersRef.current.forEach(m => m.setMap(null));
+    markersRef.current.forEach(m => { try { m.setMap(null); } catch {} });
     markersRef.current = [];
 
     if (mapPoints.length === 0) return;
 
-    const markers = [];
-    mapPoints.forEach(pt => {
-      const size = Math.min(28 + pt.count * 4, 52);
-      const bgColor = pt.hasWarning ? '#ff4d4f' : '#1677ff';
-
-      const marker = new TMap.DOMOverlay({
-        map,
+    try {
+      const geometries = mapPoints.map((pt, idx) => ({
+        id: `marker_${idx}`,
         position: new TMap.LatLng(pt.lat, pt.lng),
+        properties: pt,
+      }));
+
+      const markerCluster = new TMap.MultiMarker({
+        map,
+        styles: mapPoints.reduce((acc, pt, idx) => {
+          const size = Math.min(28 + pt.count * 4, 52);
+          const bgColor = pt.hasWarning ? '#ff4d4f' : '#1677ff';
+          acc[`marker_${idx}`] = new TMap.MarkerStyle({
+            width: size,
+            height: size,
+            anchor: { x: size / 2, y: size / 2 },
+            src: `data:image/svg+xml,${encodeURIComponent(
+              `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">` +
+              `<circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="${bgColor}" stroke="white" stroke-width="2"/>` +
+              `<text x="${size/2}" y="${size/2 + 5}" text-anchor="middle" fill="white" font-size="14" font-weight="bold">${pt.count}</text>` +
+              `</svg>`
+            )}`,
+          });
+          return acc;
+        }, {}),
+        geometries: geometries.map((g, idx) => ({ ...g, styleId: `marker_${idx}` })),
       });
 
-      // 用 MultiMarker + Label 代替 DOMOverlay
-      // 腾讯地图推荐用 MultiMarker
-    });
-
-    // 使用 MultiMarker 方式
-    const geometries = mapPoints.map((pt, idx) => ({
-      id: `marker_${idx}`,
-      position: new TMap.LatLng(pt.lat, pt.lng),
-      properties: pt,
-    }));
-
-    const markerCluster = new TMap.MultiMarker({
-      map,
-      styles: mapPoints.reduce((acc, pt, idx) => {
-        const size = Math.min(28 + pt.count * 4, 52);
-        const bgColor = pt.hasWarning ? '#ff4d4f' : '#1677ff';
-        acc[`marker_${idx}`] = new TMap.MarkerStyle({
-          width: size,
-          height: size,
-          anchor: { x: size / 2, y: size / 2 },
-          src: `data:image/svg+xml,${encodeURIComponent(`
-            <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
-              <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="${bgColor}" stroke="white" stroke-width="2"/>
-              <text x="${size/2}" y="${size/2 + 5}" text-anchor="middle" fill="white" font-size="14" font-weight="bold">${pt.count}</text>
-            </svg>
-          `)}`,
-        });
-        return acc;
-      }, {}),
-      geometries: geometries.map((g, idx) => ({ ...g, styleId: `marker_${idx}` })),
-    });
-
-    // 点击弹出信息窗
-    markerCluster.on('click', (e) => {
-      const pt = e.geometry.properties;
-      const content = `
-        <div style="background:#fff;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:12px 16px;min-width:200px;max-width:320px;">
-          <div style="font-weight:700;font-size:15px;margin-bottom:8px;border-bottom:1px solid #f0f0f0;padding-bottom:6px;color:#333;">
-            📍 ${pt.city}（${pt.count}人）
-          </div>
-          ${pt.persons.map(p => {
-            const warn = p.days_since_contact === null || p.days_since_contact >= WARN_DAYS;
-            const daysText = p.days_since_contact !== null ? `${p.days_since_contact}天前` : '暂无互动';
-            return `<div style="padding:4px 0;border-bottom:1px solid #fafafa;">
-              <div style="font-weight:600;font-size:13px;color:${warn ? '#ff4d4f' : '#333'};">${p.name}${p.company ? ` · ${p.company}` : ''}</div>
-              <div style="font-size:11px;color:${warn ? '#ff4d4f' : '#999'};">
-                上次联系：${daysText}${warn ? ' ⚠️' : ''}
+      // 点击弹出信息窗
+      if (infoWindowRef.current) {
+        markerCluster.on('click', (e) => {
+          if (!infoWindowRef.current) return;
+          const pt = e.geometry.properties;
+          const content = `
+            <div style="background:#fff;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:12px 16px;min-width:200px;max-width:320px;">
+              <div style="font-weight:700;font-size:15px;margin-bottom:8px;border-bottom:1px solid #f0f0f0;padding-bottom:6px;color:#333;">
+                ${pt.city}（${pt.count}人）
               </div>
-            </div>`;
-          }).join('')}
-        </div>
-      `;
-      infoWindowRef.current.open();
-      infoWindowRef.current.setPosition(e.geometry.position);
-      infoWindowRef.current.setContent(content);
-    });
+              ${pt.persons.map(p => {
+                const warn = p.days_since_contact === null || p.days_since_contact >= WARN_DAYS;
+                const daysText = p.days_since_contact !== null ? `${p.days_since_contact}天前` : '暂无互动';
+                return `<div style="padding:4px 0;border-bottom:1px solid #fafafa;">
+                  <div style="font-weight:600;font-size:13px;color:${warn ? '#ff4d4f' : '#333'};">${p.name}${p.company ? ` · ${p.company}` : ''}</div>
+                  <div style="font-size:11px;color:${warn ? '#ff4d4f' : '#999'};">
+                    上次联系：${daysText}
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>
+          `;
+          try {
+            infoWindowRef.current.open();
+            infoWindowRef.current.setPosition(e.geometry.position);
+            infoWindowRef.current.setContent(content);
+          } catch {}
+        });
+      }
 
-    markersRef.current = [markerCluster];
+      markersRef.current = [markerCluster];
 
-    // 自适应视野
-    if (mapPoints.length === 1) {
-      map.setCenter(new TMap.LatLng(mapPoints[0].lat, mapPoints[0].lng));
-      map.setZoom(10);
-    } else {
-      const bounds = new TMap.LatLngBounds();
-      mapPoints.forEach(pt => bounds.extend(new TMap.LatLng(pt.lat, pt.lng)));
-      map.fitBounds(bounds, { padding: 60 });
+      // 自适应视野
+      if (mapPoints.length === 1) {
+        map.setCenter(new TMap.LatLng(mapPoints[0].lat, mapPoints[0].lng));
+        map.setZoom(10);
+      } else {
+        const bounds = new TMap.LatLngBounds();
+        mapPoints.forEach(pt => bounds.extend(new TMap.LatLng(pt.lat, pt.lng)));
+        map.fitBounds(bounds, { padding: 60 });
+      }
+    } catch (err) {
+      console.warn('TMap markers update failed:', err);
     }
   }, [mapPoints, mapReady]);
 
