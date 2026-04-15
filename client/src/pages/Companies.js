@@ -862,13 +862,9 @@ function CompetitorResearchTab({ companyId }) {
           </Row>
 
           <Divider style={{ margin: '8px 0' }} />
-          <Collapse
-            ghost
-            items={[{
-              key: 'opp',
-              label: <span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>,
-              children: (
-                <Row gutter={16}>
+          <Collapse ghost>
+            <Collapse.Panel key="opp" header={<span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>}>
+              <Row gutter={16}>
                   <Col span={12}>
                     <Form.Item label="商机标题" name="opportunity_title">
                       <Input placeholder="简述商机，如：XX采购合作意向" />
@@ -905,9 +901,8 @@ function CompetitorResearchTab({ companyId }) {
                     </Form.Item>
                   </Col>
                 </Row>
-              ),
-            }]}
-          />
+            </Collapse.Panel>
+          </Collapse>
         </Form>
       </Modal>
     </div>
