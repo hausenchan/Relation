@@ -12,6 +12,25 @@ const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
 
+// 腾讯地图 Key（地理编码用）
+const TMAP_KEY = 'BFBBZ-CNXC4-XEWUR-KQN7R-QOUGJ-Q4B66';
+
+// 地理编码：城市+地址 → 经纬度
+async function geocodeAddress(city, address) {
+  try {
+    const firstCity = (city || '').split(',')[0].trim();
+    const fullAddress = (firstCity + (address || '')).trim();
+    if (!fullAddress) return { lat: null, lng: null };
+    const url = `https://apis.map.qq.com/ws/geocoder/v1/?address=${encodeURIComponent(fullAddress)}&key=${TMAP_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.status === 0 && data.result?.location) {
+      return { lat: data.result.location.lat, lng: data.result.location.lng };
+    }
+  } catch {}
+  return { lat: null, lng: null };
+}
+
 app.use(cors());
 app.use(express.json());
 
@@ -273,6 +292,8 @@ if (existingCols.length > 0) {
     ["weight",        "TEXT DEFAULT 'medium'"],
     ["created_by",    "INTEGER DEFAULT NULL"],
     ["assigned_to",   "INTEGER DEFAULT NULL"],
+    ["lat",           "REAL DEFAULT NULL"],
+    ["lng",           "REAL DEFAULT NULL"],
   ];
   for (const [col, def] of personColsToAdd) {
     if (!existingCols.includes(col)) {
@@ -1010,7 +1031,7 @@ app.get('/api/persons', (req, res) => {
 app.get('/api/persons/map', (req, res) => {
   const { city, person_category, relationship_level, weight } = req.query;
   const { id: me, role } = req.user;
-  let query = `SELECT p.id, p.name, p.company, p.city, p.person_category, p.relationship_level, p.weight, p.phone,
+  let query = `SELECT p.id, p.name, p.company, p.city, p.address, p.lat, p.lng, p.person_category, p.relationship_level, p.weight, p.phone,
     (SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id) as last_interaction_date,
     CAST(julianday('now') - julianday((SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id)) AS INTEGER) as days_since_contact
     FROM persons p WHERE p.city IS NOT NULL AND p.city != ''`;
@@ -1044,7 +1065,7 @@ app.get('/api/persons/:id', (req, res, next) => {
   res.json(p);
 });
 
-app.post('/api/persons', canWrite, (req, res) => {
+app.post('/api/persons', canWrite, async (req, res) => {
   const {
     name, person_category, relation_types, city, company, position, industry,
     phone, email, wechat, birthday, address, tags, notes, resources, demands,
@@ -1053,26 +1074,27 @@ app.post('/api/persons', canWrite, (req, res) => {
     skills, experience_years, education, recruit_status, intent_level,
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight
   } = req.body;
+  const { lat, lng } = await geocodeAddress(city, address);
   const result = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, city, company, position, industry,
       phone, email, wechat, birthday, address, tags, notes, resources, demands,
       relationship_level, client_status,
       talent_type, current_company, current_position, target_position,
       skills, experience_years, education, recruit_status, intent_level,
-      potential_level, expected_salary, source, heart, brain, mouth, hand, weight, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      potential_level, expected_salary, source, heart, brain, mouth, hand, weight, lat, lng, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     name, person_category || 'social', relation_types || '', city,
     company, position, industry, phone, email, wechat, birthday, address, tags, notes,
     resources, demands, relationship_level || 'normal', client_status || 'active',
     talent_type || 'external', current_company, current_position, target_position,
     skills, experience_years, education, recruit_status || 'potential', intent_level || 'low',
-    potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium', req.user.id
+    potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium', lat, lng, req.user.id
   );
   res.json({ id: result.lastInsertRowid });
 });
 
-app.put('/api/persons/:id', canWrite, (req, res) => {
+app.put('/api/persons/:id', canWrite, async (req, res) => {
   // member / readonly 只能改自己录入的 或 被指派给自己的
   if (req.user.role === 'member' || req.user.role === 'readonly') {
     const p = db.prepare('SELECT created_by, assigned_to FROM persons WHERE id = ?').get(req.params.id);
@@ -1088,6 +1110,7 @@ app.put('/api/persons/:id', canWrite, (req, res) => {
     skills, experience_years, education, recruit_status, intent_level,
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight
   } = req.body;
+  const { lat, lng } = await geocodeAddress(city, address);
   db.prepare(`
     UPDATE persons SET name=?, person_category=?, relation_types=?, city=?, company=?, position=?, industry=?,
       phone=?, email=?, wechat=?, birthday=?, address=?, tags=?, notes=?, resources=?, demands=?,
@@ -1095,7 +1118,7 @@ app.put('/api/persons/:id', canWrite, (req, res) => {
       talent_type=?, current_company=?, current_position=?, target_position=?,
       skills=?, experience_years=?, education=?, recruit_status=?, intent_level=?,
       potential_level=?, expected_salary=?, source=?, heart=?, brain=?, mouth=?, hand=?, weight=?,
-      updated_at=CURRENT_TIMESTAMP
+      lat=?, lng=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
   `).run(
     name, person_category, relation_types || '', city,
@@ -1104,7 +1127,7 @@ app.put('/api/persons/:id', canWrite, (req, res) => {
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium',
-    req.params.id
+    lat, lng, req.params.id
   );
   res.json({ success: true });
 });
