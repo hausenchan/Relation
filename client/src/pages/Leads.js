@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Select, Modal, Form, message,
-  Drawer, Descriptions, Tooltip, Input, Card, Row, Col, Badge, Avatar
+  Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider
 } from 'antd';
-import { RiseOutlined, EditOutlined, UserOutlined, FunnelPlotOutlined, BankOutlined } from '@ant-design/icons';
-import { opportunitiesApi, usersApi } from '../api';
+import { RiseOutlined, EditOutlined, UserOutlined, PlusOutlined, BankOutlined } from '@ant-design/icons';
+import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi } from '../api';
+import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -14,6 +15,11 @@ const opportunityStatusMap = {
   following: { label: '跟进中', color: '#D97706', bg: '#fffbeb', border: '#fde68a' },
   won: { label: '已成交', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0' },
   lost: { label: '已关闭', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' },
+};
+
+const interactionTypeMap = {
+  visit: '拜访', call: '通话', gift: '送礼', meal: '餐饮',
+  wechat: '微信', email: '邮件', meeting: '会议', other: '其他',
 };
 
 export default function Leads() {
@@ -27,6 +33,14 @@ export default function Leads() {
   const [editForm] = Form.useForm();
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
+
+  // 添加线索
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [addForm] = Form.useForm();
+  const [addLoading, setAddLoading] = useState(false);
+  const [addSourceType, setAddSourceType] = useState('interaction');
+  const [persons, setPersons] = useState([]);
+  const [companies, setCompanies] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,7 +61,68 @@ export default function Leads() {
 
   useEffect(() => {
     usersApi.listSimple().then(setUsers).catch(() => {});
+    personsApi.list().then(setPersons).catch(() => {});
+    companiesApi.list().then(setCompanies).catch(() => {});
   }, []);
+
+  const openAddLead = () => {
+    setAddSourceType('interaction');
+    addForm.resetFields();
+    addForm.setFieldsValue({ source_type: 'interaction', opportunity_status: 'new', date: dayjs() });
+    setAddModalOpen(true);
+  };
+
+  const handleAddLead = async () => {
+    setAddLoading(true);
+    try {
+      const values = await addForm.validateFields();
+      const dateStr = values.date?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD');
+      const nextDateStr = values.next_action_date?.format('YYYY-MM-DD') || null;
+
+      if (addSourceType === 'interaction') {
+        await interactionsApi.create({
+          person_id: values.person_id,
+          date: dateStr,
+          type: values.interaction_type || 'other',
+          importance: values.importance || 'normal',
+          description: values.description || '',
+          outcome: values.outcome || '',
+          next_action: values.next_action || '',
+          next_action_date: nextDateStr,
+          opportunity_title: values.opportunity_title,
+          opportunity_status: values.opportunity_status,
+          opportunity_assignee: values.opportunity_assignee,
+          opportunity_note: values.opportunity_note || '',
+        });
+      } else {
+        await competitorResearchApi.create({
+          company_id: values.company_id,
+          date: dateStr,
+          importance: values.importance || 'normal',
+          title: values.opportunity_title,
+          content: values.description || '',
+          source: values.info_source || '',
+          outcome: values.outcome || '',
+          impact: values.impact || '',
+          next_action: values.next_action || '',
+          next_action_date: nextDateStr,
+          opportunity_title: values.opportunity_title,
+          opportunity_status: values.opportunity_status,
+          opportunity_assignee: values.opportunity_assignee,
+          opportunity_note: values.opportunity_note || '',
+        });
+      }
+
+      message.success('线索添加成功');
+      setAddModalOpen(false);
+      load();
+    } catch (err) {
+      if (err?.errorFields) return; // form validation
+      message.error(err.response?.data?.error || '添加失败');
+    } finally {
+      setAddLoading(false);
+    }
+  };
 
   const openEdit = (record) => {
     setEditTarget(record);
@@ -188,29 +263,32 @@ export default function Leads() {
 
       {/* 筛选与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-        <Space style={{ marginBottom: 16 }} wrap>
-          <Select
-            placeholder="商机状态"
-            allowClear
-            style={{ width: 130 }}
-            value={filterStatus || undefined}
-            onChange={v => setFilterStatus(v || '')}
-          >
-            {Object.entries(opportunityStatusMap).map(([k, v]) => (
-              <Option key={k} value={k}>{v.label}</Option>
-            ))}
-          </Select>
-          <Select
-            placeholder="指派人"
-            allowClear
-            showSearch
-            style={{ width: 160 }}
-            value={filterAssignee || undefined}
-            onChange={v => setFilterAssignee(v || '')}
-            filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-            options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
-          />
-        </Space>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+          <Space wrap>
+            <Select
+              placeholder="商机状态"
+              allowClear
+              style={{ width: 130 }}
+              value={filterStatus || undefined}
+              onChange={v => setFilterStatus(v || '')}
+            >
+              {Object.entries(opportunityStatusMap).map(([k, v]) => (
+                <Option key={k} value={k}>{v.label}</Option>
+              ))}
+            </Select>
+            <Select
+              placeholder="指派人"
+              allowClear
+              showSearch
+              style={{ width: 160 }}
+              value={filterAssignee || undefined}
+              onChange={v => setFilterAssignee(v || '')}
+              filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+              options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
+            />
+          </Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAddLead}>添加线索</Button>
+        </div>
 
         <Table
           columns={columns}
@@ -310,6 +388,128 @@ export default function Leads() {
           </div>
         )}
       </Drawer>
+
+      {/* 添加线索 Modal */}
+      <Modal
+        title={<span style={{ fontWeight: 600, fontSize: 15, color: '#1f2937' }}>添加线索</span>}
+        open={addModalOpen}
+        onOk={handleAddLead}
+        onCancel={() => setAddModalOpen(false)}
+        confirmLoading={addLoading}
+        okText="提交"
+        cancelText="取消"
+        width={620}
+        destroyOnClose
+      >
+        <Form form={addForm} layout="vertical" style={{ marginTop: 12 }}>
+          {/* 来源类型 */}
+          <Form.Item label="线索来源" name="source_type" rules={[{ required: true, message: '请选择线索来源' }]}>
+            <Select onChange={v => { setAddSourceType(v); addForm.setFieldsValue({ person_id: undefined, company_id: undefined }); }}>
+              <Option value="interaction">互动</Option>
+              <Option value="competitor_research">竞研</Option>
+            </Select>
+          </Form.Item>
+
+          {/* 互动来源 - 关联人脉 + 互动类型 */}
+          {addSourceType === 'interaction' && (
+            <>
+              <Form.Item label="关联人脉" name="person_id" rules={[{ required: true, message: '请选择关联人脉' }]}>
+                <Select showSearch placeholder="搜索人脉" optionFilterProp="label"
+                  options={persons.map(p => ({ value: p.id, label: `${p.name}${p.company ? ` (${p.company})` : ''}` }))}
+                />
+              </Form.Item>
+              <Form.Item label="互动类型" name="interaction_type" rules={[{ required: true, message: '请选择互动类型' }]}>
+                <Select placeholder="选择互动类型">
+                  {Object.entries(interactionTypeMap).map(([k, v]) => <Option key={k} value={k}>{v}</Option>)}
+                </Select>
+              </Form.Item>
+            </>
+          )}
+
+          {/* 竞研来源 - 关联公司 + 信息来源 */}
+          {addSourceType === 'competitor_research' && (
+            <>
+              <Form.Item label="关联公司" name="company_id" rules={[{ required: true, message: '请选择关联公司' }]}>
+                <Select showSearch placeholder="搜索公司" optionFilterProp="label"
+                  options={companies.map(c => ({ value: c.id, label: c.name }))}
+                />
+              </Form.Item>
+              <Form.Item label="信息来源" name="info_source">
+                <Input placeholder="如：官网、行业报告、客户反馈等" />
+              </Form.Item>
+            </>
+          )}
+
+          <Divider style={{ margin: '8px 0 16px', borderColor: '#f0f0f5' }} />
+
+          {/* 商机信息（通用） */}
+          <Form.Item label="商机标题" name="opportunity_title" rules={[{ required: true, message: '请输入商机标题' }]}>
+            <Input placeholder="简要描述商机内容" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="商机状态" name="opportunity_status">
+                <Select>
+                  {Object.entries(opportunityStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="指派跟进人" name="opportunity_assignee">
+                <Select allowClear showSearch placeholder="选择跟进人" optionFilterProp="label"
+                  options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label="商机说明" name="opportunity_note">
+            <Input.TextArea rows={2} placeholder="背景、需求、补充说明等" />
+          </Form.Item>
+
+          <Divider style={{ margin: '8px 0 16px', borderColor: '#f0f0f5' }} />
+
+          {/* 记录详情（通用） */}
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="日期" name="date" rules={[{ required: true, message: '请选择日期' }]}>
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="重要程度" name="importance">
+                <Select placeholder="选择重要程度" allowClear>
+                  <Option value="high">重要</Option>
+                  <Option value="medium">一般</Option>
+                  <Option value="normal">普通</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item label="描述" name="description">
+            <Input.TextArea rows={2} placeholder="详细描述" />
+          </Form.Item>
+          <Form.Item label="结果" name="outcome">
+            <Input.TextArea rows={2} placeholder="结果或收获" />
+          </Form.Item>
+          {addSourceType === 'competitor_research' && (
+            <Form.Item label="影响分析" name="impact">
+              <Input.TextArea rows={2} placeholder="对我方业务的影响分析" />
+            </Form.Item>
+          )}
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item label="下一步行动" name="next_action">
+                <Input placeholder="后续跟进事项" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item label="下一步日期" name="next_action_date">
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
     </div>
   );
 }
