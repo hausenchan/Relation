@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message } from 'antd';
 import {
@@ -7,7 +7,8 @@ import {
   GiftOutlined, CalendarOutlined, AuditOutlined, CarOutlined, RiseOutlined,
   ApartmentOutlined, LockOutlined, ThunderboltOutlined, MenuOutlined,
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
-  BranchesOutlined, SolutionOutlined, ToolOutlined
+  BranchesOutlined, SolutionOutlined, ToolOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -89,6 +90,9 @@ function AppLayout() {
   const [pwdForm] = Form.useForm();
   const [pwdLoading, setPwdLoading] = useState(false);
   const menuScrollRef = React.useRef(null);
+  const [collapsed, setCollapsed] = useState(false);
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'biz-coop', 'team-mgmt', 'executive', 'system']);
 
   useEffect(() => {
     if (!user) return;
@@ -256,6 +260,44 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
+  // ── 菜单搜索过滤 ────────────────────────────────────────────
+  const getMenuText = (label) => {
+    if (!label) return '';
+    if (typeof label === 'string') return label;
+    if (label.props) {
+      const { children } = label.props;
+      if (typeof children === 'string') return children;
+      if (Array.isArray(children)) return children.map(c => (typeof c === 'string' ? c : (c?.props?.children || ''))).join('');
+      if (children?.props?.children) return typeof children.props.children === 'string' ? children.props.children : '';
+    }
+    return '';
+  };
+
+  const filteredMenuItems = useMemo(() => {
+    const kw = searchKeyword.trim().toLowerCase();
+    if (!kw) return menuItems;
+    return menuItems.map(item => {
+      if (!item.children) {
+        const text = getMenuText(item.label).toLowerCase();
+        return text.includes(kw) ? item : null;
+      }
+      const matched = item.children.filter(child => {
+        const text = getMenuText(child.label).toLowerCase();
+        return text.includes(kw);
+      });
+      if (matched.length > 0) return { ...item, children: matched };
+      const groupText = getMenuText(item.label).toLowerCase();
+      if (groupText.includes(kw)) return item;
+      return null;
+    }).filter(Boolean);
+  }, [menuItems, searchKeyword]);
+
+  const effectiveOpenKeys = useMemo(() => {
+    const kw = searchKeyword.trim().toLowerCase();
+    if (kw) return filteredMenuItems.filter(i => i.children).map(i => i.key);
+    return menuOpenKeys;
+  }, [filteredMenuItems, searchKeyword, menuOpenKeys]);
+
   const userMenuItems = [
     {
       key: 'info', disabled: true,
@@ -311,9 +353,14 @@ function AppLayout() {
         </Form>
       </Modal>
 
-      <Sider breakpoint="lg" collapsedWidth="0" style={{ background: '#0a0a1a', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+      <Sider
+        collapsed={collapsed}
+        collapsedWidth={56}
+        width={220}
+        style={{ background: '#0a0a1a', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', position: 'relative' }}
+      >
         <div style={{
-          height: 64, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          height: 64, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'center',
           borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0 16px', gap: 10, flexShrink: 0,
         }}>
           {/* 迷你 Logo SVG */}
@@ -327,11 +374,27 @@ function AppLayout() {
             <circle cx="36" cy="36" r="34" fill="url(#slg1)" />
             <path d="M41 10 L24 38 L34 38 L31 62 L50 32 L39 32 Z" fill="white" opacity="0.95" />
           </svg>
-          <div>
-            <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, letterSpacing: 2, lineHeight: '18px' }}>幂动小智</div>
-            <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', color: '#07C160' }}>AI赋能 · 协同提效</div>
-          </div>
+          {!collapsed && (
+            <div>
+              <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, letterSpacing: 2, lineHeight: '18px' }}>幂动小智</div>
+              <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', color: '#07C160' }}>AI赋能 · 协同提效</div>
+            </div>
+          )}
         </div>
+        {/* 搜索框 */}
+        {!collapsed && (
+          <div style={{ padding: '8px 12px 0', flexShrink: 0 }} className="sider-search">
+            <Input
+              placeholder="搜索菜单..."
+              prefix={<SearchOutlined style={{ color: 'rgba(255,255,255,0.35)' }} />}
+              allowClear
+              size="small"
+              value={searchKeyword}
+              onChange={e => setSearchKeyword(e.target.value)}
+              style={{ borderRadius: 6 }}
+            />
+          </div>
+        )}
         <div
           ref={menuScrollRef}
           style={{
@@ -347,10 +410,14 @@ function AppLayout() {
             theme="dark"
             mode="inline"
             selectedKeys={[selectedKey]}
-            defaultOpenKeys={['goal-plan', 'biz-flow', 'biz-coop', 'team-mgmt', 'executive', 'system']}
-            items={menuItems}
+            openKeys={collapsed ? [] : effectiveOpenKeys}
+            items={filteredMenuItems}
+            inlineCollapsed={collapsed}
             style={{ marginTop: 8, background: '#0a0a1a', border: 'none', height: 'auto' }}
             onOpenChange={(openKeys) => {
+              if (!searchKeyword.trim()) {
+                setMenuOpenKeys(openKeys);
+              }
               // 当展开菜单时，自动滚动到对应位置
               if (openKeys.length > 0 && menuScrollRef.current) {
                 setTimeout(() => {
@@ -368,16 +435,24 @@ function AppLayout() {
       </Sider>
 
       <Layout>
-        <Header style={{ background: '#fff', padding: '0 24px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, boxShadow: '0 1px 4px rgba(0,21,41,.08)' }}>
-          <NotificationBell />
-          <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight" trigger={['click']}>
-            <Space style={{ cursor: 'pointer' }}>
-              <Avatar size={28} style={{ background: roleColor[user?.role], fontSize: 13 }}>
-                {(user?.display_name || user?.username || '?')[0].toUpperCase()}
-              </Avatar>
-              <span style={{ fontSize: 14 }}>{user?.display_name || user?.username}</span>
-            </Space>
-          </Dropdown>
+        <Header style={{ background: '#fff', padding: '0 24px', display: 'flex', alignItems: 'center', boxShadow: '0 1px 4px rgba(0,21,41,.08)' }}>
+          <span
+            onClick={() => { setCollapsed(!collapsed); if (!collapsed) setSearchKeyword(''); }}
+            style={{ fontSize: 18, cursor: 'pointer', color: '#333', marginRight: 'auto' }}
+          >
+            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <NotificationBell />
+            <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight" trigger={['click']}>
+              <Space style={{ cursor: 'pointer' }}>
+                <Avatar size={28} style={{ background: roleColor[user?.role], fontSize: 13 }}>
+                  {(user?.display_name || user?.username || '?')[0].toUpperCase()}
+                </Avatar>
+                <span style={{ fontSize: 14 }}>{user?.display_name || user?.username}</span>
+              </Space>
+            </Dropdown>
+          </div>
         </Header>
         <Content style={{ margin: '16px', padding: '16px', background: '#fff', borderRadius: 8, minHeight: 280 }}>
           <Routes>
