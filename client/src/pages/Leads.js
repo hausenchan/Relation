@@ -166,24 +166,6 @@ export default function Leads() {
 
   return (
     <div>
-      {/* 页面头部 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#fff', fontSize: 18,
-          }}>
-            <FunnelPlotOutlined />
-          </div>
-          <div>
-            <Title level={4} style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#1f2937' }}>线索池</Title>
-            <Text type="secondary" style={{ fontSize: 12 }}>管理商机线索，跟踪转化进度</Text>
-          </div>
-        </div>
-      </div>
-
       {/* 统计概览 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
