@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Select, Space, Tag, List, Typography, Spin, Badge, Empty } from 'antd';
 import { EnvironmentOutlined, WarningOutlined } from '@ant-design/icons';
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { personsApi } from '../api';
 
@@ -46,28 +46,37 @@ const weightMap = {
 
 const WARN_DAYS = 30;
 
-// 自适应视野组件
-function FitBounds({ bounds }) {
-  const map = useMap();
-  useEffect(() => {
-    if (bounds && bounds.length > 0) {
-      if (bounds.length === 1) {
-        map.setView(bounds[0], 10);
-      } else {
-        map.fitBounds(bounds, { padding: [40, 40] });
-      }
-    }
-  }, [bounds, map]);
-  return null;
-}
-
 export default function PersonsMap() {
   const [filterCity, setFilterCity] = useState([]);
   const [filterCategory, setFilterCategory] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const mapRef = useRef(null);
+  const mapInstanceRef = useRef(null);
+  const layerGroupRef = useRef(null);
 
+  // 初始化地图
+  useEffect(() => {
+    if (mapInstanceRef.current) return;
+    const map = L.map(mapRef.current, {
+      center: [35.5, 104.0],
+      zoom: 5,
+      scrollWheelZoom: true,
+    });
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+    mapInstanceRef.current = map;
+    layerGroupRef.current = L.layerGroup().addTo(map);
+
+    return () => {
+      map.remove();
+      mapInstanceRef.current = null;
+    };
+  }, []);
+
+  // 加载数据
   const loadData = useCallback(async () => {
     setLoading(true);
     const params = {};
@@ -109,7 +118,72 @@ export default function PersonsMap() {
       });
   }, [cityGroups]);
 
-  const bounds = useMemo(() => mapPoints.map(p => [p.lat, p.lng]), [mapPoints]);
+  // 更新标点
+  useEffect(() => {
+    if (!mapInstanceRef.current || !layerGroupRef.current) return;
+    const map = mapInstanceRef.current;
+    const layerGroup = layerGroupRef.current;
+    layerGroup.clearLayers();
+
+    if (mapPoints.length === 0) return;
+
+    mapPoints.forEach(pt => {
+      const radius = Math.min(10 + pt.count * 3, 28);
+      const color = pt.hasWarning ? '#ff4d4f' : '#1677ff';
+
+      const circle = L.circleMarker([pt.lat, pt.lng], {
+        radius,
+        color: '#fff',
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 0.85,
+      });
+
+      // 数字标签
+      const icon = L.divIcon({
+        className: '',
+        html: `<div style="
+          width:${radius * 2}px;height:${radius * 2}px;border-radius:50%;
+          display:flex;align-items:center;justify-content:center;
+          color:#fff;font-size:12px;font-weight:700;pointer-events:none;
+        ">${pt.count}</div>`,
+        iconSize: [radius * 2, radius * 2],
+        iconAnchor: [radius, radius],
+      });
+      const label = L.marker([pt.lat, pt.lng], { icon, interactive: false });
+
+      // Popup
+      const popupHtml = `
+        <div style="min-width:180px;max-width:320px;">
+          <div style="font-weight:700;font-size:14px;margin-bottom:6px;border-bottom:1px solid #f0f0f0;padding-bottom:4px;">
+            ${pt.city}（${pt.count}人）
+          </div>
+          ${pt.persons.map(p => {
+            const warn = p.days_since_contact === null || p.days_since_contact >= WARN_DAYS;
+            const daysText = p.days_since_contact !== null ? `${p.days_since_contact}天前` : '暂无互动';
+            return `<div style="padding:3px 0;border-bottom:1px solid #fafafa;${warn ? 'color:#ff4d4f;' : ''}">
+              <div style="font-weight:600;font-size:13px;">${p.name}${p.company ? ` · ${p.company}` : ''}</div>
+              <div style="font-size:11px;color:${warn ? '#ff4d4f' : '#999'};">
+                上次联系：${daysText}${warn ? ' !!!' : ''}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      `;
+      circle.bindPopup(popupHtml, { maxWidth: 320 });
+
+      layerGroup.addLayer(circle);
+      layerGroup.addLayer(label);
+    });
+
+    // 自适应视野
+    const bounds = mapPoints.map(p => [p.lat, p.lng]);
+    if (bounds.length === 1) {
+      map.setView(bounds[0], 10);
+    } else {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+  }, [mapPoints]);
 
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 260px)', minHeight: 500 }}>
@@ -208,54 +282,7 @@ export default function PersonsMap() {
 
       {/* 右侧：地图 */}
       <div style={{ flex: 1, borderRadius: 8, overflow: 'hidden', border: '1px solid #f0f0f0' }}>
-        <MapContainer
-          center={[35.5, 104.0]}
-          zoom={5}
-          style={{ width: '100%', height: '100%' }}
-          scrollWheelZoom={true}
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          {bounds.length > 0 && <FitBounds bounds={bounds} />}
-          {mapPoints.map(pt => {
-            const radius = Math.min(10 + pt.count * 3, 28);
-            return (
-              <CircleMarker
-                key={pt.city}
-                center={[pt.lat, pt.lng]}
-                radius={radius}
-                pathOptions={{
-                  color: '#fff',
-                  weight: 2,
-                  fillColor: pt.hasWarning ? '#ff4d4f' : '#1677ff',
-                  fillOpacity: 0.85,
-                }}
-              >
-                <Popup maxWidth={320}>
-                  <div style={{ minWidth: 180 }}>
-                    <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6, borderBottom: '1px solid #f0f0f0', paddingBottom: 4 }}>
-                      {pt.city}（{pt.count}人）
-                    </div>
-                    {pt.persons.map(p => {
-                      const warn = p.days_since_contact === null || p.days_since_contact >= WARN_DAYS;
-                      const daysText = p.days_since_contact !== null ? `${p.days_since_contact}天前` : '暂无互动';
-                      return (
-                        <div key={p.id} style={{ padding: '3px 0', borderBottom: '1px solid #fafafa', color: warn ? '#ff4d4f' : undefined }}>
-                          <div style={{ fontWeight: 600, fontSize: 13 }}>{p.name}{p.company ? ` · ${p.company}` : ''}</div>
-                          <div style={{ fontSize: 11, color: warn ? '#ff4d4f' : '#999' }}>
-                            上次联系：{daysText}{warn ? ' !!!' : ''}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Popup>
-              </CircleMarker>
-            );
-          })}
-        </MapContainer>
+        <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
       </div>
     </div>
   );
