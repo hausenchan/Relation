@@ -137,7 +137,7 @@ function AppLayout() {
   const bizFlowChildren = [
     { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">线索池</Link> },
     { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略管理</Link> },
-    { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">研发任务</Link> },
+    { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">研发需求</Link> },
   ];
 
   // ── 商务协作 ────────────────────────────────────────────────
@@ -365,29 +365,19 @@ function AppLayout() {
           />
         </div>
 
-        {/* 底部用户信息 */}
-        <div style={{ flexShrink: 0, borderTop: '1px solid rgba(255,255,255,0.08)', padding: '12px 16px', background: '#0a0a1a' }}>
-          <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="topLeft" trigger={['click']}>
-            <Space style={{ cursor: 'pointer', width: '100%' }}>
-              <Avatar size={30} style={{ background: roleColor[user?.role], fontSize: 13 }}>
-                {(user?.display_name || user?.username || '?')[0].toUpperCase()}
-              </Avatar>
-              <div style={{ flex: 1, overflow: 'hidden' }}>
-                <div style={{ color: '#fff', fontSize: 13, lineHeight: '18px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {user?.display_name || user?.username}
-                </div>
-                <div style={{ fontSize: 11, color: roleColor[user?.role], lineHeight: '14px' }}>
-                  {roleLabel[user?.role]}
-                </div>
-              </div>
-            </Space>
-          </Dropdown>
-        </div>
       </Sider>
 
       <Layout>
-        <Header style={{ background: '#fff', padding: '0 24px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', boxShadow: '0 1px 4px rgba(0,21,41,.08)' }}>
+        <Header style={{ background: '#fff', padding: '0 24px', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 16, boxShadow: '0 1px 4px rgba(0,21,41,.08)' }}>
           <NotificationBell />
+          <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight" trigger={['click']}>
+            <Space style={{ cursor: 'pointer' }}>
+              <Avatar size={28} style={{ background: roleColor[user?.role], fontSize: 13 }}>
+                {(user?.display_name || user?.username || '?')[0].toUpperCase()}
+              </Avatar>
+              <span style={{ fontSize: 14 }}>{user?.display_name || user?.username}</span>
+            </Space>
+          </Dropdown>
         </Header>
         <Content style={{ margin: '16px', padding: '16px', background: '#fff', borderRadius: 8, minHeight: 280 }}>
           <Routes>

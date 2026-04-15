@@ -24,7 +24,7 @@ const MENU_TREE = [
     children: [
       { title: '线索池', key: '/leads' },
       { title: '策略管理', key: '/strategies' },
-      { title: '研发任务', key: '/dev-tasks' },
+      { title: '研发需求', key: '/dev-tasks' },
     ],
   },
   {
