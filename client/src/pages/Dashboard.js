@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, Row, Col, Statistic, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm } from 'antd';
 import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
@@ -67,6 +67,19 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  // 每30秒自动刷新商机任务状态
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      try {
+        const followUpData = await followUpTasksApi.list({ status: 'pending' });
+        setFollowUpTasks(followUpData.slice(0, 5));
+        const allFollowUpData = await followUpTasksApi.list({});
+        setOpportunities(allFollowUpData);
+      } catch {}
+    }, 30000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
