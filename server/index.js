@@ -343,6 +343,18 @@ if (futCols.length > 0) {
   if (!futCols.includes('company_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN company_id INTEGER DEFAULT NULL");
 }
 
+// 补创建竞品研究商机对应的 follow_up_tasks（修复历史数据）
+try {
+  db.exec(`
+    INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, assigned_to, assigned_by, status)
+    SELECT c.name || ' - ' || cr.opportunity_title, 0, 0, cr.id, cr.company_id, cr.opportunity_title, cr.opportunity_assignee, 1, 'pending'
+    FROM competitor_research cr
+    LEFT JOIN companies c ON cr.company_id = c.id
+    LEFT JOIN follow_up_tasks ft ON ft.competitor_research_id = cr.id
+    WHERE cr.opportunity_title IS NOT NULL AND cr.opportunity_assignee IS NOT NULL AND ft.id IS NULL
+  `);
+} catch(e) { /* 表不存在时忽略 */ }
+
 const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.name);
 if (companyCols.length > 0 && !companyCols.includes('created_by')) {
   db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");

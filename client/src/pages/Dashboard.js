@@ -102,8 +102,8 @@ export default function Dashboard() {
       setFollowUpTasks(followUpData.slice(0, 5));
 
       // 商机任务（所有分配给我的商机任务）
-      const allFollowUpData = await followUpTasksApi.list({ assigned_to: user?.id });
-      setOpportunities(allFollowUpData);
+      const allFollowUpData = await followUpTasksApi.list({});
+      setOpportunities(allFollowUpData.filter(t => t.assigned_to === user?.id));
 
     } catch (err) {
       console.error('加载数据失败:', err);
