@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
-import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message } from 'antd';
+import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message, Watermark } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
   BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
@@ -139,9 +139,9 @@ function AppLayout() {
 
   // ── 业务流转 ────────────────────────────────────────────────
   const bizFlowChildren = [
-    { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">线索池</Link> },
-    { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略管理</Link> },
-    { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">研发需求</Link> },
+    { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">线索</Link> },
+    { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
+    { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
   ];
 
   // ── 商务协作 ────────────────────────────────────────────────
@@ -226,7 +226,7 @@ function AppLayout() {
     { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
     // 目标与计划
     {
-      key: 'goal-plan', icon: <AimOutlined />, label: '目标与计划',
+      key: 'goal-plan', icon: <AimOutlined />, label: '目标计划',
       children: goalChildren,
     },
     // 公司经营（仅高管）
@@ -320,6 +320,7 @@ function AppLayout() {
   };
 
   return (
+    <Watermark content={user?.display_name || user?.username} style={{ minHeight: '100vh' }}>
     <Layout style={{ minHeight: '100vh' }}>
       <Modal
         title="修改密码"
@@ -489,6 +490,7 @@ function AppLayout() {
         </Content>
       </Layout>
     </Layout>
+    </Watermark>
   );
 }
 
