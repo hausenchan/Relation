@@ -287,25 +287,6 @@ export default function DevTasks() {
 
   return (
     <div>
-      {/* 页面头部 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 10,
-            background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: '#fff', fontSize: 18,
-          }}>
-            <ToolOutlined />
-          </div>
-          <div>
-            <Title level={4} style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#1f2937' }}>需求管理</Title>
-            <Text type="secondary" style={{ fontSize: 12 }}>跟踪研发需求，关联线索与策略</Text>
-          </div>
-        </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增需求</Button>
-      </div>
-
       {/* 状态统计 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
@@ -329,7 +310,8 @@ export default function DevTasks() {
 
       {/* 筛选与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-        <Space style={{ marginBottom: 16 }} size={12} wrap>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+          <Space size={12} wrap>
           <Select
             placeholder="状态"
             style={{ width: 150 }}
@@ -377,6 +359,8 @@ export default function DevTasks() {
             <Option value="manual">手动创建</Option>
           </Select>
         </Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增需求</Button>
+        </div>
 
         <Table
           columns={columns}
