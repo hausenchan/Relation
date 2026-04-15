@@ -312,7 +312,33 @@ if (crCols.length > 0) {
   if (!crCols.includes('opportunity_status')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_status TEXT DEFAULT NULL");
   if (!crCols.includes('opportunity_assignee')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_assignee INTEGER DEFAULT NULL");
   if (!crCols.includes('opportunity_note')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_note TEXT DEFAULT NULL");
+  if (!crCols.includes('created_by')) db.exec("ALTER TABLE competitor_research ADD COLUMN created_by INTEGER DEFAULT NULL");
 }
+
+// 回填历史数据 created_by
+try {
+  // interactions: 通过 person_id 关联 persons.created_by 回填
+  db.exec(`
+    UPDATE interactions SET created_by = (
+      SELECT p.created_by FROM persons p WHERE p.id = interactions.person_id
+    ) WHERE created_by IS NULL
+  `);
+  // competitor_research: 优先通过 follow_up_tasks.assigned_by 回填
+  db.exec(`
+    UPDATE competitor_research SET created_by = (
+      SELECT ft.assigned_by FROM follow_up_tasks ft
+      WHERE ft.competitor_research_id = competitor_research.id LIMIT 1
+    ) WHERE created_by IS NULL AND EXISTS (
+      SELECT 1 FROM follow_up_tasks ft WHERE ft.competitor_research_id = competitor_research.id
+    )
+  `);
+  // competitor_research: 其余通过 companies.created_by 回填
+  db.exec(`
+    UPDATE competitor_research SET created_by = (
+      SELECT c.created_by FROM companies c WHERE c.id = competitor_research.company_id
+    ) WHERE created_by IS NULL
+  `);
+} catch(e) { /* 忽略回填错误 */ }
 
 // =========== 待跟进任务表 ===========
 db.exec(`
@@ -1745,11 +1771,21 @@ app.delete('/api/reminders/:id', (req, res) => {
 
 // =========== 统计 API ===========
 app.get('/api/stats', (req, res) => {
-  const personCount = db.prepare('SELECT COUNT(*) as cnt FROM persons').get().cnt;
+  const { id: me, role } = req.user;
+  const filter = buildUserFilter(me, role, 'p');
+  const personCountSql = `SELECT COUNT(*) as cnt FROM persons p WHERE 1=1${filter.sql}`;
+  const personCount = db.prepare(personCountSql).get(...filter.params).cnt;
   const categoryStats = db.prepare(`
     SELECT person_category, COUNT(*) as cnt FROM persons GROUP BY person_category
   `).all();
-  const interactionCount = db.prepare('SELECT COUNT(*) as cnt FROM interactions').get().cnt;
+  const userId = req.user?.id;
+  const monthlyInteractions = db.prepare(
+    "SELECT COUNT(*) as cnt FROM interactions WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now') AND created_by = ?"
+  ).get(userId).cnt;
+  const monthlyResearch = db.prepare(
+    "SELECT COUNT(*) as cnt FROM competitor_research WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now') AND created_by = ?"
+  ).get(userId).cnt;
+  const monthlyTotal = monthlyInteractions + monthlyResearch;
   const pendingReminders = db.prepare("SELECT COUNT(*) as cnt FROM reminders WHERE done=0 AND remind_date <= date('now', '+7 days')").get().cnt;
   const recentInteractions = db.prepare(`
     SELECT i.*, p.name as person_name, p.person_category
@@ -1757,7 +1793,7 @@ app.get('/api/stats', (req, res) => {
     LEFT JOIN persons p ON i.person_id = p.id
     ORDER BY i.date DESC LIMIT 5
   `).all();
-  res.json({ personCount, categoryStats, interactionCount, pendingReminders, recentInteractions });
+  res.json({ personCount, categoryStats, monthlyInteractions: monthlyTotal, pendingReminders, recentInteractions });
 });
 
 // =========== 公司研究表 ===========
@@ -2121,10 +2157,11 @@ app.get('/api/competitor_research', (req, res) => {
 
 app.post('/api/competitor_research', (req, res) => {
   const { company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
+  const createdBy = req.user?.id || null;
   const r = db.prepare(`
-    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note);
+    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, createdBy);
   db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
 
   // 自动创建待跟进任务（商机指派）
