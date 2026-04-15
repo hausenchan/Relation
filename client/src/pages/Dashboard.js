@@ -489,7 +489,7 @@ export default function Dashboard() {
       label: (
         <span>
           <RiseOutlined /> 商机任务
-          {opportunities.length > 0 && <Badge count={opportunities.length} style={{ marginLeft: 8 }} />}
+          {opportunities.filter(t => t.status !== 'done').length > 0 && <Badge count={opportunities.filter(t => t.status !== 'done').length} style={{ marginLeft: 8 }} />}
         </span>
       ),
       children: (
