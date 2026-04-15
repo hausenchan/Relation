@@ -990,7 +990,16 @@ app.get('/api/persons', (req, res) => {
   if (potential_level) { query += ' AND p.potential_level = ?'; params.push(potential_level); }
   if (recruit_status) { query += ' AND p.recruit_status = ?'; params.push(recruit_status); }
   if (intent_level) { query += ' AND p.intent_level = ?'; params.push(intent_level); }
-  if (city) { query += ' AND p.city LIKE ?'; params.push(`%${city}%`); }
+  if (city) {
+    const cities = city.split(',').filter(Boolean);
+    if (cities.length === 1) {
+      query += ' AND p.city LIKE ?'; params.push(`%${cities[0]}%`);
+    } else if (cities.length > 1) {
+      const clauses = cities.map(() => 'p.city LIKE ?');
+      query += ` AND (${clauses.join(' OR ')})`;
+      cities.forEach(c => params.push(`%${c}%`));
+    }
+  }
   if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
 
   query += ' ORDER BY p.updated_at DESC';

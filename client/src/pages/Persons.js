@@ -20,6 +20,16 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
+const CHINA_CITIES = [
+  '北京','上海','广州','深圳','杭州','成都','重庆','武汉','南京','西安',
+  '苏州','天津','郑州','长沙','东莞','青岛','合肥','宁波','佛山','昆明',
+  '沈阳','无锡','大连','济南','厦门','哈尔滨','福州','温州','石家庄','南宁',
+  '长春','泉州','贵阳','常州','珠海','南通','嘉兴','中山','惠州','太原',
+  '烟台','兰州','绍兴','海口','扬州','徐州','台州','金华','潍坊','保定',
+  '镇江','洛阳','呼和浩特','乌鲁木齐','银川','西宁','拉萨','三亚',
+  '香港','澳门','台北',
+];
+
 export const categoryMap = {
   business: { label: '商务圈', color: 'blue' },
   talent:   { label: '人才圈', color: 'green' },
@@ -145,7 +155,17 @@ function commonFields() {
         </Col>
         <Col span={8}>
           <Form.Item label="城市" name="city">
-            <Input prefix={<EnvironmentOutlined />} placeholder="如：北京" />
+            <Select
+              mode="tags"
+              placeholder="输入或选择城市"
+              filterOption={(input, option) =>
+                option.children.toLowerCase().includes(input.toLowerCase())
+              }
+              tokenSeparators={[',']}
+              style={{ width: '100%' }}
+            >
+              {CHINA_CITIES.map(c => <Option key={c} value={c}>{c}</Option>)}
+            </Select>
           </Form.Item>
         </Col>
         <Col span={8}>
@@ -477,6 +497,7 @@ export default function Persons() {
     form.setFieldsValue({
       ...record,
       relation_types: parseRelationTypes(record.relation_types),
+      city: record.city ? record.city.split(',').map(s => s.trim()).filter(Boolean) : [],
     });
     setModalOpen(true);
   };
@@ -495,6 +516,9 @@ export default function Persons() {
       relation_types: Array.isArray(values.relation_types)
         ? values.relation_types.join(',')
         : (values.relation_types || ''),
+      city: Array.isArray(values.city)
+        ? values.city.join(',')
+        : (values.city || ''),
     };
     if (editing) {
       await personsApi.update(editing.id, payload);
@@ -807,13 +831,21 @@ export default function Persons() {
             .filter(([, v]) => !filterCategory || v.category === filterCategory || !v.category)
             .map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
-        <Input.Search
+        <Select
+          mode="multiple"
           placeholder="城市"
           allowClear
-          style={{ width: 120 }}
-          onSearch={setFilterCity}
-          onChange={e => !e.target.value && setFilterCity('')}
-        />
+          style={{ width: 200 }}
+          value={filterCity ? filterCity.split(',') : []}
+          onChange={v => setFilterCity(v.join(','))}
+          filterOption={(input, option) =>
+            option.children.toLowerCase().includes(input.toLowerCase())
+          }
+          maxTagCount={2}
+          maxTagTextLength={4}
+        >
+          {CHINA_CITIES.map(c => <Option key={c} value={c}>{c}</Option>)}
+        </Select>
         <Select
           placeholder="权重"
           allowClear
