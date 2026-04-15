@@ -3,6 +3,8 @@ import { authApi } from './api';
 
 const AuthContext = createContext(null);
 const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2小时
+const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const isAdmin = (role) => ADMIN_ROLES.has(role);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
@@ -70,7 +72,7 @@ export function AuthProvider({ children }) {
   // 检查菜单可见权限（admin 始终全部可见，其他用户依据 menuPerms 配置）
   const canAccessMenu = (menuKey) => {
     if (!user) return false;
-    if (user.role === 'admin') return true;
+    if (isAdmin(user.role)) return true;
     return Array.isArray(user.menuPerms) && user.menuPerms.includes(menuKey);
   };
 

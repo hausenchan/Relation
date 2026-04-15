@@ -14,6 +14,9 @@ const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
+const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const isAdmin = (role) => ADMIN_ROLES.has(role);
+
 const planStatusMap = {
   draft:    { label: '草稿',   color: 'default' },
   active:   { label: '进行中', color: 'blue' },
@@ -125,7 +128,7 @@ export default function GiftPlansPage() {
       render: (_, r) => (
         <Space>
           <Button size="small" icon={<SendOutlined />} type="primary" ghost onClick={() => openDrawer(r)}>发起申请</Button>
-          {(user.role === 'admin' || r.created_by === user.id) && (
+          {(isAdmin(user.role) || r.created_by === user.id) && (
             <>
               <Button size="small" icon={<EditOutlined />} onClick={() => openPlanEdit(r)}>编辑</Button>
               <Popconfirm title="确认删除？" onConfirm={async () => { await giftPlansApi.delete(r.id); message.success('已删除'); loadPlans(); }}>

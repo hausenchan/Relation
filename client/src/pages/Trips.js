@@ -18,6 +18,9 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { RangePicker } = DatePicker;
 
+const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const isAdmin = (role) => ADMIN_ROLES.has(role);
+
 const statusMap = {
   draft:     { label: '草稿',   color: 'default',  step: 0 },
   pending:   { label: '待审批', color: 'processing', step: 1 },
@@ -166,7 +169,7 @@ function ReportPanel({ tripId, tripStatus, isOwner, onRefresh }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const canApprove = user?.role === 'admin' || user?.role === 'leader';
+  const canApprove = isAdmin(user?.role) || user?.role === 'leader';
 
   const handleCreate = async () => {
     await tripsApi.createReport(tripId);
@@ -239,7 +242,7 @@ function ReportPanel({ tripId, tripStatus, isOwner, onRefresh }) {
 function TripDrawer({ trip, open, onClose, onRefresh }) {
   const { user } = useAuth();
   const isOwner = trip?.user_id === user?.id;
-  const canApprove = user?.role === 'admin' || user?.role === 'leader';
+  const canApprove = isAdmin(user?.role) || user?.role === 'leader';
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveAction, setApproveAction] = useState('');
   const [approveNote, setApproveNote] = useState('');
@@ -342,7 +345,7 @@ export default function Trips() {
   const [persons, setPersons] = useState([]);
   const [form] = Form.useForm();
   const { user } = useAuth();
-  const canApprove = user?.role === 'admin' || user?.role === 'leader';
+  const canApprove = isAdmin(user?.role) || user?.role === 'leader';
 
   const load = useCallback(async () => {
     setLoading(true);

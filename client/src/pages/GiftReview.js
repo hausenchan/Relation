@@ -13,6 +13,9 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
+const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const isAdmin = (role) => ADMIN_ROLES.has(role);
+
 const requestStatusMap = {
   pending:  { label: '待审核', color: 'orange' },
   approved: { label: '已通过', color: 'green' },
@@ -161,7 +164,7 @@ function RecordsTab() {
     load();
   };
 
-  const canEdit = (r) => r.sender_id === user.id || user.role === 'admin' || user.role === 'leader';
+  const canEdit = (r) => r.sender_id === user.id || isAdmin(user.role) || user.role === 'leader';
 
   const columns = [
     { title: '送礼人', dataIndex: 'sender_name' },
@@ -239,7 +242,7 @@ export default function GiftReviewPage() {
   }, []);
 
   const items = [];
-  if (user.role === 'leader' || user.role === 'admin') {
+  if (user.role === 'leader' || isAdmin(user.role)) {
     items.push({
       key: 'review',
       label: <span><AuditOutlined /> 审核申请 {pendingCount > 0 && <Badge count={pendingCount} size="small" style={{ marginLeft: 4 }} />}</span>,

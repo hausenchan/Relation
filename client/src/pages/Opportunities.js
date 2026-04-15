@@ -31,12 +31,17 @@ export default function Opportunities() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const params = {};
-    if (filterStatus) params.status = filterStatus;
-    if (filterAssignee) params.assignee = filterAssignee;
-    const res = await opportunitiesApi.list(params);
-    setData(res);
-    setLoading(false);
+    try {
+      const params = {};
+      if (filterStatus) params.status = filterStatus;
+      if (filterAssignee) params.assignee = filterAssignee;
+      const res = await opportunitiesApi.list(params);
+      setData(res);
+    } catch {
+      message.error('加载失败，请刷新重试');
+    } finally {
+      setLoading(false);
+    }
   }, [filterStatus, filterAssignee]);
 
   useEffect(() => { load(); }, [load]);
@@ -172,6 +177,7 @@ export default function Opportunities() {
         loading={loading}
         size="small"
         pagination={{ pageSize: 20 }}
+        locale={{ emptyText: '暂无商机记录' }}
         expandable={{
           expandedRowRender: r => (
             <div style={{ padding: '8px 16px', background: '#fafafa', borderRadius: 6 }}>

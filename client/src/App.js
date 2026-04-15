@@ -12,6 +12,9 @@ import {
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
 
+const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const isAdmin = (role) => ADMIN_ROLES.has(role);
+
 const { Header, Sider, Content } = Layout;
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -190,7 +193,7 @@ function AppLayout() {
         </span>
       ),
     },
-    canAccessMenu('/gifts') && user?.role === 'admin' && {
+    canAccessMenu('/gifts') && isAdmin(user?.role) && {
       key: '/gifts', icon: <GiftOutlined />, label: <Link to="/gifts">礼品库</Link>,
     },
     // 出差管理
@@ -209,7 +212,7 @@ function AppLayout() {
   ].filter(Boolean);
 
   // ── 公司经营（仅高管或admin）────────────────────────────────────────
-  const executiveChildren = (isExecutive() || user?.role === 'admin') ? [
+  const executiveChildren = (isExecutive() || isAdmin(user?.role)) ? [
     { key: '/executive', icon: <DashboardOutlined />, label: <Link to="/executive">经营概览</Link> },
     { key: '/executive/talents', icon: <UserOutlined />, label: <Link to="/executive/talents">高级人才</Link> },
     { key: '/executive/dynamics', icon: <RiseOutlined />, label: <Link to="/executive/dynamics">竞品动态</Link> },
@@ -247,7 +250,7 @@ function AppLayout() {
       children: teamChildren,
     },
     // 系统管理（仅 admin）
-    user?.role === 'admin' && {
+    isAdmin(user?.role) && {
       key: 'system', icon: <SettingOutlined />, label: '系统管理',
       children: [
         { key: '/users', icon: <UserOutlined />, label: <Link to="/users">用户管理</Link> },

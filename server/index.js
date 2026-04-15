@@ -2684,7 +2684,7 @@ app.get('/api/weekly-reports/writers', (req, res) => {
   const writers = db.prepare(`
     SELECT id, username, display_name, department, role, need_weekly_report
     FROM users
-    WHERE role IN ('leader', 'sales_director') OR need_weekly_report = 1
+    WHERE role NOT IN ('admin', 'ceo', 'coo', 'cto', 'cmo')
     ORDER BY department, display_name
   `).all();
 
