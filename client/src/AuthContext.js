@@ -59,7 +59,7 @@ export function AuthProvider({ children }) {
   // 检查模块访问权限
   const canAccessModule = (module) => {
     if (!user) return false;
-    if (['admin', 'member', 'readonly', 'leader', 'sales_director'].includes(user.role)) return true;
+    if (['admin', 'member', 'readonly', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user.role)) return true;
     if (user.role === 'guest') {
       const perm = user.modulePerms?.find(p => p.module === module);
       return perm?.can_read === 1;
@@ -76,7 +76,7 @@ export function AuthProvider({ children }) {
 
   const canWrite = (module) => {
     if (!user) return false;
-    if (['admin', 'member', 'leader', 'sales_director'].includes(user.role)) return true;
+    if (['admin', 'member', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user.role)) return true;
     if (user.role === 'readonly') return false;
     if (user.role === 'guest') {
       const perm = user.modulePerms?.find(p => p.module === module);
@@ -86,10 +86,10 @@ export function AuthProvider({ children }) {
   };
 
   // 是否可以审批
-  const canApprove = () => ['admin', 'leader', 'sales_director'].includes(user?.role);
+  const canApprove = () => ['admin', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user?.role);
 
   // 是否可以指派人脉
-  const canAssign = () => ['admin', 'leader', 'sales_director'].includes(user?.role);
+  const canAssign = () => ['admin', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user?.role);
 
   // 是否为高管
   const isExecutive = () => {
