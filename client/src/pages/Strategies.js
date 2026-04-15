@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined } from '@ant-design/icons';
+
+const { Title, Text } = Typography;
 
 const { TextArea } = Input;
 const { Option } = Select;
-const { TabPane } = Tabs;
 
 const dimensionMap = {
   monetization: { label: '变现策略', color: 'green', icon: <RiseOutlined /> },
@@ -267,9 +268,49 @@ export default function Strategies() {
   };
 
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Space size={12}>
+    <div>
+      {/* 页面头部 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 10,
+            background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontSize: 18,
+          }}>
+            <BranchesOutlined />
+          </div>
+          <div>
+            <Title level={4} style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#1f2937' }}>策略管理</Title>
+            <Text type="secondary" style={{ fontSize: 12 }}>制定变现、流量、链路策略，驱动业务增长</Text>
+          </div>
+        </div>
+        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增策略</Button>
+      </div>
+
+      {/* 统计卡片 */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+        {[
+          { label: '总策略数', value: stats.total, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          { label: '变现策略', value: stats.monetization, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+          { label: '流量策略', value: stats.traffic, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { label: '链路策略', value: stats.link, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+        ].map((item, idx) => (
+          <Col xs={12} sm={6} key={idx}>
+            <div className="stat-card" style={{
+              background: item.gradient, borderRadius: 10, padding: '14px 18px',
+              cursor: 'default',
+            }}>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
+              <div style={{ fontSize: 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
+            </div>
+          </Col>
+        ))}
+      </Row>
+
+      {/* 筛选、Tabs与表格 */}
+      <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <Space style={{ marginBottom: 16 }} size={12} wrap>
           <Select
             placeholder="维度"
             style={{ width: 150 }}
@@ -320,43 +361,27 @@ export default function Strategies() {
             <Option value="paused">暂停</Option>
           </Select>
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增策略</Button>
-      </div>
 
-      <div style={{ marginBottom: 16, display: 'flex', gap: 16 }}>
-        <div style={{ padding: '12px 16px', background: '#f0f2f5', borderRadius: 4, flex: 1 }}>
-          <div style={{ fontSize: 12, color: '#888' }}>总策略数</div>
-          <div style={{ fontSize: 24, fontWeight: 600, color: '#1890ff' }}>{stats.total}</div>
-        </div>
-        <div style={{ padding: '12px 16px', background: '#f6ffed', borderRadius: 4, flex: 1 }}>
-          <div style={{ fontSize: 12, color: '#888' }}>变现策略</div>
-          <div style={{ fontSize: 24, fontWeight: 600, color: '#52c41a' }}>{stats.monetization}</div>
-        </div>
-        <div style={{ padding: '12px 16px', background: '#e6f7ff', borderRadius: 4, flex: 1 }}>
-          <div style={{ fontSize: 12, color: '#888' }}>流量策略</div>
-          <div style={{ fontSize: 24, fontWeight: 600, color: '#1890ff' }}>{stats.traffic}</div>
-        </div>
-        <div style={{ padding: '12px 16px', background: '#fff7e6', borderRadius: 4, flex: 1 }}>
-          <div style={{ fontSize: 12, color: '#888' }}>链路策略</div>
-          <div style={{ fontSize: 24, fontWeight: 600, color: '#fa8c16' }}>{stats.link}</div>
-        </div>
-      </div>
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            { key: 'all', label: `全部 (${stats.total})` },
+            { key: 'monetization', label: <span><RiseOutlined /> 变现策略 ({stats.monetization})</span> },
+            { key: 'traffic', label: <span><ThunderboltOutlined /> 流量策略 ({stats.traffic})</span> },
+            { key: 'link', label: <span><LinkOutlined /> 链路策略 ({stats.link})</span> },
+          ]}
+        />
 
-      <Tabs activeKey={activeTab} onChange={setActiveTab}>
-        <TabPane tab={`全部 (${stats.total})`} key="all" />
-        <TabPane tab={<span><RiseOutlined /> 变现策略 ({stats.monetization})</span>} key="monetization" />
-        <TabPane tab={<span><ThunderboltOutlined /> 流量策略 ({stats.traffic})</span>} key="traffic" />
-        <TabPane tab={<span><LinkOutlined /> 链路策略 ({stats.link})</span>} key="link" />
-      </Tabs>
-
-      <Table
-        columns={columns}
-        dataSource={getFilteredData()}
-        rowKey="id"
-        loading={loading}
-        scroll={{ x: 1200 }}
-        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
-      />
+        <Table
+          columns={columns}
+          dataSource={getFilteredData()}
+          rowKey="id"
+          loading={loading}
+          scroll={{ x: 1200 }}
+          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+        />
+      </Card>
 
       <Modal
         title={editingStrategy ? '编辑策略' : '新增策略'}

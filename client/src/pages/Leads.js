@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Select, Modal, Form, message,
-  Drawer, Descriptions, Tooltip, Input
+  Drawer, Descriptions, Tooltip, Input, Card, Row, Col
 } from 'antd';
-import { RiseOutlined, EditOutlined, UserOutlined } from '@ant-design/icons';
+import { RiseOutlined, EditOutlined, UserOutlined, FunnelPlotOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi } from '../api';
 
 const { Title, Text } = Typography;
@@ -141,53 +141,90 @@ export default function Leads() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>线索池</Title>
+      {/* 页面头部 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 10,
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontSize: 18,
+          }}>
+            <FunnelPlotOutlined />
+          </div>
+          <div>
+            <Title level={4} style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#1f2937' }}>线索池</Title>
+            <Text type="secondary" style={{ fontSize: 12 }}>管理商机线索，跟踪转化进度</Text>
+          </div>
+        </div>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Select
-          placeholder="商机状态"
-          allowClear
-          style={{ width: 130 }}
-          value={filterStatus || undefined}
-          onChange={v => setFilterStatus(v || '')}
-        >
-          {Object.entries(opportunityStatusMap).map(([k, v]) => (
-            <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
-          ))}
-        </Select>
-        <Select
-          placeholder="指派人"
-          allowClear
-          showSearch
-          style={{ width: 160 }}
-          value={filterAssignee || undefined}
-          onChange={v => setFilterAssignee(v || '')}
-          filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-          options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
-        />
-      </Space>
-
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        pagination={{ pageSize: 20 }}
-        locale={{ emptyText: '暂无线索记录' }}
-        expandable={{
-          expandedRowRender: r => (
-            <div style={{ padding: '8px 16px', background: '#fafafa', borderRadius: 6 }}>
-              {r.description && <div><Text type="secondary">互动描述：</Text>{r.description}</div>}
-              {r.outcome && <div><Text type="secondary">互动结果：</Text>{r.outcome}</div>}
-              {r.opportunity_note && <div><Text type="secondary">商机说明：</Text>{r.opportunity_note}</div>}
+      {/* 统计概览 */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+        {[
+          { label: '全部线索', value: data.length, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+        ].map((item, idx) => (
+          <Col xs={12} sm={6} key={idx}>
+            <div className="stat-card" style={{
+              background: item.gradient, borderRadius: 10, padding: '14px 18px',
+              cursor: 'default',
+            }}>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
+              <div style={{ fontSize: 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
             </div>
-          ),
-          rowExpandable: r => !!(r.description || r.outcome || r.opportunity_note),
-        }}
-      />
+          </Col>
+        ))}
+      </Row>
+
+      {/* 筛选与表格 */}
+      <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <Space style={{ marginBottom: 16 }} wrap>
+          <Select
+            placeholder="商机状态"
+            allowClear
+            style={{ width: 130 }}
+            value={filterStatus || undefined}
+            onChange={v => setFilterStatus(v || '')}
+          >
+            {Object.entries(opportunityStatusMap).map(([k, v]) => (
+              <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
+            ))}
+          </Select>
+          <Select
+            placeholder="指派人"
+            allowClear
+            showSearch
+            style={{ width: 160 }}
+            value={filterAssignee || undefined}
+            onChange={v => setFilterAssignee(v || '')}
+            filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+            options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
+          />
+        </Space>
+
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+          locale={{ emptyText: '暂无线索记录' }}
+          expandable={{
+            expandedRowRender: r => (
+              <div style={{ padding: '8px 16px', background: '#f8fafc', borderRadius: 8 }}>
+                {r.description && <div><Text type="secondary">互动描述：</Text>{r.description}</div>}
+                {r.outcome && <div><Text type="secondary">互动结果：</Text>{r.outcome}</div>}
+                {r.opportunity_note && <div><Text type="secondary">商机说明：</Text>{r.opportunity_note}</div>}
+              </div>
+            ),
+            rowExpandable: r => !!(r.description || r.outcome || r.opportunity_note),
+          }}
+        />
+      </Card>
 
       <Modal
         title="编辑商机信息"

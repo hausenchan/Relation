@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber, Card, Row, Col, Typography } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined, ToolOutlined } from '@ant-design/icons';
+
+const { Title, Text } = Typography;
 import dayjs from 'dayjs';
 
 const { TextArea } = Input;
@@ -284,75 +286,107 @@ export default function DevTasks() {
   };
 
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Space size="large">
-          <div>待开始: <Tag>{stats.pending}</Tag></div>
-          <div>进行中: <Tag color="blue">{stats.in_progress}</Tag></div>
-          <div>测试中: <Tag color="orange">{stats.testing}</Tag></div>
-          <div>已完成: <Tag color="green">{stats.completed}</Tag></div>
-          <div>阻塞: <Tag color="red">{stats.blocked}</Tag></div>
-        </Space>
+    <div>
+      {/* 页面头部 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 10,
+            background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: '#fff', fontSize: 18,
+          }}>
+            <ToolOutlined />
+          </div>
+          <div>
+            <Title level={4} style={{ margin: 0, fontSize: 18, fontWeight: 600, color: '#1f2937' }}>需求管理</Title>
+            <Text type="secondary" style={{ fontSize: 12 }}>跟踪研发需求，关联线索与策略</Text>
+          </div>
+        </div>
         <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增需求</Button>
       </div>
 
-      <div style={{ marginBottom: 16, display: 'flex', gap: 12 }}>
-        <Select
-          placeholder="状态"
-          style={{ width: 150 }}
-          allowClear
-          value={filters.status || undefined}
-          onChange={(val) => setFilters({ ...filters, status: val || '' })}
-        >
-          <Option value="pending">待开始</Option>
-          <Option value="in_progress">进行中</Option>
-          <Option value="testing">测试中</Option>
-          <Option value="completed">已完成</Option>
-          <Option value="blocked">阻塞</Option>
-        </Select>
-        <Select
-          placeholder="优先级"
-          style={{ width: 150 }}
-          allowClear
-          value={filters.priority || undefined}
-          onChange={(val) => setFilters({ ...filters, priority: val || '' })}
-        >
-          <Option value="high">高</Option>
-          <Option value="medium">中</Option>
-          <Option value="low">低</Option>
-        </Select>
-        <Select
-          placeholder="负责人"
-          style={{ width: 150 }}
-          allowClear
-          showSearch
-          optionFilterProp="children"
-          value={filters.assignee_id || undefined}
-          onChange={(val) => setFilters({ ...filters, assignee_id: val || '' })}
-        >
-          {users.map(u => <Option key={u.id} value={u.id}>{u.display_name}</Option>)}
-        </Select>
-        <Select
-          placeholder="来源类型"
-          style={{ width: 150 }}
-          allowClear
-          value={filters.source_type || undefined}
-          onChange={(val) => setFilters({ ...filters, source_type: val || '' })}
-        >
-          <Option value="lead">线索</Option>
-          <Option value="strategy">策略</Option>
-          <Option value="manual">手动创建</Option>
-        </Select>
-      </div>
+      {/* 状态统计 */}
+      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+        {[
+          { label: '待开始', value: stats.pending, gradient: 'linear-gradient(135deg, #a8b8d8 0%, #8e9ebc 100%)' },
+          { label: '进行中', value: stats.in_progress, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { label: '测试中', value: stats.testing, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { label: '已完成', value: stats.completed, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+          { label: '阻塞', value: stats.blocked, gradient: 'linear-gradient(135deg, #eb3349 0%, #f45c43 100%)' },
+        ].map((item, idx) => (
+          <Col xs={12} sm={4} key={idx}>
+            <div className="stat-card" style={{
+              background: item.gradient, borderRadius: 10, padding: '12px 16px',
+              cursor: 'default',
+            }}>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
+            </div>
+          </Col>
+        ))}
+      </Row>
 
-      <Table
-        columns={columns}
-        dataSource={tasks}
-        rowKey="id"
-        loading={loading}
-        scroll={{ x: 1400 }}
-        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
-      />
+      {/* 筛选与表格 */}
+      <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <Space style={{ marginBottom: 16 }} size={12} wrap>
+          <Select
+            placeholder="状态"
+            style={{ width: 150 }}
+            allowClear
+            value={filters.status || undefined}
+            onChange={(val) => setFilters({ ...filters, status: val || '' })}
+          >
+            <Option value="pending">待开始</Option>
+            <Option value="in_progress">进行中</Option>
+            <Option value="testing">测试中</Option>
+            <Option value="completed">已完成</Option>
+            <Option value="blocked">阻塞</Option>
+          </Select>
+          <Select
+            placeholder="优先级"
+            style={{ width: 150 }}
+            allowClear
+            value={filters.priority || undefined}
+            onChange={(val) => setFilters({ ...filters, priority: val || '' })}
+          >
+            <Option value="high">高</Option>
+            <Option value="medium">中</Option>
+            <Option value="low">低</Option>
+          </Select>
+          <Select
+            placeholder="负责人"
+            style={{ width: 150 }}
+            allowClear
+            showSearch
+            optionFilterProp="children"
+            value={filters.assignee_id || undefined}
+            onChange={(val) => setFilters({ ...filters, assignee_id: val || '' })}
+          >
+            {users.map(u => <Option key={u.id} value={u.id}>{u.display_name}</Option>)}
+          </Select>
+          <Select
+            placeholder="来源类型"
+            style={{ width: 150 }}
+            allowClear
+            value={filters.source_type || undefined}
+            onChange={(val) => setFilters({ ...filters, source_type: val || '' })}
+          >
+            <Option value="lead">线索</Option>
+            <Option value="strategy">策略</Option>
+            <Option value="manual">手动创建</Option>
+          </Select>
+        </Space>
+
+        <Table
+          columns={columns}
+          dataSource={tasks}
+          rowKey="id"
+          loading={loading}
+          scroll={{ x: 1400 }}
+          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+        />
+      </Card>
 
       <Modal
         title={editingTask ? '编辑任务' : '新增需求'}
