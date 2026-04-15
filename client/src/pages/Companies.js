@@ -704,7 +704,7 @@ function CompetitorResearchTab({ companyId }) {
 
   useEffect(() => {
     load();
-    usersApi.list().then(setUsers);
+    usersApi.listSimple().then(setUsers).catch(() => {});
   }, [load]);
 
   const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ date: dayjs().format('YYYY-MM-DD'), importance: 'normal' }); setModalOpen(true); };
