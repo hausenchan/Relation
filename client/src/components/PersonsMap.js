@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Select, Space, Tag, List, Typography, Spin, Badge, Empty } from 'antd';
 import { EnvironmentOutlined, WarningOutlined } from '@ant-design/icons';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { personsApi } from '../api';
 
 const { Text } = Typography;
 const { Option } = Select;
+
+// 腾讯地图 Key
+const TMAP_KEY = 'BFBBZ-CNXC4-XEWUR-KQN7R-QOUGJ-Q4B66';
 
 // 中国主要城市经纬度表
 const CITY_COORDS = {
@@ -46,33 +47,49 @@ const weightMap = {
 
 const WARN_DAYS = 30;
 
+// 动态加载腾讯地图 SDK
+function loadTMapSDK() {
+  return new Promise((resolve, reject) => {
+    if (window.TMap) { resolve(window.TMap); return; }
+    const script = document.createElement('script');
+    script.src = `https://map.qq.com/api/gljs?v=1.exp&key=${TMAP_KEY}`;
+    script.onload = () => resolve(window.TMap);
+    script.onerror = reject;
+    document.head.appendChild(script);
+  });
+}
+
 export default function PersonsMap() {
   const [filterCity, setFilterCity] = useState([]);
   const [filterCategory, setFilterCategory] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
   const mapRef = useRef(null);
   const mapInstanceRef = useRef(null);
-  const layerGroupRef = useRef(null);
+  const markersRef = useRef([]);
+  const infoWindowRef = useRef(null);
 
-  // 初始化地图
+  // 初始化腾讯地图
   useEffect(() => {
-    if (mapInstanceRef.current) return;
-    const map = L.map(mapRef.current, {
-      center: [35.5, 104.0],
-      zoom: 5,
-      scrollWheelZoom: true,
-    });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    }).addTo(map);
-    mapInstanceRef.current = map;
-    layerGroupRef.current = L.layerGroup().addTo(map);
+    loadTMapSDK().then(TMap => {
+      const map = new TMap.Map(mapRef.current, {
+        center: new TMap.LatLng(35.5, 104.0),
+        zoom: 5,
+        viewMode: '2D',
+      });
+      mapInstanceRef.current = map;
+      infoWindowRef.current = new TMap.InfoWindow({ map, enableCustom: true, offset: { x: 0, y: -20 } });
+      infoWindowRef.current.close();
+      setMapReady(true);
+    }).catch(() => {});
 
     return () => {
-      map.remove();
-      mapInstanceRef.current = null;
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.destroy();
+        mapInstanceRef.current = null;
+      }
     };
   }, []);
 
@@ -120,70 +137,95 @@ export default function PersonsMap() {
 
   // 更新标点
   useEffect(() => {
-    if (!mapInstanceRef.current || !layerGroupRef.current) return;
+    if (!mapReady || !mapInstanceRef.current || !window.TMap) return;
+    const TMap = window.TMap;
     const map = mapInstanceRef.current;
-    const layerGroup = layerGroupRef.current;
-    layerGroup.clearLayers();
+
+    // 清除旧标点
+    markersRef.current.forEach(m => m.setMap(null));
+    markersRef.current = [];
 
     if (mapPoints.length === 0) return;
 
+    const markers = [];
     mapPoints.forEach(pt => {
-      const radius = Math.min(10 + pt.count * 3, 28);
-      const color = pt.hasWarning ? '#ff4d4f' : '#1677ff';
+      const size = Math.min(28 + pt.count * 4, 52);
+      const bgColor = pt.hasWarning ? '#ff4d4f' : '#1677ff';
 
-      const circle = L.circleMarker([pt.lat, pt.lng], {
-        radius,
-        color: '#fff',
-        weight: 2,
-        fillColor: color,
-        fillOpacity: 0.85,
+      const marker = new TMap.DOMOverlay({
+        map,
+        position: new TMap.LatLng(pt.lat, pt.lng),
       });
 
-      // 数字标签
-      const icon = L.divIcon({
-        className: '',
-        html: `<div style="
-          width:${radius * 2}px;height:${radius * 2}px;border-radius:50%;
-          display:flex;align-items:center;justify-content:center;
-          color:#fff;font-size:12px;font-weight:700;pointer-events:none;
-        ">${pt.count}</div>`,
-        iconSize: [radius * 2, radius * 2],
-        iconAnchor: [radius, radius],
-      });
-      const label = L.marker([pt.lat, pt.lng], { icon, interactive: false });
+      // 用 MultiMarker + Label 代替 DOMOverlay
+      // 腾讯地图推荐用 MultiMarker
+    });
 
-      // Popup
-      const popupHtml = `
-        <div style="min-width:180px;max-width:320px;">
-          <div style="font-weight:700;font-size:14px;margin-bottom:6px;border-bottom:1px solid #f0f0f0;padding-bottom:4px;">
-            ${pt.city}（${pt.count}人）
+    // 使用 MultiMarker 方式
+    const geometries = mapPoints.map((pt, idx) => ({
+      id: `marker_${idx}`,
+      position: new TMap.LatLng(pt.lat, pt.lng),
+      properties: pt,
+    }));
+
+    const markerCluster = new TMap.MultiMarker({
+      map,
+      styles: mapPoints.reduce((acc, pt, idx) => {
+        const size = Math.min(28 + pt.count * 4, 52);
+        const bgColor = pt.hasWarning ? '#ff4d4f' : '#1677ff';
+        acc[`marker_${idx}`] = new TMap.MarkerStyle({
+          width: size,
+          height: size,
+          anchor: { x: size / 2, y: size / 2 },
+          src: `data:image/svg+xml,${encodeURIComponent(`
+            <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}">
+              <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 2}" fill="${bgColor}" stroke="white" stroke-width="2"/>
+              <text x="${size/2}" y="${size/2 + 5}" text-anchor="middle" fill="white" font-size="14" font-weight="bold">${pt.count}</text>
+            </svg>
+          `)}`,
+        });
+        return acc;
+      }, {}),
+      geometries: geometries.map((g, idx) => ({ ...g, styleId: `marker_${idx}` })),
+    });
+
+    // 点击弹出信息窗
+    markerCluster.on('click', (e) => {
+      const pt = e.geometry.properties;
+      const content = `
+        <div style="background:#fff;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:12px 16px;min-width:200px;max-width:320px;">
+          <div style="font-weight:700;font-size:15px;margin-bottom:8px;border-bottom:1px solid #f0f0f0;padding-bottom:6px;color:#333;">
+            📍 ${pt.city}（${pt.count}人）
           </div>
           ${pt.persons.map(p => {
             const warn = p.days_since_contact === null || p.days_since_contact >= WARN_DAYS;
             const daysText = p.days_since_contact !== null ? `${p.days_since_contact}天前` : '暂无互动';
-            return `<div style="padding:3px 0;border-bottom:1px solid #fafafa;${warn ? 'color:#ff4d4f;' : ''}">
-              <div style="font-weight:600;font-size:13px;">${p.name}${p.company ? ` · ${p.company}` : ''}</div>
+            return `<div style="padding:4px 0;border-bottom:1px solid #fafafa;">
+              <div style="font-weight:600;font-size:13px;color:${warn ? '#ff4d4f' : '#333'};">${p.name}${p.company ? ` · ${p.company}` : ''}</div>
               <div style="font-size:11px;color:${warn ? '#ff4d4f' : '#999'};">
-                上次联系：${daysText}${warn ? ' !!!' : ''}
+                上次联系：${daysText}${warn ? ' ⚠️' : ''}
               </div>
             </div>`;
           }).join('')}
         </div>
       `;
-      circle.bindPopup(popupHtml, { maxWidth: 320 });
-
-      layerGroup.addLayer(circle);
-      layerGroup.addLayer(label);
+      infoWindowRef.current.open();
+      infoWindowRef.current.setPosition(e.geometry.position);
+      infoWindowRef.current.setContent(content);
     });
 
+    markersRef.current = [markerCluster];
+
     // 自适应视野
-    const bounds = mapPoints.map(p => [p.lat, p.lng]);
-    if (bounds.length === 1) {
-      map.setView(bounds[0], 10);
+    if (mapPoints.length === 1) {
+      map.setCenter(new TMap.LatLng(mapPoints[0].lat, mapPoints[0].lng));
+      map.setZoom(10);
     } else {
-      map.fitBounds(bounds, { padding: [40, 40] });
+      const bounds = new TMap.LatLngBounds();
+      mapPoints.forEach(pt => bounds.extend(new TMap.LatLng(pt.lat, pt.lng)));
+      map.fitBounds(bounds, { padding: 60 });
     }
-  }, [mapPoints]);
+  }, [mapPoints, mapReady]);
 
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 260px)', minHeight: 500 }}>
@@ -280,7 +322,7 @@ export default function PersonsMap() {
         </Spin>
       </div>
 
-      {/* 右侧：地图 */}
+      {/* 右侧：腾讯地图 */}
       <div style={{ flex: 1, borderRadius: 8, overflow: 'hidden', border: '1px solid #f0f0f0' }}>
         <div ref={mapRef} style={{ width: '100%', height: '100%' }} />
       </div>
