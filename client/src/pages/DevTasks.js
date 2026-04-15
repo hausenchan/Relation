@@ -185,7 +185,7 @@ export default function DevTasks() {
 
   const columns = [
     {
-      title: '任务标题',
+      title: '需求标题',
       dataIndex: 'title',
       key: 'title',
       width: 250,
@@ -293,7 +293,7 @@ export default function DevTasks() {
           <div>已完成: <Tag color="green">{stats.completed}</Tag></div>
           <div>阻塞: <Tag color="red">{stats.blocked}</Tag></div>
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增任务</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增需求</Button>
       </div>
 
       <div style={{ marginBottom: 16, display: 'flex', gap: 12 }}>
@@ -355,7 +355,7 @@ export default function DevTasks() {
       />
 
       <Modal
-        title={editingTask ? '编辑任务' : '新增任务'}
+        title={editingTask ? '编辑任务' : '新增需求'}
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         onOk={handleSubmit}
@@ -364,8 +364,8 @@ export default function DevTasks() {
         cancelText="取消"
       >
         <Form form={form} layout="vertical">
-          <Form.Item name="title" label="任务标题" rules={[{ required: true, message: '请输入任务标题' }]}>
-            <Input placeholder="请输入任务标题" />
+          <Form.Item name="title" label="需求标题" rules={[{ required: true, message: '请输入需求标题' }]}>
+            <Input placeholder="请输入需求标题" />
           </Form.Item>
           <Form.Item name="description" label="任务描述">
             <TextArea rows={4} placeholder="请输入任务描述" />
@@ -460,7 +460,7 @@ export default function DevTasks() {
       >
         {selectedTask && (
           <Descriptions column={1} bordered>
-            <Descriptions.Item label="任务标题">{selectedTask.title}</Descriptions.Item>
+            <Descriptions.Item label="需求标题">{selectedTask.title}</Descriptions.Item>
             <Descriptions.Item label="来源">
               {selectedTask.source_type ? (
                 <>

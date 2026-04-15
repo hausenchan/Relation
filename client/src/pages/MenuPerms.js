@@ -11,7 +11,7 @@ const { Title, Text } = Typography;
 const MENU_TREE = [
   { title: '工作台', key: '/' },
   {
-    title: '目标与计划',
+    title: '目标计划',
     key: 'goal-plan',
     children: [
       { title: '目标管理', key: '/goals' },
@@ -22,9 +22,9 @@ const MENU_TREE = [
     title: '业务流转',
     key: 'biz-flow',
     children: [
-      { title: '线索池', key: '/leads' },
-      { title: '策略管理', key: '/strategies' },
-      { title: '研发需求', key: '/dev-tasks' },
+      { title: '线索', key: '/leads' },
+      { title: '策略', key: '/strategies' },
+      { title: '需求', key: '/dev-tasks' },
     ],
   },
   {

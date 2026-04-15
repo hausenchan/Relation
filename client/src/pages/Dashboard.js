@@ -537,7 +537,7 @@ export default function Dashboard() {
           <Card>
             <Statistic
               title="人脉总数"
-              value={stats?.totalPersons || 0}
+              value={stats?.personCount || 0}
               prefix={<TeamOutlined />}
               valueStyle={{ color: '#3f8600' }}
             />
@@ -557,9 +557,9 @@ export default function Dashboard() {
           <Card>
             <Statistic
               title="待办提醒"
-              value={urgentReminders.length}
+              value={stats?.pendingReminders || 0}
               prefix={<BellOutlined />}
-              valueStyle={{ color: urgentReminders.length > 0 ? '#cf1322' : '#999' }}
+              valueStyle={{ color: (stats?.pendingReminders || 0) > 0 ? '#cf1322' : '#999' }}
             />
           </Card>
         </Col>
@@ -569,7 +569,7 @@ export default function Dashboard() {
               title="本周任务"
               value={myTasks.filter(t => {
                 const diff = dayjs(t.date).diff(dayjs(), 'day');
-                return diff >= 0 && diff <= 7 && t.status !== 'done';
+                return diff <= 7 && t.status !== 'done';
               }).length}
               prefix={<CalendarOutlined />}
               valueStyle={{ color: '#fa8c16' }}

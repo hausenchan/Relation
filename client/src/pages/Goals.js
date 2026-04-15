@@ -256,7 +256,7 @@ function Goals() {
         title="目标管理"
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={() => handleCreate('quarter')}>
-            新建季度目标
+            新建目标
           </Button>
         }
       >
