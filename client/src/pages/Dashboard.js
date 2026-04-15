@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Card, Row, Col, Statistic, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm } from 'antd';
+import { Card, Row, Col, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm } from 'antd';
 import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
@@ -530,62 +530,43 @@ export default function Dashboard() {
   );
 
   return (
-    <div style={{ padding: 24 }}>
+    <div>
       {/* 统计卡片 */}
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="人脉总数"
-              value={stats?.personCount || 0}
-              prefix={<TeamOutlined />}
-              valueStyle={{ color: '#3f8600' }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="本月互动"
-              value={stats?.monthlyInteractions || 0}
-              prefix={<MessageOutlined />}
-              valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="待办提醒"
-              value={stats?.pendingReminders || 0}
-              prefix={<BellOutlined />}
-              valueStyle={{ color: (stats?.pendingReminders || 0) > 0 ? '#cf1322' : '#999' }}
-            />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card>
-            <Statistic
-              title="本周任务"
-              value={myTasks.filter(t => {
-                const diff = dayjs(t.date).diff(dayjs(), 'day');
-                return diff <= 7 && t.status !== 'done';
-              }).length}
-              prefix={<CalendarOutlined />}
-              valueStyle={{ color: '#fa8c16' }}
-            />
-          </Card>
-        </Col>
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        {[
+          { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { title: '待办提醒', value: stats?.pendingReminders || 0, icon: <BellOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { title: '本周任务', value: myTasks.filter(t => { const diff = dayjs(t.date).diff(dayjs(), 'day'); return diff <= 7 && t.status !== 'done'; }).length, icon: <CalendarOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+        ].map((card, idx) => (
+          <Col xs={24} sm={12} lg={6} key={idx}>
+            <Card
+              className="stat-card"
+              style={{ background: card.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
+              styles={{ body: { padding: '20px 24px' } }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500 }}>{card.title}</div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{card.value}</div>
+                </div>
+                <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: '#fff' }}>
+                  {card.icon}
+                </div>
+              </div>
+            </Card>
+          </Col>
+        ))}
       </Row>
 
       {/* 任务管理 Tabs */}
-      <Card style={{ marginBottom: 24 }}>
+      <Card style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         <Tabs items={tabItems} />
       </Card>
 
       {/* 近期提醒 */}
       {urgentReminders.length > 0 && (
-        <Card title="近期提醒" extra={<Button type="link" onClick={() => navigate('/reminders')}>查看全部</Button>} style={{ marginBottom: 24 }}>
+        <Card title="近期提醒" extra={<Button type="link" onClick={() => navigate('/reminders')}>查看全部</Button>} style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
           <List
             dataSource={urgentReminders.slice(0, 5)}
             renderItem={item => {
@@ -617,7 +598,7 @@ export default function Dashboard() {
 
       {/* 最近互动 */}
       {stats?.recentInteractions && stats.recentInteractions.length > 0 && (
-        <Card title="最近互动" extra={<Button type="link" onClick={() => navigate('/interactions')}>查看全部</Button>}>
+        <Card title="最近互动" extra={<Button type="link" onClick={() => navigate('/interactions')}>查看全部</Button>} style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
           <List
             dataSource={stats.recentInteractions.slice(0, 5)}
             renderItem={item => (

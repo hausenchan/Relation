@@ -16,6 +16,57 @@ import { AuthProvider, useAuth } from './AuthContext';
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
 
+// ── Design system constants ──────────────────────────
+const DS = {
+  sidebar: { bg: '#0f0f23', width: 240, collapsedWidth: 64, accentColor: '#a5b4fc' },
+  header: { height: 56, bg: '#ffffff', border: '#e8e8ed' },
+  content: { bg: '#f0f2f5', padding: 24 },
+};
+
+const appTheme = {
+  algorithm: theme.defaultAlgorithm,
+  token: {
+    colorPrimary: '#4F46E5',
+    colorSuccess: '#10B981',
+    colorWarning: '#F59E0B',
+    colorError: '#EF4444',
+    colorInfo: '#3B82F6',
+    colorBgLayout: '#f0f2f5',
+    colorBgContainer: '#ffffff',
+    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Noto Sans SC', 'Microsoft YaHei', 'Helvetica Neue', sans-serif",
+    fontSize: 14,
+    borderRadius: 8,
+    borderRadiusLG: 12,
+    borderRadiusSM: 6,
+    boxShadow: '0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06)',
+    boxShadowSecondary: '0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03)',
+    controlHeight: 36,
+    controlHeightLG: 44,
+  },
+  components: {
+    Menu: {
+      darkItemBg: 'transparent',
+      darkSubMenuItemBg: 'transparent',
+      darkItemSelectedBg: 'rgba(79,70,229,0.25)',
+      darkItemHoverBg: 'rgba(255,255,255,0.06)',
+      darkItemSelectedColor: '#a5b4fc',
+      darkItemColor: 'rgba(255,255,255,0.65)',
+      darkItemHoverColor: 'rgba(255,255,255,0.95)',
+      darkGroupTitleColor: 'rgba(255,255,255,0.35)',
+      itemMarginInline: 8,
+      itemPaddingInline: 12,
+      itemBorderRadius: 8,
+    },
+    Card: { paddingLG: 20, borderRadiusLG: 12 },
+    Table: { headerBg: '#fafafa', headerColor: '#374151', rowHoverBg: '#f8fafc', borderRadius: 8 },
+    Button: { borderRadius: 8, controlHeight: 36 },
+    Input: { borderRadius: 8 },
+    Select: { borderRadius: 8 },
+    Modal: { borderRadiusLG: 16 },
+    Tabs: { inkBarColor: '#4F46E5', itemActiveColor: '#4F46E5', itemSelectedColor: '#4F46E5', itemHoverColor: '#6366F1' },
+  },
+};
+
 const { Header, Sider, Content } = Layout;
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -60,7 +111,7 @@ function ComingSoon({ title }) {
 }
 
 const roleLabel = { admin: '管理员', leader: '组长', member: '成员', readonly: '只读', guest: '访客', sales_director: '商务总监' };
-const roleColor = { admin: '#ff4d4f', leader: '#fa541c', member: '#1677ff', readonly: '#888', guest: '#fa8c16', sales_director: '#722ed1' };
+const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
 
 // 路由守卫
 function PrivateRoute({ children, module }) {
@@ -356,20 +407,20 @@ function AppLayout() {
 
       <Sider
         collapsed={collapsed}
-        collapsedWidth={56}
-        width={220}
-        style={{ background: '#0a0a1a', display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', position: 'sticky', top: 0 }}
+        collapsedWidth={DS.sidebar.collapsedWidth}
+        width={DS.sidebar.width}
+        style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', position: 'sticky', top: 0, borderRight: '1px solid rgba(255,255,255,0.04)' }}
       >
         <div style={{
-          height: 64, display: 'flex', alignItems: 'center', justifyContent: collapsed ? 'center' : 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0 16px', gap: 10, flexShrink: 0,
+          height: DS.header.height, display: 'flex', alignItems: 'center', justifyContent: 'center',
+          borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '0 16px', gap: 10, flexShrink: 0,
         }}>
           {/* 迷你 Logo SVG */}
           <svg width="28" height="28" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
             <defs>
               <linearGradient id="slg1" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stopColor="#07C160" />
-                <stop offset="100%" stopColor="#06AD56" />
+                <stop offset="0%" stopColor="#667eea" />
+                <stop offset="100%" stopColor="#764ba2" />
               </linearGradient>
             </defs>
             <circle cx="36" cy="36" r="34" fill="url(#slg1)" />
@@ -378,13 +429,13 @@ function AppLayout() {
           {!collapsed && (
             <div>
               <div style={{ color: '#fff', fontWeight: 700, fontSize: 15, letterSpacing: 2, lineHeight: '18px' }}>幂动小智</div>
-              <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', color: '#07C160' }}>AI赋能 · 协同提效</div>
+              <div style={{ fontSize: 10, letterSpacing: 1.5, lineHeight: '13px', color: DS.sidebar.accentColor }}>AI赋能 · 协同提效</div>
             </div>
           )}
         </div>
         {/* 搜索框 */}
         {!collapsed && (
-          <div style={{ padding: '8px 12px 0', flexShrink: 0 }} className="sider-search">
+          <div style={{ padding: '10px 16px 4px', flexShrink: 0 }} className="sider-search">
             <Input
               placeholder="搜索菜单..."
               prefix={<SearchOutlined style={{ color: 'rgba(255,255,255,0.35)' }} />}
@@ -414,7 +465,7 @@ function AppLayout() {
             openKeys={collapsed ? [] : effectiveOpenKeys}
             items={filteredMenuItems}
             inlineCollapsed={collapsed}
-            style={{ marginTop: 8, background: '#0a0a1a', border: 'none', height: 'auto' }}
+            style={{ marginTop: 4, background: 'transparent', border: 'none', height: 'auto' }}
             onOpenChange={(openKeys) => {
               if (!searchKeyword.trim()) {
                 setMenuOpenKeys(openKeys);
@@ -436,26 +487,37 @@ function AppLayout() {
       </Sider>
 
       <Layout>
-        <Header style={{ background: '#fff', padding: '0 24px', display: 'flex', alignItems: 'center', boxShadow: '0 1px 4px rgba(0,21,41,.08)' }}>
+        <Header style={{
+          background: DS.header.bg, padding: '0 24px', height: DS.header.height, lineHeight: `${DS.header.height}px`,
+          display: 'flex', alignItems: 'center', borderBottom: `1px solid ${DS.header.border}`,
+          boxShadow: 'none', position: 'sticky', top: 0, zIndex: 10,
+        }}>
           <span
             onClick={() => { setCollapsed(!collapsed); if (!collapsed) setSearchKeyword(''); }}
-            style={{ fontSize: 18, cursor: 'pointer', color: '#333', marginRight: 'auto' }}
+            style={{
+              fontSize: 18, cursor: 'pointer', color: '#6b7280', marginRight: 'auto',
+              width: 32, height: 32, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              transition: 'background 0.2s, color 0.2s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#374151'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#6b7280'; }}
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <NotificationBell />
+            <div style={{ width: 1, height: 20, background: '#e8e8ed' }} />
             <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight" trigger={['click']}>
               <Space style={{ cursor: 'pointer' }}>
-                <Avatar size={28} style={{ background: roleColor[user?.role], fontSize: 13 }}>
+                <Avatar size={28} style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', fontSize: 12, fontWeight: 600 }}>
                   {(user?.display_name || user?.username || '?')[0].toUpperCase()}
                 </Avatar>
-                <span style={{ fontSize: 14 }}>{user?.display_name || user?.username}</span>
+                <span style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>{user?.display_name || user?.username}</span>
               </Space>
             </Dropdown>
           </div>
         </Header>
-        <Content style={{ margin: '16px', padding: '16px', background: '#fff', borderRadius: 8, minHeight: 280 }}>
+        <Content style={{ margin: 12, padding: 20, background: '#fff', borderRadius: 12, minHeight: 'calc(100vh - 80px)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
           <Routes>
             <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/persons" element={<PrivateRoute module="persons"><Persons /></PrivateRoute>} />
@@ -496,7 +558,7 @@ function AppLayout() {
 
 export default function App() {
   return (
-    <ConfigProvider locale={zhCN} theme={{ algorithm: theme.defaultAlgorithm }}>
+    <ConfigProvider locale={zhCN} theme={appTheme}>
       <AuthProvider>
         <BrowserRouter>
           <Routes>

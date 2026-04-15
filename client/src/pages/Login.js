@@ -11,8 +11,8 @@ function MidongLogo({ size = 72 }) {
     <svg width={size} height={size} viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <linearGradient id="lg1" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
-          <stop offset="0%" stopColor="#07C160" />
-          <stop offset="100%" stopColor="#06AD56" />
+          <stop offset="0%" stopColor="#667eea" />
+          <stop offset="100%" stopColor="#764ba2" />
         </linearGradient>
         <linearGradient id="lg2" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
           <stop offset="0%" stopColor="#fff" stopOpacity="0.95" />
@@ -63,24 +63,29 @@ export default function Login() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'linear-gradient(135deg, #0a0a1a 0%, #0d1f3c 40%, #1a0a2e 100%)',
+      background: 'linear-gradient(135deg, #0f0f23 0%, #1a1145 40%, #0d1f3c 100%)',
       position: 'relative',
       overflow: 'hidden',
     }}>
       {/* 背景光晕装饰 */}
       <div style={{
-        position: 'absolute', width: 400, height: 400, borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(238,9,121,0.15) 0%, transparent 70%)',
-        top: '10%', left: '15%', pointerEvents: 'none',
+        position: 'absolute', width: 500, height: 500, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(102,126,234,0.15) 0%, transparent 70%)',
+        top: '-5%', left: '10%', pointerEvents: 'none',
       }} />
       <div style={{
-        position: 'absolute', width: 500, height: 500, borderRadius: '50%',
-        background: 'radial-gradient(circle, rgba(22,119,255,0.12) 0%, transparent 70%)',
-        bottom: '5%', right: '10%', pointerEvents: 'none',
+        position: 'absolute', width: 400, height: 400, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(118,75,162,0.12) 0%, transparent 70%)',
+        bottom: '10%', right: '5%', pointerEvents: 'none',
+      }} />
+      <div style={{
+        position: 'absolute', width: 300, height: 300, borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(79,172,254,0.08) 0%, transparent 70%)',
+        bottom: '30%', left: '50%', pointerEvents: 'none',
       }} />
 
       <Card
-        style={{ width: 400, borderRadius: 20, boxShadow: '0 30px 80px rgba(0,0,0,0.5)', border: 'none' }}
+        style={{ width: 420, borderRadius: 24, boxShadow: '0 30px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)', border: 'none' }}
         styles={{ body: { padding: '44px 40px' } }}
       >
         {/* Logo + 标题区 */}
@@ -88,7 +93,7 @@ export default function Login() {
           <div style={{ marginBottom: 14 }}>
             <MidongLogo size={76} />
           </div>
-          <Title level={2} style={{ margin: 0, fontSize: 28, letterSpacing: 4, color: '#07C160' }}>
+          <Title level={2} style={{ margin: 0, fontSize: 28, letterSpacing: 4, color: '#4F46E5' }}>
             幂动小智
           </Title>
           <div style={{ marginTop: 6, fontSize: 12, letterSpacing: 3, color: '#999', fontWeight: 400 }}>
@@ -110,9 +115,9 @@ export default function Login() {
               loading={loading}
               block
               style={{
-                height: 46, fontSize: 16, borderRadius: 8, border: 'none',
-                background: '#07C160',
-                boxShadow: '0 4px 20px rgba(7,193,96,0.4)',
+                height: 46, fontSize: 16, borderRadius: 10, border: 'none',
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                boxShadow: '0 4px 20px rgba(102,126,234,0.4)',
               }}
             >
               登 录
