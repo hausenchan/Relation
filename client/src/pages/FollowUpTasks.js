@@ -9,7 +9,7 @@ import {
 import { followUpTasksApi } from '../api';
 import dayjs from 'dayjs';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const statusMap = {
   pending: { label: '待处理', color: 'default', badge: 'default' },
@@ -146,12 +146,7 @@ export default function FollowUpTasks() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Space>
-          <Title level={4} style={{ margin: 0 }}>待跟进任务</Title>
-          {pendingCount > 0 && <Tag color="orange">{pendingCount} 条未完成</Tag>}
-        </Space>
-      </div>
+      {pendingCount > 0 && <div style={{ marginBottom: 16 }}><Tag color="orange">{pendingCount} 条未完成</Tag></div>}
 
       <Tabs
         activeKey={activeTab}

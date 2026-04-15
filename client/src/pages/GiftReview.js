@@ -9,7 +9,7 @@ import {
 import { giftRequestsApi, giftRecordsApi } from '../api';
 import { useAuth } from '../AuthContext';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
@@ -257,7 +257,6 @@ export default function GiftReviewPage() {
 
   return (
     <div>
-      <Title level={4} style={{ marginBottom: 16 }}><GiftOutlined /> 送礼审核与记录</Title>
       <Tabs items={items} defaultActiveKey={user.role === 'member' ? 'records' : 'review'} />
     </div>
   );

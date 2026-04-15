@@ -253,7 +253,6 @@ function Goals() {
   return (
     <div style={{ padding: 24 }}>
       <Card
-        title="目标管理"
         extra={
           <Button type="primary" icon={<PlusOutlined />} onClick={() => handleCreate('quarter')}>
             新建目标

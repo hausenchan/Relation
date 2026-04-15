@@ -109,7 +109,6 @@ export default function ExecutiveDynamics() {
   return (
     <div style={{ padding: 24 }}>
       <Card
-        title="竞品动态"
         extra={
           <Space>
             <Select

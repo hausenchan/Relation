@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Tag, Space, Typography, Button, Popconfirm, Badge, Select, message, Modal, Form, Input, DatePicker, Row, Col, Tooltip } from 'antd';
-import { CheckOutlined, DeleteOutlined, BellOutlined, PlusOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Table, Tag, Space, Button, Popconfirm, Badge, Select, message, Modal, Form, Input, DatePicker, Row, Col, Tooltip } from 'antd';
+import { CheckOutlined, DeleteOutlined, PlusOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { remindersApi, personsApi } from '../api';
 import dayjs from 'dayjs';
 
-const { Title } = Typography;
+
 const { Option } = Select;
 
 const typeMap = {
@@ -131,7 +131,6 @@ export default function Reminders() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}><BellOutlined /> 提醒事项</Title>
         <Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加提醒</Button>
           <Button onClick={() => setShowDone(v => !v)}>

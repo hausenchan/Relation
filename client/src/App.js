@@ -182,6 +182,38 @@ function AppLayout() {
 
   const selectedKey = '/' + location.pathname.split('/')[1];
 
+  // 路由 → 页面标题映射
+  const pageTitleMap = {
+    '/': '工作台',
+    '/goals': '目标管理',
+    '/weekly-reports': '周报管理',
+    '/leads': '线索',
+    '/strategies': '策略',
+    '/dev-tasks': '需求',
+    '/persons': '人脉管理',
+    '/interactions': '互动记录',
+    '/reminders': '提醒事项',
+    '/companies': '公司研究',
+    '/follow-up-tasks': '待跟进任务',
+    '/my-tasks': '我的任务',
+    '/task-board': '任务看板',
+    '/gift-plans': '送礼计划',
+    '/gift-review': '审核与记录',
+    '/gifts': '礼品库',
+    '/trips': '出差申请',
+    '/trip-stats': '费用统计',
+    '/executive': '经营概览',
+    '/executive/talents': '高级人才',
+    '/executive/dynamics': '竞品动态',
+    '/executive/customers': '重点客户',
+    '/executive/strategic': '战略月会',
+    '/executive/operational': '经营周会',
+    '/users': '用户管理',
+    '/teams': '小组管理',
+    '/menu-perms': '菜单权限管理',
+  };
+  const currentPageTitle = pageTitleMap[location.pathname] || '';
+
   // ── 目标与计划 ──────────────────────────────────────────────
   const goalChildren = [
     { key: '/goals', icon: <AimOutlined />, label: <Link to="/goals">目标管理</Link> },
@@ -495,7 +527,7 @@ function AppLayout() {
           <span
             onClick={() => { setCollapsed(!collapsed); if (!collapsed) setSearchKeyword(''); }}
             style={{
-              fontSize: 18, cursor: 'pointer', color: '#6b7280', marginRight: 'auto',
+              fontSize: 18, cursor: 'pointer', color: '#6b7280', marginRight: 12,
               width: 32, height: 32, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               transition: 'background 0.2s, color 0.2s',
             }}
@@ -504,6 +536,7 @@ function AppLayout() {
           >
             {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           </span>
+          {currentPageTitle && <span style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginRight: 'auto' }}>{currentPageTitle}</span>}
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <NotificationBell />
             <div style={{ width: 1, height: 20, background: '#e8e8ed' }} />

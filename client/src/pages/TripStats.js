@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Row, Col, Card, Select, Typography, Tag, Table, Alert, Space, Statistic, Badge } from 'antd';
-import { WarningOutlined, RiseOutlined, TeamOutlined, CarOutlined } from '@ant-design/icons';
+import { WarningOutlined, TeamOutlined, CarOutlined } from '@ant-design/icons';
 import { tripsApi, groupsApi } from '../api';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 
 const expenseTypeMap = {
@@ -86,7 +86,6 @@ export default function TripStats() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}><RiseOutlined /> 出差费用统计</Title>
         <Space>
           <Select value={year} onChange={setYear} style={{ width: 90 }}>
             {[2024, 2025, 2026, 2027].map(y => <Option key={y} value={String(y)}>{y}年</Option>)}

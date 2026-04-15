@@ -16,7 +16,7 @@ import {
 } from '../api';
 import dayjs from 'dayjs';
 
-const { Title, Text, Paragraph } = Typography;
+const { Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
@@ -1369,7 +1369,6 @@ export default function Companies() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}><BankOutlined /> 公司研究</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加公司</Button>
       </div>
 

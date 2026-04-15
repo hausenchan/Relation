@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm, message, Card, Typography } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm, message, Card } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, TeamOutlined } from '@ant-design/icons';
 import { teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 
-const { Title } = Typography;
 
 const departmentOptions = [
   { value: 'commercial', label: '商务' },
@@ -128,7 +127,6 @@ export default function Teams() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>小组管理</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增小组</Button>
       </div>
 

@@ -3,10 +3,10 @@ import {
   Table, Button, Modal, Form, Input, InputNumber, Select, Space,
   Tag, Popconfirm, message, Typography, Divider, Row, Col
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, GiftOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { giftsApi } from '../api';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
@@ -79,7 +79,6 @@ export default function GiftsPage() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}><GiftOutlined /> 礼品库</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加礼品</Button>
       </div>
 

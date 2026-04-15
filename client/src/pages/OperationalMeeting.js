@@ -228,7 +228,6 @@ export default function OperationalMeeting() {
   return (
     <div style={{ padding: 24 }}>
       <Card
-        title="经营周会"
         extra={
           <Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>

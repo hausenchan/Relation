@@ -2,10 +2,10 @@ import React, { useEffect, useState } from 'react';
 import {
   Card, Select, Tree, Button, Space, message, Spin, Typography, Divider, Tag
 } from 'antd';
-import { MenuOutlined, SaveOutlined } from '@ant-design/icons';
+import { SaveOutlined } from '@ant-design/icons';
 import { usersApi, menuPermsApi } from '../api';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 // 与 App.js 中完全一致的菜单树定义（不含 admin-only 的系统管理）
 const MENU_TREE = [
@@ -129,10 +129,6 @@ export default function MenuPerms() {
 
   return (
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <Title level={4} style={{ marginBottom: 4 }}>
-        <MenuOutlined style={{ marginRight: 8 }} />
-        菜单权限管理
-      </Title>
       <Text type="secondary">超级管理员可为每位用户单独配置可见的菜单项，未勾选的菜单将对该用户隐藏。</Text>
 
       <Card style={{ marginTop: 16 }}>

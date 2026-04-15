@@ -84,7 +84,6 @@ export default function ExecutiveCustomers() {
   return (
     <div style={{ padding: 24 }}>
       <Card
-        title="重点客户维护"
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>

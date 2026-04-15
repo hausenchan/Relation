@@ -11,7 +11,7 @@ import { tasksApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 
 const statusMap = {
@@ -206,7 +206,6 @@ export default function MyTasks() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Space align="center">
-          <Title level={4} style={{ margin: 0 }}>我的任务</Title>
           {total > 0 && (
             <Tag color={done === total ? 'green' : 'blue'}>
               {done}/{total} 已完成

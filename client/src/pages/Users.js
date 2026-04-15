@@ -7,7 +7,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, UserOutlined, 
 import { usersApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 
 const roleMap = {
@@ -194,7 +194,6 @@ export default function UsersPage() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}><UserOutlined /> 用户管理</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建用户</Button>
       </div>
 

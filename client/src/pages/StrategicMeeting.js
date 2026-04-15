@@ -159,7 +159,6 @@ export default function StrategicMeeting() {
   return (
     <div style={{ padding: 24 }}>
       <Card
-        title="战略月会"
         extra={
           <Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>

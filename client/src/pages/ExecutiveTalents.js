@@ -93,7 +93,6 @@ export default function ExecutiveTalents() {
   return (
     <div style={{ padding: 24 }}>
       <Card
-        title="高级人才视图"
         extra={
           <Space>
             <Select

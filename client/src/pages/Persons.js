@@ -17,7 +17,7 @@ import InteractionList from '../components/InteractionList';
 import ReminderList from '../components/ReminderList';
 import PersonsMap from '../components/PersonsMap';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
@@ -787,7 +787,6 @@ export default function Persons() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>人脉管理</Title>
         <Space>
           <Button icon={<UploadOutlined />} onClick={() => { setImportRows([]); setImportOpen(true); }}>导入</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加人脉</Button>

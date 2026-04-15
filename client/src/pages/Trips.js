@@ -13,7 +13,7 @@ import { tripsApi, expensesApi, reportsApi, personsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 const { RangePicker } = DatePicker;
@@ -460,7 +460,6 @@ export default function Trips() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}><CarOutlined /> 出差管理</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建出差申请</Button>
       </div>
 

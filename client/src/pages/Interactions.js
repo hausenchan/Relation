@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Typography, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider } from 'antd';
+import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
 import dayjs from 'dayjs';
 
-const { Title } = Typography;
+
 const { Option } = Select;
 
 const typeMap = {
@@ -189,7 +189,6 @@ export default function Interactions() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}>全部互动记录</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加记录</Button>
       </div>
       <Space style={{ marginBottom: 16 }} wrap>

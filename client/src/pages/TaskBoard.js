@@ -11,7 +11,7 @@ import { tasksApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 
 const statusMap = {
@@ -152,7 +152,6 @@ export default function TaskBoard() {
       {/* 头部 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Space align="center">
-          <Title level={4} style={{ margin: 0 }}>任务看板</Title>
           <DatePicker
             value={selectedDate}
             onChange={(d) => setSelectedDate(d || dayjs())}

@@ -69,8 +69,6 @@ export default function ExecutiveDashboard() {
 
   return (
     <div style={{ padding: 24 }}>
-      <h2>公司经营概览</h2>
-
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col span={6}>
           <Card>

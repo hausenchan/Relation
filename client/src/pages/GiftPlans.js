@@ -10,7 +10,7 @@ import {
 import { giftPlansApi, giftRequestsApi, giftsApi, personsApi } from '../api';
 import { useAuth } from '../AuthContext';
 
-const { Title, Text, Paragraph } = Typography;
+const { Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
@@ -165,7 +165,6 @@ export default function GiftPlansPage() {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Title level={4} style={{ margin: 0 }}><CalendarOutlined /> 送礼计划</Title>
         <Button type="primary" icon={<PlusOutlined />} onClick={openPlanAdd}>新建计划</Button>
       </div>
 
