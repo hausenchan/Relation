@@ -30,7 +30,6 @@ import GiftReview from './pages/GiftReview';
 import Trips from './pages/Trips';
 import TripStats from './pages/TripStats';
 import MenuPerms from './pages/MenuPerms';
-import Opportunities from './pages/Opportunities';
 import FollowUpTasks from './pages/FollowUpTasks';
 import MyTasks from './pages/MyTasks';
 import TaskBoard from './pages/TaskBoard';
@@ -160,9 +159,6 @@ function AppLayout() {
     },
     canAccessMenu('/companies') && canAccessModule('companies') && {
       key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link>,
-    },
-    canAccessMenu('/opportunities') && {
-      key: '/opportunities', icon: <RiseOutlined />, label: <Link to="/opportunities">商机管理</Link>,
     },
     {
       key: '/follow-up-tasks', icon: <ThunderboltOutlined />,
@@ -408,7 +404,6 @@ function AppLayout() {
             <Route path="/trips" element={<PrivateRoute><Trips /></PrivateRoute>} />
             <Route path="/trip-stats" element={<PrivateRoute><TripStats /></PrivateRoute>} />
             <Route path="/menu-perms" element={<PrivateRoute><MenuPerms /></PrivateRoute>} />
-            <Route path="/opportunities" element={<PrivateRoute><Opportunities /></PrivateRoute>} />
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
             <Route path="/my-tasks" element={<PrivateRoute><MyTasks /></PrivateRoute>} />
             <Route path="/task-board" element={<PrivateRoute><TaskBoard /></PrivateRoute>} />
