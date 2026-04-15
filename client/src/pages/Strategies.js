@@ -269,11 +269,6 @@ export default function Strategies() {
 
   return (
     <div>
-      {/* 操作栏 */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 20 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增策略</Button>
-      </div>
-
       {/* 统计卡片 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
@@ -296,7 +291,8 @@ export default function Strategies() {
 
       {/* 筛选、Tabs与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-        <Space style={{ marginBottom: 16 }} size={12} wrap>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+          <Space size={12} wrap>
           <Select
             placeholder="维度"
             style={{ width: 150 }}
@@ -347,6 +343,8 @@ export default function Strategies() {
             <Option value="paused">暂停</Option>
           </Select>
         </Space>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增策略</Button>
+        </div>
 
         <Tabs
           activeKey={activeTab}
