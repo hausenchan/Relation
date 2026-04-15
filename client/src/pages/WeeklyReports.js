@@ -11,6 +11,9 @@ const { TextArea } = Input;
 const { Option } = Select;
 const { RangePicker } = DatePicker;
 
+const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const isAdmin = (role) => ADMIN_ROLES.has(role);
+
 export default function WeeklyReports() {
   const { user: currentUser } = useAuth();
   const [reports, setReports] = useState([]);
@@ -212,10 +215,10 @@ export default function WeeklyReports() {
       render: (_, record) => (
         <Space size="small">
           <Button type="link" size="small" onClick={() => showDetail(record)}>详情</Button>
-          {(currentUser?.role === 'admin' || record.user_id === currentUser?.id) && (
+          {(isAdmin(currentUser?.role) || record.user_id === currentUser?.id) && (
             <>
               <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
-              {currentUser?.role === 'admin' && (
+              {isAdmin(currentUser?.role) && (
                 <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>删除</Button>
               )}
             </>
@@ -227,7 +230,16 @@ export default function WeeklyReports() {
 
   const writerColumns = [
     { title: '姓名', dataIndex: 'display_name', key: 'display_name', width: 120 },
-    { title: '部门', dataIndex: 'department', key: 'department', width: 100 },
+    {
+      title: '部门',
+      dataIndex: 'department',
+      key: 'department',
+      width: 100,
+      render: (val) => {
+        const map = { commercial: '商务部', operation: '产运部', product: '产运部', business: '商务部', rd: '研发部', '商务部': '商务部', '产运部': '产运部', '研发部': '研发部' };
+        return map[val] || val || '-';
+      },
+    },
     {
       title: '角色',
       dataIndex: 'role',
@@ -307,7 +319,7 @@ export default function WeeklyReports() {
           <Option value="研发部">研发部</Option>
         </Select>
         <div style={{ flex: 1 }} />
-        {currentUser?.role === 'admin' && (
+        {isAdmin(currentUser?.role) && (
           <Button icon={<SettingOutlined />} onClick={handleManageWriters}>
             管理周报人员
           </Button>

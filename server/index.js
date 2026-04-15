@@ -1291,9 +1291,9 @@ app.get('/api/follow-up-tasks', (req, res) => {
     LEFT JOIN users ua ON f.assigned_to = ua.id
     LEFT JOIN users ub ON f.assigned_by = ub.id
     LEFT JOIN interactions i ON f.interaction_id = i.id
-    WHERE f.assigned_to = ?
+    WHERE (f.assigned_to = ? OR f.assigned_by = ?)
   `;
-  const params = [me];
+  const params = [me, me];
   if (status) { query += ' AND f.status = ?'; params.push(status); }
   query += ' ORDER BY f.created_at DESC';
   res.json(db.prepare(query).all(...params));
