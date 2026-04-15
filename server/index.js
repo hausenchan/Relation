@@ -1222,12 +1222,25 @@ app.get('/api/opportunities', auth, (req, res) => {
   if (status) { query2 += ' AND cr.opportunity_status = ?'; params2.push(status); }
   if (assignee) { query2 += ' AND cr.opportunity_assignee = ?'; params2.push(assignee); }
 
-  const results1 = db.prepare(query1).all(...params1);
-  const results2 = db.prepare(query2).all(...params2);
+  try {
+    const results1 = db.prepare(query1).all(...params1);
+    let results2 = [];
 
-  // 合并结果并按日期排序
-  const combined = [...results1, ...results2].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-  res.json(combined);
+    // 尝试查询 competitor_research 表，如果表不存在则跳过
+    try {
+      results2 = db.prepare(query2).all(...params2);
+    } catch (err) {
+      // 表不存在或其他错误，忽略
+      console.warn('competitor_research query failed:', err.message);
+    }
+
+    // 合并结果并按日期排序
+    const combined = [...results1, ...results2].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    res.json(combined);
+  } catch (err) {
+    console.error('opportunities list error:', err);
+    res.status(500).json({ error: '加载失败' });
+  }
 });
 
 app.put('/api/opportunities/:id', (req, res) => {
