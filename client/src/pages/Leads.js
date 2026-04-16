@@ -69,6 +69,7 @@ export default function Leads() {
   }, []);
 
   const openAddLead = () => {
+    setEditTarget(null);
     setAddSourceType('interaction');
     addForm.resetFields();
     addForm.setFieldsValue({ source_type: 'interaction', opportunity_status: 'new', date: dayjs() });
@@ -83,6 +84,34 @@ export default function Leads() {
       const dateStr = values.date?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD');
       const nextDateStr = values.next_action_date?.format('YYYY-MM-DD') || null;
 
+      // 编辑模式：直接更新商机
+      if (editTarget) {
+        await opportunitiesApi.update(editTarget.id, {
+          opportunity_status: values.opportunity_status,
+          assignee_id: values.assignee_id,
+        });
+
+        // 上传新附件
+        if (fileList.length > 0) {
+          const formData = new FormData();
+          formData.append('source_type', editTarget.source_type);
+          formData.append('source_id', editTarget.source_id);
+          fileList.forEach(f => formData.append('files', f.originFileObj));
+          try {
+            await attachmentsApi.upload(formData);
+          } catch {
+            message.warning('附件上传失败，但记录已更新');
+          }
+        }
+
+        message.success('更新成功');
+        setAddModalOpen(false);
+        setEditTarget(null);
+        load();
+        return;
+      }
+
+      // 新增模式
       let sourceId;
       if (addSourceType === 'interaction') {
         const res = await interactionsApi.create({
@@ -138,7 +167,7 @@ export default function Leads() {
       load();
     } catch (err) {
       if (err?.errorFields) return; // form validation
-      message.error(err.response?.data?.error || '添加失败');
+      message.error(err.response?.data?.error || '操作失败');
     } finally {
       setAddLoading(false);
     }
@@ -146,13 +175,24 @@ export default function Leads() {
 
   const openEdit = (record) => {
     setEditTarget(record);
-    editForm.setFieldsValue({
-      opportunity_title: record.opportunity_title,
+    // 复用添加线索表单，填充完整数据
+    addForm.setFieldsValue({
+      source_type: record.source_type,
+      person_id: record.person_id,
+      company_id: record.company_id,
+      date: record.date ? dayjs(record.date) : null,
+      type: record.type,
+      description: record.description,
+      outcome: record.outcome,
+      impact: record.impact,
+      next_action: record.next_action,
+      next_action_date: record.next_action_date ? dayjs(record.next_action_date) : null,
       opportunity_status: record.opportunity_status,
-      opportunity_assignee: record.opportunity_assignee || undefined,
-      opportunity_note: record.opportunity_note,
+      assignee_id: record.assignee_id,
     });
-    setEditModalOpen(true);
+    setAddSourceType(record.source_type || 'interaction');
+    setFileList([]);
+    setAddModalOpen(true);
   };
 
   const handleSave = async () => {
@@ -259,6 +299,63 @@ export default function Leads() {
       dataIndex: 'created_by_name',
       width: 90,
       render: v => <Text style={{ fontSize: 12, color: '#9ca3af' }}>{v || '-'}</Text>,
+    },
+    {
+      title: '附件',
+      width: 100,
+      render: (_, r) => (
+        <Button
+          type="link"
+          size="small"
+          icon={<PaperClipOutlined />}
+          style={{ fontSize: 12, color: '#6b7280' }}
+          onClick={async () => {
+            try {
+              const atts = await attachmentsApi.list({ source_type: r.source_type, source_id: r.source_id });
+              if (atts.length === 0) {
+                message.info('暂无附件');
+                return;
+              }
+              Modal.info({
+                title: '附件列表',
+                width: 500,
+                content: (
+                  <div style={{ marginTop: 16 }}>
+                    {atts.map(att => (
+                      <div key={att.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <div style={{ flex: 1, overflow: 'hidden' }}>
+                            <div style={{ fontSize: 13, color: '#374151', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {att.filename}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                              {(att.size / 1024).toFixed(1)} KB
+                            </div>
+                          </div>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={<DownloadOutlined />}
+                            href={`/uploads/${att.filepath}`}
+                            download={att.filename}
+                            target="_blank"
+                          >
+                            下载
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ),
+              });
+            } catch {
+              message.error('加载附件失败');
+            }
+          }}
+        >
+          {r.attachment_count || 0}
+        </Button>
+      ),
     },
     {
       title: '操作',
@@ -477,12 +574,12 @@ export default function Leads() {
         )}
       </Drawer>
 
-      {/* 添加线索 Modal */}
+      {/* 添加/编辑线索 Modal */}
       <Modal
-        title={<span style={{ fontWeight: 600, fontSize: 15, color: '#1f2937' }}>添加线索</span>}
+        title={<span style={{ fontWeight: 600, fontSize: 15, color: '#1f2937' }}>{editTarget ? '编辑线索' : '添加线索'}</span>}
         open={addModalOpen}
         onOk={handleAddLead}
-        onCancel={() => setAddModalOpen(false)}
+        onCancel={() => { setAddModalOpen(false); setEditTarget(null); }}
         confirmLoading={addLoading}
         okText="提交"
         cancelText="取消"

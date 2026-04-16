@@ -1339,9 +1339,11 @@ app.get('/api/opportunities', auth, (req, res) => {
   let query1 = `
     SELECT i.*,
       'interaction' as source_type,
+      i.id as source_id,
       p.name as person_name, p.company, p.city, p.current_company, p.person_category,
       u.display_name as assignee_name,
-      ub.display_name as created_by_name
+      ub.display_name as created_by_name,
+      (SELECT COUNT(*) FROM attachments WHERE source_type='interaction' AND source_id=i.id) as attachment_count
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
     LEFT JOIN users u ON i.opportunity_assignee = u.id
@@ -1364,10 +1366,12 @@ app.get('/api/opportunities', auth, (req, res) => {
   let query2 = `
     SELECT cr.*,
       'competitor_research' as source_type,
+      cr.id as source_id,
       c.name as company_name,
       NULL as person_name, NULL as company, NULL as city, NULL as current_company, NULL as person_category,
       u.display_name as assignee_name,
-      NULL as created_by, NULL as created_by_name
+      NULL as created_by, NULL as created_by_name,
+      (SELECT COUNT(*) FROM attachments WHERE source_type='competitor_research' AND source_id=cr.id) as attachment_count
     FROM competitor_research cr
     LEFT JOIN companies c ON cr.company_id = c.id
     LEFT JOIN users u ON cr.opportunity_assignee = u.id
