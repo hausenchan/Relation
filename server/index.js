@@ -2887,7 +2887,7 @@ app.get('/api/leads', (req, res) => {
   const { status, assignee_id, priority, source_type } = req.query;
   const { id: userId, role } = req.user;
 
-  let q = 'SELECT l.*, u.display_name as assignee_name, c.display_name as creator_name FROM leads l LEFT JOIN users u ON l.assignee_id = u.id LEFT JOIN users c ON l.created_by = c.id WHERE 1=1';
+  let q = 'SELECT l.*, u.display_name as assignee_name, c.display_name as created_by_name FROM leads l LEFT JOIN users u ON l.assignee_id = u.id LEFT JOIN users c ON l.created_by = c.id WHERE 1=1';
   const params = [];
 
   // 角色过滤
