@@ -3683,7 +3683,7 @@ app.delete('/api/executive/reports/:id', requireExecutive, (req, res) => {
 
 // SPA fallback - 必须放在所有 API 路由之后
 // =========== 附件 API ===========
-app.post('/api/attachments/upload', authenticate, upload.array('files', 10), (req, res) => {
+app.post('/api/attachments/upload', auth, upload.array('files', 10), (req, res) => {
   const { source_type, source_id } = req.body;
   if (!source_type || !source_id) return res.status(400).json({ error: '缺少 source_type 或 source_id' });
   if (!req.files?.length) return res.status(400).json({ error: '未收到文件' });
@@ -3699,7 +3699,7 @@ app.post('/api/attachments/upload', authenticate, upload.array('files', 10), (re
   res.json(results);
 });
 
-app.get('/api/attachments', authenticate, (req, res) => {
+app.get('/api/attachments', auth, (req, res) => {
   const { source_type, source_id } = req.query;
   if (!source_type || !source_id) return res.status(400).json({ error: '缺少参数' });
   const rows = db.prepare(`
@@ -3711,7 +3711,7 @@ app.get('/api/attachments', authenticate, (req, res) => {
   res.json(rows);
 });
 
-app.delete('/api/attachments/:id', authenticate, (req, res) => {
+app.delete('/api/attachments/:id', auth, (req, res) => {
   const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: '附件不存在' });
   if (row.created_by !== req.user.id && !isAdmin(req.user.role)) {

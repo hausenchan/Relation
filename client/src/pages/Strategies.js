@@ -60,6 +60,15 @@ export default function Strategies() {
     fetchUsers();
   }, [filters]);
 
+  const getErrorMessage = async (res, fallback) => {
+    try {
+      const data = await res.json();
+      return data?.error || fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   const fetchStrategies = async () => {
     setLoading(true);
     try {
@@ -72,10 +81,13 @@ export default function Strategies() {
       const res = await fetch(`/api/strategies?${params}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '策略列表加载失败'));
+      }
       const data = await res.json();
-      setStrategies(data);
+      setStrategies(Array.isArray(data) ? data : []);
     } catch (err) {
-      message.error('加载失败');
+      message.error(err.message || '加载失败');
     } finally {
       setLoading(false);
     }
@@ -86,9 +98,13 @@ export default function Strategies() {
       const res = await fetch('/api/users/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '负责人列表加载失败'));
+      }
       const data = await res.json();
-      setUsers(data);
+      setUsers(Array.isArray(data) ? data : []);
     } catch (err) {
+      setUsers([]);
       console.error(err);
     }
   };
@@ -133,7 +149,7 @@ export default function Strategies() {
         : '/api/strategies';
       const method = editingStrategy ? 'PUT' : 'POST';
 
-      await fetch(url, {
+      const res = await fetch(url, {
         method,
         headers: {
           'Content-Type': 'application/json',
@@ -141,12 +157,15 @@ export default function Strategies() {
         },
         body: JSON.stringify(values),
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, editingStrategy ? '更新失败' : '创建失败'));
+      }
 
       message.success(editingStrategy ? '更新成功' : '创建成功');
       setModalVisible(false);
       fetchStrategies();
     } catch (err) {
-      message.error('操作失败');
+      message.error(err.message || '操作失败');
     }
   };
 
@@ -162,9 +181,14 @@ export default function Strategies() {
       const res = await fetch(`/api/strategies/${id}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '策略详情加载失败'));
+      }
       const data = await res.json();
       setSelectedStrategy(data);
     } catch (err) {
+      message.error(err.message || '加载失败');
+      setDrawerVisible(false);
       console.error(err);
     }
   };
@@ -407,9 +431,16 @@ export default function Strategies() {
             </Select>
           </Form.Item>
           <Form.Item name="owner_id" label="负责人">
-            <Select placeholder="请选择负责人" showSearch optionFilterProp="children" allowClear>
-              {users.map(u => <Option key={u.id} value={u.id}>{u.display_name}</Option>)}
-            </Select>
+            <Select
+              placeholder={users.length > 0 ? '请选择负责人' : '暂无可选负责人'}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              options={users.map(u => ({
+                value: u.id,
+                label: u.display_name || u.username || `用户${u.id}`,
+              }))}
+            />
           </Form.Item>
           <Form.Item name="description" label="策略描述">
             <TextArea rows={4} placeholder="请输入策略描述" />
