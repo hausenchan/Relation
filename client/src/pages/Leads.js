@@ -45,6 +45,34 @@ export default function Leads() {
   const [companies, setCompanies] = useState([]);
   const [fileList, setFileList] = useState([]);
 
+  const allowedAttachmentExt = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'mp4', 'mov', 'avi'];
+
+  const getErrorMessage = (error, fallback) => {
+    return error?.response?.data?.error || error?.message || fallback;
+  };
+
+  const validateAttachment = (file) => {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    if (!allowedAttachmentExt.includes(ext)) {
+      message.error('不支持该文件格式');
+      return Upload.LIST_IGNORE;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      message.error('单个文件不能超过 50MB');
+      return Upload.LIST_IGNORE;
+    }
+    return false;
+  };
+
+  const uploadLeadAttachments = async (sourceType, sourceId, files) => {
+    if (!files.length) return [];
+    const formData = new FormData();
+    formData.append('source_type', sourceType);
+    formData.append('source_id', sourceId);
+    files.forEach(file => formData.append('files', file.originFileObj || file));
+    return attachmentsApi.upload(formData);
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -93,14 +121,10 @@ export default function Leads() {
 
         // 上传新附件
         if (fileList.length > 0) {
-          const formData = new FormData();
-          formData.append('source_type', editTarget.source_type);
-          formData.append('source_id', editTarget.source_id);
-          fileList.forEach(f => formData.append('files', f.originFileObj || f));
           try {
-            await attachmentsApi.upload(formData);
-          } catch {
-            message.warning('附件上传失败，但记录已更新');
+            await uploadLeadAttachments(editTarget.source_type, editTarget.source_id, fileList);
+          } catch (uploadError) {
+            message.warning(getErrorMessage(uploadError, '附件上传失败，但记录已更新'));
           }
         }
 
@@ -151,14 +175,10 @@ export default function Leads() {
 
       // 上传附件
       if (fileList.length > 0) {
-        const formData = new FormData();
-        formData.append('source_type', addSourceType);
-        formData.append('source_id', sourceId);
-        fileList.forEach(f => formData.append('files', f.originFileObj || f));
         try {
-          await attachmentsApi.upload(formData);
-        } catch {
-          message.warning('附件上传失败，但记录已创建');
+          await uploadLeadAttachments(addSourceType, sourceId, fileList);
+        } catch (uploadError) {
+          message.warning(getErrorMessage(uploadError, '附件上传失败，但记录已创建'));
         }
       }
 
@@ -167,7 +187,7 @@ export default function Leads() {
       load();
     } catch (err) {
       if (err?.errorFields) return; // form validation
-      message.error(err.response?.data?.error || '操作失败');
+      message.error(getErrorMessage(err, '操作失败'));
     } finally {
       setAddLoading(false);
     }
@@ -693,7 +713,7 @@ export default function Leads() {
             <Upload
               fileList={fileList}
               onChange={({ fileList: newFileList }) => setFileList(newFileList)}
-              beforeUpload={() => false}
+              beforeUpload={validateAttachment}
               maxCount={10}
               accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.mp4,.mov,.avi"
             >

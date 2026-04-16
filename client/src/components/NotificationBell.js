@@ -23,14 +23,29 @@ export default function NotificationBell() {
     }
   }, [dropdownOpen]);
 
+  const parseJsonSafely = async (res, fallbackMessage) => {
+    if (!res.ok) {
+      let messageText = fallbackMessage;
+      try {
+        const data = await res.json();
+        messageText = data?.error || fallbackMessage;
+      } catch {
+        messageText = fallbackMessage;
+      }
+      throw new Error(messageText);
+    }
+    return res.json();
+  };
+
   const fetchUnreadCount = async () => {
     try {
       const res = await fetch('/api/notifications/unread-count', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
-      const data = await res.json();
+      const data = await parseJsonSafely(res, '通知未读数加载失败');
       setUnreadCount(data.count);
     } catch (err) {
+      setUnreadCount(0);
       console.error(err);
     }
   };
@@ -41,10 +56,11 @@ export default function NotificationBell() {
       const res = await fetch('/api/notifications?limit=20', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
-      const data = await res.json();
+      const data = await parseJsonSafely(res, '加载通知失败');
       setNotifications(data);
     } catch (err) {
-      message.error('加载通知失败');
+      setNotifications([]);
+      message.error(err.message || '加载通知失败');
     } finally {
       setLoading(false);
     }
@@ -52,42 +68,45 @@ export default function NotificationBell() {
 
   const markAsRead = async (id) => {
     try {
-      await fetch(`/api/notifications/${id}/read`, {
+      const res = await fetch(`/api/notifications/${id}/read`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      await parseJsonSafely(res, '操作失败');
       fetchNotifications();
       fetchUnreadCount();
     } catch (err) {
-      message.error('操作失败');
+      message.error(err.message || '操作失败');
     }
   };
 
   const markAllAsRead = async () => {
     try {
-      await fetch('/api/notifications/read-all', {
+      const res = await fetch('/api/notifications/read-all', {
         method: 'PUT',
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      await parseJsonSafely(res, '操作失败');
       fetchNotifications();
       fetchUnreadCount();
       message.success('已全部标记为已读');
     } catch (err) {
-      message.error('操作失败');
+      message.error(err.message || '操作失败');
     }
   };
 
   const deleteNotification = async (id) => {
     try {
-      await fetch(`/api/notifications/${id}`, {
+      const res = await fetch(`/api/notifications/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      await parseJsonSafely(res, '删除失败');
       fetchNotifications();
       fetchUnreadCount();
       message.success('已删除');
     } catch (err) {
-      message.error('删除失败');
+      message.error(err.message || '删除失败');
     }
   };
 

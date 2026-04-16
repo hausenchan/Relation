@@ -22,9 +22,29 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|mp4|mov|avi)$/i;
-    cb(null, allowed.test(file.originalname));
+    if (!allowed.test(file.originalname)) {
+      cb(new Error('不支持的文件类型'));
+      return;
+    }
+    cb(null, true);
   },
 });
+
+function uploadAttachments(req, res, next) {
+  upload.array('files', 10)(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: '单个文件不能超过 50MB' });
+      }
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ error: '最多只能上传 10 个文件' });
+      }
+      return res.status(400).json({ error: err.message || '附件上传失败' });
+    }
+    return res.status(400).json({ error: err.message || '附件上传失败' });
+  });
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -396,6 +416,25 @@ db.exec(`
     created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+`);
+
+// =========== 通知表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT,
+    link TEXT,
+    is_read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_notifications_user_read
+    ON notifications(user_id, is_read);
+  CREATE INDEX IF NOT EXISTS idx_notifications_created
+    ON notifications(created_at);
 `);
 
 // =========== 待跟进任务表 ===========
@@ -3688,7 +3727,7 @@ app.delete('/api/executive/reports/:id', requireExecutive, (req, res) => {
 
 // SPA fallback - 必须放在所有 API 路由之后
 // =========== 附件 API ===========
-app.post('/api/attachments/upload', auth, upload.array('files', 10), (req, res) => {
+app.post('/api/attachments/upload', auth, uploadAttachments, (req, res) => {
   const { source_type, source_id } = req.body;
   if (!source_type || !source_id) return res.status(400).json({ error: '缺少 source_type 或 source_id' });
   if (!req.files?.length) return res.status(400).json({ error: '未收到文件' });
