@@ -96,7 +96,7 @@ export default function Leads() {
           const formData = new FormData();
           formData.append('source_type', editTarget.source_type);
           formData.append('source_id', editTarget.source_id);
-          fileList.forEach(f => formData.append('files', f.originFileObj));
+          fileList.forEach(f => formData.append('files', f.originFileObj || f));
           try {
             await attachmentsApi.upload(formData);
           } catch {
@@ -154,7 +154,7 @@ export default function Leads() {
         const formData = new FormData();
         formData.append('source_type', addSourceType);
         formData.append('source_id', sourceId);
-        fileList.forEach(f => formData.append('files', f.originFileObj));
+        fileList.forEach(f => formData.append('files', f.originFileObj || f));
         try {
           await attachmentsApi.upload(formData);
         } catch {
