@@ -219,9 +219,7 @@ export const goalsApi = {
 };
 
 export const attachmentsApi = {
-  upload: (formData) => api.post('/attachments/upload', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  }).then(r => r.data),
+  upload: (formData) => api.post('/attachments/upload', formData).then(r => r.data),
   list: (params) => api.get('/attachments', { params }).then(r => r.data),
   delete: (id) => api.delete(`/attachments/${id}`).then(r => r.data),
 };
