@@ -509,6 +509,81 @@ if (taskCols.length > 0 && !taskCols.includes('result')) {
   db.exec("ALTER TABLE tasks ADD COLUMN result TEXT DEFAULT NULL");
 }
 
+// =========== 线索池表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS leads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    source TEXT,
+    source_type TEXT,
+    contact_person TEXT,
+    contact_company TEXT,
+    contact_info TEXT,
+    description TEXT,
+    status TEXT DEFAULT 'new',
+    assignee_id INTEGER,
+    priority TEXT DEFAULT 'medium',
+    created_by INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_leads_assignee_id ON leads(assignee_id);
+  CREATE INDEX IF NOT EXISTS idx_leads_created_by ON leads(created_by);
+  CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
+  CREATE INDEX IF NOT EXISTS idx_leads_source_type ON leads(source_type);
+`);
+
+// =========== 策略表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS strategies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    dimension TEXT NOT NULL,
+    role_type TEXT,
+    budget_group_type TEXT,
+    description TEXT,
+    owner_id INTEGER,
+    status TEXT DEFAULT 'active',
+    source_type TEXT,
+    source_id INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_strategies_owner_id ON strategies(owner_id);
+  CREATE INDEX IF NOT EXISTS idx_strategies_dimension ON strategies(dimension);
+  CREATE INDEX IF NOT EXISTS idx_strategies_status ON strategies(status);
+  CREATE INDEX IF NOT EXISTS idx_strategies_source ON strategies(source_type, source_id);
+`);
+
+// =========== 研发任务表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS dev_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    source_type TEXT,
+    source_id INTEGER,
+    assignee_id INTEGER,
+    status TEXT DEFAULT 'pending',
+    priority TEXT DEFAULT 'medium',
+    estimated_hours REAL,
+    actual_hours REAL,
+    start_date TEXT,
+    due_date TEXT,
+    completed_date TEXT,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_dev_tasks_assignee_id ON dev_tasks(assignee_id);
+  CREATE INDEX IF NOT EXISTS idx_dev_tasks_created_by ON dev_tasks(created_by);
+  CREATE INDEX IF NOT EXISTS idx_dev_tasks_status ON dev_tasks(status);
+  CREATE INDEX IF NOT EXISTS idx_dev_tasks_source ON dev_tasks(source_type, source_id);
+`);
+
 // =========== 预算管理表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS budgets (
