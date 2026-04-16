@@ -69,7 +69,7 @@ export default function Strategies() {
       if (filters.budget_group_type) params.append('budget_group_type', filters.budget_group_type);
       if (filters.status) params.append('status', filters.status);
 
-      const res = await fetch(`http://localhost:3001/api/strategies?${params}`, {
+      const res = await fetch(`/api/strategies?${params}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -83,7 +83,7 @@ export default function Strategies() {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/users/simple', {
+      const res = await fetch('/api/users/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -111,7 +111,7 @@ export default function Strategies() {
       content: '删除后无法恢复，确定要删除吗？',
       onOk: async () => {
         try {
-          await fetch(`http://localhost:3001/api/strategies/${id}`, {
+          await fetch(`/api/strategies/${id}`, {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
           });
@@ -129,8 +129,8 @@ export default function Strategies() {
       const values = await form.validateFields();
 
       const url = editingStrategy
-        ? `http://localhost:3001/api/strategies/${editingStrategy.id}`
-        : 'http://localhost:3001/api/strategies';
+        ? `/api/strategies/${editingStrategy.id}`
+        : '/api/strategies';
       const method = editingStrategy ? 'PUT' : 'POST';
 
       await fetch(url, {
@@ -159,7 +159,7 @@ export default function Strategies() {
 
   const fetchStrategyDetail = async (id) => {
     try {
-      const res = await fetch(`http://localhost:3001/api/strategies/${id}`, {
+      const res = await fetch(`/api/strategies/${id}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();

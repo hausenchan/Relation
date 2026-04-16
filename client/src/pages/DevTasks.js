@@ -64,7 +64,7 @@ export default function DevTasks() {
       if (filters.priority) params.append('priority', filters.priority);
       if (filters.source_type) params.append('source_type', filters.source_type);
 
-      const res = await fetch(`http://localhost:3001/api/dev-tasks?${params}`, {
+      const res = await fetch(`/api/dev-tasks?${params}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -78,7 +78,7 @@ export default function DevTasks() {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/users/simple', {
+      const res = await fetch('/api/users/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -90,7 +90,7 @@ export default function DevTasks() {
 
   const fetchLeads = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/leads/simple', {
+      const res = await fetch('/api/leads/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -102,7 +102,7 @@ export default function DevTasks() {
 
   const fetchStrategies = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/strategies/simple', {
+      const res = await fetch('/api/strategies/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -135,7 +135,7 @@ export default function DevTasks() {
       content: '删除后无法恢复，确定要删除吗？',
       onOk: async () => {
         try {
-          await fetch(`http://localhost:3001/api/dev-tasks/${id}`, {
+          await fetch(`/api/dev-tasks/${id}`, {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
           });
@@ -159,8 +159,8 @@ export default function DevTasks() {
       };
 
       const url = editingTask
-        ? `http://localhost:3001/api/dev-tasks/${editingTask.id}`
-        : 'http://localhost:3001/api/dev-tasks';
+        ? `/api/dev-tasks/${editingTask.id}`
+        : '/api/dev-tasks';
       const method = editingTask ? 'PUT' : 'POST';
 
       await fetch(url, {

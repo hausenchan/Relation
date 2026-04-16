@@ -42,7 +42,7 @@ export default function WeeklyReports() {
       if (filters.week_start) params.append('week_start', filters.week_start);
       if (filters.department) params.append('department', filters.department);
 
-      const res = await fetch(`http://localhost:3001/api/weekly-reports?${params}`, {
+      const res = await fetch(`/api/weekly-reports?${params}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -56,7 +56,7 @@ export default function WeeklyReports() {
 
   const fetchWriters = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/weekly-reports/writers', {
+      const res = await fetch('/api/weekly-reports/writers', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -92,7 +92,7 @@ export default function WeeklyReports() {
       content: '删除后无法恢复，确定要删除吗？',
       onOk: async () => {
         try {
-          await fetch(`http://localhost:3001/api/weekly-reports/${id}`, {
+          await fetch(`/api/weekly-reports/${id}`, {
             method: 'DELETE',
             headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
           });
@@ -117,7 +117,7 @@ export default function WeeklyReports() {
         risks: values.risks,
       };
 
-      await fetch('http://localhost:3001/api/weekly-reports', {
+      await fetch('/api/weekly-reports', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -146,7 +146,7 @@ export default function WeeklyReports() {
 
   const toggleWriter = async (userId, currentValue) => {
     try {
-      await fetch(`http://localhost:3001/api/users/${userId}/weekly-report`, {
+      await fetch(`/api/users/${userId}/weekly-report`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

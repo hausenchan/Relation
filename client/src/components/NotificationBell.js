@@ -25,7 +25,7 @@ export default function NotificationBell() {
 
   const fetchUnreadCount = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/notifications/unread-count', {
+      const res = await fetch('/api/notifications/unread-count', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -38,7 +38,7 @@ export default function NotificationBell() {
   const fetchNotifications = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:3001/api/notifications?limit=20', {
+      const res = await fetch('/api/notifications?limit=20', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const data = await res.json();
@@ -52,7 +52,7 @@ export default function NotificationBell() {
 
   const markAsRead = async (id) => {
     try {
-      await fetch(`http://localhost:3001/api/notifications/${id}/read`, {
+      await fetch(`/api/notifications/${id}/read`, {
         method: 'PUT',
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
@@ -65,7 +65,7 @@ export default function NotificationBell() {
 
   const markAllAsRead = async () => {
     try {
-      await fetch('http://localhost:3001/api/notifications/read-all', {
+      await fetch('/api/notifications/read-all', {
         method: 'PUT',
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
@@ -79,7 +79,7 @@ export default function NotificationBell() {
 
   const deleteNotification = async (id) => {
     try {
-      await fetch(`http://localhost:3001/api/notifications/${id}`, {
+      await fetch(`/api/notifications/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
