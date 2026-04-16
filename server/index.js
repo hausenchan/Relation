@@ -3721,8 +3721,17 @@ app.get('/api/attachments/:id/download', auth, (req, res) => {
   if (!row) return res.status(404).json({ error: '附件不存在' });
   const filePath = path.join(UPLOADS_DIR, row.filepath);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
+
+  res.setHeader('Content-Type', row.mimetype || 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`);
-  res.sendFile(filePath);
+  res.setHeader('Content-Length', row.size);
+
+  const fileStream = fs.createReadStream(filePath);
+  fileStream.pipe(res);
+  fileStream.on('error', (err) => {
+    console.error('文件流错误:', err);
+    if (!res.headersSent) res.status(500).json({ error: '文件读取失败' });
+  });
 });
 
 app.delete('/api/attachments/:id', auth, (req, res) => {
