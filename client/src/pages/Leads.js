@@ -336,9 +336,7 @@ export default function Leads() {
                             type="link"
                             size="small"
                             icon={<DownloadOutlined />}
-                            href={`/uploads/${att.filepath}`}
-                            download={att.filename}
-                            target="_blank"
+                            onClick={() => attachmentsApi.download(att.id, att.filename).catch(() => message.error('下载失败'))}
                           >
                             下载
                           </Button>
@@ -542,9 +540,7 @@ export default function Leads() {
                           type="text"
                           size="small"
                           icon={<DownloadOutlined />}
-                          href={`/uploads/${att.filepath}`}
-                          download={att.filename}
-                          target="_blank"
+                          onClick={() => attachmentsApi.download(att.id, att.filename).catch(() => message.error('下载失败'))}
                         />
                         {att.created_by === JSON.parse(localStorage.getItem('user') || '{}').id && (
                           <Button

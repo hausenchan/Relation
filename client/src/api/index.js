@@ -222,5 +222,19 @@ export const attachmentsApi = {
   upload: (formData) => api.post('/attachments/upload', formData).then(r => r.data),
   list: (params) => api.get('/attachments', { params }).then(r => r.data),
   delete: (id) => api.delete(`/attachments/${id}`).then(r => r.data),
+  download: async (id, filename) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/api/attachments/${id}/download`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error('下载失败');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };
 

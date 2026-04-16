@@ -2965,6 +2965,12 @@ app.get('/api/leads', (req, res) => {
   res.json(db.prepare(q).all(...params));
 });
 
+// 获取可关联的线索列表（用于研发任务来源选择）
+app.get('/api/leads/simple', (req, res) => {
+  const leads = db.prepare('SELECT id, title, status FROM leads WHERE status != ? ORDER BY created_at DESC LIMIT 100').all('closed');
+  res.json(leads);
+});
+
 // 获取单个线索详情（含关联的策略和研发任务）
 app.get('/api/leads/:id', (req, res) => {
   const { id } = req.params;
@@ -3107,6 +3113,12 @@ app.get('/api/strategies', (req, res) => {
 
   q += ' ORDER BY s.created_at DESC';
   res.json(db.prepare(q).all(...params));
+});
+
+// 获取可关联的策略列表（用于研发任务来源选择）
+app.get('/api/strategies/simple', (req, res) => {
+  const strategies = db.prepare('SELECT id, title, dimension FROM strategies WHERE status = ? ORDER BY created_at DESC LIMIT 100').all('active');
+  res.json(strategies);
 });
 
 // 获取单个策略详情（含关联的研发任务）
@@ -3322,17 +3334,6 @@ app.delete('/api/dev-tasks/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// 获取可关联的线索列表（用于研发任务来源选择）
-app.get('/api/leads/simple', (req, res) => {
-  const leads = db.prepare('SELECT id, title, status FROM leads WHERE status != ? ORDER BY created_at DESC LIMIT 100').all('closed');
-  res.json(leads);
-});
-
-// 获取可关联的策略列表（用于研发任务来源选择）
-app.get('/api/strategies/simple', (req, res) => {
-  const strategies = db.prepare('SELECT id, title, dimension FROM strategies WHERE status = ? ORDER BY created_at DESC LIMIT 100').all('active');
-  res.json(strategies);
-});
 
 // =========== 通知系统 API ===========
 // 创建通知（内部函数）
@@ -3713,6 +3714,15 @@ app.get('/api/attachments', auth, (req, res) => {
     ORDER BY a.created_at ASC
   `).all(source_type, source_id);
   res.json(rows);
+});
+
+app.get('/api/attachments/:id/download', auth, (req, res) => {
+  const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  const filePath = path.join(UPLOADS_DIR, row.filepath);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`);
+  res.sendFile(filePath);
 });
 
 app.delete('/api/attachments/:id', auth, (req, res) => {
