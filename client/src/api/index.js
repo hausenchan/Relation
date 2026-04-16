@@ -217,3 +217,12 @@ export const goalsApi = {
   update: (id, data) => api.put(`/goals/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/goals/${id}`).then(r => r.data),
 };
+
+export const attachmentsApi = {
+  upload: (formData) => api.post('/attachments/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  }).then(r => r.data),
+  list: (params) => api.get('/attachments', { params }).then(r => r.data),
+  delete: (id) => api.delete(`/attachments/${id}`).then(r => r.data),
+};
+

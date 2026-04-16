@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Select, Modal, Form, message,
-  Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider
+  Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider, Upload
 } from 'antd';
-import { RiseOutlined, EditOutlined, UserOutlined, PlusOutlined, BankOutlined } from '@ant-design/icons';
-import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi } from '../api';
+import { RiseOutlined, EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
+import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -33,6 +33,8 @@ export default function Leads() {
   const [editForm] = Form.useForm();
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [attachments, setAttachments] = useState([]);
+  const [attachmentsLoading, setAttachmentsLoading] = useState(false);
 
   // 添加线索
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -41,6 +43,7 @@ export default function Leads() {
   const [addSourceType, setAddSourceType] = useState('interaction');
   const [persons, setPersons] = useState([]);
   const [companies, setCompanies] = useState([]);
+  const [fileList, setFileList] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -69,6 +72,7 @@ export default function Leads() {
     setAddSourceType('interaction');
     addForm.resetFields();
     addForm.setFieldsValue({ source_type: 'interaction', opportunity_status: 'new', date: dayjs() });
+    setFileList([]);
     setAddModalOpen(true);
   };
 
@@ -79,8 +83,9 @@ export default function Leads() {
       const dateStr = values.date?.format('YYYY-MM-DD') || dayjs().format('YYYY-MM-DD');
       const nextDateStr = values.next_action_date?.format('YYYY-MM-DD') || null;
 
+      let sourceId;
       if (addSourceType === 'interaction') {
-        await interactionsApi.create({
+        const res = await interactionsApi.create({
           person_id: values.person_id,
           date: dateStr,
           type: values.interaction_type || 'other',
@@ -94,8 +99,9 @@ export default function Leads() {
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
         });
+        sourceId = res.id;
       } else {
-        await competitorResearchApi.create({
+        const res = await competitorResearchApi.create({
           company_id: values.company_id,
           date: dateStr,
           importance: values.importance || 'normal',
@@ -111,6 +117,20 @@ export default function Leads() {
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
         });
+        sourceId = res.id;
+      }
+
+      // 上传附件
+      if (fileList.length > 0) {
+        const formData = new FormData();
+        formData.append('source_type', addSourceType);
+        formData.append('source_id', sourceId);
+        fileList.forEach(f => formData.append('files', f.originFileObj));
+        try {
+          await attachmentsApi.upload(formData);
+        } catch {
+          message.warning('附件上传失败，但记录已创建');
+        }
       }
 
       message.success('线索添加成功');
@@ -185,7 +205,19 @@ export default function Leads() {
         <Button
           type="link"
           style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left', fontWeight: 500, fontSize: 13, color: '#4F46E5' }}
-          onClick={() => { setDetailRecord(r); setDetailOpen(true); }}
+          onClick={async () => {
+            setDetailRecord(r);
+            setDetailOpen(true);
+            setAttachmentsLoading(true);
+            try {
+              const atts = await attachmentsApi.list({ source_type: r.source_type, source_id: r.source_id });
+              setAttachments(atts);
+            } catch {
+              setAttachments([]);
+            } finally {
+              setAttachmentsLoading(false);
+            }
+          }}
         >
           <RiseOutlined style={{ marginRight: 4, fontSize: 12 }} />{r.opportunity_title}
         </Button>
@@ -385,6 +417,62 @@ export default function Leads() {
               <Descriptions.Item label="互动结果">{detailRecord.outcome || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{detailRecord.created_by_name || '-'}</Descriptions.Item>
             </Descriptions>
+
+            {/* 附件列表 */}
+            <Divider style={{ margin: '20px 0' }} />
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#1f2937', marginBottom: 12 }}>
+                <PaperClipOutlined style={{ marginRight: 6 }} />附件
+              </div>
+              {attachmentsLoading ? (
+                <Text style={{ color: '#9ca3af' }}>加载中...</Text>
+              ) : attachments.length === 0 ? (
+                <Text style={{ color: '#9ca3af' }}>暂无附件</Text>
+              ) : (
+                <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                  {attachments.map(att => (
+                    <div key={att.id} style={{ padding: '8px 12px', background: '#f9fafb', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ flex: 1, overflow: 'hidden' }}>
+                        <div style={{ fontSize: 13, color: '#374151', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {att.filename}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                          {(att.size / 1024).toFixed(1)} KB · {att.creator_name || '未知'}
+                        </div>
+                      </div>
+                      <Space size={4}>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<DownloadOutlined />}
+                          href={`/uploads/${att.filepath}`}
+                          download={att.filename}
+                          target="_blank"
+                        />
+                        {att.created_by === JSON.parse(localStorage.getItem('user') || '{}').id && (
+                          <Button
+                            type="text"
+                            size="small"
+                            danger
+                            icon={<DeleteOutlined />}
+                            onClick={async () => {
+                              try {
+                                await attachmentsApi.delete(att.id);
+                                message.success('删除成功');
+                                const atts = await attachmentsApi.list({ source_type: detailRecord.source_type, source_id: detailRecord.source_id });
+                                setAttachments(atts);
+                              } catch {
+                                message.error('删除失败');
+                              }
+                            }}
+                          />
+                        )}
+                      </Space>
+                    </div>
+                  ))}
+                </Space>
+              )}
+            </div>
           </div>
         )}
       </Drawer>
@@ -508,6 +596,17 @@ export default function Leads() {
               </Form.Item>
             </Col>
           </Row>
+          <Form.Item label="附件">
+            <Upload
+              fileList={fileList}
+              onChange={({ fileList: newFileList }) => setFileList(newFileList)}
+              beforeUpload={() => false}
+              maxCount={10}
+              accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.mp4,.mov,.avi"
+            >
+              <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大50MB）</Button>
+            </Upload>
+          </Form.Item>
         </Form>
       </Modal>
     </div>

@@ -1,9 +1,30 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const Database = require('better-sqlite3');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const multer = require('multer');
+
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  },
+});
+const upload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|mp4|mov|avi)$/i;
+    cb(null, allowed.test(file.originalname));
+  },
+});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -62,6 +83,7 @@ app.use('/api', (req, res, next) => {
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/build')));
 }
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 const db = new Database(path.join(__dirname, 'data.db'));
 
@@ -360,6 +382,21 @@ try {
     ) WHERE created_by IS NULL
   `);
 } catch(e) { /* 忽略回填错误 */ }
+
+// =========== 附件表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    mimetype TEXT,
+    size INTEGER,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
 
 // =========== 待跟进任务表 ===========
 db.exec(`
@@ -3645,6 +3682,46 @@ app.delete('/api/executive/reports/:id', requireExecutive, (req, res) => {
 });
 
 // SPA fallback - 必须放在所有 API 路由之后
+// =========== 附件 API ===========
+app.post('/api/attachments/upload', authenticate, upload.array('files', 10), (req, res) => {
+  const { source_type, source_id } = req.body;
+  if (!source_type || !source_id) return res.status(400).json({ error: '缺少 source_type 或 source_id' });
+  if (!req.files?.length) return res.status(400).json({ error: '未收到文件' });
+
+  const insert = db.prepare(`
+    INSERT INTO attachments (source_type, source_id, filename, filepath, mimetype, size, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const results = req.files.map(f => {
+    const r = insert.run(source_type, source_id, f.originalname, f.filename, f.mimetype, f.size, req.user.id);
+    return { id: r.lastInsertRowid, filename: f.originalname, filepath: f.filename, size: f.size, mimetype: f.mimetype };
+  });
+  res.json(results);
+});
+
+app.get('/api/attachments', authenticate, (req, res) => {
+  const { source_type, source_id } = req.query;
+  if (!source_type || !source_id) return res.status(400).json({ error: '缺少参数' });
+  const rows = db.prepare(`
+    SELECT a.*, u.display_name as creator_name
+    FROM attachments a LEFT JOIN users u ON a.created_by = u.id
+    WHERE a.source_type = ? AND a.source_id = ?
+    ORDER BY a.created_at ASC
+  `).all(source_type, source_id);
+  res.json(rows);
+});
+
+app.delete('/api/attachments/:id', authenticate, (req, res) => {
+  const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  if (row.created_by !== req.user.id && !isAdmin(req.user.role)) {
+    return res.status(403).json({ error: '只有创建人可以删除附件' });
+  }
+  try { fs.unlinkSync(path.join(UPLOADS_DIR, row.filepath)); } catch {}
+  db.prepare('DELETE FROM attachments WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res) => {
     res.sendFile(path.join(__dirname, '../client/build/index.html'));
