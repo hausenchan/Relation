@@ -55,6 +55,15 @@ export default function DevTasks() {
     fetchStrategies();
   }, [filters]);
 
+  const getErrorMessage = async (res, fallback) => {
+    try {
+      const data = await res.json();
+      return data?.error || fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   const fetchTasks = async () => {
     setLoading(true);
     try {
@@ -67,10 +76,13 @@ export default function DevTasks() {
       const res = await fetch(`/api/dev-tasks?${params}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '需求列表加载失败'));
+      }
       const data = await res.json();
-      setTasks(data);
+      setTasks(Array.isArray(data) ? data : []);
     } catch (err) {
-      message.error('加载失败');
+      message.error(err.message || '加载失败');
     } finally {
       setLoading(false);
     }
@@ -81,9 +93,13 @@ export default function DevTasks() {
       const res = await fetch('/api/users/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '负责人列表加载失败'));
+      }
       const data = await res.json();
-      setUsers(data);
+      setUsers(Array.isArray(data) ? data : []);
     } catch (err) {
+      setUsers([]);
       console.error(err);
     }
   };
@@ -93,9 +109,13 @@ export default function DevTasks() {
       const res = await fetch('/api/leads/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '线索列表加载失败'));
+      }
       const data = await res.json();
-      setLeads(data);
+      setLeads(Array.isArray(data) ? data : []);
     } catch (err) {
+      setLeads([]);
       console.error(err);
     }
   };
@@ -105,9 +125,13 @@ export default function DevTasks() {
       const res = await fetch('/api/strategies/simple', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '策略列表加载失败'));
+      }
       const data = await res.json();
-      setStrategies(data);
+      setStrategies(Array.isArray(data) ? data : []);
     } catch (err) {
+      setStrategies([]);
       console.error(err);
     }
   };
@@ -163,7 +187,7 @@ export default function DevTasks() {
         : '/api/dev-tasks';
       const method = editingTask ? 'PUT' : 'POST';
 
-      await fetch(url, {
+      const res = await fetch(url, {
         method,
         headers: {
           'Content-Type': 'application/json',
@@ -171,12 +195,15 @@ export default function DevTasks() {
         },
         body: JSON.stringify(payload),
       });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, editingTask ? '更新失败' : '创建失败'));
+      }
 
       message.success(editingTask ? '更新成功' : '创建成功');
       setModalVisible(false);
       fetchTasks();
     } catch (err) {
-      message.error('操作失败');
+      message.error(err.message || '操作失败');
     }
   };
 
@@ -341,12 +368,14 @@ export default function DevTasks() {
             style={{ width: 150 }}
             allowClear
             showSearch
-            optionFilterProp="children"
+            optionFilterProp="label"
             value={filters.assignee_id || undefined}
             onChange={(val) => setFilters({ ...filters, assignee_id: val || '' })}
-          >
-            {users.map(u => <Option key={u.id} value={u.id}>{u.display_name}</Option>)}
-          </Select>
+            options={users.map(u => ({
+              value: u.id,
+              label: u.display_name || u.username || `用户${u.id}`,
+            }))}
+          />
           <Select
             placeholder="来源类型"
             style={{ width: 150 }}
@@ -404,18 +433,32 @@ export default function DevTasks() {
               if (sourceType === 'lead') {
                 return (
                   <Form.Item name="source_id" label="关联线索">
-                    <Select placeholder="请选择线索" allowClear showSearch optionFilterProp="children">
-                      {leads.map(l => <Option key={l.id} value={l.id}>{l.title}</Option>)}
-                    </Select>
+                    <Select
+                      placeholder={leads.length > 0 ? '请选择线索' : '暂无可选线索'}
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      options={leads.map(l => ({
+                        value: l.id,
+                        label: l.title || `线索${l.id}`,
+                      }))}
+                    />
                   </Form.Item>
                 );
               }
               if (sourceType === 'strategy') {
                 return (
                   <Form.Item name="source_id" label="关联策略">
-                    <Select placeholder="请选择策略" allowClear showSearch optionFilterProp="children">
-                      {strategies.map(s => <Option key={s.id} value={s.id}>{s.title}</Option>)}
-                    </Select>
+                    <Select
+                      placeholder={strategies.length > 0 ? '请选择策略' : '暂无可选策略'}
+                      allowClear
+                      showSearch
+                      optionFilterProp="label"
+                      options={strategies.map(s => ({
+                        value: s.id,
+                        label: s.title || `策略${s.id}`,
+                      }))}
+                    />
                   </Form.Item>
                 );
               }
@@ -423,9 +466,16 @@ export default function DevTasks() {
             }}
           </Form.Item>
           <Form.Item name="assignee_id" label="负责人">
-            <Select placeholder="请选择负责人" allowClear showSearch optionFilterProp="children">
-              {users.map(u => <Option key={u.id} value={u.id}>{u.display_name}</Option>)}
-            </Select>
+            <Select
+              placeholder={users.length > 0 ? '请选择负责人' : '暂无可选负责人'}
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={users.map(u => ({
+                value: u.id,
+                label: u.display_name || u.username || `用户${u.id}`,
+              }))}
+            />
           </Form.Item>
           <Form.Item name="status" label="状态" initialValue="pending">
             <Select>
