@@ -3746,8 +3746,13 @@ app.delete('/api/attachments/:id', auth, (req, res) => {
 });
 
 if (process.env.NODE_ENV === 'production') {
-  app.use((req, res) => {
-    res.sendFile(path.join(__dirname, '../client/build/index.html'));
+  app.use((req, res, next) => {
+    // 只有非 API 路由才返回 index.html
+    if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
+      res.sendFile(path.join(__dirname, '../client/build/index.html'));
+    } else {
+      next();
+    }
   });
 }
 
