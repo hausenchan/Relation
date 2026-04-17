@@ -443,6 +443,25 @@ export default function Dashboard() {
       render: (value) => value || <Text type="secondary">-</Text>,
     },
     {
+      title: '操作',
+      key: 'action',
+      width: 120,
+      render: (_, record) => (
+        <Space size={4}>
+          {record.task_source === 'normal' && (
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+              编辑
+            </Button>
+          )}
+          {record.task_source === 'opportunity' && (
+            <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>
+              查看
+            </Button>
+          )}
+        </Space>
+      ),
+    },
+    {
       title: '状态',
       dataIndex: 'display_status_label',
       key: 'display_status_label',
@@ -496,7 +515,6 @@ export default function Dashboard() {
                 </Button>
               )}
             </Space>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>
           </div>
           <Table
             dataSource={filteredAssignedTasks}
@@ -611,6 +629,9 @@ export default function Dashboard() {
 
       {/* 任务管理 Tabs */}
       <Card style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>
+        </div>
         <Tabs items={tabItems} />
       </Card>
 
