@@ -1789,23 +1789,8 @@ app.get('/api/tasks/board', (req, res) => {
 // 创建任务
 app.post('/api/tasks', (req, res) => {
   const { title, description, date, priority, assigned_to, team_id, parent_id, result } = req.body;
-  const { id: me, role } = req.user;
+  const { id: me } = req.user;
   if (!title || !date || !assigned_to) return res.status(400).json({ error: '标题、日期、被指派人必填' });
-
-  // 权限校验：member只能指派给自己
-  if (role === 'member' && parseInt(assigned_to) !== me) {
-    return res.status(403).json({ error: '普通商务只能给自己创建任务' });
-  }
-  // leader只能指派给本组成员
-  if (role === 'leader') {
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(me);
-    if (myUser?.team_id) {
-      const memberIds = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
-      if (!memberIds.includes(parseInt(assigned_to)) && parseInt(assigned_to) !== me) {
-        return res.status(403).json({ error: '组长只能指派本组成员' });
-      }
-    }
-  }
 
   // 计算 depth
   let depth = 0;

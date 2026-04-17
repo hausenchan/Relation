@@ -47,7 +47,7 @@ export default function MyTasks() {
   const [detailRecord, setDetailRecord] = useState(null);
   const [children, setChildren] = useState([]); // 子任务列表
 
-  const canAssignOthers = ['admin', 'leader', 'sales_director'].includes(user?.role);
+  const canAssignOthers = true; // 新规则：所有角色都可以给任何人创建任务
 
   const activeDate = customDate || selectedDate;
 
