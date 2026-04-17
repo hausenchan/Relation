@@ -285,9 +285,9 @@ export default function Dashboard() {
     {
       title: '操作',
       key: 'action',
-      width: 180,
+      width: 160,
       render: (_, record) => (
-        <Space size="small">
+        <Space size={2} wrap={false}>
           {record.status === 'pending' && (
             <Button
               type="link"
@@ -410,6 +410,7 @@ export default function Dashboard() {
             columns={taskColumns}
             rowKey="id"
             loading={loading}
+            scroll={{ x: 980 }}
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             size="small"
           />
@@ -467,6 +468,7 @@ export default function Dashboard() {
             columns={assignedTaskColumns}
             rowKey="id"
             loading={loading}
+            scroll={{ x: 760 }}
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             size="small"
           />
