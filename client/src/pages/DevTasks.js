@@ -212,6 +212,22 @@ export default function DevTasks() {
   const showDetail = (record) => {
     setSelectedTask(record);
     setDrawerVisible(true);
+    fetchTaskDetail(record.id);
+  };
+
+  const fetchTaskDetail = async (id) => {
+    try {
+      const res = await fetch(`/api/dev-tasks/${id}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '需求详情加载失败'));
+      }
+      const data = await res.json();
+      setSelectedTask(data);
+    } catch (err) {
+      message.error(err.message || '加载失败');
+    }
   };
 
   const columns = [
@@ -566,6 +582,19 @@ export default function DevTasks() {
             <Descriptions.Item label="创建时间">{selectedTask.created_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
             <Descriptions.Item label="更新时间">{selectedTask.updated_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
           </Descriptions>
+
+          {selectedTask.source_strategy && (
+            <Card size="small" title="关联策略" style={{ marginTop: 16 }}>
+              <Descriptions column={1} size="small" bordered>
+                <Descriptions.Item label="策略标题">{selectedTask.source_strategy.title}</Descriptions.Item>
+                <Descriptions.Item label="维度">{selectedTask.source_strategy.dimension || '-'}</Descriptions.Item>
+                <Descriptions.Item label="负责人">{selectedTask.source_strategy.owner_name || '-'}</Descriptions.Item>
+                <Descriptions.Item label="状态">{selectedTask.source_strategy.status || '-'}</Descriptions.Item>
+                <Descriptions.Item label="效果结论">{selectedTask.source_strategy.effect_judgement || '-'}</Descriptions.Item>
+                <Descriptions.Item label="最新结果摘要">{selectedTask.source_strategy.latest_result_summary || '-'}</Descriptions.Item>
+              </Descriptions>
+            </Card>
+          )}
         )}
       </Drawer>
     </div>

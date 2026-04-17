@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined } from '@ant-design/icons';
+import { useAuth } from '../AuthContext';
 
 const { Title, Text } = Typography;
 
@@ -37,7 +38,26 @@ const statusMap = {
   paused: { label: '暂停', color: 'orange' },
 };
 
+const effectJudgementMap = {
+  pending: { label: '待观察', color: 'default' },
+  effective: { label: '有效', color: 'green' },
+  normal: { label: '一般', color: 'orange' },
+  invalid: { label: '无效', color: 'red' },
+};
+
+const actionTypeMap = {
+  budget_adjust: '调整预算',
+  creative_adjust: '调整创意',
+  landing_page_adjust: '调整落地页',
+  copy_adjust: '调整文案',
+  media_add: '新增媒体',
+  media_remove: '下线媒体',
+  ab_test: 'AB测试',
+  other: '其他',
+};
+
 export default function Strategies() {
+  const { user } = useAuth();
   const [strategies, setStrategies] = useState([]);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -46,7 +66,12 @@ export default function Strategies() {
   const [editingStrategy, setEditingStrategy] = useState(null);
   const [selectedStrategy, setSelectedStrategy] = useState(null);
   const [form] = Form.useForm();
+  const [logForm] = Form.useForm();
+  const [reviewForm] = Form.useForm();
   const [activeTab, setActiveTab] = useState('all');
+  const [logModalVisible, setLogModalVisible] = useState(false);
+  const [editingLog, setEditingLog] = useState(null);
+  const [reviewSaving, setReviewSaving] = useState(false);
 
   // 筛选
   const [filters, setFilters] = useState({
@@ -191,10 +216,117 @@ export default function Strategies() {
       }
       const data = await res.json();
       setSelectedStrategy(data);
+      reviewForm.setFieldsValue({
+        baseline_value: data.review?.baseline_value,
+        target_value: data.review?.target_value,
+        actual_value: data.review?.actual_value,
+        result_summary: data.review?.result_summary,
+        effect_judgement: data.review?.effect_judgement,
+        review_note: data.review?.review_note,
+        next_action: data.review?.next_action,
+      });
     } catch (err) {
       message.error(err.message || '加载失败');
       setDrawerVisible(false);
       console.error(err);
+    }
+  };
+
+  const openAddLog = () => {
+    setEditingLog(null);
+    logForm.resetFields();
+    logForm.setFieldsValue({
+      execute_date: dayjs(),
+      executor_id: user?.id,
+      continue_flag: 1,
+    });
+    setLogModalVisible(true);
+  };
+
+  const openEditLog = (record) => {
+    setEditingLog(record);
+    logForm.setFieldsValue({
+      ...record,
+      execute_date: record.execute_date ? dayjs(record.execute_date) : null,
+    });
+    setLogModalVisible(true);
+  };
+
+  const handleSaveLog = async () => {
+    if (!selectedStrategy) return;
+    try {
+      const values = await logForm.validateFields();
+      const payload = {
+        ...values,
+        execute_date: values.execute_date?.format('YYYY-MM-DD'),
+      };
+
+      const url = editingLog
+        ? `/api/strategy-execution-logs/${editingLog.id}`
+        : `/api/strategies/${selectedStrategy.id}/execution-logs`;
+      const method = editingLog ? 'PUT' : 'POST';
+
+      const res = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, editingLog ? '更新执行记录失败' : '新增执行记录失败'));
+      }
+
+      message.success(editingLog ? '执行记录已更新' : '执行记录已新增');
+      setLogModalVisible(false);
+      fetchStrategyDetail(selectedStrategy.id);
+      fetchStrategies();
+    } catch (err) {
+      message.error(err.message || '保存失败');
+    }
+  };
+
+  const handleDeleteLog = async (id) => {
+    try {
+      const res = await fetch(`/api/strategy-execution-logs/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '删除执行记录失败'));
+      }
+      message.success('执行记录已删除');
+      fetchStrategyDetail(selectedStrategy.id);
+      fetchStrategies();
+    } catch (err) {
+      message.error(err.message || '删除失败');
+    }
+  };
+
+  const handleSaveReview = async () => {
+    if (!selectedStrategy) return;
+    setReviewSaving(true);
+    try {
+      const values = await reviewForm.validateFields();
+      const res = await fetch(`/api/strategies/${selectedStrategy.id}/review`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('token')}`,
+        },
+        body: JSON.stringify(values),
+      });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '保存复盘失败'));
+      }
+      message.success('策略复盘已保存');
+      fetchStrategyDetail(selectedStrategy.id);
+      fetchStrategies();
+    } catch (err) {
+      message.error(err.message || '保存失败');
+    } finally {
+      setReviewSaving(false);
     }
   };
 
@@ -267,6 +399,40 @@ export default function Strategies() {
       key: 'owner_name',
       width: 100,
       render: (text) => text || '-',
+    },
+    {
+      title: '来源线索',
+      dataIndex: 'source_title',
+      key: 'source_title',
+      width: 180,
+      ellipsis: true,
+      render: (text) => text || '-',
+    },
+    {
+      title: '关联需求数',
+      dataIndex: 'dev_task_count',
+      key: 'dev_task_count',
+      width: 100,
+      render: (value) => value ?? 0,
+    },
+    {
+      title: '最新结果摘要',
+      dataIndex: 'latest_result_summary',
+      key: 'latest_result_summary',
+      width: 180,
+      ellipsis: true,
+      render: (text) => text || '-',
+    },
+    {
+      title: '效果结论',
+      dataIndex: 'effect_judgement',
+      key: 'effect_judgement',
+      width: 100,
+      render: (value) => {
+        if (!value) return '-';
+        const cfg = effectJudgementMap[value] || { label: value, color: 'default' };
+        return <Tag color={cfg.color}>{cfg.label}</Tag>;
+      },
     },
     {
       title: '状态',
@@ -430,7 +596,7 @@ export default function Strategies() {
           dataSource={getFilteredData()}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1600 }}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
         />
       </Card>
@@ -515,78 +681,212 @@ export default function Strategies() {
       <Drawer
         title="策略详情"
         placement="right"
-        width={720}
+        width={900}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
       >
         {selectedStrategy && (
           <>
-            <Descriptions column={1} bordered>
-              <Descriptions.Item label="策略标题">{selectedStrategy.title}</Descriptions.Item>
-              <Descriptions.Item label="维度">
-                {dimensionMap[selectedStrategy.dimension]?.label || selectedStrategy.dimension}
-              </Descriptions.Item>
-              <Descriptions.Item label="岗位类型">
-                {selectedStrategy.role_type ? roleTypeMap[selectedStrategy.role_type]?.label : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="预算组类型">
-                {selectedStrategy.budget_group_type ? budgetGroupTypeMap[selectedStrategy.budget_group_type]?.label : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="负责人">{selectedStrategy.owner_name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="状态">
-                <Tag color={statusMap[selectedStrategy.status]?.color}>
-                  {statusMap[selectedStrategy.status]?.label}
-                </Tag>
-              </Descriptions.Item>
-              {selectedStrategy.source_title && (
-                <Descriptions.Item label="来源线索">{selectedStrategy.source_title}</Descriptions.Item>
-              )}
-              <Descriptions.Item label="策略描述">
-                <div style={{ whiteSpace: 'pre-wrap' }}>{selectedStrategy.description || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="创建时间">
-                {selectedStrategy.created_at?.replace('T', ' ').substring(0, 19)}
-              </Descriptions.Item>
-              <Descriptions.Item label="更新时间">
-                {selectedStrategy.updated_at?.replace('T', ' ').substring(0, 19)}
-              </Descriptions.Item>
-            </Descriptions>
+            <Tabs
+              items={[
+                {
+                  key: 'basic',
+                  label: <span><FileTextOutlined /> 基本信息</span>,
+                  children: (
+                    <Descriptions column={1} bordered>
+                      <Descriptions.Item label="策略标题">{selectedStrategy.title}</Descriptions.Item>
+                      <Descriptions.Item label="维度">
+                        {dimensionMap[selectedStrategy.dimension]?.label || selectedStrategy.dimension}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="岗位类型">
+                        {selectedStrategy.role_type ? roleTypeMap[selectedStrategy.role_type]?.label : '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="预算组类型">
+                        {selectedStrategy.budget_group_type ? budgetGroupTypeMap[selectedStrategy.budget_group_type]?.label : '-'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="媒体">{selectedStrategy.media || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="对接方式">{selectedStrategy.access_method || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="负责人">{selectedStrategy.owner_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="状态">
+                        <Tag color={statusMap[selectedStrategy.status]?.color}>
+                          {statusMap[selectedStrategy.status]?.label}
+                        </Tag>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="策略描述">
+                        <div style={{ whiteSpace: 'pre-wrap' }}>{selectedStrategy.description || '-'}</div>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="创建时间">
+                        {selectedStrategy.created_at?.replace('T', ' ').substring(0, 19)}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="更新时间">
+                        {selectedStrategy.updated_at?.replace('T', ' ').substring(0, 19)}
+                      </Descriptions.Item>
+                    </Descriptions>
+                  ),
+                },
+                {
+                  key: 'traceability',
+                  label: <span><NodeIndexOutlined /> 关联追溯</span>,
+                  children: (
+                    <Space direction="vertical" style={{ width: '100%' }} size={16}>
+                      <Card size="small" title="来源线索">
+                        {selectedStrategy.source_info ? (
+                          <Descriptions column={1} size="small" bordered>
+                            <Descriptions.Item label="线索标题">{selectedStrategy.source_info.title}</Descriptions.Item>
+                            <Descriptions.Item label="线索状态">{selectedStrategy.source_info.status || '-'}</Descriptions.Item>
+                            <Descriptions.Item label="优先级">{selectedStrategy.source_info.priority || '-'}</Descriptions.Item>
+                          </Descriptions>
+                        ) : (
+                          <Text type="secondary">暂无来源线索</Text>
+                        )}
+                      </Card>
 
-            {/* 关联的研发任务 */}
-            {selectedStrategy.devTasks && selectedStrategy.devTasks.length > 0 && (
-              <div style={{ marginTop: 24 }}>
-                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>关联研发任务 ({selectedStrategy.devTasks.length})</div>
-                <Table
-                  dataSource={selectedStrategy.devTasks}
-                  rowKey="id"
-                  size="small"
-                  pagination={false}
-                  columns={[
-                    { title: '任务标题', dataIndex: 'title', key: 'title', ellipsis: true },
-                    { title: '负责人', dataIndex: 'assignee_name', key: 'assignee_name' },
-                    {
-                      title: '状态',
-                      dataIndex: 'status',
-                      key: 'status',
-                      render: (val) => {
-                        const map = {
-                          pending: { label: '待开始', color: 'default' },
-                          in_progress: { label: '进行中', color: 'blue' },
-                          testing: { label: '测试中', color: 'orange' },
-                          completed: { label: '已完成', color: 'green' },
-                        };
-                        const cfg = map[val] || { label: val, color: 'default' };
-                        return <Tag color={cfg.color}>{cfg.label}</Tag>;
-                      }
-                    },
-                    { title: '截止日期', dataIndex: 'due_date', key: 'due_date' },
-                  ]}
-                />
-              </div>
-            )}
+                      <Card size="small" title={`关联需求 (${selectedStrategy.devTasks?.length || 0})`}>
+                        {selectedStrategy.devTasks && selectedStrategy.devTasks.length > 0 ? (
+                          <Table
+                            dataSource={selectedStrategy.devTasks}
+                            rowKey="id"
+                            size="small"
+                            pagination={false}
+                            columns={[
+                              { title: '需求标题', dataIndex: 'title', key: 'title', ellipsis: true },
+                              { title: '负责人', dataIndex: 'assignee_name', key: 'assignee_name' },
+                              { title: '状态', dataIndex: 'status', key: 'status', render: (val) => <Tag color={{ pending: 'default', in_progress: 'blue', testing: 'orange', completed: 'green', blocked: 'red' }[val] || 'default'}>{statusMap[val]?.label || val}</Tag> },
+                              { title: '计划日期', dataIndex: 'due_date', key: 'due_date', render: (val) => val || '-' },
+                              { title: '完成备注', dataIndex: 'completion_note', key: 'completion_note', ellipsis: true, render: (val) => val || '-' },
+                            ]}
+                          />
+                        ) : (
+                          <Text type="secondary">暂无关联需求</Text>
+                        )}
+                      </Card>
+                    </Space>
+                  ),
+                },
+                {
+                  key: 'execution',
+                  label: <span><FileSearchOutlined /> 执行过程</span>,
+                  children: (
+                    <Space direction="vertical" style={{ width: '100%' }} size={16}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button type="primary" icon={<PlusOutlined />} onClick={openAddLog}>新增执行记录</Button>
+                      </div>
+                      <Table
+                        dataSource={selectedStrategy.executionLogs || []}
+                        rowKey="id"
+                        size="small"
+                        pagination={false}
+                        columns={[
+                          { title: '执行日期', dataIndex: 'execute_date', key: 'execute_date', width: 110 },
+                          { title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 100 },
+                          { title: '动作类型', dataIndex: 'action_type', key: 'action_type', width: 120, render: (val) => actionTypeMap[val] || val },
+                          { title: '动作说明', dataIndex: 'action_desc', key: 'action_desc', ellipsis: true },
+                          { title: '观察结果', dataIndex: 'observation', key: 'observation', ellipsis: true },
+                          { title: '是否继续', dataIndex: 'continue_flag', key: 'continue_flag', width: 90, render: (val) => val ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag> },
+                          {
+                            title: '操作',
+                            key: 'action',
+                            width: 120,
+                            render: (_, record) => (
+                              <Space size="small">
+                                <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditLog(record)}>编辑</Button>
+                                <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteLog(record.id)}>删除</Button>
+                              </Space>
+                            ),
+                          },
+                        ]}
+                      />
+                    </Space>
+                  ),
+                },
+                {
+                  key: 'review',
+                  label: <span><BranchesOutlined /> 结果复盘</span>,
+                  children: (
+                    <Form form={reviewForm} layout="vertical" onFinish={handleSaveReview}>
+                      <Form.Item name="baseline_value" label="执行前基线">
+                        <TextArea rows={3} placeholder="如：点击率 2.1%，转化率 4.8%" />
+                      </Form.Item>
+                      <Form.Item name="target_value" label="目标值">
+                        <TextArea rows={3} placeholder="如：点击率提升到 2.3%" />
+                      </Form.Item>
+                      <Form.Item name="actual_value" label="实际结果">
+                        <TextArea rows={3} placeholder="填写当前实际结果" />
+                      </Form.Item>
+                      <Form.Item name="result_summary" label="最新结果摘要">
+                        <Input placeholder="如：点击率提升 12%" />
+                      </Form.Item>
+                      <Form.Item name="effect_judgement" label="效果结论">
+                        <Select allowClear placeholder="请选择效果结论">
+                          {Object.entries(effectJudgementMap).map(([key, item]) => (
+                            <Option key={key} value={key}>{item.label}</Option>
+                          ))}
+                        </Select>
+                      </Form.Item>
+                      <Form.Item name="review_note" label="复盘总结">
+                        <TextArea rows={4} placeholder="说明为什么有效/无效、遇到了什么问题" />
+                      </Form.Item>
+                      <Form.Item name="next_action" label="下一步动作">
+                        <TextArea rows={3} placeholder="如：继续执行、扩大执行、优化后重试" />
+                      </Form.Item>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <Button type="primary" loading={reviewSaving} onClick={() => reviewForm.submit()}>
+                          保存复盘
+                        </Button>
+                      </div>
+                    </Form>
+                  ),
+                },
+              ]}
+            />
           </>
         )}
       </Drawer>
+
+      <Modal
+        title={editingLog ? '编辑执行记录' : '新增执行记录'}
+        open={logModalVisible}
+        onOk={handleSaveLog}
+        onCancel={() => setLogModalVisible(false)}
+        width={640}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={logForm} layout="vertical">
+          <Form.Item name="execute_date" label="执行日期" rules={[{ required: true, message: '请选择执行日期' }]}>
+            <DatePicker style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="executor_id" label="执行人" rules={[{ required: true, message: '请选择执行人' }]}>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
+            />
+          </Form.Item>
+          <Form.Item name="action_type" label="动作类型" rules={[{ required: true, message: '请选择动作类型' }]}>
+            <Select allowClear placeholder="请选择动作类型">
+              {Object.entries(actionTypeMap).map(([key, label]) => (
+                <Option key={key} value={key}>{label}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="action_desc" label="动作说明">
+            <TextArea rows={3} placeholder="填写本次执行动作" />
+          </Form.Item>
+          <Form.Item name="observation" label="当次观察结果">
+            <TextArea rows={3} placeholder="填写本次执行后的观察结果" />
+          </Form.Item>
+          <Form.Item name="attachments" label="附件（第一版先手动填）">
+            <Input placeholder='可先填写 JSON 数组，如 ["report.xlsx","screenshot.png"]' />
+          </Form.Item>
+          <Form.Item name="continue_flag" label="是否继续" initialValue={1}>
+            <Select>
+              <Option value={1}>继续</Option>
+              <Option value={0}>暂停</Option>
+            </Select>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 }

@@ -564,6 +564,53 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_strategies_source ON strategies(source_type, source_id);
 `);
 
+// =========== 策略执行记录表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS strategy_execution_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy_id INTEGER NOT NULL,
+    execute_date TEXT NOT NULL,
+    executor_id INTEGER NOT NULL,
+    action_type TEXT NOT NULL,
+    action_desc TEXT,
+    observation TEXT,
+    attachments TEXT,
+    continue_flag INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_strategy_execution_logs_strategy_id
+    ON strategy_execution_logs(strategy_id);
+  CREATE INDEX IF NOT EXISTS idx_strategy_execution_logs_execute_date
+    ON strategy_execution_logs(execute_date);
+  CREATE INDEX IF NOT EXISTS idx_strategy_execution_logs_executor_id
+    ON strategy_execution_logs(executor_id);
+`);
+
+// =========== 策略结果复盘表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS strategy_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy_id INTEGER NOT NULL UNIQUE,
+    baseline_value TEXT,
+    target_value TEXT,
+    actual_value TEXT,
+    result_summary TEXT,
+    effect_judgement TEXT,
+    review_note TEXT,
+    next_action TEXT,
+    updated_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_strategy_reviews_strategy_id
+    ON strategy_reviews(strategy_id);
+  CREATE INDEX IF NOT EXISTS idx_strategy_reviews_effect_judgement
+    ON strategy_reviews(effect_judgement);
+`);
+
 // 迁移：为已存在的表添加新字段
 ['media', 'access_method'].forEach(col => {
   try { db.exec(`ALTER TABLE strategies ADD COLUMN ${col} TEXT`); } catch (e) {}
@@ -3162,7 +3209,9 @@ app.get('/api/leads/:id', (req, res) => {
 
   // 获取关联的策略
   const strategies = db.prepare(`
-    SELECT s.*, u.display_name as owner_name
+    SELECT s.*, u.display_name as owner_name,
+      (SELECT result_summary FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as latest_result_summary,
+      (SELECT effect_judgement FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as effect_judgement
     FROM strategies s
     LEFT JOIN users u ON s.owner_id = u.id
     WHERE s.source_type = 'lead' AND s.source_id = ?
@@ -3249,7 +3298,12 @@ app.get('/api/strategies', (req, res) => {
       CASE
         WHEN s.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = s.source_id)
         ELSE NULL
-      END as source_title
+      END as source_title,
+      (SELECT COUNT(*) FROM dev_tasks dt WHERE dt.source_type = 'strategy' AND dt.source_id = s.id) as dev_task_count,
+      (SELECT result_summary FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as latest_result_summary,
+      (SELECT effect_judgement FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as effect_judgement,
+      (SELECT MAX(execute_date) FROM strategy_execution_logs sel WHERE sel.strategy_id = s.id) as last_execution_date,
+      (SELECT updated_at FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as last_review_time
     FROM strategies s
     LEFT JOIN users u ON s.owner_id = u.id
     WHERE 1=1
@@ -3315,16 +3369,210 @@ app.get('/api/strategies/:id', (req, res) => {
 
   if (!strategy) return res.status(404).json({ error: '策略不存在' });
 
+  const sourceInfo = strategy.source_type === 'lead' && strategy.source_id
+    ? db.prepare(`
+        SELECT id, title, status, assignee_id, priority, created_by, created_at, updated_at
+        FROM leads
+        WHERE id = ?
+      `).get(strategy.source_id)
+    : null;
+
   // 获取关联的研发任务
   const devTasks = db.prepare(`
-    SELECT dt.*, u.display_name as assignee_name
+    SELECT dt.*, u.display_name as assignee_name, c.display_name as creator_name
     FROM dev_tasks dt
     LEFT JOIN users u ON dt.assignee_id = u.id
+    LEFT JOIN users c ON dt.created_by = c.id
     WHERE dt.source_type = 'strategy' AND dt.source_id = ?
     ORDER BY dt.created_at DESC
   `).all(id);
 
-  res.json({ ...strategy, devTasks });
+  const executionLogs = db.prepare(`
+    SELECT l.*, u.display_name as executor_name
+    FROM strategy_execution_logs l
+    LEFT JOIN users u ON l.executor_id = u.id
+    WHERE l.strategy_id = ?
+    ORDER BY l.execute_date DESC, l.id DESC
+  `).all(id);
+
+  const review = db.prepare(`
+    SELECT sr.*, u.display_name as updated_by_name
+    FROM strategy_reviews sr
+    LEFT JOIN users u ON sr.updated_by = u.id
+    WHERE sr.strategy_id = ?
+  `).get(id) || null;
+
+  res.json({ ...strategy, source_info: sourceInfo, executionLogs, review, devTasks });
+});
+
+app.get('/api/strategies/:id/execution-logs', (req, res) => {
+  const { id } = req.params;
+  const rows = db.prepare(`
+    SELECT l.*, u.display_name as executor_name
+    FROM strategy_execution_logs l
+    LEFT JOIN users u ON l.executor_id = u.id
+    WHERE l.strategy_id = ?
+    ORDER BY l.execute_date DESC, l.id DESC
+  `).all(id);
+  res.json(rows);
+});
+
+app.post('/api/strategies/:id/execution-logs', (req, res) => {
+  const { id } = req.params;
+  const {
+    execute_date,
+    executor_id,
+    action_type,
+    action_desc,
+    observation,
+    attachments,
+    continue_flag,
+  } = req.body;
+
+  if (!execute_date || !executor_id || !action_type) {
+    return res.status(400).json({ error: '执行日期、执行人、动作类型必填' });
+  }
+
+  const strategy = db.prepare('SELECT id FROM strategies WHERE id = ?').get(id);
+  if (!strategy) return res.status(404).json({ error: '策略不存在' });
+
+  const result = db.prepare(`
+    INSERT INTO strategy_execution_logs (
+      strategy_id, execute_date, executor_id, action_type, action_desc, observation, attachments, continue_flag
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    execute_date,
+    executor_id,
+    action_type,
+    action_desc || null,
+    observation || null,
+    attachments || null,
+    continue_flag === undefined ? 1 : (continue_flag ? 1 : 0)
+  );
+
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/strategy-execution-logs/:id', (req, res) => {
+  const { id } = req.params;
+  const {
+    execute_date,
+    executor_id,
+    action_type,
+    action_desc,
+    observation,
+    attachments,
+    continue_flag,
+  } = req.body;
+
+  const existing = db.prepare('SELECT * FROM strategy_execution_logs WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: '执行记录不存在' });
+
+  db.prepare(`
+    UPDATE strategy_execution_logs SET
+      execute_date = COALESCE(?, execute_date),
+      executor_id = COALESCE(?, executor_id),
+      action_type = COALESCE(?, action_type),
+      action_desc = COALESCE(?, action_desc),
+      observation = COALESCE(?, observation),
+      attachments = COALESCE(?, attachments),
+      continue_flag = COALESCE(?, continue_flag),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    execute_date,
+    executor_id,
+    action_type,
+    action_desc,
+    observation,
+    attachments,
+    continue_flag === undefined ? null : (continue_flag ? 1 : 0),
+    id
+  );
+
+  res.json({ success: true });
+});
+
+app.delete('/api/strategy-execution-logs/:id', (req, res) => {
+  const { id } = req.params;
+  db.prepare('DELETE FROM strategy_execution_logs WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+app.get('/api/strategies/:id/review', (req, res) => {
+  const { id } = req.params;
+  const review = db.prepare(`
+    SELECT sr.*, u.display_name as updated_by_name
+    FROM strategy_reviews sr
+    LEFT JOIN users u ON sr.updated_by = u.id
+    WHERE sr.strategy_id = ?
+  `).get(id);
+  res.json(review || null);
+});
+
+app.post('/api/strategies/:id/review', (req, res) => {
+  const { id } = req.params;
+  const {
+    baseline_value,
+    target_value,
+    actual_value,
+    result_summary,
+    effect_judgement,
+    review_note,
+    next_action,
+  } = req.body;
+  const { id: userId } = req.user;
+
+  const strategy = db.prepare('SELECT id FROM strategies WHERE id = ?').get(id);
+  if (!strategy) return res.status(404).json({ error: '策略不存在' });
+
+  const existing = db.prepare('SELECT id FROM strategy_reviews WHERE strategy_id = ?').get(id);
+  if (existing) {
+    db.prepare(`
+      UPDATE strategy_reviews SET
+        baseline_value = ?,
+        target_value = ?,
+        actual_value = ?,
+        result_summary = ?,
+        effect_judgement = ?,
+        review_note = ?,
+        next_action = ?,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE strategy_id = ?
+    `).run(
+      baseline_value || null,
+      target_value || null,
+      actual_value || null,
+      result_summary || null,
+      effect_judgement || null,
+      review_note || null,
+      next_action || null,
+      userId,
+      id
+    );
+    return res.json({ id: existing.id, updated: true });
+  }
+
+  const result = db.prepare(`
+    INSERT INTO strategy_reviews (
+      strategy_id, baseline_value, target_value, actual_value, result_summary,
+      effect_judgement, review_note, next_action, updated_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    baseline_value || null,
+    target_value || null,
+    actual_value || null,
+    result_summary || null,
+    effect_judgement || null,
+    review_note || null,
+    next_action || null,
+    userId
+  );
+
+  res.json({ id: result.lastInsertRowid, created: true });
 });
 
 // 创建策略
@@ -3427,6 +3675,40 @@ app.get('/api/dev-tasks', (req, res) => {
 
   q += ' ORDER BY dt.created_at DESC';
   res.json(db.prepare(q).all(...params));
+});
+
+app.get('/api/dev-tasks/:id', (req, res) => {
+  const { id } = req.params;
+
+  const task = db.prepare(`
+    SELECT dt.*,
+      u.display_name as assignee_name,
+      c.display_name as creator_name,
+      CASE
+        WHEN dt.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = dt.source_id)
+        WHEN dt.source_type = 'strategy' THEN (SELECT title FROM strategies WHERE id = dt.source_id)
+        ELSE NULL
+      END as source_title
+    FROM dev_tasks dt
+    LEFT JOIN users u ON dt.assignee_id = u.id
+    LEFT JOIN users c ON dt.created_by = c.id
+    WHERE dt.id = ?
+  `).get(id);
+
+  if (!task) return res.status(404).json({ error: '需求不存在' });
+
+  const sourceStrategy = task.source_type === 'strategy' && task.source_id
+    ? db.prepare(`
+        SELECT s.*, u.display_name as owner_name,
+          (SELECT result_summary FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as latest_result_summary,
+          (SELECT effect_judgement FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as effect_judgement
+        FROM strategies s
+        LEFT JOIN users u ON s.owner_id = u.id
+        WHERE s.id = ?
+      `).get(task.source_id)
+    : null;
+
+  res.json({ ...task, source_strategy: sourceStrategy });
 });
 
 // 创建研发任务
