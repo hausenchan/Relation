@@ -544,7 +544,7 @@ db.exec(`
     budget_group_type TEXT,
     description TEXT,
     owner_id INTEGER,
-    status TEXT DEFAULT 'active',
+    status TEXT DEFAULT 'not_started',
     source_type TEXT,
     source_id INTEGER,
     media TEXT,

@@ -31,6 +31,7 @@ const budgetGroupTypeMap = {
 };
 
 const statusMap = {
+  not_started: { label: '未开始', color: 'default' },
   active: { label: '进行中', color: 'blue' },
   completed: { label: '已完成', color: 'green' },
   paused: { label: '暂停', color: 'orange' },
@@ -384,6 +385,7 @@ export default function Strategies() {
             value={filters.status || undefined}
             onChange={(val) => setFilters({ ...filters, status: val || '' })}
           >
+            <Option value="not_started">未开始</Option>
             <Option value="active">进行中</Option>
             <Option value="completed">已完成</Option>
             <Option value="paused">暂停</Option>
@@ -500,6 +502,7 @@ export default function Strategies() {
           {editingStrategy && (
             <Form.Item name="status" label="状态">
               <Select placeholder="请选择状态">
+                <Option value="not_started">未开始</Option>
                 <Option value="active">进行中</Option>
                 <Option value="completed">已完成</Option>
                 <Option value="paused">暂停</Option>
