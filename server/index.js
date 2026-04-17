@@ -3284,7 +3284,7 @@ app.post('/api/strategies', (req, res) => {
   const result = db.prepare(`
     INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_started')
-  `).run(title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method);
+  `).run(title, dimension, role_type ?? null, budget_group_type ?? null, description ?? null, owner_id ?? null, source_type ?? null, source_id ?? null, media ?? null, access_method ?? null);
 
   res.json({ id: result.lastInsertRowid });
 });
