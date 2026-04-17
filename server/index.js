@@ -564,6 +564,43 @@ db.exec(`
   try { db.exec(`ALTER TABLE strategies ADD COLUMN ${col} TEXT`); } catch (e) {}
 });
 
+// 迁移：去掉 strategies.owner_id 的 NOT NULL 约束（重建表）
+try {
+  const col = db.prepare("SELECT * FROM pragma_table_info('strategies') WHERE name='owner_id'").get();
+  if (col && col.notnull === 1) {
+    db.exec(`
+      PRAGMA foreign_keys=OFF;
+      BEGIN TRANSACTION;
+      CREATE TABLE strategies_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        dimension TEXT NOT NULL,
+        role_type TEXT,
+        budget_group_type TEXT,
+        description TEXT,
+        owner_id INTEGER,
+        status TEXT DEFAULT 'not_started',
+        source_type TEXT,
+        source_id INTEGER,
+        media TEXT,
+        access_method TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      INSERT INTO strategies_new (id,title,dimension,role_type,budget_group_type,description,owner_id,status,source_type,source_id,media,access_method,created_at,updated_at)
+        SELECT id,title,dimension,role_type,budget_group_type,description,owner_id,status,source_type,source_id,media,access_method,created_at,updated_at FROM strategies;
+      DROP TABLE strategies;
+      ALTER TABLE strategies_new RENAME TO strategies;
+      CREATE INDEX IF NOT EXISTS idx_strategies_owner_id ON strategies(owner_id);
+      CREATE INDEX IF NOT EXISTS idx_strategies_dimension ON strategies(dimension);
+      CREATE INDEX IF NOT EXISTS idx_strategies_status ON strategies(status);
+      CREATE INDEX IF NOT EXISTS idx_strategies_source ON strategies(source_type, source_id);
+      COMMIT;
+      PRAGMA foreign_keys=ON;
+    `);
+  }
+} catch (e) {}
+
 try { db.exec('ALTER TABLE dev_tasks ADD COLUMN completion_note TEXT'); } catch (e) {}
 
 // =========== 研发任务表 ===========
