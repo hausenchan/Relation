@@ -3375,9 +3375,14 @@ app.get('/api/dev-tasks', (req, res) => {
 // 创建研发任务
 app.post('/api/dev-tasks', (req, res) => {
   const { title, description, source_type, source_id, assignee_id, priority, estimated_hours, start_date, due_date } = req.body;
-  const { id: userId } = req.user;
+  const { id: userId, role } = req.user;
 
   if (!title) return res.status(400).json({ error: '任务标题必填' });
+
+  // 权限校验：member 只能给自己创建
+  if (role === 'member' && assignee_id && parseInt(assignee_id) !== userId) {
+    return res.status(403).json({ error: '普通成员只能给自己创建任务' });
+  }
 
   const result = db.prepare(`
     INSERT INTO dev_tasks (title, description, source_type, source_id, assignee_id, priority, estimated_hours, start_date, due_date, created_by)

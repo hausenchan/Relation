@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber, Card, Row, Col, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined, ToolOutlined } from '@ant-design/icons';
+import { useAuth } from '../AuthContext';
 
 const { Title, Text } = Typography;
 import dayjs from 'dayjs';
@@ -29,6 +30,7 @@ const sourceTypeMap = {
 };
 
 export default function DevTasks() {
+  const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
   const [leads, setLeads] = useState([]);
@@ -471,7 +473,7 @@ export default function DevTasks() {
               allowClear
               showSearch
               optionFilterProp="label"
-              options={users.map(u => ({
+              options={(user?.role === 'member' ? users.filter(u => u.id === user.id) : users).map(u => ({
                 value: u.id,
                 label: u.display_name || u.username || `用户${u.id}`,
               }))}
