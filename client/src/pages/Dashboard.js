@@ -55,11 +55,11 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   // 筛选条件 - 我的任务
-  const [myTaskStatusFilter, setMyTaskStatusFilter] = useState(['pending', 'in_progress']);
+  const [myTaskStatusFilter, setMyTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
   const [myTaskDateRange, setMyTaskDateRange] = useState(null);
 
   // 筛选条件 - 我指派的任务
-  const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState(['pending', 'in_progress']);
+  const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
@@ -391,11 +391,11 @@ export default function Dashboard() {
                 onChange={setMyTaskDateRange}
                 style={{ width: 240 }}
               />
-              {(myTaskStatusFilter.length !== 2 || myTaskDateRange) && (
+              {(myTaskStatusFilter.length !== 3 || myTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
-                    setMyTaskStatusFilter(['pending', 'in_progress']);
+                    setMyTaskStatusFilter(['pending', 'in_progress', 'done']);
                     setMyTaskDateRange(null);
                   }}
                 >
@@ -449,11 +449,11 @@ export default function Dashboard() {
                 onChange={setAssignedTaskDateRange}
                 style={{ width: 240 }}
               />
-              {(assignedTaskStatusFilter.length !== 2 || assignedTaskDateRange) && (
+              {(assignedTaskStatusFilter.length !== 3 || assignedTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
-                    setAssignedTaskStatusFilter(['pending', 'in_progress']);
+                    setAssignedTaskStatusFilter(['pending', 'in_progress', 'done']);
                     setAssignedTaskDateRange(null);
                   }}
                 >
