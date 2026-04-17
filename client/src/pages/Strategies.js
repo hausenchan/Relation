@@ -455,6 +455,18 @@ export default function Strategies() {
               <Option value="link">链路策略</Option>
             </Select>
           </Form.Item>
+          <Form.Item name="owner_id" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
+            <Select
+              placeholder={users.length > 0 ? '请选择负责人' : '暂无可选负责人'}
+              showSearch
+              optionFilterProp="label"
+              allowClear
+              options={users.map(u => ({
+                value: u.id,
+                label: u.display_name || u.username || `用户${u.id}`,
+              }))}
+            />
+          </Form.Item>
           <Form.Item name="role_type" label="岗位类型">
             <Select placeholder="请选择岗位类型" allowClear>
               <Option value="budget_delivery">预算交付岗</Option>
@@ -483,18 +495,6 @@ export default function Strategies() {
               <Option value="yyz_api">YYZ-API</Option>
               <Option value="yyz_h5">YYZ-H5</Option>
             </Select>
-          </Form.Item>
-          <Form.Item name="owner_id" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
-            <Select
-              placeholder={users.length > 0 ? '请选择负责人' : '暂无可选负责人'}
-              showSearch
-              optionFilterProp="label"
-              allowClear
-              options={users.map(u => ({
-                value: u.id,
-                label: u.display_name || u.username || `用户${u.id}`,
-              }))}
-            />
           </Form.Item>
           <Form.Item name="description" label="策略描述">
             <TextArea rows={4} placeholder="请输入策略描述" />
