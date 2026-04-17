@@ -7,6 +7,7 @@ import {
   CheckOutlined, PlayCircleOutlined, RiseOutlined, UserOutlined, CalendarOutlined
 } from '@ant-design/icons';
 import { followUpTasksApi } from '../api';
+import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;
@@ -23,6 +24,7 @@ const interactionTypeMap = {
 };
 
 export default function FollowUpTasks() {
+  const { user } = useAuth();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
@@ -44,9 +46,13 @@ export default function FollowUpTasks() {
   useEffect(() => { load(); }, [load]);
 
   const handleStart = async (record) => {
-    await followUpTasksApi.update(record.id, { status: 'in_progress' });
-    message.success('已开始跟进');
-    load();
+    try {
+      await followUpTasksApi.update(record.id, { status: 'in_progress' });
+      message.success('已开始跟进');
+      load();
+    } catch (err) {
+      message.error(err.response?.data?.error || '开始跟进失败');
+    }
   };
 
   const openDone = (record) => {
@@ -56,11 +62,16 @@ export default function FollowUpTasks() {
   };
 
   const handleDone = async () => {
-    const values = await doneForm.validateFields();
-    await followUpTasksApi.update(doneTarget.id, { status: 'done', done_note: values.done_note });
-    message.success('已标记为完成');
-    setDoneModalOpen(false);
-    load();
+    try {
+      const values = await doneForm.validateFields();
+      await followUpTasksApi.update(doneTarget.id, { status: 'done', done_note: values.done_note });
+      message.success('已标记为完成');
+      setDoneModalOpen(false);
+      load();
+    } catch (err) {
+      if (err?.errorFields) return;
+      message.error(err.response?.data?.error || '更新失败');
+    }
   };
 
   const openDetail = (record) => {
@@ -113,14 +124,16 @@ export default function FollowUpTasks() {
     },
     {
       title: '操作',
-      render: (_, r) => (
+      render: (_, r) => {
+        const canOperate = r.assigned_to === user?.id;
+        return (
         <Space>
-          {r.status === 'pending' && (
+          {canOperate && r.status === 'pending' && (
             <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleStart(r)}>
               开始跟进
             </Button>
           )}
-          {r.status === 'in_progress' && (
+          {canOperate && r.status === 'in_progress' && (
             <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => openDone(r)}>
               完成
             </Button>
@@ -131,7 +144,8 @@ export default function FollowUpTasks() {
             </Tooltip>
           )}
         </Space>
-      ),
+      );
+      },
     },
   ];
 
