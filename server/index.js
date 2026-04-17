@@ -452,6 +452,7 @@ db.exec(`
     assigned_by     INTEGER NOT NULL,
     status          TEXT DEFAULT 'pending',
     due_date        TEXT,
+    started_at      DATETIME,
     done_at         DATETIME,
     done_note       TEXT,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -464,6 +465,7 @@ const futCols = db.prepare("PRAGMA table_info(follow_up_tasks)").all().map(c => 
 if (futCols.length > 0) {
   if (!futCols.includes('competitor_research_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN competitor_research_id INTEGER DEFAULT NULL");
   if (!futCols.includes('company_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN company_id INTEGER DEFAULT NULL");
+  if (!futCols.includes('started_at')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN started_at DATETIME DEFAULT NULL");
 }
 
 // 补创建竞品研究商机对应的 follow_up_tasks（修复历史数据）
@@ -507,6 +509,9 @@ db.exec(`
 const taskCols = db.prepare("PRAGMA table_info(tasks)").all().map(c => c.name);
 if (taskCols.length > 0 && !taskCols.includes('result')) {
   db.exec("ALTER TABLE tasks ADD COLUMN result TEXT DEFAULT NULL");
+}
+if (taskCols.length > 0 && !taskCols.includes('started_at')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN started_at DATETIME DEFAULT NULL");
 }
 
 // =========== 线索池表 ===========
@@ -1650,10 +1655,14 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
   if (task.assigned_to !== req.user.id && !isAdmin(req.user.role)) {
     return res.status(403).json({ error: '无权操作' });
   }
-  const doneAt = status === 'done' ? new Date().toISOString() : task.done_at;
+  const now = new Date().toISOString();
+  const startedAt = status === 'in_progress'
+    ? (task.started_at || now)
+    : task.started_at;
+  const doneAt = status === 'done' ? now : (status && status !== 'done' ? null : task.done_at);
   db.prepare(`
-    UPDATE follow_up_tasks SET status=?, done_note=?, due_date=?, done_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
-  `).run(status ?? task.status, done_note ?? task.done_note, due_date ?? task.due_date, doneAt, req.params.id);
+    UPDATE follow_up_tasks SET status=?, done_note=?, due_date=?, started_at=?, done_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+  `).run(status ?? task.status, done_note ?? task.done_note, due_date ?? task.due_date, startedAt, doneAt, req.params.id);
   res.json({ success: true });
 });
 
@@ -1837,15 +1846,20 @@ app.put('/api/tasks/:id', (req, res) => {
     return res.status(403).json({ error: '无权修改此任务' });
   }
 
-  const doneAt = status === 'done' ? new Date().toISOString() : (status && status !== 'done' ? null : task.done_at);
+  const now = new Date().toISOString();
+  const startedAt = status === 'in_progress'
+    ? (task.started_at || now)
+    : task.started_at;
+  const doneAt = status === 'done' ? now : (status && status !== 'done' ? null : task.done_at);
   db.prepare(`
-    UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+    UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, started_at=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(
     title ?? task.title,
     description ?? task.description,
     status ?? task.status,
     priority ?? task.priority,
     date ?? task.date,
+    startedAt,
     doneAt,
     result !== undefined ? result : task.result,
     req.params.id
