@@ -3244,7 +3244,7 @@ app.get('/api/strategies', (req, res) => {
 
   // 角色过滤
   if (role === 'member') {
-    q += ' AND s.owner_id = ?';
+    q += ' AND (s.owner_id = ? OR s.owner_id IS NULL)';
     params.push(userId);
   } else if (role === 'leader') {
     const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
