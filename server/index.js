@@ -3282,8 +3282,8 @@ app.post('/api/strategies', (req, res) => {
   if (!title || !dimension) return res.status(400).json({ error: '标题和维度必填' });
 
   const result = db.prepare(`
-    INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_started')
   `).run(title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method);
 
   res.json({ id: result.lastInsertRowid });
