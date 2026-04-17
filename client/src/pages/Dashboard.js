@@ -629,10 +629,12 @@ export default function Dashboard() {
 
       {/* 任务管理 Tabs */}
       <Card style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>
-        </div>
-        <Tabs items={tabItems} />
+        <Tabs
+          items={tabItems}
+          tabBarExtraContent={{
+            right: <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>,
+          }}
+        />
       </Card>
 
       {/* 近期提醒 */}
