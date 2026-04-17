@@ -3190,7 +3190,7 @@ app.delete('/api/leads/:id', (req, res) => {
 // =========== 策略管理 API ===========
 // 获取策略列表
 app.get('/api/strategies', (req, res) => {
-  const { dimension, role_type, budget_group_type, status } = req.query;
+  const { dimension, role_type, budget_group_type, status, media, access_method } = req.query;
   const { id: userId, role } = req.user;
 
   let q = `
@@ -3234,6 +3234,8 @@ app.get('/api/strategies', (req, res) => {
   if (role_type) { q += ' AND s.role_type = ?'; params.push(role_type); }
   if (budget_group_type) { q += ' AND s.budget_group_type = ?'; params.push(budget_group_type); }
   if (status) { q += ' AND s.status = ?'; params.push(status); }
+  if (media) { q += ' AND s.media LIKE ?'; params.push(`%${media}%`); }
+  if (access_method) { q += ' AND s.access_method = ?'; params.push(access_method); }
 
   q += ' ORDER BY s.created_at DESC';
   res.json(db.prepare(q).all(...params));

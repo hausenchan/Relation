@@ -53,6 +53,8 @@ export default function Strategies() {
     role_type: '',
     budget_group_type: '',
     status: '',
+    media: '',
+    access_method: '',
   });
 
   useEffect(() => {
@@ -77,6 +79,8 @@ export default function Strategies() {
       if (filters.role_type) params.append('role_type', filters.role_type);
       if (filters.budget_group_type) params.append('budget_group_type', filters.budget_group_type);
       if (filters.status) params.append('status', filters.status);
+      if (filters.media) params.append('media', filters.media);
+      if (filters.access_method) params.append('access_method', filters.access_method);
 
       const res = await fetch(`/api/strategies?${params}`, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
@@ -252,7 +256,8 @@ export default function Strategies() {
       width: 120,
       render: (val) => {
         if (!val) return '-';
-        return val === 'yyz_sdk' ? 'yyz sdk' : 'yys H5';
+        const labelMap = { yyz_ui: 'YYZ-UI', yyz_api: 'YYZ-API', yyz_h5: 'YYZ-H5' };
+        return labelMap[val] || val;
       },
     },
     {
@@ -383,6 +388,26 @@ export default function Strategies() {
             <Option value="completed">已完成</Option>
             <Option value="paused">暂停</Option>
           </Select>
+          <Input
+            placeholder="媒体"
+            style={{ width: 150 }}
+            allowClear
+            value={filters.media}
+            onChange={(e) => setFilters({ ...filters, media: e.target.value })}
+            onPressEnter={fetchStrategies}
+            onBlur={fetchStrategies}
+          />
+          <Select
+            placeholder="对接方式"
+            style={{ width: 150 }}
+            allowClear
+            value={filters.access_method || undefined}
+            onChange={(val) => setFilters({ ...filters, access_method: val || '' })}
+          >
+            <Option value="yyz_ui">YYZ-UI</Option>
+            <Option value="yyz_api">YYZ-API</Option>
+            <Option value="yyz_h5">YYZ-H5</Option>
+          </Select>
         </Space>
           <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增策略</Button>
         </div>
@@ -452,8 +477,9 @@ export default function Strategies() {
           </Form.Item>
           <Form.Item name="access_method" label="对接方式（如果是预算策略，可以不填）">
             <Select placeholder="请选择对接方式" allowClear>
-              <Option value="yyz_sdk">yyz sdk</Option>
-              <Option value="yys_h5">yys H5</Option>
+              <Option value="yyz_ui">YYZ-UI</Option>
+              <Option value="yyz_api">YYZ-API</Option>
+              <Option value="yyz_h5">YYZ-H5</Option>
             </Select>
           </Form.Item>
           <Form.Item name="owner_id" label="负责人">
