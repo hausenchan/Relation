@@ -1617,8 +1617,8 @@ app.put('/api/opportunities/:id', (req, res) => {
 
 // =========== 待跟进任务 API ===========
 app.get('/api/follow-up-tasks', (req, res) => {
-  const { status } = req.query;
-  const { id: me } = req.user;
+  const { status, all } = req.query;
+  const { id: me, role } = req.user;
   let query = `
     SELECT f.*,
       p.name as person_name, p.company, p.city, p.current_company, p.person_category,
@@ -1632,9 +1632,13 @@ app.get('/api/follow-up-tasks', (req, res) => {
     LEFT JOIN users ub ON f.assigned_by = ub.id
     LEFT JOIN interactions i ON f.interaction_id = i.id
     LEFT JOIN companies co ON f.company_id = co.id
-    WHERE (f.assigned_to = ? OR f.assigned_by = ?)
+    WHERE 1=1
   `;
-  const params = [me, me];
+  const params = [];
+  if (!(isAdmin(role) && all === '1')) {
+    query += ' AND (f.assigned_to = ? OR f.assigned_by = ?)';
+    params.push(me, me);
+  }
   if (status) { query += ' AND f.status = ?'; params.push(status); }
   query += ' ORDER BY f.created_at DESC';
   res.json(db.prepare(query).all(...params));

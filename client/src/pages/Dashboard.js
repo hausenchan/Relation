@@ -40,11 +40,12 @@ const priorityMap = {
 };
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user, isExecutive } = useAuth();
   const [stats, setStats] = useState(null);
   const [reminders, setReminders] = useState([]);
   const [assignedTasks, setAssignedTasks] = useState([]);
   const [executionTasks, setExecutionTasks] = useState([]);
+  const [teamTasks, setTeamTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -60,8 +61,13 @@ export default function Dashboard() {
   const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
   const [executionTaskDateRange, setExecutionTaskDateRange] = useState(null);
 
+  // 筛选条件 - 团队任务
+  const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
+  const [teamTaskDateRange, setTeamTaskDateRange] = useState(null);
+
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
+  const canViewTeamTasks = isExecutive();
 
   useEffect(() => {
     loadData();
@@ -72,13 +78,16 @@ export default function Dashboard() {
     const timer = setInterval(async () => {
       try {
         const allTasks = await tasksApi.list({ parent_id: 'null' });
-        const allFollowUpData = await followUpTasksApi.list({});
+        const allFollowUpData = await followUpTasksApi.list(canViewTeamTasks ? { all: '1' } : {});
         setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
         setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
+        if (canViewTeamTasks) {
+          setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
+        }
       } catch {}
     }, 30000);
     return () => clearInterval(timer);
-  }, []);
+  }, [canViewTeamTasks]);
 
   useEffect(() => {
     if (canAssignOthers) {
@@ -166,6 +175,45 @@ export default function Dashboard() {
     return [...normalTasks, ...followUpItems].sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
   };
 
+  const buildTeamTasks = (allTasks, allFollowUpData) => {
+    const normalTasks = allTasks
+      .filter(t => t.created_by !== user?.id && t.assigned_to !== user?.id)
+      .map(t => ({
+        ...t,
+        task_source: 'normal',
+        task_source_label: '日常指派',
+        plan_date: t.date,
+        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
+        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        display_status: toDisplayStatus(t.status),
+        display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
+        display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
+        display_result: t.result || '',
+        assigner_name: t.created_by_name,
+        follower_name: t.assigned_to_name,
+      }));
+
+    const followUpItems = allFollowUpData
+      .filter(t => t.assigned_by !== user?.id && t.assigned_to !== user?.id)
+      .map(t => ({
+        ...t,
+        id: `follow_up_${t.id}`,
+        task_source: 'opportunity',
+        task_source_label: '商机',
+        plan_date: t.due_date || null,
+        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
+        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        display_status: toDisplayStatus(t.status),
+        display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
+        display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
+        display_result: t.done_note || '',
+        assigner_name: t.assigned_by_name,
+        follower_name: t.assigned_to_name,
+      }));
+
+    return [...normalTasks, ...followUpItems].sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
+  };
+
   const countUnfinished = (items) => items.filter(item => ['pending', 'in_progress'].includes(item.display_status || item.status)).length;
 
   const isWithinRange = (date, range) => {
@@ -187,9 +235,14 @@ export default function Dashboard() {
       setReminders(remindersData);
 
       const allTasks = await tasksApi.list({ parent_id: 'null' });
-      const allFollowUpData = await followUpTasksApi.list({});
+      const allFollowUpData = await followUpTasksApi.list(canViewTeamTasks ? { all: '1' } : {});
       setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
+      if (canViewTeamTasks) {
+        setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
+      } else {
+        setTeamTasks([]);
+      }
 
     } catch (err) {
       console.error('加载数据失败:', err);
@@ -270,6 +323,11 @@ export default function Dashboard() {
   const filteredExecutionTasks = executionTasks.filter(t => {
     if (!executionTaskStatusFilter.includes(t.display_status)) return false;
     return isWithinRange(t.plan_date, executionTaskDateRange);
+  });
+
+  const filteredTeamTasks = teamTasks.filter(t => {
+    if (!teamTaskStatusFilter.includes(t.display_status)) return false;
+    return isWithinRange(t.plan_date, teamTaskDateRange);
   });
 
   const executionTaskColumns = [
@@ -470,6 +528,84 @@ export default function Dashboard() {
     },
   ];
 
+  const teamTaskColumns = [
+    {
+      title: '任务',
+      dataIndex: 'title',
+      key: 'title',
+      render: (text, record) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{text}</Text>
+          {record.description && <Text type="secondary" style={{ fontSize: 12 }}>{record.description}</Text>}
+        </Space>
+      ),
+    },
+    {
+      title: '任务来源',
+      dataIndex: 'task_source_label',
+      key: 'task_source_label',
+      width: 100,
+      render: (value, record) => <Tag color={record.task_source === 'opportunity' ? 'purple' : 'blue'}>{value}</Tag>,
+    },
+    {
+      title: '优先级',
+      dataIndex: 'priority',
+      key: 'priority',
+      width: 80,
+      render: (priority) => priority ? <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag> : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '指派人',
+      dataIndex: 'assigner_name',
+      key: 'assigner_name',
+      width: 110,
+      render: (value) => value || <Text type="secondary">-</Text>,
+    },
+    {
+      title: '跟进人',
+      dataIndex: 'follower_name',
+      key: 'follower_name',
+      width: 110,
+      render: (value) => value || <Text type="secondary">-</Text>,
+    },
+    {
+      title: '计划日期',
+      dataIndex: 'plan_date',
+      key: 'plan_date',
+      width: 110,
+      render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '开始日期',
+      dataIndex: 'start_date',
+      key: 'start_date',
+      width: 110,
+      render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '完成日期',
+      dataIndex: 'complete_date',
+      key: 'complete_date',
+      width: 110,
+      render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'display_status_label',
+      key: 'display_status_label',
+      width: 100,
+      render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
+    },
+    {
+      title: '任务进度/结果',
+      dataIndex: 'display_result',
+      key: 'display_result',
+      width: 220,
+      ellipsis: true,
+      render: (value) => value || <Text type="secondary">-</Text>,
+    },
+  ];
+
   const tabItems = [];
 
   if (canViewAssignedTasks) {
@@ -530,7 +666,7 @@ export default function Dashboard() {
     });
   }
 
-    tabItems.push(
+  tabItems.push(
     {
       key: 'execution-tasks',
       label: (
@@ -587,6 +723,64 @@ export default function Dashboard() {
       ),
     }
   );
+
+  if (canViewTeamTasks) {
+    tabItems.push({
+      key: 'team-tasks',
+      label: (
+        <span>
+          <TeamOutlined /> 团队任务
+          {countUnfinished(teamTasks) > 0 && <Badge count={countUnfinished(teamTasks)} style={{ marginLeft: 8 }} />}
+        </span>
+      ),
+      children: (
+        <div>
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <Space wrap>
+              <Select
+                mode="multiple"
+                placeholder="状态筛选"
+                value={teamTaskStatusFilter}
+                onChange={setTeamTaskStatusFilter}
+                style={{ minWidth: 200 }}
+                options={[
+                  { label: '未开始', value: 'pending' },
+                  { label: '进行中', value: 'in_progress' },
+                  { label: '已完成', value: 'done' },
+                ]}
+              />
+              <RangePicker
+                placeholder={['开始日期', '结束日期']}
+                value={teamTaskDateRange}
+                onChange={setTeamTaskDateRange}
+                style={{ width: 240 }}
+              />
+              {(teamTaskStatusFilter.length !== 3 || teamTaskDateRange) && (
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setTeamTaskStatusFilter(['pending', 'in_progress', 'done']);
+                    setTeamTaskDateRange(null);
+                  }}
+                >
+                  重置筛选
+                </Button>
+              )}
+            </Space>
+          </div>
+          <Table
+            dataSource={filteredTeamTasks}
+            columns={teamTaskColumns}
+            rowKey="id"
+            loading={loading}
+            scroll={{ x: 1380 }}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            size="small"
+          />
+        </div>
+      ),
+    });
+  }
 
   return (
     <div>
