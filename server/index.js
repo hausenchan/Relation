@@ -564,6 +564,8 @@ db.exec(`
   try { db.exec(`ALTER TABLE strategies ADD COLUMN ${col} TEXT`); } catch (e) {}
 });
 
+try { db.exec('ALTER TABLE dev_tasks ADD COLUMN completion_note TEXT'); } catch (e) {}
+
 // =========== 研发任务表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS dev_tasks (
@@ -580,6 +582,7 @@ db.exec(`
     start_date TEXT,
     due_date TEXT,
     completed_date TEXT,
+    completion_note TEXT,
     created_by INTEGER NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -3406,7 +3409,7 @@ app.post('/api/dev-tasks', (req, res) => {
 // 更新研发任务
 app.put('/api/dev-tasks/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, source_type, source_id, assignee_id, status, priority, estimated_hours, actual_hours, start_date, due_date, completed_date } = req.body;
+  const { title, description, source_type, source_id, assignee_id, status, priority, estimated_hours, actual_hours, start_date, due_date, completed_date, completion_note } = req.body;
   const { id: userId } = req.user;
 
   // 获取旧任务信息
@@ -3426,9 +3429,10 @@ app.put('/api/dev-tasks/:id', (req, res) => {
       start_date = COALESCE(?, start_date),
       due_date = COALESCE(?, due_date),
       completed_date = COALESCE(?, completed_date),
+      completion_note = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, description, source_type, source_id, assignee_id, status, priority, estimated_hours, actual_hours, start_date, due_date, completed_date, id);
+  `).run(title, description, source_type, source_id, assignee_id, status, priority, estimated_hours, actual_hours, start_date, due_date, completed_date, completion_note !== undefined ? completion_note : oldTask.completion_note, id);
 
   // 如果负责人变更，通知新负责人
   if (assignee_id && assignee_id !== oldTask.assignee_id && assignee_id !== userId) {

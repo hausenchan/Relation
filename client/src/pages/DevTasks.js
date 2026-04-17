@@ -518,6 +518,9 @@ export default function DevTasks() {
               <DatePicker style={{ width: 200 }} />
             </Form.Item>
           )}
+          <Form.Item name="completion_note" label="完成备注" style={{ marginTop: 16 }}>
+            <TextArea rows={3} placeholder="请填写完成情况或结果说明" />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -542,7 +545,7 @@ export default function DevTasks() {
               ) : '-'}
             </Descriptions.Item>
             <Descriptions.Item label="负责人">{selectedTask.assignee_name || '-'}</Descriptions.Item>
-            <Descriptions.Item label="创建人">{selectedTask.creator_name || '-'}</Descriptions.Item>
+            <Descriptions.Item label="指派人">{selectedTask.creator_name || '-'}</Descriptions.Item>
             <Descriptions.Item label="状态">
               <Tag color={statusMap[selectedTask.status]?.color}>{statusMap[selectedTask.status]?.label}</Tag>
             </Descriptions.Item>
@@ -556,6 +559,9 @@ export default function DevTasks() {
             <Descriptions.Item label="完成日期">{selectedTask.completed_date || '-'}</Descriptions.Item>
             <Descriptions.Item label="任务描述">
               <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.description || '-'}</div>
+            </Descriptions.Item>
+            <Descriptions.Item label="完成备注">
+              <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.completion_note || '-'}</div>
             </Descriptions.Item>
             <Descriptions.Item label="创建时间">{selectedTask.created_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
             <Descriptions.Item label="更新时间">{selectedTask.updated_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>

@@ -344,6 +344,9 @@ export default function TaskBoard() {
               options={allUsers.map(u => ({ value: u.id, label: u.display_name || u.username }))}
             />
           </Form.Item>
+          <Form.Item label="完成备注" name="result" style={{ marginTop: 4 }}>
+            <Input.TextArea rows={2} placeholder="完成情况或结果说明（选填）" />
+          </Form.Item>
         </Form>
       </Modal>
     </div>
@@ -377,6 +380,12 @@ function TaskItem({ task, currentUser, onStatus, onEdit, onDelete, onAddSub }) {
           {task.title}
         </Text>
       </div>
+      {task.created_by_name && (
+        <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>指派人：{task.created_by_name}</div>
+      )}
+      {task.result && (
+        <div style={{ fontSize: 11, color: '#52c41a', marginBottom: 2, whiteSpace: 'pre-wrap' }}>备注：{task.result}</div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
         <Badge status={s.badge} text={<Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>} />
         <Space size={2}>
