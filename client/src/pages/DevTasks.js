@@ -548,53 +548,55 @@ export default function DevTasks() {
         onClose={() => setDrawerVisible(false)}
       >
         {selectedTask && (
-          <Descriptions column={1} bordered>
-            <Descriptions.Item label="需求标题">{selectedTask.title}</Descriptions.Item>
-            <Descriptions.Item label="来源">
-              {selectedTask.source_type ? (
-                <>
-                  <Tag color={sourceTypeMap[selectedTask.source_type]?.color} icon={sourceTypeMap[selectedTask.source_type]?.icon}>
-                    {sourceTypeMap[selectedTask.source_type]?.label}
-                  </Tag>
-                  {selectedTask.source_title && <span style={{ marginLeft: 8 }}>{selectedTask.source_title}</span>}
-                </>
-              ) : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="负责人">{selectedTask.assignee_name || '-'}</Descriptions.Item>
-            <Descriptions.Item label="指派人">{selectedTask.creator_name || '-'}</Descriptions.Item>
-            <Descriptions.Item label="状态">
-              <Tag color={statusMap[selectedTask.status]?.color}>{statusMap[selectedTask.status]?.label}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="优先级">
-              <Tag color={priorityMap[selectedTask.priority]?.color}>{priorityMap[selectedTask.priority]?.label}</Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="预估工时">{selectedTask.estimated_hours ? `${selectedTask.estimated_hours}h` : '-'}</Descriptions.Item>
-            <Descriptions.Item label="实际工时">{selectedTask.actual_hours ? `${selectedTask.actual_hours}h` : '-'}</Descriptions.Item>
-            <Descriptions.Item label="开始日期">{selectedTask.start_date || '-'}</Descriptions.Item>
-            <Descriptions.Item label="截止日期">{selectedTask.due_date || '-'}</Descriptions.Item>
-            <Descriptions.Item label="完成日期">{selectedTask.completed_date || '-'}</Descriptions.Item>
-            <Descriptions.Item label="任务描述">
-              <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.description || '-'}</div>
-            </Descriptions.Item>
-            <Descriptions.Item label="完成备注">
-              <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.completion_note || '-'}</div>
-            </Descriptions.Item>
-            <Descriptions.Item label="创建时间">{selectedTask.created_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
-            <Descriptions.Item label="更新时间">{selectedTask.updated_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
-          </Descriptions>
+          <>
+            <Descriptions column={1} bordered>
+              <Descriptions.Item label="需求标题">{selectedTask.title}</Descriptions.Item>
+              <Descriptions.Item label="来源">
+                {selectedTask.source_type ? (
+                  <>
+                    <Tag color={sourceTypeMap[selectedTask.source_type]?.color} icon={sourceTypeMap[selectedTask.source_type]?.icon}>
+                      {sourceTypeMap[selectedTask.source_type]?.label}
+                    </Tag>
+                    {selectedTask.source_title && <span style={{ marginLeft: 8 }}>{selectedTask.source_title}</span>}
+                  </>
+                ) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="负责人">{selectedTask.assignee_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="指派人">{selectedTask.creator_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag color={statusMap[selectedTask.status]?.color}>{statusMap[selectedTask.status]?.label}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="优先级">
+                <Tag color={priorityMap[selectedTask.priority]?.color}>{priorityMap[selectedTask.priority]?.label}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="预估工时">{selectedTask.estimated_hours ? `${selectedTask.estimated_hours}h` : '-'}</Descriptions.Item>
+              <Descriptions.Item label="实际工时">{selectedTask.actual_hours ? `${selectedTask.actual_hours}h` : '-'}</Descriptions.Item>
+              <Descriptions.Item label="开始日期">{selectedTask.start_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="截止日期">{selectedTask.due_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="完成日期">{selectedTask.completed_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="任务描述">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.description || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="完成备注">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.completion_note || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="创建时间">{selectedTask.created_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{selectedTask.updated_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
+            </Descriptions>
 
-          {selectedTask.source_strategy && (
-            <Card size="small" title="关联策略" style={{ marginTop: 16 }}>
-              <Descriptions column={1} size="small" bordered>
-                <Descriptions.Item label="策略标题">{selectedTask.source_strategy.title}</Descriptions.Item>
-                <Descriptions.Item label="维度">{selectedTask.source_strategy.dimension || '-'}</Descriptions.Item>
-                <Descriptions.Item label="负责人">{selectedTask.source_strategy.owner_name || '-'}</Descriptions.Item>
-                <Descriptions.Item label="状态">{selectedTask.source_strategy.status || '-'}</Descriptions.Item>
-                <Descriptions.Item label="效果结论">{selectedTask.source_strategy.effect_judgement || '-'}</Descriptions.Item>
-                <Descriptions.Item label="最新结果摘要">{selectedTask.source_strategy.latest_result_summary || '-'}</Descriptions.Item>
-              </Descriptions>
-            </Card>
-          )}
+            {selectedTask.source_strategy && (
+              <Card size="small" title="关联策略" style={{ marginTop: 16 }}>
+                <Descriptions column={1} size="small" bordered>
+                  <Descriptions.Item label="策略标题">{selectedTask.source_strategy.title}</Descriptions.Item>
+                  <Descriptions.Item label="维度">{selectedTask.source_strategy.dimension || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="负责人">{selectedTask.source_strategy.owner_name || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="状态">{selectedTask.source_strategy.status || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="效果结论">{selectedTask.source_strategy.effect_judgement || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="最新结果摘要">{selectedTask.source_strategy.latest_result_summary || '-'}</Descriptions.Item>
+                </Descriptions>
+              </Card>
+            )}
+          </>
         )}
       </Drawer>
     </div>
