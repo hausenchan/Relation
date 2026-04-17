@@ -3317,6 +3317,7 @@ app.get('/api/strategies/:id', (req, res) => {
 app.post('/api/strategies', (req, res) => {
   const { title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method } = req.body;
   if (!title || !dimension) return res.status(400).json({ error: '标题和维度必填' });
+  if (!owner_id) return res.status(400).json({ error: '负责人必填' });
 
   const result = db.prepare(`
     INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method, status)
