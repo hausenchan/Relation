@@ -1788,7 +1788,7 @@ app.get('/api/tasks/board', (req, res) => {
 
 // 创建任务
 app.post('/api/tasks', (req, res) => {
-  const { title, description, date, priority, assigned_to, team_id, parent_id } = req.body;
+  const { title, description, date, priority, assigned_to, team_id, parent_id, result } = req.body;
   const { id: me, role } = req.user;
   if (!title || !date || !assigned_to) return res.status(400).json({ error: '标题、日期、被指派人必填' });
 
@@ -1822,9 +1822,20 @@ app.post('/api/tasks', (req, res) => {
   }
 
   const r = db.prepare(`
-    INSERT INTO tasks (title, description, date, status, priority, created_by, assigned_to, team_id, parent_id, depth)
-    VALUES (?,?,?,'pending',?,?,?,?,?,?)
-  `).run(title, description || null, date, priority || 'medium', me, assigned_to, resolvedTeamId, parent_id || null, depth);
+    INSERT INTO tasks (title, description, date, status, priority, created_by, assigned_to, team_id, parent_id, depth, result)
+    VALUES (?,?,?,'pending',?,?,?,?,?,?,?)
+  `).run(
+    title,
+    description || null,
+    date,
+    priority || 'medium',
+    me,
+    assigned_to,
+    resolvedTeamId,
+    parent_id || null,
+    depth,
+    result || null
+  );
 
   res.json({ id: r.lastInsertRowid });
 });

@@ -63,7 +63,7 @@ export default function Dashboard() {
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
-  const isLeaderOrAbove = ['admin', 'leader', 'sales_director'].includes(user?.role);
+  const canViewAssignedTasks = canAssignOthers;
 
   useEffect(() => {
     loadData();
@@ -103,8 +103,8 @@ export default function Dashboard() {
       const myTasksData = await tasksApi.list({ mine: '1', parent_id: 'null' });
       setMyTasks(myTasksData);
 
-      // 我指派的任务（仅 leader 及以上）
-      if (isLeaderOrAbove) {
+      // 我指派的任务（所有可指派角色都可查看）
+      if (canViewAssignedTasks) {
         const allTasks = await tasksApi.list({ parent_id: 'null' });
         const assigned = allTasks.filter(t => t.created_by === user?.id && t.assigned_to !== user?.id);
         setAssignedTasks(assigned);
@@ -134,6 +134,7 @@ export default function Dashboard() {
       date: dayjs(),
       priority: 'medium',
       assigned_to: user?.id,
+      result: '',
     });
     setModalOpen(true);
   };
@@ -256,11 +257,30 @@ export default function Dashboard() {
       render: (priority) => <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag>,
     },
     {
+      title: '指派人',
+      dataIndex: 'created_by_name',
+      key: 'created_by_name',
+      width: 100,
+      render: (name, record) => (
+        record.created_by === user?.id
+          ? <Text type="secondary">自建</Text>
+          : <Text>{name || '-'}</Text>
+      ),
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
       width: 100,
       render: (status) => <Badge status={statusMap[status]?.badge} text={statusMap[status]?.label} />,
+    },
+    {
+      title: '任务进度/结果',
+      dataIndex: 'result',
+      key: 'result',
+      width: 220,
+      ellipsis: true,
+      render: (value) => value || <Text type="secondary">-</Text>,
     },
     {
       title: '操作',
@@ -315,6 +335,14 @@ export default function Dashboard() {
       key: 'assigned_to_name',
       width: 100,
       render: (name) => <Tag icon={<UserOutlined />}>{name}</Tag>,
+    },
+    {
+      title: '任务进度/结果',
+      dataIndex: 'result',
+      key: 'result',
+      width: 220,
+      ellipsis: true,
+      render: (value) => value || <Text type="secondary">-</Text>,
     },
     {
       title: '日期',
@@ -390,7 +418,7 @@ export default function Dashboard() {
     },
   ];
 
-  if (isLeaderOrAbove) {
+  if (canViewAssignedTasks) {
     tabItems.push({
       key: 'assigned-tasks',
       label: (
@@ -634,6 +662,9 @@ export default function Dashboard() {
           </Form.Item>
           <Form.Item label="任务描述" name="description">
             <Input.TextArea rows={3} placeholder="任务描述" />
+          </Form.Item>
+          <Form.Item label="任务进度/任务结果" name="result">
+            <Input.TextArea rows={3} placeholder="填写当前进度、执行情况或最终结果" />
           </Form.Item>
           <Form.Item label="日期" name="date" rules={[{ required: true, message: '请选择日期' }]}>
             <DatePicker style={{ width: '100%' }} />
