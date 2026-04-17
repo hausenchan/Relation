@@ -547,6 +547,8 @@ db.exec(`
     status TEXT DEFAULT 'active',
     source_type TEXT,
     source_id INTEGER,
+    media TEXT,
+    access_method TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -556,6 +558,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_strategies_status ON strategies(status);
   CREATE INDEX IF NOT EXISTS idx_strategies_source ON strategies(source_type, source_id);
 `);
+
+// 迁移：为已存在的表添加新字段
+['media', 'access_method'].forEach(col => {
+  try { db.exec(`ALTER TABLE strategies ADD COLUMN ${col} TEXT`); } catch (e) {}
+});
 
 // =========== 研发任务表 ===========
 db.exec(`
@@ -3266,13 +3273,13 @@ app.get('/api/strategies/:id', (req, res) => {
 
 // 创建策略
 app.post('/api/strategies', (req, res) => {
-  const { title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id } = req.body;
+  const { title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method } = req.body;
   if (!title || !dimension) return res.status(400).json({ error: '标题和维度必填' });
 
   const result = db.prepare(`
-    INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id);
+    INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method);
 
   res.json({ id: result.lastInsertRowid });
 });
@@ -3280,7 +3287,7 @@ app.post('/api/strategies', (req, res) => {
 // 更新策略
 app.put('/api/strategies/:id', (req, res) => {
   const { id } = req.params;
-  const { title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id } = req.body;
+  const { title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id, media, access_method } = req.body;
 
   db.prepare(`
     UPDATE strategies SET
@@ -3293,9 +3300,11 @@ app.put('/api/strategies/:id', (req, res) => {
       status = COALESCE(?, status),
       source_type = COALESCE(?, source_type),
       source_id = COALESCE(?, source_id),
+      media = ?,
+      access_method = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id, id);
+  `).run(title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id, media, access_method, id);
 
   res.json({ success: true });
 });

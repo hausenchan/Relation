@@ -239,6 +239,23 @@ export default function Strategies() {
       },
     },
     {
+      title: '媒体',
+      dataIndex: 'media',
+      key: 'media',
+      width: 120,
+      render: (val) => val || '-',
+    },
+    {
+      title: '对接方式',
+      dataIndex: 'access_method',
+      key: 'access_method',
+      width: 120,
+      render: (val) => {
+        if (!val) return '-';
+        return val === 'yyz_sdk' ? 'yyz sdk' : 'yys H5';
+      },
+    },
+    {
       title: '负责人',
       dataIndex: 'owner_name',
       key: 'owner_name',
@@ -417,7 +434,7 @@ export default function Strategies() {
               <Option value="traffic_operation">流量运营岗</Option>
             </Select>
           </Form.Item>
-          <Form.Item name="budget_group_type" label="预算组类型">
+          <Form.Item name="budget_group_type" label="预算组类型（如果是流量运营策略，可以不填）">
             <Select placeholder="请选择预算组类型" allowClear>
               <Option value="zhixiao">支小</Option>
               <Option value="douxiao">抖小</Option>
@@ -428,6 +445,15 @@ export default function Strategies() {
               <Option value="h5">H5</Option>
               <Option value="cpd">CPD</Option>
               <Option value="kuaiyingyong">快应用</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="media" label="媒体（如果是预算策略，可以不填）">
+            <Input placeholder="请输入媒体" />
+          </Form.Item>
+          <Form.Item name="access_method" label="对接方式（如果是预算策略，可以不填）">
+            <Select placeholder="请选择对接方式" allowClear>
+              <Option value="yyz_sdk">yyz sdk</Option>
+              <Option value="yys_h5">yys H5</Option>
             </Select>
           </Form.Item>
           <Form.Item name="owner_id" label="负责人">
