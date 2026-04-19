@@ -145,11 +145,6 @@ export default function Interactions() {
     },
     { title: '描述', dataIndex: 'description', ellipsis: true },
     {
-      title: '礼物',
-      dataIndex: 'gift_name',
-      render: (v, r) => r.type === 'gift' && v ? <Tag color="gold">{v}</Tag> : null,
-    },
-    {
       title: '重要程度',
       dataIndex: 'importance',
       render: v => {
