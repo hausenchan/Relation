@@ -68,6 +68,7 @@ export default function Dashboard() {
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
   const canViewTeamTasks = isExecutive();
+  const hideRelationshipPanels = ['operation', 'rd'].includes(user?.department);
 
   useEffect(() => {
     loadData();
@@ -787,8 +788,8 @@ export default function Dashboard() {
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         {[
-          { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-          { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
           { title: '待办提醒', value: stats?.pendingReminders || 0, icon: <BellOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
           {
             title: '本周任务',
@@ -800,7 +801,7 @@ export default function Dashboard() {
             icon: <CalendarOutlined />,
             gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)'
           },
-        ].map((card, idx) => (
+        ].filter(Boolean).map((card, idx) => (
           <Col xs={24} sm={12} lg={6} key={idx}>
             <Card
               className="stat-card"
@@ -864,7 +865,7 @@ export default function Dashboard() {
       )}
 
       {/* 最近互动 */}
-      {stats?.recentInteractions && stats.recentInteractions.length > 0 && (
+      {!hideRelationshipPanels && stats?.recentInteractions && stats.recentInteractions.length > 0 && (
         <Card title="最近互动" extra={<Button type="link" onClick={() => navigate('/interactions')}>查看全部</Button>} style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
           <List
             dataSource={stats.recentInteractions.slice(0, 5)}
