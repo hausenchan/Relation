@@ -1,11 +1,30 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Button, Table, Modal, Form, Input, Select, DatePicker, message, Tag, Progress, Space, Descriptions, Drawer } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, DownOutlined, RightOutlined } from '@ant-design/icons';
-import { goalsApi, usersApi } from '../api';
+import React, { useEffect, useState } from 'react';
+import {
+  Button,
+  Card,
+  DatePicker,
+  Descriptions,
+  Drawer,
+  Form,
+  Input,
+  InputNumber,
+  Modal,
+  Progress,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  message,
+} from 'antd';
+import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { goalsApi, usersApi } from '../api';
+import { useAuth } from '../AuthContext';
 
-const { Option } = Select;
 const { TextArea } = Input;
+const { RangePicker } = DatePicker;
+const executiveRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 
 const goalTypeMap = {
   quarter: { label: '季度目标', color: 'blue' },
@@ -14,128 +33,205 @@ const goalTypeMap = {
 };
 
 const statusMap = {
-  active: { label: '进行中', color: 'processing' },
+  pending: { label: '未开始', color: 'default' },
+  active: { label: '未开始', color: 'default' },
   completed: { label: '已完成', color: 'success' },
   delayed: { label: '延期', color: 'warning' },
-  cancelled: { label: '已取消', color: 'default' },
+  cancelled: { label: '已取消', color: 'error' },
 };
 
+const roleMap = {
+  admin: '管理员',
+  ceo: 'CEO',
+  coo: 'COO',
+  cto: 'CTO',
+  cmo: 'CMO',
+  sales_director: '销售总监',
+  leader: '组长',
+  member: '普通成员',
+  readonly: '只读',
+  guest: '访客',
+};
+
+const goalTypeOptions = [
+  { value: 'quarter', label: '季度目标' },
+  { value: 'month', label: '月度目标' },
+  { value: 'week', label: '周目标' },
+];
+
+const statusOptions = [
+  { value: 'pending', label: '未开始' },
+  { value: 'completed', label: '已完成' },
+  { value: 'delayed', label: '延期' },
+  { value: 'cancelled', label: '已取消' },
+];
+
+const ownerRoleOptions = [
+  { value: 'ceo', label: 'CEO' },
+  { value: 'coo', label: 'COO' },
+  { value: 'cmo', label: 'CMO' },
+  { value: 'cto', label: 'CTO' },
+  { value: 'leader', label: '组长' },
+  { value: 'member', label: '普通成员' },
+];
+
+const getDisplayName = (user) => user?.display_name || user?.username || `用户${user?.id}`;
+const getRoleLabel = (role) => roleMap[role] || role || '-';
+const isExecutive = (role) => executiveRoles.has(role);
+
 function Goals() {
-  const [quarterGoals, setQuarterGoals] = useState([]);
-  const [expandedQuarters, setExpandedQuarters] = useState({});
-  const [expandedMonths, setExpandedMonths] = useState({});
-  const [monthGoals, setMonthGoals] = useState({});
-  const [weekGoals, setWeekGoals] = useState({});
-  const [loading, setLoading] = useState(false);
+  const { user } = useAuth();
+  const [goals, setGoals] = useState([]);
+  const [goalOptions, setGoalOptions] = useState([]);
   const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [filtersReady, setFiltersReady] = useState(false);
+  const [filters, setFilters] = useState({
+    department: undefined,
+    owner_id: undefined,
+    goal_type: undefined,
+    status: undefined,
+    owner_role: undefined,
+  });
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState(null);
   const [detailVisible, setDetailVisible] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
   const [form] = Form.useForm();
   const goalType = Form.useWatch('goal_type', form);
 
   useEffect(() => {
-    loadQuarterGoals();
     loadUsers();
   }, []);
+
+  useEffect(() => {
+    if (!user || filtersReady) return;
+    setFilters({
+      department: undefined,
+      owner_id: user.role === 'member' ? user.id : undefined,
+      goal_type: undefined,
+      status: undefined,
+      owner_role: undefined,
+    });
+    setFiltersReady(true);
+  }, [user, filtersReady]);
+
+  useEffect(() => {
+    if (!filtersReady) return;
+    loadGoals();
+  }, [filtersReady, filters]);
+
+  useEffect(() => {
+    if (!user) return;
+    loadGoalOptions();
+  }, [user]);
 
   const loadUsers = async () => {
     try {
       const data = await usersApi.listSimple();
       setUsers(data);
-    } catch (err) {
+    } catch {
       message.error('加载用户失败');
     }
   };
 
-  const loadQuarterGoals = async () => {
+  const loadGoals = async () => {
     setLoading(true);
     try {
-      const data = await goalsApi.list({ goal_type: 'quarter', parent_id: 'null' });
-      setQuarterGoals(data);
-    } catch (err) {
-      message.error('加载季度目标失败');
+      const data = await goalsApi.list(filters);
+      setGoals(data);
+    } catch {
+      message.error('加载目标失败');
     } finally {
       setLoading(false);
     }
   };
 
-  const loadMonthGoals = async (quarterId) => {
+  const loadGoalOptions = async () => {
     try {
-      const data = await goalsApi.list({ goal_type: 'month', parent_id: quarterId });
-      setMonthGoals(prev => ({ ...prev, [quarterId]: data }));
-    } catch (err) {
-      message.error('加载月度目标失败');
+      const data = await goalsApi.list();
+      setGoalOptions(data);
+    } catch {
+      message.error('加载上级目标选项失败');
     }
   };
 
-  const loadWeekGoals = async (monthId) => {
-    try {
-      const data = await goalsApi.list({ goal_type: 'week', parent_id: monthId });
-      setWeekGoals(prev => ({ ...prev, [monthId]: data }));
-    } catch (err) {
-      message.error('加载周目标失败');
-    }
+  const refreshGoals = async () => {
+    await Promise.all([loadGoals(), loadGoalOptions()]);
   };
 
-  const toggleQuarter = (quarterId) => {
-    const isExpanded = expandedQuarters[quarterId];
-    setExpandedQuarters(prev => ({ ...prev, [quarterId]: !isExpanded }));
-    if (!isExpanded && !monthGoals[quarterId]) {
-      loadMonthGoals(quarterId);
+  const currentUserMeta = users.find(item => item.id === user?.id);
+
+  const getVisibleUsers = () => {
+    if (!user) return [];
+    if (isExecutive(user.role) || user.role === 'sales_director') return users;
+    if (!currentUserMeta) return users.filter(item => item.id === user.id);
+
+    if (user.role === 'leader') {
+      return users.filter(item => item.team_id === currentUserMeta?.team_id || item.id === user.id);
     }
+
+    if (user.role === 'member') {
+      const visibleIds = new Set([user.id]);
+      if (currentUserMeta?.leader_id) visibleIds.add(currentUserMeta.leader_id);
+      const teamLeader = users.find(item => item.role === 'leader' && item.team_id === currentUserMeta?.team_id);
+      if (teamLeader?.id) visibleIds.add(teamLeader.id);
+      return users.filter(item => visibleIds.has(item.id));
+    }
+
+    return users.filter(item => item.id === user.id);
   };
 
-  const toggleMonth = (monthId) => {
-    const isExpanded = expandedMonths[monthId];
-    setExpandedMonths(prev => ({ ...prev, [monthId]: !isExpanded }));
-    if (!isExpanded && !weekGoals[monthId]) {
-      loadWeekGoals(monthId);
+  const visibleUsers = getVisibleUsers();
+  const ownerOptions = visibleUsers.map(item => ({
+    value: item.id,
+    label: getDisplayName(item),
+  }));
+  const departmentOptions = Array.from(new Set([
+    ...visibleUsers.map(item => item.department).filter(Boolean),
+    ...goals.map(item => item.department).filter(Boolean),
+  ])).map(department => ({ value: department, label: department }));
+
+  const getParentOptions = () => {
+    if (goalType === 'month') {
+      return goalOptions
+        .filter(item => item.goal_type === 'quarter' && item.id !== editing?.id)
+        .map(item => ({ value: item.id, label: `${item.period} · ${item.title}` }));
     }
+    if (goalType === 'week') {
+      return goalOptions
+        .filter(item => item.goal_type === 'month' && item.id !== editing?.id)
+        .map(item => ({ value: item.id, label: `${item.period} · ${item.title}` }));
+    }
+    return [];
   };
 
-  const handleCreate = (goalType, parentId = null, parentPeriod = null) => {
+  const openCreateModal = () => {
+    const now = dayjs();
+    const currentQuarter = Math.ceil((now.month() + 1) / 3);
     setEditing(null);
     form.resetFields();
-    const now = dayjs();
-    let defaultValues = {};
-    if (goalType === 'quarter') {
-      const year = now.year();
-      const quarter = Math.ceil((now.month() + 1) / 3);
-      defaultValues = {
-        period_year: year,
-        period_quarter: `Q${quarter}`,
-      };
-    } else if (goalType === 'month') {
-      let monthValue = now;
-      if (parentPeriod && /^\d{4}-Q[1-4]$/.test(parentPeriod)) {
-        const year = Number(parentPeriod.slice(0, 4));
-        monthValue = dayjs(`${year}-${String(now.month() + 1).padStart(2, '0')}-01`);
-      }
-      defaultValues = {
-        period_month: monthValue,
-      };
-    } else if (goalType === 'week') {
-      defaultValues = {
-        period_range: [now.startOf('week'), now.endOf('week')],
-      };
-    }
-
     form.setFieldsValue({
-      goal_type: goalType,
-      parent_id: parentId,
-      period: '',
-      ...defaultValues,
+      goal_type: 'quarter',
+      period_year: now.year(),
+      period_quarter: `Q${currentQuarter}`,
+      owner_id: user?.id,
+      department: currentUserMeta?.department || undefined,
+      progress: 0,
+      status: 'pending',
+      result: '',
     });
     setModalVisible(true);
   };
 
   const handleEdit = (record) => {
-    setEditing(record);
     const values = {
       ...record,
       deadline: record.deadline ? dayjs(record.deadline) : null,
+      status: record.status === 'active' ? 'pending' : record.status,
+      progress: Number(record.progress || 0),
+      result: record.result || '',
     };
 
     if (record.goal_type === 'quarter' && record.period) {
@@ -154,23 +250,26 @@ function Goals() {
       }
     }
 
+    setEditing(record);
     form.setFieldsValue(values);
     setModalVisible(true);
   };
 
-  const handleDelete = (id) => {
+  const handleDelete = (record) => {
     Modal.confirm({
       title: '确认删除',
       content: '删除目标将同时删除其所有子目标，确定要删除吗？',
       onOk: async () => {
         try {
-          await goalsApi.delete(id);
+          await goalsApi.delete(record.id);
           message.success('删除成功');
-          loadQuarterGoals();
-          setMonthGoals({});
-          setWeekGoals({});
-        } catch (err) {
-          message.error('删除失败');
+          if (detailRecord?.id === record.id) {
+            setDetailVisible(false);
+            setDetailRecord(null);
+          }
+          await refreshGoals();
+        } catch (error) {
+          message.error(error?.response?.data?.error || '删除失败');
         }
       },
     });
@@ -179,28 +278,29 @@ function Goals() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      let normalizedPeriod = values.period;
-
+      let period = '';
       if (values.goal_type === 'quarter') {
-        normalizedPeriod = `${values.period_year}-${values.period_quarter}`;
+        period = `${values.period_year}-${values.period_quarter}`;
       } else if (values.goal_type === 'month') {
-        normalizedPeriod = values.period_month?.format('YYYY-MM');
+        period = values.period_month?.format('YYYY-MM');
       } else if (values.goal_type === 'week') {
         const [start, end] = values.period_range || [];
-        normalizedPeriod = start && end
-          ? `${start.format('YYYY-MM-DD')}~${end.format('YYYY-MM-DD')}`
-          : '';
+        period = start && end ? `${start.format('YYYY-MM-DD')}~${end.format('YYYY-MM-DD')}` : '';
       }
 
       const payload = {
-        ...values,
-        period: normalizedPeriod,
+        title: values.title,
+        description: values.description,
+        owner_id: values.owner_id,
+        department: values.department || undefined,
         deadline: values.deadline ? values.deadline.format('YYYY-MM-DD') : null,
+        progress: values.progress || 0,
+        status: values.status,
+        result: values.result || '',
+        goal_type: values.goal_type,
+        period,
+        parent_id: values.goal_type === 'quarter' ? null : values.parent_id,
       };
-      delete payload.period_year;
-      delete payload.period_quarter;
-      delete payload.period_month;
-      delete payload.period_range;
 
       if (editing) {
         await goalsApi.update(editing.id, payload);
@@ -211,107 +311,193 @@ function Goals() {
       }
 
       setModalVisible(false);
-      loadQuarterGoals();
-      setMonthGoals({});
-      setWeekGoals({});
-    } catch (err) {
-      message.error(editing ? '更新失败' : '创建失败');
+      await refreshGoals();
+    } catch (error) {
+      if (error?.errorFields) return;
+      message.error(error?.response?.data?.error || (editing ? '更新失败' : '创建失败'));
     }
   };
 
-  const showDetail = (record) => {
-    setDetailRecord(record);
+  const showDetail = async (record) => {
     setDetailVisible(true);
+    setDetailLoading(true);
+    try {
+      const data = await goalsApi.get(record.id);
+      setDetailRecord(data);
+    } catch (error) {
+      message.error(error?.response?.data?.error || '加载目标详情失败');
+      setDetailVisible(false);
+    } finally {
+      setDetailLoading(false);
+    }
   };
 
-  const renderGoalCard = (goal, level = 0) => {
-    const isQuarter = goal.goal_type === 'quarter';
-    const isMonth = goal.goal_type === 'month';
-    const isExpanded = isQuarter ? expandedQuarters[goal.id] : expandedMonths[goal.id];
-    const hasChildren = goal.child_count > 0;
-    const children = isQuarter ? monthGoals[goal.id] : weekGoals[goal.id];
-
-    return (
-      <div key={goal.id} style={{ marginLeft: level * 40, marginBottom: 16 }}>
-        <Card
-          size="small"
-          style={{ borderLeft: `4px solid ${(goalTypeMap[goal.goal_type] || goalTypeMap.quarter).color}` }}
-          title={
-            <Space>
-              {hasChildren && (
-                <Button
-                  type="text"
-                  size="small"
-                  icon={isExpanded ? <DownOutlined /> : <RightOutlined />}
-                  onClick={() => isQuarter ? toggleQuarter(goal.id) : toggleMonth(goal.id)}
-                />
-              )}
-              <Tag color={(goalTypeMap[goal.goal_type] || { color: 'default' }).color}>{(goalTypeMap[goal.goal_type] || { label: goal.goal_type }).label}</Tag>
-              <span>{goal.period}</span>
-              <span style={{ fontWeight: 'bold' }}>{goal.title}</span>
-              {hasChildren && <Tag>{goal.child_count} 个子目标</Tag>}
-            </Space>
-          }
-          extra={
-            <Space>
-              <Tag color={(statusMap[goal.status] || { color: 'default' }).color}>{(statusMap[goal.status] || { label: goal.status }).label}</Tag>
-              <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(goal)}>详情</Button>
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(goal)}>编辑</Button>
-              {(isQuarter || isMonth) && (
-                <Button
-                  type="link"
-                  size="small"
-                  icon={<PlusOutlined />}
-                  onClick={() => handleCreate(
-                    isQuarter ? 'month' : 'week',
-                    goal.id,
-                    goal.period
-                  )}
-                >
-                  添加{isQuarter ? '月度' : '周'}目标
-                </Button>
-              )}
-              <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(goal.id)}>删除</Button>
-            </Space>
-          }
-        >
-          <Space direction="vertical" style={{ width: '100%' }}>
-            <div>负责人: {goal.owner_name}</div>
-            {goal.department && <div>部门: {goal.department}</div>}
-            {goal.deadline && <div>截止日期: {goal.deadline}</div>}
-            {goal.description && <div>描述: {goal.description}</div>}
-            <div>
-              <span>进度: </span>
-              <Progress percent={goal.progress} style={{ width: 200, display: 'inline-block' }} />
-            </div>
-          </Space>
-        </Card>
-
-        {isExpanded && children && children.length > 0 && (
-          <div style={{ marginTop: 8 }}>
-            {children.map(child => renderGoalCard(child, level + 1))}
-          </div>
-        )}
-      </div>
-    );
+  const handleFilterChange = (field, value) => {
+    setFilters(prev => ({ ...prev, [field]: value || undefined }));
   };
+
+  const resetFilters = () => {
+    setFilters({
+      department: undefined,
+      owner_id: user?.role === 'member' ? user.id : undefined,
+      goal_type: undefined,
+      status: undefined,
+      owner_role: undefined,
+    });
+  };
+
+  const columns = [
+    {
+      title: '目标类型',
+      dataIndex: 'goal_type',
+      width: 110,
+      render: (value) => (
+        <Tag color={(goalTypeMap[value] || { color: 'default' }).color}>
+          {(goalTypeMap[value] || { label: value }).label}
+        </Tag>
+      ),
+    },
+    {
+      title: '周期',
+      dataIndex: 'period',
+      width: 170,
+    },
+    {
+      title: '目标标题',
+      dataIndex: 'title',
+      width: 220,
+    },
+    {
+      title: '目标描述',
+      dataIndex: 'description',
+      ellipsis: true,
+      render: (value) => value || '-',
+    },
+    {
+      title: '负责人',
+      dataIndex: 'owner_name',
+      width: 120,
+      render: (value, record) => value || getDisplayName(record),
+    },
+    {
+      title: '部门',
+      dataIndex: 'department',
+      width: 120,
+      render: (value) => value || '-',
+    },
+    {
+      title: '进度',
+      dataIndex: 'progress',
+      width: 160,
+      render: (value) => <Progress percent={Number(value || 0)} size="small" />,
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 110,
+      render: (value) => (
+        <Tag color={(statusMap[value] || { color: 'default' }).color}>
+          {(statusMap[value] || { label: value }).label}
+        </Tag>
+      ),
+    },
+    {
+      title: '结果',
+      dataIndex: 'result',
+      ellipsis: true,
+      render: (value) => value || '-',
+    },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 180,
+      render: (_, record) => (
+        <Space size="small">
+          <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record)}>
+            详情
+          </Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+            编辑
+          </Button>
+          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
+            删除
+          </Button>
+        </Space>
+      ),
+    },
+  ];
 
   return (
     <div style={{ padding: 24 }}>
       <Card
-        extra={
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => handleCreate('quarter')}>
+        title="目标管理"
+        extra={(
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
             新建目标
           </Button>
-        }
-      >
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: 40 }}>加载中...</div>
-        ) : quarterGoals.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: 40, color: '#999' }}>暂无季度目标</div>
-        ) : (
-          quarterGoals.map(goal => renderGoalCard(goal, 0))
         )}
+      >
+        <Space wrap size={[12, 12]} style={{ marginBottom: 16 }}>
+          <Select
+            allowClear
+            placeholder="部门"
+            style={{ width: 160 }}
+            value={filters.department}
+            onChange={(value) => handleFilterChange('department', value)}
+            options={departmentOptions}
+          />
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="负责人姓名"
+            style={{ width: 180 }}
+            value={filters.owner_id}
+            onChange={(value) => handleFilterChange('owner_id', value)}
+            options={ownerOptions}
+          />
+          <Select
+            allowClear
+            placeholder="目标类型"
+            style={{ width: 140 }}
+            value={filters.goal_type}
+            onChange={(value) => handleFilterChange('goal_type', value)}
+            options={goalTypeOptions}
+          />
+          <Select
+            allowClear
+            placeholder="状态"
+            style={{ width: 140 }}
+            value={filters.status}
+            onChange={(value) => handleFilterChange('status', value)}
+            options={statusOptions}
+          />
+          <Select
+            allowClear
+            placeholder="负责人角色"
+            style={{ width: 160 }}
+            value={filters.owner_role}
+            onChange={(value) => handleFilterChange('owner_role', value)}
+            options={ownerRoleOptions}
+          />
+          <Button onClick={resetFilters}>重置筛选</Button>
+        </Space>
+
+        <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+          双击目标行可查看详情
+        </Typography.Text>
+
+        <Table
+          rowKey="id"
+          loading={loading}
+          columns={columns}
+          dataSource={goals}
+          pagination={{ pageSize: 10, showSizeChanger: true }}
+          scroll={{ x: 1300 }}
+          onRow={(record) => ({
+            onDoubleClick: () => showDetail(record),
+          })}
+        />
       </Card>
 
       <Modal
@@ -319,23 +505,38 @@ function Goals() {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={600}
+        width={680}
+        destroyOnClose
       >
-        <Form form={form} layout="vertical">
-          <Form.Item name="goal_type" label="目标类型" rules={[{ required: true }]}>
-            <Select disabled={!!editing}>
-              <Option value="quarter">季度目标</Option>
-              <Option value="month">月度目标</Option>
-              <Option value="week">周目标</Option>
-            </Select>
+        <Form
+          form={form}
+          layout="vertical"
+          onValuesChange={(changedValues) => {
+            if (Object.prototype.hasOwnProperty.call(changedValues, 'goal_type')) {
+              form.setFieldsValue({
+                parent_id: undefined,
+                period_year: undefined,
+                period_quarter: undefined,
+                period_month: undefined,
+                period_range: undefined,
+              });
+            }
+            if (Object.prototype.hasOwnProperty.call(changedValues, 'owner_id')) {
+              const selectedUser = users.find(item => item.id === changedValues.owner_id);
+              form.setFieldValue('department', selectedUser?.department || undefined);
+            }
+          }}
+        >
+          <Form.Item name="goal_type" label="目标类型" rules={[{ required: true, message: '请选择目标类型' }]}>
+            <Select options={goalTypeOptions} disabled={!!editing} />
           </Form.Item>
 
           {goalType === 'quarter' && (
             <Space style={{ width: '100%' }} size={12}>
               <Form.Item name="period_year" label="年份" rules={[{ required: true, message: '请选择年份' }]} style={{ flex: 1 }}>
                 <Select
-                  options={Array.from({ length: 7 }, (_, i) => {
-                    const year = dayjs().year() - 2 + i;
+                  options={Array.from({ length: 7 }, (_, index) => {
+                    const year = dayjs().year() - 2 + index;
                     return { value: year, label: `${year}年` };
                   })}
                 />
@@ -354,20 +555,44 @@ function Goals() {
           )}
 
           {goalType === 'month' && (
-            <Form.Item name="period_month" label="周期" rules={[{ required: true, message: '请选择月份' }]}>
-              <DatePicker picker="month" style={{ width: '100%' }} />
-            </Form.Item>
+            <>
+              <Form.Item
+                name="parent_id"
+                label="上级季度目标"
+                rules={[{ required: true, message: '请选择上级季度目标' }]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  options={getParentOptions()}
+                  placeholder="请选择上级季度目标"
+                />
+              </Form.Item>
+              <Form.Item name="period_month" label="周期" rules={[{ required: true, message: '请选择月份' }]}>
+                <DatePicker picker="month" style={{ width: '100%' }} />
+              </Form.Item>
+            </>
           )}
 
           {goalType === 'week' && (
-            <Form.Item name="period_range" label="周期" rules={[{ required: true, message: '请选择日期范围' }]}>
-              <DatePicker.RangePicker style={{ width: '100%' }} />
-            </Form.Item>
+            <>
+              <Form.Item
+                name="parent_id"
+                label="上级月度目标"
+                rules={[{ required: true, message: '请选择上级月度目标' }]}
+              >
+                <Select
+                  showSearch
+                  optionFilterProp="label"
+                  options={getParentOptions()}
+                  placeholder="请选择上级月度目标"
+                />
+              </Form.Item>
+              <Form.Item name="period_range" label="周期" rules={[{ required: true, message: '请选择日期范围' }]}>
+                <RangePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </>
           )}
-
-          <Form.Item name="parent_id" label="父目标ID" hidden>
-            <Input />
-          </Form.Item>
 
           <Form.Item name="title" label="目标标题" rules={[{ required: true, message: '请输入目标标题' }]}>
             <Input />
@@ -381,15 +606,17 @@ function Goals() {
             <Select
               showSearch
               optionFilterProp="label"
-              options={users.map(u => ({
-                value: u.id,
-                label: u.display_name || u.username || `用户${u.id}`,
-              }))}
+              options={ownerOptions}
+              placeholder="请选择负责人"
             />
           </Form.Item>
 
           <Form.Item name="department" label="部门">
-            <Input />
+            <Select
+              allowClear
+              options={departmentOptions}
+              placeholder="请选择部门"
+            />
           </Form.Item>
 
           <Form.Item name="deadline" label="截止日期">
@@ -397,16 +624,15 @@ function Goals() {
           </Form.Item>
 
           <Form.Item name="progress" label="进度" initialValue={0}>
-            <Input type="number" min={0} max={100} addonAfter="%" />
+            <InputNumber min={0} max={100} addonAfter="%" style={{ width: '100%' }} />
           </Form.Item>
 
-          <Form.Item name="status" label="状态" initialValue="active">
-            <Select>
-              <Option value="active">进行中</Option>
-              <Option value="completed">已完成</Option>
-              <Option value="delayed">延期</Option>
-              <Option value="cancelled">已取消</Option>
-            </Select>
+          <Form.Item name="status" label="状态" initialValue="pending" rules={[{ required: true, message: '请选择状态' }]}>
+            <Select options={statusOptions} />
+          </Form.Item>
+
+          <Form.Item name="result" label="目标结果">
+            <TextArea rows={4} placeholder="填写目标完成得怎么样" />
           </Form.Item>
         </Form>
       </Modal>
@@ -414,35 +640,60 @@ function Goals() {
       <Drawer
         title="目标详情"
         placement="right"
-        width={600}
+        width={680}
         open={detailVisible}
         onClose={() => setDetailVisible(false)}
       >
-        {detailRecord && (
-          <Descriptions column={1} bordered>
-            <Descriptions.Item label="目标类型">
-              <Tag color={(goalTypeMap[detailRecord.goal_type] || { color: 'default' }).color}>
-                {(goalTypeMap[detailRecord.goal_type] || { label: detailRecord.goal_type }).label}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="周期">{detailRecord.period}</Descriptions.Item>
-            <Descriptions.Item label="标题">{detailRecord.title}</Descriptions.Item>
-            <Descriptions.Item label="描述">{detailRecord.description || '-'}</Descriptions.Item>
-            <Descriptions.Item label="负责人">{detailRecord.owner_name}</Descriptions.Item>
-            <Descriptions.Item label="部门">{detailRecord.department || '-'}</Descriptions.Item>
-            <Descriptions.Item label="截止日期">{detailRecord.deadline || '-'}</Descriptions.Item>
-            <Descriptions.Item label="状态">
-              <Tag color={(statusMap[detailRecord.status] || { color: 'default' }).color}>
-                {(statusMap[detailRecord.status] || { label: detailRecord.status }).label}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="进度">
-              <Progress percent={detailRecord.progress} />
-            </Descriptions.Item>
-            <Descriptions.Item label="子目标数量">{detailRecord.child_count}</Descriptions.Item>
-            <Descriptions.Item label="创建时间">{detailRecord.created_at}</Descriptions.Item>
-            <Descriptions.Item label="更新时间">{detailRecord.updated_at}</Descriptions.Item>
-          </Descriptions>
+        {detailLoading && <div style={{ textAlign: 'center', padding: 32 }}>加载中...</div>}
+        {!detailLoading && detailRecord && (
+          <Space direction="vertical" style={{ width: '100%' }} size={16}>
+            <Descriptions column={1} bordered>
+              <Descriptions.Item label="目标类型">
+                <Tag color={(goalTypeMap[detailRecord.goal_type] || { color: 'default' }).color}>
+                  {(goalTypeMap[detailRecord.goal_type] || { label: detailRecord.goal_type }).label}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="周期">{detailRecord.period}</Descriptions.Item>
+              <Descriptions.Item label="目标标题">{detailRecord.title}</Descriptions.Item>
+              <Descriptions.Item label="目标描述">{detailRecord.description || '-'}</Descriptions.Item>
+              <Descriptions.Item label="负责人">{detailRecord.owner_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="负责人角色">{getRoleLabel(detailRecord.owner_role)}</Descriptions.Item>
+              <Descriptions.Item label="部门">{detailRecord.department || '-'}</Descriptions.Item>
+              <Descriptions.Item label="上级目标">{detailRecord.parent_title || '-'}</Descriptions.Item>
+              <Descriptions.Item label="截止日期">{detailRecord.deadline || '-'}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag color={(statusMap[detailRecord.status] || { color: 'default' }).color}>
+                  {(statusMap[detailRecord.status] || { label: detailRecord.status }).label}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="进度">
+                <Progress percent={Number(detailRecord.progress || 0)} />
+              </Descriptions.Item>
+              <Descriptions.Item label="目标结果">{detailRecord.result || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{detailRecord.created_at}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{detailRecord.updated_at}</Descriptions.Item>
+            </Descriptions>
+
+            <Card title={`下级目标（${detailRecord.children?.length || 0}）`} size="small">
+              {detailRecord.children?.length ? (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {detailRecord.children.map(child => (
+                    <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                      <span>
+                        <Tag color={(goalTypeMap[child.goal_type] || { color: 'default' }).color}>
+                          {(goalTypeMap[child.goal_type] || { label: child.goal_type }).label}
+                        </Tag>
+                        {child.period} · {child.title}
+                      </span>
+                      <span>{child.owner_name || '-'}</span>
+                    </div>
+                  ))}
+                </Space>
+              ) : (
+                <Typography.Text type="secondary">暂无下级目标</Typography.Text>
+              )}
+            </Card>
+          </Space>
         )}
       </Drawer>
     </div>

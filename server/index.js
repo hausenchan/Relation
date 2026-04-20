@@ -738,7 +738,17 @@ if (goalCols.length > 0) {
   if (!goalCols.includes('parent_id')) {
     db.exec("ALTER TABLE goals ADD COLUMN parent_id INTEGER DEFAULT NULL");
   }
+  if (!goalCols.includes('result')) {
+    db.exec("ALTER TABLE goals ADD COLUMN result TEXT DEFAULT NULL");
+  }
+  if (!goalCols.includes('progress')) {
+    db.exec("ALTER TABLE goals ADD COLUMN progress INTEGER DEFAULT 0");
+  }
+  if (!goalCols.includes('status')) {
+    db.exec("ALTER TABLE goals ADD COLUMN status TEXT DEFAULT 'pending'");
+  }
 }
+db.prepare("UPDATE goals SET status = 'pending' WHERE status = 'active'").run();
 
 // users 表加 leader_id / department / team_id
 const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
@@ -1039,6 +1049,57 @@ function getVisibleUserIds(userId, role) {
   return [userId];
 }
 
+function getVisibleGoalOwnerIds(userId, role) {
+  if (isAdmin(role)) return null;
+
+  const me = db.prepare('SELECT id, team_id, leader_id FROM users WHERE id = ?').get(userId);
+  if (!me) return [userId];
+
+  if (role === 'sales_director') {
+    return getVisibleUserIds(userId, role);
+  }
+
+  if (role === 'leader') {
+    if (!me.team_id) return [userId];
+    const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(me.team_id).map(u => u.id);
+    return [...new Set([userId, ...members])];
+  }
+
+  if (role === 'member') {
+    const ids = new Set([userId]);
+    if (me.leader_id) ids.add(me.leader_id);
+    if (me.team_id) {
+      const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(me.team_id);
+      if (team?.leader_id) ids.add(team.leader_id);
+    }
+    return [...ids];
+  }
+
+  return [userId];
+}
+
+function canManageGoalForOwner(actor, ownerId) {
+  if (isAdmin(actor.role)) return true;
+  if (Number(ownerId) === actor.id) return true;
+
+  const owner = db.prepare('SELECT id, team_id FROM users WHERE id = ?').get(ownerId);
+  const me = db.prepare('SELECT id, team_id FROM users WHERE id = ?').get(actor.id);
+  if (!owner || !me) return false;
+
+  if (actor.role === 'leader') {
+    return !!me.team_id && me.team_id === owner.team_id;
+  }
+
+  if (actor.role === 'sales_director') {
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(actor.id).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(actor.id).map(r => r.id);
+    const allTeamIds = new Set([...myTeams, ...ledTeams]);
+    return !!owner.team_id && allTeamIds.has(owner.team_id);
+  }
+
+  return false;
+}
+
 // 构建用户可见ID的 SQL 片段
 function buildUserFilter(userId, role, tableAlias) {
   const ids = getVisibleUserIds(userId, role);
@@ -1112,7 +1173,7 @@ app.put('/api/users/:id/reset-password', auth, adminOnly, (req, res) => {
 
 // 所有登录用户可访问（用于指派选人下拉）
 app.get('/api/users/simple', auth, (req, res) => {
-  const users = db.prepare('SELECT id, username, display_name, role, team_id FROM users WHERE role != ? ORDER BY display_name ASC').all('readonly');
+  const users = db.prepare('SELECT id, username, display_name, role, team_id, leader_id, department FROM users WHERE role != ? ORDER BY display_name ASC').all('readonly');
   res.json(users);
 });
 
@@ -2942,42 +3003,60 @@ app.get('/api/trips/stats/summary', (req, res) => {
 // =========== 目标管理 API ===========
 // 获取目标列表
 app.get('/api/goals', (req, res) => {
-  const { department, quarter, status, goal_type, period, parent_id } = req.query;
+  const { department, status, goal_type, period, parent_id, owner_id, owner_role } = req.query;
   const { id: userId, role } = req.user;
 
-  let q = 'SELECT g.*, u.display_name as owner_name FROM goals g LEFT JOIN users u ON g.owner_id = u.id WHERE 1=1';
+  let q = `
+    SELECT
+      g.*,
+      u.display_name as owner_name,
+      u.role as owner_role,
+      u.department as owner_department,
+      p.title as parent_title
+    FROM goals g
+    LEFT JOIN users u ON g.owner_id = u.id
+    LEFT JOIN goals p ON g.parent_id = p.id
+    WHERE 1=1
+  `;
   const params = [];
 
-  // 角色过滤：member 只看自己的，leader 看本组的，sales_director 看辖区的，admin 看全部
-  if (role === 'member') {
-    q += ' AND g.owner_id = ?';
-    params.push(userId);
-  } else if (role === 'leader') {
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
-    if (myUser?.team_id) {
-      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
-      q += ` AND g.owner_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
-    } else {
-      q += ' AND g.owner_id = ?';
-      params.push(userId);
+  const visibleOwnerIds = getVisibleGoalOwnerIds(userId, role);
+  if (visibleOwnerIds !== null) {
+    if (visibleOwnerIds.length === 0) {
+      return res.json([]);
     }
-  } else if (role === 'sales_director') {
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    if (allTeamIds.length > 0) {
-      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
-      q += ` AND g.owner_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
-    }
+    q += ` AND g.owner_id IN (${visibleOwnerIds.map(() => '?').join(',')})`;
+    params.push(...visibleOwnerIds);
   }
 
-  if (department) { q += ' AND g.department = ?'; params.push(department); }
-  if (quarter) { q += ' AND g.quarter = ?'; params.push(quarter); }
-  if (status) { q += ' AND g.status = ?'; params.push(status); }
-  if (goal_type) { q += ' AND g.goal_type = ?'; params.push(goal_type); }
-  if (period) { q += ' AND g.period = ?'; params.push(period); }
+  if (department) {
+    q += ' AND COALESCE(g.department, u.department) = ?';
+    params.push(department);
+  }
+  if (status) {
+    if (status === 'pending') {
+      q += " AND g.status IN ('pending', 'active')";
+    } else {
+      q += ' AND g.status = ?';
+      params.push(status);
+    }
+  }
+  if (goal_type) {
+    q += ' AND g.goal_type = ?';
+    params.push(goal_type);
+  }
+  if (period) {
+    q += ' AND g.period = ?';
+    params.push(period);
+  }
+  if (owner_id) {
+    q += ' AND g.owner_id = ?';
+    params.push(owner_id);
+  }
+  if (owner_role) {
+    q += ' AND u.role = ?';
+    params.push(owner_role);
+  }
   if (parent_id !== undefined) {
     if (parent_id === 'null') {
       q += ' AND g.parent_id IS NULL';
@@ -2987,37 +3066,113 @@ app.get('/api/goals', (req, res) => {
     }
   }
 
-  q += ' ORDER BY g.period DESC, g.created_at DESC';
+  q += `
+    ORDER BY
+      CASE g.goal_type
+        WHEN 'quarter' THEN 1
+        WHEN 'month' THEN 2
+        WHEN 'week' THEN 3
+        ELSE 4
+      END,
+      g.period DESC,
+      g.created_at DESC
+  `;
   const goals = db.prepare(q).all(...params);
 
   // 为每个目标加载子目标数量
   goals.forEach(g => {
     const childCount = db.prepare('SELECT COUNT(*) as cnt FROM goals WHERE parent_id = ?').get(g.id);
     g.child_count = childCount.cnt;
+    g.department = g.department || g.owner_department || null;
+    if (g.status === 'active') g.status = 'pending';
   });
 
   res.json(goals);
 });
 
+app.get('/api/goals/:id', (req, res) => {
+  const { id } = req.params;
+  const { id: userId, role } = req.user;
+  const goal = db.prepare(`
+    SELECT
+      g.*,
+      u.display_name as owner_name,
+      u.role as owner_role,
+      u.department as owner_department,
+      p.title as parent_title
+    FROM goals g
+    LEFT JOIN users u ON g.owner_id = u.id
+    LEFT JOIN goals p ON g.parent_id = p.id
+    WHERE g.id = ?
+  `).get(id);
+
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+
+  const visibleOwnerIds = getVisibleGoalOwnerIds(userId, role);
+  if (visibleOwnerIds !== null && !visibleOwnerIds.includes(goal.owner_id)) {
+    return res.status(403).json({ error: '无权限查看该目标' });
+  }
+
+  const children = db.prepare(`
+    SELECT
+      g.*,
+      u.display_name as owner_name,
+      u.role as owner_role
+    FROM goals g
+    LEFT JOIN users u ON g.owner_id = u.id
+    WHERE g.parent_id = ?
+    ORDER BY g.period DESC, g.created_at DESC
+  `).all(id).map(child => ({
+    ...child,
+    status: child.status === 'active' ? 'pending' : child.status,
+  }));
+
+  res.json({
+    ...goal,
+    department: goal.department || goal.owner_department || null,
+    status: goal.status === 'active' ? 'pending' : goal.status,
+    children,
+  });
+});
+
 // 创建目标
 app.post('/api/goals', (req, res) => {
-  const { title, description, owner_id, department, deadline, goal_type, period, parent_id } = req.body;
+  const { title, description, owner_id, department, deadline, progress, status, result: goalResult, goal_type, period, parent_id } = req.body;
   if (!title || !owner_id || !goal_type || !period) {
     return res.status(400).json({ error: '标题、负责人、目标类型、周期必填' });
   }
 
-  const result = db.prepare(`
-    INSERT INTO goals (title, description, owner_id, department, deadline, goal_type, period, parent_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, description, owner_id, department, deadline, goal_type, period, parent_id || null);
+  if (!canManageGoalForOwner(req.user, owner_id)) {
+    return res.status(403).json({ error: '无权为该负责人创建目标' });
+  }
 
-  res.json({ id: result.lastInsertRowid });
+  const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(owner_id);
+  const normalizedDepartment = department || owner?.department || null;
+  const normalizedStatus = status === 'active' ? 'pending' : (status || 'pending');
+
+  const insertResult = db.prepare(`
+    INSERT INTO goals (title, description, owner_id, department, deadline, progress, status, result, goal_type, period, parent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, description, owner_id, normalizedDepartment, deadline, progress || 0, normalizedStatus, goalResult || null, goal_type, period, parent_id || null);
+
+  res.json({ id: insertResult.lastInsertRowid });
 });
 
 // 更新目标
 app.put('/api/goals/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, owner_id, department, deadline, progress, status, goal_type, period } = req.body;
+  const { title, description, owner_id, department, deadline, progress, status, result, goal_type, period, parent_id } = req.body;
+  const existing = db.prepare('SELECT owner_id FROM goals WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: '目标不存在' });
+
+  const targetOwnerId = owner_id || existing.owner_id;
+  if (!canManageGoalForOwner(req.user, targetOwnerId)) {
+    return res.status(403).json({ error: '无权编辑该目标' });
+  }
+
+  const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(targetOwnerId);
+  const normalizedDepartment = department || owner?.department || null;
+  const normalizedStatus = status === 'active' ? 'pending' : status;
 
   db.prepare(`
     UPDATE goals SET
@@ -3028,11 +3183,13 @@ app.put('/api/goals/:id', (req, res) => {
       deadline = COALESCE(?, deadline),
       progress = COALESCE(?, progress),
       status = COALESCE(?, status),
+      result = COALESCE(?, result),
       goal_type = COALESCE(?, goal_type),
       period = COALESCE(?, period),
+      parent_id = COALESCE(?, parent_id),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, description, owner_id, department, deadline, progress, status, goal_type, period, id);
+  `).run(title, description, owner_id, normalizedDepartment, deadline, progress, normalizedStatus, result, goal_type, period, parent_id, id);
 
   res.json({ success: true });
 });
@@ -3040,6 +3197,11 @@ app.put('/api/goals/:id', (req, res) => {
 // 删除目标（级联删除子目标）
 app.delete('/api/goals/:id', (req, res) => {
   const { id } = req.params;
+  const goal = db.prepare('SELECT owner_id FROM goals WHERE id = ?').get(id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canManageGoalForOwner(req.user, goal.owner_id)) {
+    return res.status(403).json({ error: '无权删除该目标' });
+  }
   // 递归删除所有子目标
   function deleteGoalAndChildren(goalId) {
     const children = db.prepare('SELECT id FROM goals WHERE parent_id = ?').all(goalId);
