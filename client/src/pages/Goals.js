@@ -33,6 +33,7 @@ function Goals() {
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
   const [form] = Form.useForm();
+  const goalType = Form.useWatch('goal_type', form);
 
   useEffect(() => {
     loadQuarterGoals();
@@ -97,36 +98,63 @@ function Goals() {
   const handleCreate = (goalType, parentId = null, parentPeriod = null) => {
     setEditing(null);
     form.resetFields();
-
-    let defaultPeriod = '';
+    const now = dayjs();
+    let defaultValues = {};
     if (goalType === 'quarter') {
-      const year = new Date().getFullYear();
-      const quarter = Math.ceil((new Date().getMonth() + 1) / 3);
-      defaultPeriod = `${year}-Q${quarter}`;
-    } else if (goalType === 'month' && parentPeriod) {
-      const year = parentPeriod.split('-')[0];
-      const month = String(new Date().getMonth() + 1).padStart(2, '0');
-      defaultPeriod = `${year}-${month}`;
-    } else if (goalType === 'week' && parentPeriod) {
-      const year = parentPeriod.split('-')[0];
-      const week = String(Math.ceil(new Date().getDate() / 7)).padStart(2, '0');
-      defaultPeriod = `${year}-W${week}`;
+      const year = now.year();
+      const quarter = Math.ceil((now.month() + 1) / 3);
+      defaultValues = {
+        period_year: year,
+        period_quarter: `Q${quarter}`,
+      };
+    } else if (goalType === 'month') {
+      let monthValue = now;
+      if (parentPeriod && /^\d{4}-Q[1-4]$/.test(parentPeriod)) {
+        const year = Number(parentPeriod.slice(0, 4));
+        monthValue = dayjs(`${year}-${String(now.month() + 1).padStart(2, '0')}-01`);
+      }
+      defaultValues = {
+        period_month: monthValue,
+      };
+    } else if (goalType === 'week') {
+      defaultValues = {
+        period_range: [now.startOf('week'), now.endOf('week')],
+      };
     }
 
     form.setFieldsValue({
       goal_type: goalType,
       parent_id: parentId,
-      period: defaultPeriod
+      period: '',
+      ...defaultValues,
     });
     setModalVisible(true);
   };
 
   const handleEdit = (record) => {
     setEditing(record);
-    form.setFieldsValue({
+    const values = {
       ...record,
       deadline: record.deadline ? dayjs(record.deadline) : null,
-    });
+    };
+
+    if (record.goal_type === 'quarter' && record.period) {
+      const match = record.period.match(/^(\d{4})-(Q[1-4])$/);
+      if (match) {
+        values.period_year = Number(match[1]);
+        values.period_quarter = match[2];
+      }
+    } else if (record.goal_type === 'month' && record.period) {
+      const monthValue = dayjs(`${record.period}-01`);
+      values.period_month = monthValue.isValid() ? monthValue : null;
+    } else if (record.goal_type === 'week' && record.period) {
+      const match = record.period.match(/^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})$/);
+      if (match) {
+        values.period_range = [dayjs(match[1]), dayjs(match[2])];
+      }
+    }
+
+    form.setFieldsValue(values);
     setModalVisible(true);
   };
 
@@ -151,10 +179,28 @@ function Goals() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
+      let normalizedPeriod = values.period;
+
+      if (values.goal_type === 'quarter') {
+        normalizedPeriod = `${values.period_year}-${values.period_quarter}`;
+      } else if (values.goal_type === 'month') {
+        normalizedPeriod = values.period_month?.format('YYYY-MM');
+      } else if (values.goal_type === 'week') {
+        const [start, end] = values.period_range || [];
+        normalizedPeriod = start && end
+          ? `${start.format('YYYY-MM-DD')}~${end.format('YYYY-MM-DD')}`
+          : '';
+      }
+
       const payload = {
         ...values,
+        period: normalizedPeriod,
         deadline: values.deadline ? values.deadline.format('YYYY-MM-DD') : null,
       };
+      delete payload.period_year;
+      delete payload.period_quarter;
+      delete payload.period_month;
+      delete payload.period_range;
 
       if (editing) {
         await goalsApi.update(editing.id, payload);
@@ -284,9 +330,40 @@ function Goals() {
             </Select>
           </Form.Item>
 
-          <Form.Item name="period" label="周期" rules={[{ required: true, message: '请输入周期' }]}>
-            <Input placeholder="如: 2024-Q1, 2024-03, 2024-W12" />
-          </Form.Item>
+          {goalType === 'quarter' && (
+            <Space style={{ width: '100%' }} size={12}>
+              <Form.Item name="period_year" label="年份" rules={[{ required: true, message: '请选择年份' }]} style={{ flex: 1 }}>
+                <Select
+                  options={Array.from({ length: 7 }, (_, i) => {
+                    const year = dayjs().year() - 2 + i;
+                    return { value: year, label: `${year}年` };
+                  })}
+                />
+              </Form.Item>
+              <Form.Item name="period_quarter" label="季度" rules={[{ required: true, message: '请选择季度' }]} style={{ flex: 1 }}>
+                <Select
+                  options={[
+                    { value: 'Q1', label: 'Q1' },
+                    { value: 'Q2', label: 'Q2' },
+                    { value: 'Q3', label: 'Q3' },
+                    { value: 'Q4', label: 'Q4' },
+                  ]}
+                />
+              </Form.Item>
+            </Space>
+          )}
+
+          {goalType === 'month' && (
+            <Form.Item name="period_month" label="周期" rules={[{ required: true, message: '请选择月份' }]}>
+              <DatePicker picker="month" style={{ width: '100%' }} />
+            </Form.Item>
+          )}
+
+          {goalType === 'week' && (
+            <Form.Item name="period_range" label="周期" rules={[{ required: true, message: '请选择日期范围' }]}>
+              <DatePicker.RangePicker style={{ width: '100%' }} />
+            </Form.Item>
+          )}
 
           <Form.Item name="parent_id" label="父目标ID" hidden>
             <Input />
