@@ -53,6 +53,16 @@ const roleMap = {
   guest: '访客',
 };
 
+const departmentMap = {
+  commercial: '商务',
+  operation: '产运',
+  rd: '研发',
+  marketing: '市场',
+  hr: '人事',
+  finance: '财务',
+  admin: '行政',
+};
+
 const goalTypeOptions = [
   { value: 'quarter', label: '季度目标' },
   { value: 'month', label: '月度目标' },
@@ -77,6 +87,7 @@ const ownerRoleOptions = [
 
 const getDisplayName = (user) => user?.display_name || user?.username || `用户${user?.id}`;
 const getRoleLabel = (role) => roleMap[role] || role || '-';
+const getDepartmentLabel = (department) => departmentMap[department] || department || '-';
 const isExecutive = (role) => executiveRoles.has(role);
 
 function Goals() {
@@ -191,7 +202,7 @@ function Goals() {
   const departmentOptions = Array.from(new Set([
     ...visibleUsers.map(item => item.department).filter(Boolean),
     ...goals.map(item => item.department).filter(Boolean),
-  ])).map(department => ({ value: department, label: department }));
+  ])).map(department => ({ value: department, label: getDepartmentLabel(department) }));
 
   const getParentOptions = () => {
     if (goalType === 'month') {
@@ -383,7 +394,7 @@ function Goals() {
       title: '部门',
       dataIndex: 'department',
       width: 120,
-      render: (value) => value || '-',
+      render: (value) => getDepartmentLabel(value),
     },
     {
       title: '进度',
@@ -658,7 +669,7 @@ function Goals() {
               <Descriptions.Item label="目标描述">{detailRecord.description || '-'}</Descriptions.Item>
               <Descriptions.Item label="负责人">{detailRecord.owner_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="负责人角色">{getRoleLabel(detailRecord.owner_role)}</Descriptions.Item>
-              <Descriptions.Item label="部门">{detailRecord.department || '-'}</Descriptions.Item>
+              <Descriptions.Item label="部门">{getDepartmentLabel(detailRecord.department)}</Descriptions.Item>
               <Descriptions.Item label="上级目标">{detailRecord.parent_title || '-'}</Descriptions.Item>
               <Descriptions.Item label="截止日期">{detailRecord.deadline || '-'}</Descriptions.Item>
               <Descriptions.Item label="状态">
