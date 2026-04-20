@@ -301,11 +301,14 @@ function Goals() {
           </Form.Item>
 
           <Form.Item name="owner_id" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
-            <Select showSearch optionFilterProp="children">
-              {users.map(u => (
-                <Option key={u.id} value={u.id}>{u.name}</Option>
-              ))}
-            </Select>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              options={users.map(u => ({
+                value: u.id,
+                label: u.display_name || u.username || `用户${u.id}`,
+              }))}
+            />
           </Form.Item>
 
           <Form.Item name="department" label="部门">
