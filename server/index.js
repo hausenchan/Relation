@@ -1595,14 +1595,33 @@ app.get('/api/opportunities', auth, (req, res) => {
       c.name as company_name,
       NULL as person_name, NULL as company, NULL as city, NULL as current_company, NULL as person_category,
       u.display_name as assignee_name,
-      NULL as created_by, NULL as created_by_name,
+      COALESCE(
+        cr.created_by,
+        (SELECT ft.assigned_by FROM follow_up_tasks ft WHERE ft.competitor_research_id = cr.id ORDER BY ft.id ASC LIMIT 1)
+      ) as created_by,
+      ub.display_name as created_by_name,
       (SELECT COUNT(*) FROM attachments WHERE source_type='competitor_research' AND source_id=cr.id) as attachment_count
     FROM competitor_research cr
     LEFT JOIN companies c ON cr.company_id = c.id
     LEFT JOIN users u ON cr.opportunity_assignee = u.id
+    LEFT JOIN users ub ON ub.id = COALESCE(
+      cr.created_by,
+      (SELECT ft.assigned_by FROM follow_up_tasks ft WHERE ft.competitor_research_id = cr.id ORDER BY ft.id ASC LIMIT 1)
+    )
     WHERE cr.opportunity_title IS NOT NULL AND cr.opportunity_title != ''
   `;
   const params2 = [];
+
+  if (visibleIds !== null) {
+    query2 += ` AND (
+      COALESCE(
+        cr.created_by,
+        (SELECT ft.assigned_by FROM follow_up_tasks ft WHERE ft.competitor_research_id = cr.id ORDER BY ft.id ASC LIMIT 1)
+      ) IN (${visibleIds.map(() => '?').join(',')})
+      OR cr.opportunity_assignee IN (${visibleIds.map(() => '?').join(',')})
+    )`;
+    params2.push(...visibleIds, ...visibleIds);
+  }
 
   if (status) { query2 += ' AND cr.opportunity_status = ?'; params2.push(status); }
   if (assignee) { query2 += ' AND cr.opportunity_assignee = ?'; params2.push(assignee); }
