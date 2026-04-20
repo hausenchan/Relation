@@ -68,7 +68,7 @@ export default function Dashboard() {
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
   const canViewTeamTasks = isExecutive();
-  const hideRelationshipPanels = ['operation', 'rd'].includes(user?.department);
+  const hideRelationshipPanels = stats?.showRelationshipPanels === false || ['operation', 'rd'].includes(user?.department);
 
   useEffect(() => {
     loadData();

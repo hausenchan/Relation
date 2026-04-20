@@ -1066,11 +1066,23 @@ app.post('/api/auth/login', (req, res) => {
   );
   // 查模块权限
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
-  res.json({ token, user: { id: user.id, username: user.username, display_name: user.display_name, role: user.role, executive_role: user.executive_role, modulePerms } });
+  res.json({
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      role: user.role,
+      department: user.department || null,
+      team_id: user.team_id || null,
+      executive_role: user.executive_role,
+      modulePerms,
+    }
+  });
 });
 
 app.get('/api/auth/me', auth, (req, res) => {
-  const user = db.prepare('SELECT id, username, display_name, role, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, username, display_name, role, department, team_id, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(req.user.id);
   const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(req.user.id).map(r => r.menu_key);
   res.json({ ...user, modulePerms, menuPerms });
@@ -2099,6 +2111,8 @@ app.delete('/api/reminders/:id', (req, res) => {
 // =========== 统计 API ===========
 app.get('/api/stats', (req, res) => {
   const { id: me, role } = req.user;
+  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(me);
+  const showRelationshipPanels = !['operation', 'rd'].includes(currentUser?.department);
   const filter = buildUserFilter(me, role, 'p');
   const personCountSql = `SELECT COUNT(*) as cnt FROM persons p WHERE 1=1${filter.sql}`;
   const personCount = db.prepare(personCountSql).get(...filter.params).cnt;
@@ -2120,7 +2134,14 @@ app.get('/api/stats', (req, res) => {
     LEFT JOIN persons p ON i.person_id = p.id
     ORDER BY i.date DESC LIMIT 5
   `).all();
-  res.json({ personCount, categoryStats, monthlyInteractions: monthlyTotal, pendingReminders, recentInteractions });
+  res.json({
+    personCount,
+    categoryStats,
+    monthlyInteractions: monthlyTotal,
+    pendingReminders,
+    recentInteractions,
+    showRelationshipPanels,
+  });
 });
 
 // =========== 公司研究表 ===========
