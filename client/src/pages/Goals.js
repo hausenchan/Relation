@@ -569,14 +569,14 @@ function Goals() {
             <>
               <Form.Item
                 name="parent_id"
-                label="上级季度目标"
-                rules={[{ required: true, message: '请选择上级季度目标' }]}
+                label="关联季度目标"
               >
                 <Select
+                  allowClear
                   showSearch
                   optionFilterProp="label"
                   options={getParentOptions()}
-                  placeholder="请选择上级季度目标"
+                  placeholder="请选择关联季度目标"
                 />
               </Form.Item>
               <Form.Item name="period_month" label="周期" rules={[{ required: true, message: '请选择月份' }]}>
@@ -589,14 +589,14 @@ function Goals() {
             <>
               <Form.Item
                 name="parent_id"
-                label="上级月度目标"
-                rules={[{ required: true, message: '请选择上级月度目标' }]}
+                label="关联月度目标"
               >
                 <Select
+                  allowClear
                   showSearch
                   optionFilterProp="label"
                   options={getParentOptions()}
-                  placeholder="请选择上级月度目标"
+                  placeholder="请选择关联月度目标"
                 />
               </Form.Item>
               <Form.Item name="period_range" label="周期" rules={[{ required: true, message: '请选择日期范围' }]}>

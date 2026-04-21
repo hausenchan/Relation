@@ -720,7 +720,7 @@ db.exec(`
     department  TEXT,
     deadline    TEXT,
     progress    INTEGER DEFAULT 0,
-    status      TEXT DEFAULT 'active',
+    status      TEXT DEFAULT 'pending',
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
   );
