@@ -115,8 +115,21 @@ export default function Leads() {
       // 编辑模式：直接更新商机
       if (editTarget) {
         await opportunitiesApi.update(editTarget.id, {
+          source_type: editTarget.source_type,
+          interaction_type: values.interaction_type,
+          date: dateStr,
+          importance: values.importance || 'normal',
+          description: values.description || '',
+          outcome: values.outcome || '',
+          follow_result: values.follow_result || '',
+          next_action: values.next_action || '',
+          next_action_date: nextDateStr,
+          info_source: values.info_source || '',
+          impact: values.impact || '',
+          opportunity_title: values.opportunity_title,
           opportunity_status: values.opportunity_status,
-          assignee_id: values.assignee_id,
+          opportunity_assignee: values.opportunity_assignee,
+          opportunity_note: values.opportunity_note || '',
         });
 
         // 上传新附件
@@ -145,6 +158,7 @@ export default function Leads() {
           importance: values.importance || 'normal',
           description: values.description || '',
           outcome: values.outcome || '',
+          follow_result: values.follow_result || '',
           next_action: values.next_action || '',
           next_action_date: nextDateStr,
           opportunity_title: values.opportunity_title,
@@ -162,6 +176,7 @@ export default function Leads() {
           content: values.description || '',
           source: values.info_source || '',
           outcome: values.outcome || '',
+          follow_result: values.follow_result || '',
           impact: values.impact || '',
           next_action: values.next_action || '',
           next_action_date: nextDateStr,
@@ -201,14 +216,19 @@ export default function Leads() {
       person_id: record.person_id,
       company_id: record.company_id,
       date: record.date ? dayjs(record.date) : null,
-      type: record.type,
+      interaction_type: record.type,
       description: record.description,
       outcome: record.outcome,
+      follow_result: record.follow_result,
       impact: record.impact,
       next_action: record.next_action,
       next_action_date: record.next_action_date ? dayjs(record.next_action_date) : null,
+      importance: record.importance,
+      info_source: record.source,
+      opportunity_title: record.opportunity_title,
       opportunity_status: record.opportunity_status,
-      assignee_id: record.assignee_id,
+      opportunity_assignee: record.opportunity_assignee,
+      opportunity_note: record.opportunity_note,
     });
     setAddSourceType(record.source_type || 'interaction');
     setFileList([]);
@@ -224,6 +244,12 @@ export default function Leads() {
   };
 
   const columns = [
+    {
+      title: '线索ID',
+      dataIndex: 'source_id',
+      width: 90,
+      render: (value) => <Text style={{ fontSize: 12, color: '#374151', fontWeight: 500 }}>{value}</Text>,
+    },
     {
       title: '来源',
       dataIndex: 'source_type',
@@ -298,6 +324,13 @@ export default function Leads() {
           </span>
         );
       },
+    },
+    {
+      title: '跟进结果',
+      dataIndex: 'follow_result',
+      width: 180,
+      ellipsis: true,
+      render: (value) => <Text style={{ fontSize: 12, color: '#4b5563' }}>{value || '-'}</Text>,
     },
     {
       title: '指派给',
@@ -440,7 +473,7 @@ export default function Leads() {
         <Table
           columns={columns}
           dataSource={data}
-          rowKey="id"
+          rowKey={(record) => `${record.source_type}-${record.source_id}`}
           loading={loading}
           size="small"
           pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
@@ -450,10 +483,11 @@ export default function Leads() {
               <div style={{ padding: '12px 20px', background: '#f8fafc', borderRadius: 10, border: '1px solid #f0f0f5' }}>
                 {r.description && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动描述：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.description}</Text></div>}
                 {r.outcome && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.outcome}</Text></div>}
+                {r.follow_result && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>跟进结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.follow_result}</Text></div>}
                 {r.opportunity_note && <div><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>商机说明：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.opportunity_note}</Text></div>}
               </div>
             ),
-            rowExpandable: r => !!(r.description || r.outcome || r.opportunity_note),
+            rowExpandable: r => !!(r.description || r.outcome || r.follow_result || r.opportunity_note),
           }}
         />
       </Card>
@@ -525,11 +559,13 @@ export default function Leads() {
                 {(detailRecord.company || detailRecord.current_company) &&
                   ` (${detailRecord.company || detailRecord.current_company})`}
               </Descriptions.Item>
+              <Descriptions.Item label="线索ID">{detailRecord.source_id}</Descriptions.Item>
               <Descriptions.Item label="指派给">{detailRecord.assignee_name || <Text style={{ color: '#d1d5db' }}>未指派</Text>}</Descriptions.Item>
               <Descriptions.Item label="商机说明">{detailRecord.opportunity_note || '-'}</Descriptions.Item>
               <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
               <Descriptions.Item label="互动描述">{detailRecord.description || '-'}</Descriptions.Item>
               <Descriptions.Item label="互动结果">{detailRecord.outcome || '-'}</Descriptions.Item>
+              <Descriptions.Item label="跟进结果">{detailRecord.follow_result || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{detailRecord.created_by_name || '-'}</Descriptions.Item>
             </Descriptions>
 
@@ -665,6 +701,9 @@ export default function Leads() {
           </Row>
           <Form.Item label="商机说明" name="opportunity_note">
             <Input.TextArea rows={2} placeholder="背景、需求、补充说明等" />
+          </Form.Item>
+          <Form.Item label="跟进结果" name="follow_result">
+            <Input.TextArea rows={2} placeholder="填写当前线索跟进结果" />
           </Form.Item>
 
           <Divider style={{ margin: '8px 0 16px', borderColor: '#f0f0f5' }} />

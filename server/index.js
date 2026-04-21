@@ -184,6 +184,7 @@ db.exec(`
     amount REAL,
     description TEXT,
     outcome TEXT,
+    follow_result TEXT,
     next_action TEXT,
     next_action_date TEXT,
     importance TEXT DEFAULT 'normal',
@@ -366,6 +367,7 @@ if (intCols.length > 0) {
   if (!intCols.includes('opportunity_status')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_status TEXT DEFAULT NULL");
   if (!intCols.includes('opportunity_assignee')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_assignee INTEGER DEFAULT NULL");
   if (!intCols.includes('opportunity_note')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_note TEXT DEFAULT NULL");
+  if (!intCols.includes('follow_result')) db.exec("ALTER TABLE interactions ADD COLUMN follow_result TEXT DEFAULT NULL");
   if (!intCols.includes('created_by')) db.exec("ALTER TABLE interactions ADD COLUMN created_by INTEGER DEFAULT NULL");
 }
 
@@ -375,7 +377,13 @@ if (crCols.length > 0) {
   if (!crCols.includes('opportunity_status')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_status TEXT DEFAULT NULL");
   if (!crCols.includes('opportunity_assignee')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_assignee INTEGER DEFAULT NULL");
   if (!crCols.includes('opportunity_note')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_note TEXT DEFAULT NULL");
+  if (!crCols.includes('follow_result')) db.exec("ALTER TABLE competitor_research ADD COLUMN follow_result TEXT DEFAULT NULL");
   if (!crCols.includes('created_by')) db.exec("ALTER TABLE competitor_research ADD COLUMN created_by INTEGER DEFAULT NULL");
+}
+
+const leadCols = db.prepare("PRAGMA table_info(leads)").all().map(c => c.name);
+if (leadCols.length > 0) {
+  if (!leadCols.includes('follow_result')) db.exec("ALTER TABLE leads ADD COLUMN follow_result TEXT DEFAULT NULL");
 }
 
 // 回填历史数据 created_by
@@ -525,6 +533,7 @@ db.exec(`
     contact_company TEXT,
     contact_info TEXT,
     description TEXT,
+    follow_result TEXT,
     status TEXT DEFAULT 'new',
     assignee_id INTEGER,
     priority TEXT DEFAULT 'medium',
@@ -1538,14 +1547,14 @@ app.get('/api/interactions', (req, res) => {
 });
 
 app.post('/api/interactions', (req, res) => {
-  const { person_id, type, date, amount, description, outcome, next_action, next_action_date, importance, gift_name,
+  const { person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
     opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
   const createdBy = req.user?.id || null;
   const result = db.prepare(`
-    INSERT INTO interactions (person_id, type, date, amount, description, outcome, next_action, next_action_date, importance, gift_name,
+    INSERT INTO interactions (person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
       opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(person_id, type, date, amount, description, outcome, next_action, next_action_date, importance || 'normal', gift_name || null,
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(person_id, type, date, amount, description, outcome, follow_result || null, next_action, next_action_date, importance || 'normal', gift_name || null,
     opportunity_title || null, opportunity_status || null, opportunity_assignee || null, opportunity_note || null, createdBy);
 
   const interactionId = result.lastInsertRowid;
@@ -1582,14 +1591,14 @@ app.post('/api/interactions', (req, res) => {
 });
 
 app.put('/api/interactions/:id', (req, res) => {
-  const { type, date, amount, description, outcome, next_action, next_action_date, importance, gift_name,
+  const { type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
     opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
   const original = db.prepare('SELECT person_id FROM interactions WHERE id=?').get(req.params.id);
   db.prepare(`
-    UPDATE interactions SET type=?, date=?, amount=?, description=?, outcome=?, next_action=?, next_action_date=?, importance=?, gift_name=?,
+    UPDATE interactions SET type=?, date=?, amount=?, description=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, importance=?, gift_name=?,
       opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
     WHERE id=?
-  `).run(type, date, amount, description, outcome, next_action, next_action_date, importance || 'normal', gift_name || null,
+  `).run(type, date, amount, description, outcome, follow_result || null, next_action, next_action_date, importance || 'normal', gift_name || null,
     opportunity_title || null, opportunity_status || null, opportunity_assignee || null, opportunity_note || null,
     req.params.id);
 
@@ -1709,7 +1718,23 @@ app.get('/api/opportunities', auth, (req, res) => {
 });
 
 app.put('/api/opportunities/:id', (req, res) => {
-  const { opportunity_status, opportunity_assignee, opportunity_note, opportunity_title, source_type } = req.body;
+  const {
+    opportunity_status,
+    opportunity_assignee,
+    opportunity_note,
+    opportunity_title,
+    follow_result,
+    date,
+    importance,
+    description,
+    outcome,
+    next_action,
+    next_action_date,
+    interaction_type,
+    info_source,
+    impact,
+    source_type,
+  } = req.body;
 
   // 根据来源类型更新不同的表
   if (source_type === 'competitor_research') {
@@ -1717,9 +1742,31 @@ app.put('/api/opportunities/:id', (req, res) => {
     if (!original) return res.status(404).json({ error: '未找到' });
 
     db.prepare(`
-      UPDATE competitor_research SET opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
+      UPDATE competitor_research SET
+        date=?,
+        importance=?,
+        content=?,
+        source=?,
+        impact=?,
+        outcome=?,
+        follow_result=?,
+        next_action=?,
+        next_action_date=?,
+        opportunity_title=?,
+        opportunity_status=?,
+        opportunity_assignee=?,
+        opportunity_note=?
       WHERE id=?
     `).run(
+      date ?? original.date,
+      importance ?? original.importance,
+      description ?? original.content,
+      info_source ?? original.source,
+      impact ?? original.impact,
+      outcome ?? original.outcome,
+      follow_result ?? original.follow_result,
+      next_action ?? original.next_action,
+      next_action_date ?? original.next_action_date,
       opportunity_title ?? original.opportunity_title,
       opportunity_status ?? original.opportunity_status,
       opportunity_assignee ?? original.opportunity_assignee,
@@ -1732,9 +1779,29 @@ app.put('/api/opportunities/:id', (req, res) => {
     if (!original) return res.status(404).json({ error: '未找到' });
 
     db.prepare(`
-      UPDATE interactions SET opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
+      UPDATE interactions SET
+        type=?,
+        date=?,
+        importance=?,
+        description=?,
+        outcome=?,
+        follow_result=?,
+        next_action=?,
+        next_action_date=?,
+        opportunity_title=?,
+        opportunity_status=?,
+        opportunity_assignee=?,
+        opportunity_note=?
       WHERE id=?
     `).run(
+      interaction_type ?? original.type,
+      date ?? original.date,
+      importance ?? original.importance,
+      description ?? original.description,
+      outcome ?? original.outcome,
+      follow_result ?? original.follow_result,
+      next_action ?? original.next_action,
+      next_action_date ?? original.next_action_date,
       opportunity_title ?? original.opportunity_title,
       opportunity_status ?? original.opportunity_status,
       opportunity_assignee ?? original.opportunity_assignee,
@@ -2564,6 +2631,7 @@ db.exec(`
     impact TEXT,
     amount REAL,
     outcome TEXT,
+    follow_result TEXT,
     next_action TEXT,
     next_action_date TEXT,
     opportunity_title TEXT,
@@ -2584,12 +2652,12 @@ app.get('/api/competitor_research', (req, res) => {
 });
 
 app.post('/api/competitor_research', (req, res) => {
-  const { company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
+  const { company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
   const createdBy = req.user?.id || null;
   const r = db.prepare(`
-    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, createdBy);
+    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, createdBy);
   db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
 
   // 自动创建待跟进任务（商机指派）
@@ -2607,11 +2675,11 @@ app.post('/api/competitor_research', (req, res) => {
 });
 
 app.put('/api/competitor_research/:id', (req, res) => {
-  const { date, title, importance, content, source, impact, amount, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
+  const { date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
   db.prepare(`
-    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
+    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
     WHERE id=?
-  `).run(date, title, importance, content, source, impact, amount || null, outcome, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, req.params.id);
+  `).run(date, title, importance, content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, req.params.id);
 
   // 同步更新待跟进任务
   if (opportunity_title && opportunity_assignee) {
@@ -3391,7 +3459,7 @@ app.get('/api/leads', (req, res) => {
 
 // 获取可关联的线索列表（用于研发任务来源选择）
 app.get('/api/leads/simple', (req, res) => {
-  const leads = db.prepare('SELECT id, title, status FROM leads WHERE status != ? ORDER BY created_at DESC LIMIT 100').all('closed');
+  const leads = db.prepare('SELECT id, title, status, follow_result FROM leads WHERE status != ? ORDER BY created_at DESC LIMIT 100').all('closed');
   res.json(leads);
 });
 
@@ -3434,15 +3502,15 @@ app.get('/api/leads/:id', (req, res) => {
 
 // 创建线索
 app.post('/api/leads', (req, res) => {
-  const { title, source, source_type, contact_person, contact_company, contact_info, description, assignee_id, priority } = req.body;
+  const { title, source, source_type, contact_person, contact_company, contact_info, description, follow_result, assignee_id, priority } = req.body;
   const { id: userId } = req.user;
 
   if (!title) return res.status(400).json({ error: '线索标题必填' });
 
   const result = db.prepare(`
-    INSERT INTO leads (title, source, source_type, contact_person, contact_company, contact_info, description, assignee_id, priority, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, assignee_id, priority, userId);
+    INSERT INTO leads (title, source, source_type, contact_person, contact_company, contact_info, description, follow_result, assignee_id, priority, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, follow_result || null, assignee_id, priority, userId);
 
   // 如果指定了负责人，发送通知
   if (assignee_id && assignee_id !== userId) {
@@ -3461,7 +3529,7 @@ app.post('/api/leads', (req, res) => {
 // 更新线索
 app.put('/api/leads/:id', (req, res) => {
   const { id } = req.params;
-  const { title, source, source_type, contact_person, contact_company, contact_info, description, status, assignee_id, priority } = req.body;
+  const { title, source, source_type, contact_person, contact_company, contact_info, description, follow_result, status, assignee_id, priority } = req.body;
 
   db.prepare(`
     UPDATE leads SET
@@ -3472,12 +3540,13 @@ app.put('/api/leads/:id', (req, res) => {
       contact_company = COALESCE(?, contact_company),
       contact_info = COALESCE(?, contact_info),
       description = COALESCE(?, description),
+      follow_result = COALESCE(?, follow_result),
       status = COALESCE(?, status),
       assignee_id = COALESCE(?, assignee_id),
       priority = COALESCE(?, priority),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, status, assignee_id, priority, id);
+  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, follow_result, status, assignee_id, priority, id);
 
   res.json({ success: true });
 });
@@ -3497,6 +3566,10 @@ app.get('/api/strategies', (req, res) => {
 
   let q = `
     SELECT s.*, u.display_name as owner_name,
+      CASE
+        WHEN s.source_type = 'lead' THEN s.source_id
+        ELSE NULL
+      END as source_lead_id,
       CASE
         WHEN s.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = s.source_id)
         ELSE NULL
@@ -3560,6 +3633,10 @@ app.get('/api/strategies/:id', (req, res) => {
 
   const strategy = db.prepare(`
     SELECT s.*, u.display_name as owner_name,
+      CASE
+        WHEN s.source_type = 'lead' THEN s.source_id
+        ELSE NULL
+      END as source_lead_id,
       CASE
         WHEN s.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = s.source_id)
         ELSE NULL
@@ -3834,6 +3911,31 @@ app.get('/api/dev-tasks', (req, res) => {
       u.display_name as assignee_name,
       c.display_name as creator_name,
       CASE
+        WHEN dt.source_type = 'lead' THEN dt.source_id
+        WHEN dt.source_type = 'strategy' THEN (
+          SELECT s.source_id FROM strategies s WHERE s.id = dt.source_id AND s.source_type = 'lead'
+        )
+        ELSE NULL
+      END as related_lead_id,
+      CASE
+        WHEN dt.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = dt.source_id)
+        WHEN dt.source_type = 'strategy' THEN (
+          SELECT l.title
+          FROM strategies s
+          LEFT JOIN leads l ON s.source_id = l.id
+          WHERE s.id = dt.source_id AND s.source_type = 'lead'
+        )
+        ELSE NULL
+      END as related_lead_title,
+      CASE
+        WHEN dt.source_type = 'strategy' THEN dt.source_id
+        ELSE NULL
+      END as related_strategy_id,
+      CASE
+        WHEN dt.source_type = 'strategy' THEN (SELECT title FROM strategies WHERE id = dt.source_id)
+        ELSE NULL
+      END as related_strategy_title,
+      CASE
         WHEN dt.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = dt.source_id)
         WHEN dt.source_type = 'strategy' THEN (SELECT title FROM strategies WHERE id = dt.source_id)
         ELSE NULL
@@ -3886,6 +3988,31 @@ app.get('/api/dev-tasks/:id', (req, res) => {
     SELECT dt.*,
       u.display_name as assignee_name,
       c.display_name as creator_name,
+      CASE
+        WHEN dt.source_type = 'lead' THEN dt.source_id
+        WHEN dt.source_type = 'strategy' THEN (
+          SELECT s.source_id FROM strategies s WHERE s.id = dt.source_id AND s.source_type = 'lead'
+        )
+        ELSE NULL
+      END as related_lead_id,
+      CASE
+        WHEN dt.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = dt.source_id)
+        WHEN dt.source_type = 'strategy' THEN (
+          SELECT l.title
+          FROM strategies s
+          LEFT JOIN leads l ON s.source_id = l.id
+          WHERE s.id = dt.source_id AND s.source_type = 'lead'
+        )
+        ELSE NULL
+      END as related_lead_title,
+      CASE
+        WHEN dt.source_type = 'strategy' THEN dt.source_id
+        ELSE NULL
+      END as related_strategy_id,
+      CASE
+        WHEN dt.source_type = 'strategy' THEN (SELECT title FROM strategies WHERE id = dt.source_id)
+        ELSE NULL
+      END as related_strategy_title,
       CASE
         WHEN dt.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = dt.source_id)
         WHEN dt.source_type = 'strategy' THEN (SELECT title FROM strategies WHERE id = dt.source_id)

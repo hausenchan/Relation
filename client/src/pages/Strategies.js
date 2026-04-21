@@ -333,6 +333,13 @@ export default function Strategies() {
 
   const columns = [
     {
+      title: '策略ID',
+      dataIndex: 'id',
+      key: 'id',
+      width: 90,
+      render: (value) => <Text strong>{value}</Text>,
+    },
+    {
       title: '策略标题',
       dataIndex: 'title',
       key: 'title',
@@ -403,11 +410,18 @@ export default function Strategies() {
     },
     {
       title: '来源线索',
-      dataIndex: 'source_title',
-      key: 'source_title',
-      width: 180,
-      ellipsis: true,
-      render: (text) => text || '-',
+      dataIndex: 'source_lead_id',
+      key: 'source_lead_id',
+      width: 140,
+      render: (_, record) => {
+        if (!record.source_lead_id) return '-';
+        return (
+          <Space direction="vertical" size={0}>
+            <Text strong>{record.source_lead_id}</Text>
+            {record.source_title && <Text type="secondary" style={{ fontSize: 12 }}>{record.source_title}</Text>}
+          </Space>
+        );
+      },
     },
     {
       title: '关联需求数',
@@ -597,7 +611,7 @@ export default function Strategies() {
           dataSource={getFilteredData()}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1600 }}
+          scroll={{ x: 1680 }}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
         />
       </Card>
@@ -733,6 +747,7 @@ export default function Strategies() {
                       <Card size="small" title="来源线索">
                         {selectedStrategy.source_info ? (
                           <Descriptions column={1} size="small" bordered>
+                            <Descriptions.Item label="线索ID">{selectedStrategy.source_info.id}</Descriptions.Item>
                             <Descriptions.Item label="线索标题">{selectedStrategy.source_info.title}</Descriptions.Item>
                             <Descriptions.Item label="线索状态">{selectedStrategy.source_info.status || '-'}</Descriptions.Item>
                             <Descriptions.Item label="优先级">{selectedStrategy.source_info.priority || '-'}</Descriptions.Item>

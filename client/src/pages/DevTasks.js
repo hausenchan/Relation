@@ -259,6 +259,34 @@ export default function DevTasks() {
       },
     },
     {
+      title: '关联线索',
+      key: 'related_lead',
+      width: 150,
+      render: (_, record) => {
+        if (!record.related_lead_id) return '-';
+        return (
+          <Space direction="vertical" size={0}>
+            <Text strong>{record.related_lead_id}</Text>
+            {record.related_lead_title && <Text type="secondary" style={{ fontSize: 12 }}>{record.related_lead_title}</Text>}
+          </Space>
+        );
+      },
+    },
+    {
+      title: '关联策略',
+      key: 'related_strategy',
+      width: 150,
+      render: (_, record) => {
+        if (!record.related_strategy_id) return '-';
+        return (
+          <Space direction="vertical" size={0}>
+            <Text strong>{record.related_strategy_id}</Text>
+            {record.related_strategy_title && <Text type="secondary" style={{ fontSize: 12 }}>{record.related_strategy_title}</Text>}
+          </Space>
+        );
+      },
+    },
+    {
       title: '负责人',
       dataIndex: 'assignee_name',
       key: 'assignee_name',
@@ -414,7 +442,7 @@ export default function DevTasks() {
           dataSource={tasks}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1680 }}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
         />
       </Card>
@@ -560,6 +588,16 @@ export default function DevTasks() {
                     {selectedTask.source_title && <span style={{ marginLeft: 8 }}>{selectedTask.source_title}</span>}
                   </>
                 ) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="关联线索">
+                {selectedTask.related_lead_id
+                  ? `${selectedTask.related_lead_id}${selectedTask.related_lead_title ? ` · ${selectedTask.related_lead_title}` : ''}`
+                  : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="关联策略">
+                {selectedTask.related_strategy_id
+                  ? `${selectedTask.related_strategy_id}${selectedTask.related_strategy_title ? ` · ${selectedTask.related_strategy_title}` : ''}`
+                  : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="负责人">{selectedTask.assignee_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="指派人">{selectedTask.creator_name || '-'}</Descriptions.Item>
