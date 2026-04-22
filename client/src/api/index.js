@@ -46,6 +46,13 @@ export const teamsApi = {
   delete: (id) => api.delete(`/teams/${id}`).then(r => r.data),
 };
 
+export const projectGroupsApi = {
+  list: () => api.get('/project-groups').then(r => r.data),
+  create: (data) => api.post('/project-groups', data).then(r => r.data),
+  update: (id, data) => api.put(`/project-groups/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/project-groups/${id}`).then(r => r.data),
+};
+
 export const personsApi = {
   list: (params) => api.get('/persons', { params }).then(r => r.data),
   get: (id) => api.get(`/persons/${id}`).then(r => r.data),
@@ -72,6 +79,8 @@ export const opportunitiesApi = {
 export const followUpTasksApi = {
   list: (params) => api.get('/follow-up-tasks', { params }).then(r => r.data),
   count: () => api.get('/follow-up-tasks/count').then(r => r.data),
+  watch: (params) => api.get('/follow-up-tasks/watch', { params }).then(r => r.data),
+  watchCount: () => api.get('/follow-up-tasks/watch/count').then(r => r.data),
   update: (id, data) => api.put(`/follow-up-tasks/${id}`, data).then(r => r.data),
 };
 

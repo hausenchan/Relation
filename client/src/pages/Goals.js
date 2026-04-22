@@ -19,7 +19,7 @@ import {
 } from 'antd';
 import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { goalsApi, usersApi } from '../api';
+import { goalsApi, usersApi, projectGroupsApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
 
 const { TextArea } = Input;
@@ -69,6 +69,20 @@ const goalTypeOptions = [
   { value: 'week', label: '周目标' },
 ];
 
+const scopeTypeOptions = [
+  { value: 'project_group', label: '项目组' },
+  { value: 'department', label: '部门' },
+  { value: 'team', label: '小组' },
+  { value: 'personal', label: '个人' },
+];
+
+const scopeTypeMap = {
+  project_group: { label: '项目组', color: 'geekblue' },
+  department: { label: '部门', color: 'cyan' },
+  team: { label: '小组', color: 'purple' },
+  personal: { label: '个人', color: 'gold' },
+};
+
 const statusOptions = [
   { value: 'pending', label: '未开始' },
   { value: 'active', label: '进行中' },
@@ -96,12 +110,17 @@ function Goals() {
   const [goals, setGoals] = useState([]);
   const [goalOptions, setGoalOptions] = useState([]);
   const [users, setUsers] = useState([]);
+  const [projectGroups, setProjectGroups] = useState([]);
+  const [teams, setTeams] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filtersReady, setFiltersReady] = useState(false);
   const [filters, setFilters] = useState({
     department: undefined,
+    team_id: undefined,
+    project_group_id: undefined,
     owner_id: undefined,
     goal_type: undefined,
+    scope_type: undefined,
     status: undefined,
     owner_role: undefined,
   });
@@ -112,17 +131,23 @@ function Goals() {
   const [detailRecord, setDetailRecord] = useState(null);
   const [form] = Form.useForm();
   const goalType = Form.useWatch('goal_type', form);
+  const scopeType = Form.useWatch('scope_type', form);
 
   useEffect(() => {
     loadUsers();
+    loadProjectGroups();
+    loadTeams();
   }, []);
 
   useEffect(() => {
     if (!user || filtersReady) return;
     setFilters({
       department: undefined,
+      team_id: undefined,
+      project_group_id: undefined,
       owner_id: user.role === 'member' ? user.id : undefined,
       goal_type: undefined,
+      scope_type: undefined,
       status: undefined,
       owner_role: undefined,
     });
@@ -145,6 +170,24 @@ function Goals() {
       setUsers(data);
     } catch {
       message.error('加载用户失败');
+    }
+  };
+
+  const loadProjectGroups = async () => {
+    try {
+      const data = await projectGroupsApi.list();
+      setProjectGroups(data);
+    } catch {
+      message.error('加载项目组失败');
+    }
+  };
+
+  const loadTeams = async () => {
+    try {
+      const data = await teamsApi.list();
+      setTeams(data);
+    } catch {
+      message.error('加载小组失败');
     }
   };
 
@@ -242,6 +285,7 @@ function Goals() {
       department: currentUserMeta?.department || undefined,
       progress: 0,
       status: 'pending',
+      scope_type: 'personal',
       result: '',
     });
     setModalVisible(true);
@@ -252,6 +296,7 @@ function Goals() {
       ...record,
       deadline: record.deadline ? dayjs(record.deadline) : null,
       status: record.status,
+      scope_type: record.scope_type || 'personal',
       progress: Number(record.progress || 0),
       result: record.result || '',
     };
@@ -314,7 +359,10 @@ function Goals() {
         title: values.title,
         description: values.description,
         owner_id: values.owner_id,
+        project_group_id: values.project_group_id || null,
         department: values.department || undefined,
+        team_id: values.team_id || null,
+        scope_type: values.scope_type,
         deadline: values.deadline ? values.deadline.format('YYYY-MM-DD') : null,
         progress: values.progress || 0,
         status: values.status,
@@ -361,8 +409,11 @@ function Goals() {
   const resetFilters = () => {
     setFilters({
       department: undefined,
+      team_id: undefined,
+      project_group_id: undefined,
       owner_id: user?.role === 'member' ? user.id : undefined,
       goal_type: undefined,
+      scope_type: undefined,
       status: undefined,
       owner_role: undefined,
     });
@@ -385,6 +436,16 @@ function Goals() {
       width: 170,
     },
     {
+      title: '归属颗粒度',
+      dataIndex: 'scope_type',
+      width: 120,
+      render: (value) => (
+        <Tag color={(scopeTypeMap[value] || { color: 'default' }).color}>
+          {(scopeTypeMap[value] || { label: value }).label}
+        </Tag>
+      ),
+    },
+    {
       title: '目标标题',
       dataIndex: 'title',
       width: 220,
@@ -393,6 +454,12 @@ function Goals() {
       title: '目标描述',
       dataIndex: 'description',
       ellipsis: true,
+      render: (value) => value || '-',
+    },
+    {
+      title: '项目组',
+      dataIndex: 'project_group_name',
+      width: 140,
       render: (value) => value || '-',
     },
     {
@@ -406,6 +473,12 @@ function Goals() {
       dataIndex: 'department',
       width: 120,
       render: (value) => getDepartmentLabel(value),
+    },
+    {
+      title: '小组',
+      dataIndex: 'team_name',
+      width: 120,
+      render: (value) => value || '-',
     },
     {
       title: '进度',
@@ -470,6 +543,22 @@ function Goals() {
           />
           <Select
             allowClear
+            placeholder="项目组"
+            style={{ width: 160 }}
+            value={filters.project_group_id}
+            onChange={(value) => handleFilterChange('project_group_id', value)}
+            options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
+          />
+          <Select
+            allowClear
+            placeholder="小组"
+            style={{ width: 160 }}
+            value={filters.team_id}
+            onChange={(value) => handleFilterChange('team_id', value)}
+            options={teams.map(team => ({ value: team.id, label: team.name }))}
+          />
+          <Select
+            allowClear
             showSearch
             optionFilterProp="label"
             placeholder="负责人姓名"
@@ -485,6 +574,14 @@ function Goals() {
             value={filters.goal_type}
             onChange={(value) => handleFilterChange('goal_type', value)}
             options={goalTypeOptions}
+          />
+          <Select
+            allowClear
+            placeholder="归属颗粒度"
+            style={{ width: 160 }}
+            value={filters.scope_type}
+            onChange={(value) => handleFilterChange('scope_type', value)}
+            options={scopeTypeOptions}
           />
           <Select
             allowClear
@@ -515,7 +612,7 @@ function Goals() {
           columns={columns}
           dataSource={goals}
           pagination={{ pageSize: 10, showSizeChanger: true }}
-          scroll={{ x: 1300 }}
+          scroll={{ x: 1440 }}
           onRow={(record) => ({
             onDoubleClick: () => showDetail(record),
           })}
@@ -543,14 +640,27 @@ function Goals() {
                 period_range: undefined,
               });
             }
+            if (Object.prototype.hasOwnProperty.call(changedValues, 'scope_type')) {
+              form.setFieldsValue({
+                project_group_id: undefined,
+                department: undefined,
+                team_id: undefined,
+              });
+            }
             if (Object.prototype.hasOwnProperty.call(changedValues, 'owner_id')) {
               const selectedUser = users.find(item => item.id === changedValues.owner_id);
-              form.setFieldValue('department', selectedUser?.department || undefined);
+              if (!form.getFieldValue('department')) {
+                form.setFieldValue('department', selectedUser?.department || undefined);
+              }
             }
           }}
         >
           <Form.Item name="goal_type" label="目标类型" rules={[{ required: true, message: '请选择目标类型' }]}>
             <Select options={goalTypeOptions} disabled={!!editing} />
+          </Form.Item>
+
+          <Form.Item name="scope_type" label="归属颗粒度" rules={[{ required: true, message: '请选择归属颗粒度' }]}>
+            <Select options={scopeTypeOptions} />
           </Form.Item>
 
           {goalType === 'quarter' && (
@@ -633,12 +743,56 @@ function Goals() {
             />
           </Form.Item>
 
-          <Form.Item name="department" label="部门">
+          <Form.Item
+            name="project_group_id"
+            label="项目组"
+            rules={scopeType !== undefined ? [{ required: ['project_group', 'department', 'team', 'personal'].includes(scopeType), message: '请选择项目组' }] : []}
+          >
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
+              placeholder="请选择项目组"
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="department"
+            label="部门"
+            rules={scopeType !== undefined ? [{ required: ['department', 'team', 'personal'].includes(scopeType), message: '请选择部门' }] : []}
+          >
             <Select
               allowClear
               options={departmentOptions}
               placeholder="请选择部门"
             />
+          </Form.Item>
+
+          <Form.Item
+            noStyle
+            shouldUpdate={(prevValues, currentValues) => prevValues.department !== currentValues.department || prevValues.scope_type !== currentValues.scope_type}
+          >
+            {({ getFieldValue }) => {
+              const selectedDepartment = getFieldValue('department');
+              const filteredTeams = selectedDepartment ? teams.filter(team => team.department === selectedDepartment) : teams;
+              return (
+                <Form.Item
+                  name="team_id"
+                  label="小组"
+                  rules={scopeType !== undefined ? [{ required: ['team', 'personal'].includes(scopeType), message: '请选择小组' }] : []}
+                >
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    options={filteredTeams.map(team => ({ value: team.id, label: team.name }))}
+                    placeholder={selectedDepartment ? '请选择小组' : '请先选择部门'}
+                    disabled={!selectedDepartment}
+                  />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
 
           <Form.Item name="deadline" label="截止日期">
@@ -675,12 +829,19 @@ function Goals() {
                   {(goalTypeMap[detailRecord.goal_type] || { label: detailRecord.goal_type }).label}
                 </Tag>
               </Descriptions.Item>
+              <Descriptions.Item label="归属颗粒度">
+                <Tag color={(scopeTypeMap[detailRecord.scope_type] || { color: 'default' }).color}>
+                  {(scopeTypeMap[detailRecord.scope_type] || { label: detailRecord.scope_type }).label}
+                </Tag>
+              </Descriptions.Item>
               <Descriptions.Item label="周期">{detailRecord.period}</Descriptions.Item>
               <Descriptions.Item label="目标标题">{detailRecord.title}</Descriptions.Item>
               <Descriptions.Item label="目标描述">{detailRecord.description || '-'}</Descriptions.Item>
               <Descriptions.Item label="负责人">{detailRecord.owner_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="负责人角色">{getRoleLabel(detailRecord.owner_role)}</Descriptions.Item>
+              <Descriptions.Item label="项目组">{detailRecord.project_group_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="部门">{getDepartmentLabel(detailRecord.department)}</Descriptions.Item>
+              <Descriptions.Item label="小组">{detailRecord.team_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="上级目标">{detailRecord.parent_title || '-'}</Descriptions.Item>
               <Descriptions.Item label="截止日期">{detailRecord.deadline || '-'}</Descriptions.Item>
               <Descriptions.Item label="状态">

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker } from 'antd';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
@@ -61,6 +61,7 @@ export default function Strategies() {
   const { user } = useAuth();
   const [strategies, setStrategies] = useState([]);
   const [users, setUsers] = useState([]);
+  const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
@@ -76,6 +77,7 @@ export default function Strategies() {
 
   // 筛选
   const [filters, setFilters] = useState({
+    id: '',
     dimension: '',
     role_type: '',
     budget_group_type: '',
@@ -87,6 +89,7 @@ export default function Strategies() {
   useEffect(() => {
     fetchStrategies();
     fetchUsers();
+    fetchLeads();
   }, [filters]);
 
   const getErrorMessage = async (res, fallback) => {
@@ -102,6 +105,7 @@ export default function Strategies() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
+      if (filters.id) params.append('id', filters.id);
       if (filters.dimension) params.append('dimension', filters.dimension);
       if (filters.role_type) params.append('role_type', filters.role_type);
       if (filters.budget_group_type) params.append('budget_group_type', filters.budget_group_type);
@@ -136,6 +140,22 @@ export default function Strategies() {
       setUsers(Array.isArray(data) ? data : []);
     } catch (err) {
       setUsers([]);
+      console.error(err);
+    }
+  };
+
+  const fetchLeads = async () => {
+    try {
+      const res = await fetch('/api/leads/simple', {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      });
+      if (!res.ok) {
+        throw new Error(await getErrorMessage(res, '来源线索列表加载失败'));
+      }
+      const data = await res.json();
+      setLeads(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setLeads([]);
       console.error(err);
     }
   };
@@ -186,7 +206,11 @@ export default function Strategies() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${localStorage.getItem('token')}`,
         },
-        body: JSON.stringify(values),
+        body: JSON.stringify({
+          ...values,
+          source_type: values.source_id ? 'lead' : null,
+          source_id: values.source_id ? Number(values.source_id) : null,
+        }),
       });
       if (!res.ok) {
         throw new Error(await getErrorMessage(res, editingStrategy ? '更新失败' : '创建失败'));
@@ -412,13 +436,16 @@ export default function Strategies() {
       title: '来源线索',
       dataIndex: 'source_lead_id',
       key: 'source_lead_id',
-      width: 140,
+      width: 170,
       render: (_, record) => {
         if (!record.source_lead_id) return '-';
+        const shortTitle = record.source_title?.length > 6
+          ? `${record.source_title.slice(0, 6)}...`
+          : record.source_title;
         return (
           <Space direction="vertical" size={0}>
             <Text strong>{record.source_lead_id}</Text>
-            {record.source_title && <Text type="secondary" style={{ fontSize: 12 }}>{record.source_title}</Text>}
+            {shortTitle && <Text type="secondary" style={{ fontSize: 12 }}>{shortTitle}</Text>}
           </Space>
         );
       },
@@ -429,6 +456,26 @@ export default function Strategies() {
       key: 'dev_task_count',
       width: 100,
       render: (value) => value ?? 0,
+    },
+    {
+      title: '关联需求详情',
+      dataIndex: 'dev_task_details',
+      key: 'dev_task_details',
+      width: 220,
+      render: (value) => {
+        if (!value) return '-';
+        const items = value.split('||').filter(Boolean).slice(0, 3);
+        return (
+          <Space direction="vertical" size={0}>
+            {items.map(item => {
+              const [id, ...titleParts] = item.split(':');
+              const title = titleParts.join(':');
+              const shortTitle = title?.length > 6 ? `${title.slice(0, 6)}...` : title;
+              return <Text key={item} style={{ fontSize: 12 }}>{id} · {shortTitle}</Text>;
+            })}
+          </Space>
+        );
+      },
     },
     {
       title: '最新结果摘要',
@@ -521,6 +568,13 @@ export default function Strategies() {
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <Space size={12} wrap>
+          <Input
+            placeholder="策略ID"
+            style={{ width: 120 }}
+            allowClear
+            value={filters.id}
+            onChange={(e) => setFilters({ ...filters, id: e.target.value })}
+          />
           <Select
             placeholder="维度"
             style={{ width: 150 }}
@@ -611,7 +665,7 @@ export default function Strategies() {
           dataSource={getFilteredData()}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1680 }}
+          scroll={{ x: 1920 }}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
         />
       </Card>
@@ -646,6 +700,17 @@ export default function Strategies() {
                 value: u.id,
                 label: u.display_name || u.username || `用户${u.id}`,
               }))}
+            />
+          </Form.Item>
+          <Form.Item name="source_id" label="来源线索ID">
+            <AutoComplete
+              allowClear
+              options={leads.map(lead => ({
+                value: String(lead.id),
+                label: `${lead.id} · ${lead.title}`,
+              }))}
+              placeholder="可输入线索ID，也可下拉选择"
+              filterOption={(inputValue, option) => (option?.label ?? '').toLowerCase().includes(inputValue.toLowerCase())}
             />
           </Form.Item>
           <Form.Item name="role_type" label="岗位类型">
@@ -765,7 +830,14 @@ export default function Strategies() {
                             size="small"
                             pagination={false}
                             columns={[
-                              { title: '需求标题', dataIndex: 'title', key: 'title', ellipsis: true },
+                              {
+                                title: '需求',
+                                key: 'title',
+                                render: (_, row) => {
+                                  const shortTitle = row.title?.length > 6 ? `${row.title.slice(0, 6)}...` : row.title;
+                                  return `${row.id} · ${shortTitle || '-'}`;
+                                },
+                              },
                               { title: '负责人', dataIndex: 'assignee_name', key: 'assignee_name' },
                               { title: '状态', dataIndex: 'status', key: 'status', render: (val) => <Tag color={{ pending: 'default', in_progress: 'blue', testing: 'orange', completed: 'green', blocked: 'red' }[val] || 'default'}>{statusMap[val]?.label || val}</Tag> },
                               { title: '计划日期', dataIndex: 'due_date', key: 'due_date', render: (val) => val || '-' },

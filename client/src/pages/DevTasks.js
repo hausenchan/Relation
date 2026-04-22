@@ -44,6 +44,7 @@ export default function DevTasks() {
 
   // 筛选
   const [filters, setFilters] = useState({
+    id: '',
     status: '',
     assignee_id: '',
     priority: '',
@@ -70,6 +71,7 @@ export default function DevTasks() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
+      if (filters.id) params.append('id', filters.id);
       if (filters.status) params.append('status', filters.status);
       if (filters.assignee_id) params.append('assignee_id', filters.assignee_id);
       if (filters.priority) params.append('priority', filters.priority);
@@ -232,6 +234,13 @@ export default function DevTasks() {
 
   const columns = [
     {
+      title: '需求ID',
+      dataIndex: 'id',
+      key: 'id',
+      width: 90,
+      render: (value) => <Text strong>{value}</Text>,
+    },
+    {
       title: '需求标题',
       dataIndex: 'title',
       key: 'title',
@@ -264,10 +273,13 @@ export default function DevTasks() {
       width: 150,
       render: (_, record) => {
         if (!record.related_lead_id) return '-';
+        const shortTitle = record.related_lead_title?.length > 6
+          ? `${record.related_lead_title.slice(0, 6)}...`
+          : record.related_lead_title;
         return (
           <Space direction="vertical" size={0}>
             <Text strong>{record.related_lead_id}</Text>
-            {record.related_lead_title && <Text type="secondary" style={{ fontSize: 12 }}>{record.related_lead_title}</Text>}
+            {shortTitle && <Text type="secondary" style={{ fontSize: 12 }}>{shortTitle}</Text>}
           </Space>
         );
       },
@@ -278,10 +290,13 @@ export default function DevTasks() {
       width: 150,
       render: (_, record) => {
         if (!record.related_strategy_id) return '-';
+        const shortTitle = record.related_strategy_title?.length > 6
+          ? `${record.related_strategy_title.slice(0, 6)}...`
+          : record.related_strategy_title;
         return (
           <Space direction="vertical" size={0}>
             <Text strong>{record.related_strategy_id}</Text>
-            {record.related_strategy_title && <Text type="secondary" style={{ fontSize: 12 }}>{record.related_strategy_title}</Text>}
+            {shortTitle && <Text type="secondary" style={{ fontSize: 12 }}>{shortTitle}</Text>}
           </Space>
         );
       },
@@ -385,6 +400,13 @@ export default function DevTasks() {
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <Space size={12} wrap>
+          <Input
+            placeholder="需求ID"
+            style={{ width: 120 }}
+            allowClear
+            value={filters.id}
+            onChange={(e) => setFilters({ ...filters, id: e.target.value })}
+          />
           <Select
             placeholder="状态"
             style={{ width: 150 }}
@@ -591,12 +613,12 @@ export default function DevTasks() {
               </Descriptions.Item>
               <Descriptions.Item label="关联线索">
                 {selectedTask.related_lead_id
-                  ? `${selectedTask.related_lead_id}${selectedTask.related_lead_title ? ` · ${selectedTask.related_lead_title}` : ''}`
+                  ? `${selectedTask.related_lead_id}${selectedTask.related_lead_title ? ` · ${selectedTask.related_lead_title.length > 6 ? `${selectedTask.related_lead_title.slice(0, 6)}...` : selectedTask.related_lead_title}` : ''}`
                   : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="关联策略">
                 {selectedTask.related_strategy_id
-                  ? `${selectedTask.related_strategy_id}${selectedTask.related_strategy_title ? ` · ${selectedTask.related_strategy_title}` : ''}`
+                  ? `${selectedTask.related_strategy_id}${selectedTask.related_strategy_title ? ` · ${selectedTask.related_strategy_title.length > 6 ? `${selectedTask.related_strategy_title.slice(0, 6)}...` : selectedTask.related_strategy_title}` : ''}`
                   : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="负责人">{selectedTask.assignee_name || '-'}</Descriptions.Item>

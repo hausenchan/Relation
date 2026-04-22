@@ -45,6 +45,7 @@ export default function Dashboard() {
   const [reminders, setReminders] = useState([]);
   const [assignedTasks, setAssignedTasks] = useState([]);
   const [executionTasks, setExecutionTasks] = useState([]);
+  const [watchedTasks, setWatchedTasks] = useState([]);
   const [teamTasks, setTeamTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -60,6 +61,10 @@ export default function Dashboard() {
   // 筛选条件 - 需我执行的任务
   const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
   const [executionTaskDateRange, setExecutionTaskDateRange] = useState(null);
+
+  // 筛选条件 - 需我关注的任务
+  const [watchedTaskStatusFilter, setWatchedTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
+  const [watchedTaskDateRange, setWatchedTaskDateRange] = useState(null);
 
   // 筛选条件 - 团队任务
   const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
@@ -80,8 +85,10 @@ export default function Dashboard() {
       try {
         const allTasks = await tasksApi.list({ parent_id: 'null' });
         const allFollowUpData = await followUpTasksApi.list(canViewTeamTasks ? { all: '1' } : {});
+        const watchedFollowUpData = await followUpTasksApi.watch();
         setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
         setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
+        setWatchedTasks(buildWatchedTasks(watchedFollowUpData));
         if (canViewTeamTasks) {
           setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
         }
@@ -215,6 +222,23 @@ export default function Dashboard() {
     return [...normalTasks, ...followUpItems].sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
   };
 
+  const buildWatchedTasks = (watchData) => {
+    return watchData.map(t => ({
+      ...t,
+      id: `watch_${t.id}`,
+      task_source: 'opportunity',
+      task_source_label: '商机',
+      plan_date: t.due_date || null,
+      start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
+      complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+      display_status: toDisplayStatus(t.status),
+      display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
+      display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
+      display_result: t.done_note || '',
+      created_by_name: t.assigned_by_name,
+    })).sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
+  };
+
   const countUnfinished = (items) => items.filter(item => ['pending', 'in_progress'].includes(item.display_status || item.status)).length;
 
   const isWithinRange = (date, range) => {
@@ -237,8 +261,10 @@ export default function Dashboard() {
 
       const allTasks = await tasksApi.list({ parent_id: 'null' });
       const allFollowUpData = await followUpTasksApi.list(canViewTeamTasks ? { all: '1' } : {});
+      const watchedFollowUpData = await followUpTasksApi.watch();
       setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
+      setWatchedTasks(buildWatchedTasks(watchedFollowUpData));
       if (canViewTeamTasks) {
         setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
       } else {
@@ -324,6 +350,11 @@ export default function Dashboard() {
   const filteredExecutionTasks = executionTasks.filter(t => {
     if (!executionTaskStatusFilter.includes(t.display_status)) return false;
     return isWithinRange(t.plan_date, executionTaskDateRange);
+  });
+
+  const filteredWatchedTasks = watchedTasks.filter(t => {
+    if (!watchedTaskStatusFilter.includes(t.display_status)) return false;
+    return isWithinRange(t.plan_date, watchedTaskDateRange);
   });
 
   const filteredTeamTasks = teamTasks.filter(t => {
@@ -529,6 +560,87 @@ export default function Dashboard() {
     },
   ];
 
+  const watchedTaskColumns = [
+    {
+      title: '任务',
+      dataIndex: 'title',
+      key: 'title',
+      render: (text, record) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{text}</Text>
+          {record.opportunity_note && <Text type="secondary" style={{ fontSize: 12 }}>{record.opportunity_note}</Text>}
+        </Space>
+      ),
+    },
+    {
+      title: '任务来源',
+      dataIndex: 'task_source_label',
+      key: 'task_source_label',
+      width: 100,
+      render: (value) => <Tag color="purple">{value}</Tag>,
+    },
+    {
+      title: '指派人',
+      dataIndex: 'assigned_by_name',
+      key: 'assigned_by_name',
+      width: 110,
+      render: (value) => value || <Text type="secondary">-</Text>,
+    },
+    {
+      title: '执行人',
+      dataIndex: 'assigned_to_name',
+      key: 'assigned_to_name',
+      width: 110,
+      render: (value) => value || <Text type="secondary">-</Text>,
+    },
+    {
+      title: '计划日期',
+      dataIndex: 'plan_date',
+      key: 'plan_date',
+      width: 110,
+      render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '开始日期',
+      dataIndex: 'start_date',
+      key: 'start_date',
+      width: 110,
+      render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '完成日期',
+      dataIndex: 'complete_date',
+      key: 'complete_date',
+      width: 110,
+      render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
+    },
+    {
+      title: '状态',
+      dataIndex: 'display_status_label',
+      key: 'display_status_label',
+      width: 100,
+      render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
+    },
+    {
+      title: '任务进度/结果',
+      dataIndex: 'display_result',
+      key: 'display_result',
+      width: 220,
+      ellipsis: true,
+      render: (value) => value || <Text type="secondary">-</Text>,
+    },
+    {
+      title: '操作',
+      key: 'action',
+      width: 100,
+      render: () => (
+        <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>
+          查看
+        </Button>
+      ),
+    },
+  ];
+
   const teamTaskColumns = [
     {
       title: '任务',
@@ -724,6 +836,62 @@ export default function Dashboard() {
       ),
     }
   );
+
+  tabItems.push({
+    key: 'watched-tasks',
+    label: (
+      <span>
+        <BellOutlined /> 需我关注的任务
+        {countUnfinished(watchedTasks) > 0 && <Badge count={countUnfinished(watchedTasks)} style={{ marginLeft: 8 }} />}
+      </span>
+    ),
+    children: (
+      <div>
+        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+          <Space wrap>
+            <Select
+              mode="multiple"
+              placeholder="状态筛选"
+              value={watchedTaskStatusFilter}
+              onChange={setWatchedTaskStatusFilter}
+              style={{ minWidth: 200 }}
+              options={[
+                { label: '未开始', value: 'pending' },
+                { label: '进行中', value: 'in_progress' },
+                { label: '已完成', value: 'done' },
+              ]}
+            />
+            <RangePicker
+              placeholder={['开始日期', '结束日期']}
+              value={watchedTaskDateRange}
+              onChange={setWatchedTaskDateRange}
+              style={{ width: 240 }}
+            />
+            {(watchedTaskStatusFilter.length !== 3 || watchedTaskDateRange) && (
+              <Button
+                size="small"
+                onClick={() => {
+                  setWatchedTaskStatusFilter(['pending', 'in_progress', 'done']);
+                  setWatchedTaskDateRange(null);
+                }}
+              >
+                重置筛选
+              </Button>
+            )}
+          </Space>
+        </div>
+        <Table
+          dataSource={filteredWatchedTasks}
+          columns={watchedTaskColumns}
+          rowKey="id"
+          loading={loading}
+          scroll={{ x: 1380 }}
+          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+          size="small"
+        />
+      </div>
+    ),
+  });
 
   if (canViewTeamTasks) {
     tabItems.push({

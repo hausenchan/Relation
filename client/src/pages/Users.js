@@ -4,7 +4,7 @@ import {
   message, Typography, Checkbox, Divider, Tooltip
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, UserOutlined, LockOutlined } from '@ant-design/icons';
-import { usersApi, teamsApi } from '../api';
+import { usersApi, teamsApi, projectGroupsApi } from '../api';
 import { useAuth } from '../AuthContext';
 
 const { Text } = Typography;
@@ -40,6 +40,7 @@ export default function UsersPage() {
   const { user: currentUser } = useAuth();
   const [data, setData] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [projectGroups, setProjectGroups] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -52,9 +53,10 @@ export default function UsersPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [users, teamList] = await Promise.all([usersApi.list(), teamsApi.list()]);
+      const [users, teamList, projectGroupList] = await Promise.all([usersApi.list(), teamsApi.list(), projectGroupsApi.list()]);
       setData(users);
       setTeams(teamList);
+      setProjectGroups(projectGroupList);
     } finally {
       setLoading(false);
     }
@@ -87,6 +89,7 @@ export default function UsersPage() {
       role: r.role,
       department: userDepartment,
       team_ids: r.team_ids?.length ? r.team_ids : (r.team_id ? [r.team_id] : undefined),
+      project_group_ids: r.project_group_ids || undefined,
       leader_id: r.leader_id || undefined,
       modulePerms: r.modulePerms?.reduce((acc, p) => {
         acc[p.module] = { can_read: p.can_read === 1, can_write: p.can_write === 1 };
@@ -109,6 +112,7 @@ export default function UsersPage() {
       ...values,
       modulePerms,
       team_ids: values.team_ids || [],
+      project_group_ids: values.project_group_ids || [],
       leader_id: values.leader_id || null,
       department: values.department || null,
     };
@@ -177,6 +181,13 @@ export default function UsersPage() {
           ? names.map(name => <Tag key={name} style={{ marginBottom: 2 }}>{name}</Tag>)
           : <Text type="secondary" style={{ fontSize: 12 }}>-</Text>;
       },
+    },
+    {
+      title: '所属项目组',
+      dataIndex: 'project_group_names',
+      render: (values) => values?.length
+        ? values.map(name => <Tag key={name} color="blue" style={{ marginBottom: 2 }}>{name}</Tag>)
+        : <Text type="secondary" style={{ fontSize: 12 }}>-</Text>,
     },
     { title: '最近登录', dataIndex: 'last_login', render: v => v?.slice(0, 16) || '从未登录' },
     {
@@ -256,6 +267,17 @@ export default function UsersPage() {
               disabled={!department}
               optionFilterProp="label"
               options={filteredTeams.map(t => ({ value: t.id, label: t.name }))}
+            />
+          </Form.Item>
+
+          <Form.Item label="所属项目组" name="project_group_ids">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="请选择所属项目组"
+              options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
             />
           </Form.Item>
 

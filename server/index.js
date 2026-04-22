@@ -3950,8 +3950,9 @@ app.delete('/api/leads/:id', (req, res) => {
 // =========== 策略管理 API ===========
 // 获取策略列表
 app.get('/api/strategies', (req, res) => {
-  const { dimension, role_type, budget_group_type, status, media, access_method } = req.query;
+  const { id, dimension, role_type, budget_group_type, status, media, access_method } = req.query;
   const { id: userId, role } = req.user;
+  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(userId);
 
   let q = `
     SELECT s.*, u.display_name as owner_name,
@@ -3964,6 +3965,11 @@ app.get('/api/strategies', (req, res) => {
         ELSE NULL
       END as source_title,
       (SELECT COUNT(*) FROM dev_tasks dt WHERE dt.source_type = 'strategy' AND dt.source_id = s.id) as dev_task_count,
+      COALESCE((
+        SELECT GROUP_CONCAT(CAST(dt.id AS TEXT) || ':' || dt.title, '||')
+        FROM dev_tasks dt
+        WHERE dt.source_type = 'strategy' AND dt.source_id = s.id
+      ), '') as dev_task_details,
       (SELECT result_summary FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as latest_result_summary,
       (SELECT effect_judgement FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as effect_judgement,
       (SELECT MAX(execute_date) FROM strategy_execution_logs sel WHERE sel.strategy_id = s.id) as last_execution_date,
@@ -3975,7 +3981,17 @@ app.get('/api/strategies', (req, res) => {
   const params = [];
 
   // 角色过滤
-  if (role === 'member') {
+  if (role === 'member' && currentUser?.department === 'operation') {
+    const teamIds = getUserTeamIds(userId);
+    if (teamIds.length > 0) {
+      const members = getUsersByTeamIds(teamIds);
+      q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
+      params.push(...members);
+    } else {
+      q += ' AND (s.owner_id = ? OR s.owner_id IS NULL)';
+      params.push(userId);
+    }
+  } else if (role === 'member') {
     // 获取跨团队访问权限
     const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
       .all(userId, 'strategies').map(r => r.target_team_id);
@@ -4013,6 +4029,7 @@ app.get('/api/strategies', (req, res) => {
     }
   }
 
+  if (id) { q += ' AND s.id = ?'; params.push(id); }
   if (dimension) { q += ' AND s.dimension = ?'; params.push(dimension); }
   if (role_type) { q += ' AND s.role_type = ?'; params.push(role_type); }
   if (budget_group_type) { q += ' AND s.budget_group_type = ?'; params.push(budget_group_type); }
@@ -4306,8 +4323,9 @@ app.delete('/api/strategies/:id', (req, res) => {
 // =========== 研发任务 API ===========
 // 获取研发任务列表
 app.get('/api/dev-tasks', (req, res) => {
-  const { status, assignee_id, priority, source_type } = req.query;
+  const { id, status, assignee_id, priority, source_type } = req.query;
   const { id: userId, role } = req.user;
+  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(userId);
 
   let q = `
     SELECT dt.*,
@@ -4351,7 +4369,17 @@ app.get('/api/dev-tasks', (req, res) => {
   const params = [];
 
   // 角色过滤
-  if (role === 'member') {
+  if (role === 'member' && currentUser?.department === 'operation') {
+    const teamIds = getUserTeamIds(userId);
+    if (teamIds.length > 0) {
+      const members = getUsersByTeamIds(teamIds);
+      q += ` AND (dt.assignee_id IN (${members.map(() => '?').join(',')}) OR dt.created_by IN (${members.map(() => '?').join(',')}))`;
+      params.push(...members, ...members);
+    } else {
+      q += ' AND (dt.assignee_id = ? OR dt.created_by = ?)';
+      params.push(userId, userId);
+    }
+  } else if (role === 'member') {
     // 获取跨团队访问权限
     const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
       .all(userId, 'dev_tasks').map(r => r.target_team_id);
@@ -4389,6 +4417,7 @@ app.get('/api/dev-tasks', (req, res) => {
     }
   }
 
+  if (id) { q += ' AND dt.id = ?'; params.push(id); }
   if (status) { q += ' AND dt.status = ?'; params.push(status); }
   if (assignee_id) { q += ' AND dt.assignee_id = ?'; params.push(assignee_id); }
   if (priority) { q += ' AND dt.priority = ?'; params.push(priority); }

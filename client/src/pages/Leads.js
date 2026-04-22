@@ -130,6 +130,7 @@ export default function Leads() {
           opportunity_status: values.opportunity_status,
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
+          watcher_ids: values.watcher_ids || [],
         });
 
         // 上传新附件
@@ -165,6 +166,7 @@ export default function Leads() {
           opportunity_status: values.opportunity_status,
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
+          watcher_ids: values.watcher_ids || [],
         });
         sourceId = res.id;
       } else {
@@ -184,6 +186,7 @@ export default function Leads() {
           opportunity_status: values.opportunity_status,
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
+          watcher_ids: values.watcher_ids || [],
         });
         sourceId = res.id;
       }
@@ -229,6 +232,7 @@ export default function Leads() {
       opportunity_status: record.opportunity_status,
       opportunity_assignee: record.opportunity_assignee,
       opportunity_note: record.opportunity_note,
+      watcher_ids: record.watcher_ids ? record.watcher_ids.split(',').map(id => Number(id)).filter(Boolean) : [],
     });
     setAddSourceType(record.source_type || 'interaction');
     setFileList([]);
@@ -328,6 +332,13 @@ export default function Leads() {
     {
       title: '跟进结果',
       dataIndex: 'follow_result',
+      width: 180,
+      ellipsis: true,
+      render: (value) => <Text style={{ fontSize: 12, color: '#4b5563' }}>{value || '-'}</Text>,
+    },
+    {
+      title: '关注人',
+      dataIndex: 'watcher_names',
       width: 180,
       ellipsis: true,
       render: (value) => <Text style={{ fontSize: 12, color: '#4b5563' }}>{value || '-'}</Text>,
@@ -566,6 +577,7 @@ export default function Leads() {
               <Descriptions.Item label="互动描述">{detailRecord.description || '-'}</Descriptions.Item>
               <Descriptions.Item label="互动结果">{detailRecord.outcome || '-'}</Descriptions.Item>
               <Descriptions.Item label="跟进结果">{detailRecord.follow_result || '-'}</Descriptions.Item>
+              <Descriptions.Item label="关注人">{detailRecord.watcher_names || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{detailRecord.created_by_name || '-'}</Descriptions.Item>
             </Descriptions>
 
@@ -704,6 +716,16 @@ export default function Leads() {
           </Form.Item>
           <Form.Item label="跟进结果" name="follow_result">
             <Input.TextArea rows={2} placeholder="填写当前线索跟进结果" />
+          </Form.Item>
+          <Form.Item label="关注人" name="watcher_ids">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder="可选择需要关注该线索的人"
+              options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
+            />
           </Form.Item>
 
           <Divider style={{ margin: '8px 0 16px', borderColor: '#f0f0f5' }} />
