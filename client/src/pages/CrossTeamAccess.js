@@ -6,7 +6,7 @@ const { Option } = Select;
 
 const moduleMap = {
   strategies: { label: '策略', color: 'green' },
-  dev_tasks: { label: '研发任务', color: 'blue' },
+  dev_tasks: { label: '需求', color: 'blue' },
   leads: { label: '线索', color: 'orange' },
   goals: { label: '目标', color: 'purple' },
   weekly_reports: { label: '周报', color: 'cyan' },
@@ -76,19 +76,42 @@ export default function CrossTeamAccess() {
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const res = await fetch('/api/cross-team-access', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
-        body: JSON.stringify(values),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || '创建失败');
+      const { user_id, target_team_id, modules } = values;
+
+      // 循环创建多个权限记录
+      let successCount = 0;
+      let failCount = 0;
+
+      for (const module of modules) {
+        try {
+          const res = await fetch('/api/cross-team-access', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${localStorage.getItem('token')}`,
+            },
+            body: JSON.stringify({ user_id, target_team_id, module }),
+          });
+          if (res.ok) {
+            successCount++;
+          } else {
+            const data = await res.json();
+            if (!data.error?.includes('已存在')) {
+              failCount++;
+            }
+          }
+        } catch (err) {
+          failCount++;
+        }
       }
-      message.success('创建成功');
+
+      if (successCount > 0) {
+        message.success(`成功创建 ${successCount} 条权限`);
+      }
+      if (failCount > 0) {
+        message.warning(`${failCount} 条权限创建失败或已存在`);
+      }
+
       setModalOpen(false);
       fetchData();
     } catch (err) {
@@ -119,7 +142,7 @@ export default function CrossTeamAccess() {
       render: (text) => text || '-',
     },
     {
-      title: '访问团队',
+      title: '访问小组',
       dataIndex: 'team_name',
       key: 'team_name',
       width: 150,
@@ -202,15 +225,15 @@ export default function CrossTeamAccess() {
               }))}
             />
           </Form.Item>
-          <Form.Item name="target_team_id" label="目标团队" rules={[{ required: true, message: '请选择团队' }]}>
-            <Select placeholder="请选择团队">
+          <Form.Item name="target_team_id" label="目标小组" rules={[{ required: true, message: '请选择小组' }]}>
+            <Select placeholder="请选择小组">
               {teams.map(t => (
                 <Option key={t.id} value={t.id}>{t.name}</Option>
               ))}
             </Select>
           </Form.Item>
-          <Form.Item name="module" label="模块" rules={[{ required: true, message: '请选择模块' }]}>
-            <Select placeholder="请选择模块">
+          <Form.Item name="modules" label="模块" rules={[{ required: true, message: '请选择模块' }]}>
+            <Select placeholder="请选择模块（可多选）" mode="multiple">
               {Object.entries(moduleMap).map(([key, val]) => (
                 <Option key={key} value={key}>{val.label}</Option>
               ))}
