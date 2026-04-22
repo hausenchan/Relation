@@ -76,12 +76,14 @@ import Reminders from './pages/Reminders';
 import Companies from './pages/Companies';
 import Users from './pages/Users';
 import Teams from './pages/Teams';
+import ProjectGroups from './pages/ProjectGroups';
 import Gifts from './pages/Gifts';
 import GiftPlans from './pages/GiftPlans';
 import GiftReview from './pages/GiftReview';
 import Trips from './pages/Trips';
 import TripStats from './pages/TripStats';
 import MenuPerms from './pages/MenuPerms';
+import CrossTeamAccess from './pages/CrossTeamAccess';
 import FollowUpTasks from './pages/FollowUpTasks';
 import MyTasks from './pages/MyTasks';
 import TaskBoard from './pages/TaskBoard';
@@ -210,7 +212,9 @@ function AppLayout() {
     '/executive/operational': '经营周会',
     '/users': '用户管理',
     '/teams': '小组管理',
+    '/project-groups': '项目组管理',
     '/menu-perms': '菜单权限管理',
+    '/cross-team-access': '跨团队权限',
   };
   const currentPageTitle = pageTitleMap[location.pathname] || '';
 
@@ -338,7 +342,9 @@ function AppLayout() {
       children: [
         { key: '/users', icon: <UserOutlined />, label: <Link to="/users">用户管理</Link> },
         { key: '/teams', icon: <TeamOutlined />, label: <Link to="/teams">小组管理</Link> },
+        { key: '/project-groups', icon: <ApartmentOutlined />, label: <Link to="/project-groups">项目组管理</Link> },
         { key: '/menu-perms', icon: <MenuOutlined />, label: <Link to="/menu-perms">菜单权限管理</Link> },
+        { key: '/cross-team-access', icon: <TeamOutlined />, label: <Link to="/cross-team-access">跨团队权限</Link> },
       ],
     },
   ].filter(Boolean);
@@ -562,9 +568,11 @@ function AppLayout() {
             <Route path="/gift-review" element={<PrivateRoute><GiftReview /></PrivateRoute>} />
             <Route path="/users" element={<PrivateRoute><Users /></PrivateRoute>} />
             <Route path="/teams" element={<PrivateRoute><Teams /></PrivateRoute>} />
+            <Route path="/project-groups" element={<PrivateRoute><ProjectGroups /></PrivateRoute>} />
             <Route path="/trips" element={<PrivateRoute><Trips /></PrivateRoute>} />
             <Route path="/trip-stats" element={<PrivateRoute><TripStats /></PrivateRoute>} />
             <Route path="/menu-perms" element={<PrivateRoute><MenuPerms /></PrivateRoute>} />
+            <Route path="/cross-team-access" element={<PrivateRoute><CrossTeamAccess /></PrivateRoute>} />
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
             <Route path="/my-tasks" element={<PrivateRoute><MyTasks /></PrivateRoute>} />
             <Route path="/task-board" element={<PrivateRoute><TaskBoard /></PrivateRoute>} />
