@@ -1214,8 +1214,14 @@ function getVisibleGoalOwnerIds(userId, role) {
 
   if (role === 'leader') {
     const managedTeamIds = getManagedTeamIds(userId, role);
-    if (!managedTeamIds?.length) return [userId];
-    const members = getUsersByTeamIds(managedTeamIds);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'goals').map(r => r.target_team_id);
+
+    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
+
+    if (!allTeamIds.length) return [userId];
+    const members = getUsersByTeamIds(allTeamIds);
     return [...new Set([userId, ...members])];
   }
 
@@ -1227,6 +1233,16 @@ function getVisibleGoalOwnerIds(userId, role) {
       const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(teamId);
       if (team?.leader_id) ids.add(team.leader_id);
     });
+
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'goals').map(r => r.target_team_id);
+
+    if (crossTeams.length > 0) {
+      const crossMembers = getUsersByTeamIds(crossTeams);
+      crossMembers.forEach(m => ids.add(m));
+    }
+
     return [...ids];
   }
 
@@ -3643,14 +3659,28 @@ app.get('/api/weekly-reports', (req, res) => {
 
   // 角色过滤
   if (role === 'member') {
-    // 普通成员只能看自己的
-    q += ' AND wr.user_id = ?';
-    params.push(userId);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'weekly_reports').map(r => r.target_team_id);
+
+    if (crossTeams.length > 0) {
+      const crossMembers = getUsersByTeamIds(crossTeams);
+      q += ' AND (wr.user_id = ? OR wr.user_id IN (' + crossMembers.map(() => '?').join(',') + '))';
+      params.push(userId, ...crossMembers);
+    } else {
+      q += ' AND wr.user_id = ?';
+      params.push(userId);
+    }
   } else if (role === 'leader') {
-    // 组长看本组成员的周报
     const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'weekly_reports').map(r => r.target_team_id);
+
+    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
+
+    if (allTeamIds.length) {
+      const members = getUsersByTeamIds(allTeamIds);
       q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
       params.push(...members);
     } else {
@@ -3770,12 +3800,28 @@ app.get('/api/leads', (req, res) => {
 
   // 角色过滤
   if (role === 'member') {
-    q += ' AND (l.assignee_id = ? OR l.created_by = ?)';
-    params.push(userId, userId);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'leads').map(r => r.target_team_id);
+
+    if (crossTeams.length > 0) {
+      const crossMembers = getUsersByTeamIds(crossTeams);
+      q += ' AND (l.assignee_id = ? OR l.created_by = ? OR l.assignee_id IN (' + crossMembers.map(() => '?').join(',') + ') OR l.created_by IN (' + crossMembers.map(() => '?').join(',') + '))';
+      params.push(userId, userId, ...crossMembers, ...crossMembers);
+    } else {
+      q += ' AND (l.assignee_id = ? OR l.created_by = ?)';
+      params.push(userId, userId);
+    }
   } else if (role === 'leader') {
     const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'leads').map(r => r.target_team_id);
+
+    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
+
+    if (allTeamIds.length) {
+      const members = getUsersByTeamIds(allTeamIds);
       q += ` AND (l.assignee_id IN (${members.map(() => '?').join(',')}) OR l.created_by IN (${members.map(() => '?').join(',')}))`;
       params.push(...members, ...members);
     } else {
@@ -4306,12 +4352,28 @@ app.get('/api/dev-tasks', (req, res) => {
 
   // 角色过滤
   if (role === 'member') {
-    q += ' AND (dt.assignee_id = ? OR dt.created_by = ?)';
-    params.push(userId, userId);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'dev_tasks').map(r => r.target_team_id);
+
+    if (crossTeams.length > 0) {
+      const crossMembers = getUsersByTeamIds(crossTeams);
+      q += ' AND (dt.assignee_id = ? OR dt.created_by = ? OR dt.assignee_id IN (' + crossMembers.map(() => '?').join(',') + ') OR dt.created_by IN (' + crossMembers.map(() => '?').join(',') + '))';
+      params.push(userId, userId, ...crossMembers, ...crossMembers);
+    } else {
+      q += ' AND (dt.assignee_id = ? OR dt.created_by = ?)';
+      params.push(userId, userId);
+    }
   } else if (role === 'leader') {
     const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'dev_tasks').map(r => r.target_team_id);
+
+    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
+
+    if (allTeamIds.length) {
+      const members = getUsersByTeamIds(allTeamIds);
       q += ` AND (dt.assignee_id IN (${members.map(() => '?').join(',')}) OR dt.created_by IN (${members.map(() => '?').join(',')}))`;
       params.push(...members, ...members);
     } else {
