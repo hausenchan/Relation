@@ -757,7 +757,6 @@ if (goalCols.length > 0) {
     db.exec("ALTER TABLE goals ADD COLUMN status TEXT DEFAULT 'pending'");
   }
 }
-db.prepare("UPDATE goals SET status = 'pending' WHERE status = 'active'").run();
 
 // users 表加 leader_id / department / team_id
 const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
@@ -3102,12 +3101,8 @@ app.get('/api/goals', (req, res) => {
     params.push(department);
   }
   if (status) {
-    if (status === 'pending') {
-      q += " AND g.status IN ('pending', 'active')";
-    } else {
-      q += ' AND g.status = ?';
-      params.push(status);
-    }
+    q += ' AND g.status = ?';
+    params.push(status);
   }
   if (goal_type) {
     q += ' AND g.goal_type = ?';
@@ -3152,7 +3147,6 @@ app.get('/api/goals', (req, res) => {
     const childCount = db.prepare('SELECT COUNT(*) as cnt FROM goals WHERE parent_id = ?').get(g.id);
     g.child_count = childCount.cnt;
     g.department = g.department || g.owner_department || null;
-    if (g.status === 'active') g.status = 'pending';
   });
 
   res.json(goals);
@@ -3192,13 +3186,11 @@ app.get('/api/goals/:id', (req, res) => {
     ORDER BY g.period DESC, g.created_at DESC
   `).all(id).map(child => ({
     ...child,
-    status: child.status === 'active' ? 'pending' : child.status,
   }));
 
   res.json({
     ...goal,
     department: goal.department || goal.owner_department || null,
-    status: goal.status === 'active' ? 'pending' : goal.status,
     children,
   });
 });
@@ -3216,7 +3208,7 @@ app.post('/api/goals', (req, res) => {
 
   const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(owner_id);
   const normalizedDepartment = department || owner?.department || null;
-  const normalizedStatus = status === 'active' ? 'pending' : (status || 'pending');
+  const normalizedStatus = status || 'pending';
 
   const insertResult = db.prepare(`
     INSERT INTO goals (title, description, owner_id, department, deadline, progress, status, result, goal_type, period, parent_id)
@@ -3240,7 +3232,7 @@ app.put('/api/goals/:id', (req, res) => {
 
   const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(targetOwnerId);
   const normalizedDepartment = department || owner?.department || null;
-  const normalizedStatus = status === 'active' ? 'pending' : status;
+  const normalizedStatus = status;
 
   db.prepare(`
     UPDATE goals SET

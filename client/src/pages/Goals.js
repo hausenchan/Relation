@@ -34,7 +34,7 @@ const goalTypeMap = {
 
 const statusMap = {
   pending: { label: '未开始', color: 'default' },
-  active: { label: '未开始', color: 'default' },
+  active: { label: '进行中', color: 'processing' },
   completed: { label: '已完成', color: 'success' },
   delayed: { label: '延期', color: 'warning' },
   cancelled: { label: '已取消', color: 'error' },
@@ -71,6 +71,7 @@ const goalTypeOptions = [
 
 const statusOptions = [
   { value: 'pending', label: '未开始' },
+  { value: 'active', label: '进行中' },
   { value: 'completed', label: '已完成' },
   { value: 'delayed', label: '延期' },
   { value: 'cancelled', label: '已取消' },
@@ -240,7 +241,7 @@ function Goals() {
     const values = {
       ...record,
       deadline: record.deadline ? dayjs(record.deadline) : null,
-      status: record.status === 'active' ? 'pending' : record.status,
+      status: record.status,
       progress: Number(record.progress || 0),
       result: record.result || '',
     };
