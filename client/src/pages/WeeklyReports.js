@@ -14,6 +14,19 @@ const { RangePicker } = DatePicker;
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
 
+const departmentMap = {
+  commercial: '商务',
+  operation: '产运',
+  rd: '研发',
+  business: '商务',
+  product: '产运',
+  '商务部': '商务',
+  '产运部': '产运',
+  '研发部': '研发',
+};
+
+const getDepartmentLabel = (department) => departmentMap[department] || department || '-';
+
 export default function WeeklyReports() {
   const { user: currentUser } = useAuth();
   const [reports, setReports] = useState([]);
@@ -163,7 +176,13 @@ export default function WeeklyReports() {
 
   const columns = [
     { title: '姓名', dataIndex: 'user_name', key: 'user_name', width: 100 },
-    { title: '部门', dataIndex: 'department', key: 'department', width: 100 },
+    {
+      title: '部门',
+      dataIndex: 'department',
+      key: 'department',
+      width: 100,
+      render: (val) => getDepartmentLabel(val),
+    },
     {
       title: '角色',
       dataIndex: 'user_role',
@@ -235,10 +254,7 @@ export default function WeeklyReports() {
       dataIndex: 'department',
       key: 'department',
       width: 100,
-      render: (val) => {
-        const map = { commercial: '商务部', operation: '产运部', product: '产运部', business: '商务部', rd: '研发部', '商务部': '商务部', '产运部': '产运部', '研发部': '研发部' };
-        return map[val] || val || '-';
-      },
+      render: (val) => getDepartmentLabel(val),
     },
     {
       title: '角色',
@@ -314,9 +330,9 @@ export default function WeeklyReports() {
           value={filters.department || undefined}
           onChange={(val) => setFilters({ ...filters, department: val || '' })}
         >
-          <Option value="商务部">商务部</Option>
-          <Option value="产运部">产运部</Option>
-          <Option value="研发部">研发部</Option>
+          <Option value="commercial">商务</Option>
+          <Option value="operation">产运</Option>
+          <Option value="rd">研发</Option>
         </Select>
         <div style={{ flex: 1 }} />
         {isAdmin(currentUser?.role) && (
@@ -402,7 +418,7 @@ export default function WeeklyReports() {
             </div>
             <div style={{ marginBottom: 24 }}>
               <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>部门</div>
-              <div style={{ fontSize: 15 }}>{selectedReport.department || '-'}</div>
+              <div style={{ fontSize: 15 }}>{getDepartmentLabel(selectedReport.department)}</div>
             </div>
             <div style={{ marginBottom: 24 }}>
               <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>周期</div>
