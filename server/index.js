@@ -329,6 +329,24 @@ db.exec(`
     team_id INTEGER NOT NULL,
     UNIQUE(user_id, team_id)
   );
+
+  CREATE TABLE IF NOT EXISTS project_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    code TEXT,
+    description TEXT,
+    owner_id INTEGER,
+    status TEXT DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS user_project_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    project_group_id INTEGER NOT NULL,
+    UNIQUE(user_id, project_group_id)
+  );
 `);
 
 // =========== 动态加列 ===========
@@ -553,6 +571,15 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_created_by ON leads(created_by);
   CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
   CREATE INDEX IF NOT EXISTS idx_leads_source_type ON leads(source_type);
+
+  CREATE TABLE IF NOT EXISTS lead_watchers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_type TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_type, source_id, user_id)
+  );
 `);
 
 // =========== 策略表 ===========
@@ -578,6 +605,23 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_strategies_dimension ON strategies(dimension);
   CREATE INDEX IF NOT EXISTS idx_strategies_status ON strategies(status);
   CREATE INDEX IF NOT EXISTS idx_strategies_source ON strategies(source_type, source_id);
+`);
+
+// =========== 跨团队访问权限表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cross_team_access (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    target_team_id INTEGER NOT NULL,
+    module TEXT NOT NULL,
+    granted_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, target_team_id, module)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cross_team_user ON cross_team_access(user_id);
+  CREATE INDEX IF NOT EXISTS idx_cross_team_target ON cross_team_access(target_team_id);
+  CREATE INDEX IF NOT EXISTS idx_cross_team_module ON cross_team_access(module);
 `);
 
 // =========== 策略执行记录表 ===========
@@ -730,10 +774,13 @@ db.exec(`
     title       TEXT NOT NULL,
     description TEXT,
     goal_type   TEXT NOT NULL,
+    scope_type  TEXT DEFAULT 'personal',
     period      TEXT NOT NULL,
     parent_id   INTEGER DEFAULT NULL,
     owner_id    INTEGER NOT NULL,
+    project_group_id INTEGER DEFAULT NULL,
     department  TEXT,
+    team_id     INTEGER DEFAULT NULL,
     deadline    TEXT,
     progress    INTEGER DEFAULT 0,
     status      TEXT DEFAULT 'pending',
@@ -751,8 +798,17 @@ if (goalCols.length > 0) {
   if (!goalCols.includes('period')) {
     db.exec("ALTER TABLE goals ADD COLUMN period TEXT DEFAULT NULL");
   }
+  if (!goalCols.includes('scope_type')) {
+    db.exec("ALTER TABLE goals ADD COLUMN scope_type TEXT DEFAULT 'personal'");
+  }
   if (!goalCols.includes('parent_id')) {
     db.exec("ALTER TABLE goals ADD COLUMN parent_id INTEGER DEFAULT NULL");
+  }
+  if (!goalCols.includes('project_group_id')) {
+    db.exec("ALTER TABLE goals ADD COLUMN project_group_id INTEGER DEFAULT NULL");
+  }
+  if (!goalCols.includes('team_id')) {
+    db.exec("ALTER TABLE goals ADD COLUMN team_id INTEGER DEFAULT NULL");
   }
   if (!goalCols.includes('result')) {
     db.exec("ALTER TABLE goals ADD COLUMN result TEXT DEFAULT NULL");
@@ -1050,6 +1106,10 @@ function getUserTeamIds(userId) {
   return [...new Set([...primaryRows, ...relationRows])];
 }
 
+function getUserProjectGroupIds(userId) {
+  return db.prepare('SELECT project_group_id FROM user_project_groups WHERE user_id = ?').all(userId).map(r => r.project_group_id);
+}
+
 function getUsersByTeamIds(teamIds) {
   if (!teamIds?.length) return [];
   const placeholders = teamIds.map(() => '?').join(',');
@@ -1085,6 +1145,46 @@ function syncUserTeams(userId, teamIds = []) {
   }
   db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(uniqueTeamIds[0] || null, userId);
   return uniqueTeamIds;
+}
+
+function syncUserProjectGroups(userId, projectGroupIds = []) {
+  const uniqueIds = [...new Set((projectGroupIds || []).map(id => Number(id)).filter(Boolean))];
+  db.prepare('DELETE FROM user_project_groups WHERE user_id = ?').run(userId);
+  if (uniqueIds.length > 0) {
+    const insert = db.prepare('INSERT OR IGNORE INTO user_project_groups (user_id, project_group_id) VALUES (?, ?)');
+    uniqueIds.forEach(projectGroupId => insert.run(userId, projectGroupId));
+  }
+  return uniqueIds;
+}
+
+function syncLeadWatchers(sourceType, sourceId, watcherIds = []) {
+  const uniqueIds = [...new Set((watcherIds || []).map(id => Number(id)).filter(Boolean))];
+  db.prepare('DELETE FROM lead_watchers WHERE source_type = ? AND source_id = ?').run(sourceType, sourceId);
+  if (uniqueIds.length > 0) {
+    const insert = db.prepare('INSERT OR IGNORE INTO lead_watchers (source_type, source_id, user_id) VALUES (?, ?, ?)');
+    uniqueIds.forEach(userId => insert.run(sourceType, sourceId, userId));
+  }
+  return uniqueIds;
+}
+
+function validateGoalScopeFields({ scope_type, project_group_id, department, team_id }) {
+  if (!scope_type) {
+    return '归属颗粒度必填';
+  }
+
+  if (['project_group', 'department', 'team', 'personal'].includes(scope_type) && !project_group_id) {
+    return '请选择项目组';
+  }
+
+  if (['department', 'team', 'personal'].includes(scope_type) && !department) {
+    return '请选择部门';
+  }
+
+  if (['team', 'personal'].includes(scope_type) && !team_id) {
+    return '请选择小组';
+  }
+
+  return null;
 }
 
 // 获取当前用户可见的所有用户ID列表（用于数据过滤）
@@ -1182,6 +1282,7 @@ app.post('/api/auth/login', (req, res) => {
   // 查模块权限
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
   const teamIds = getUserTeamIds(user.id);
+  const projectGroupIds = getUserProjectGroupIds(user.id);
   res.json({
     token,
     user: {
@@ -1192,6 +1293,7 @@ app.post('/api/auth/login', (req, res) => {
       department: user.department || null,
       team_id: user.team_id || null,
       team_ids: teamIds,
+      project_group_ids: projectGroupIds,
       executive_role: user.executive_role,
       modulePerms,
     }
@@ -1202,7 +1304,13 @@ app.get('/api/auth/me', auth, (req, res) => {
   const user = db.prepare('SELECT id, username, display_name, role, department, team_id, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(req.user.id);
   const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(req.user.id).map(r => r.menu_key);
-  res.json({ ...user, team_ids: getUserTeamIds(req.user.id), modulePerms, menuPerms });
+  res.json({
+    ...user,
+    team_ids: getUserTeamIds(req.user.id),
+    project_group_ids: getUserProjectGroupIds(req.user.id),
+    modulePerms,
+    menuPerms,
+  });
 });
 
 app.post('/api/auth/logout', auth, (req, res) => {
@@ -1231,12 +1339,16 @@ app.put('/api/users/:id/reset-password', auth, adminOnly, (req, res) => {
 app.get('/api/users/simple', auth, (req, res) => {
   const users = db.prepare('SELECT id, username, display_name, role, team_id, leader_id, department FROM users WHERE role != ? ORDER BY display_name ASC').all('readonly');
   const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
+  const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
   res.json(users.map(u => ({
     ...u,
     team_ids: [...new Set([
       ...(u.team_id ? [u.team_id] : []),
       ...userTeams.filter(row => row.user_id === u.id).map(row => row.team_id),
     ])],
+    project_group_ids: [...new Set(
+      userProjectGroups.filter(row => row.user_id === u.id).map(row => row.project_group_id)
+    )],
   })));
 });
 
@@ -1246,6 +1358,8 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
   const perms = db.prepare('SELECT * FROM user_module_perms').all();
   const teams = db.prepare('SELECT * FROM teams').all();
   const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
+  const projectGroups = db.prepare('SELECT * FROM project_groups ORDER BY name ASC').all();
+  const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
   res.json(users.map(u => ({
     ...u,
     modulePerms: perms.filter(p => p.user_id === u.id),
@@ -1261,11 +1375,20 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
         .map(row => teams.find(t => t.id === row.team_id)?.name)
         .filter(Boolean),
     ])],
+    project_group_ids: [...new Set(
+      userProjectGroups.filter(row => row.user_id === u.id).map(row => row.project_group_id)
+    )],
+    project_group_names: [...new Set(
+      userProjectGroups
+        .filter(row => row.user_id === u.id)
+        .map(row => projectGroups.find(g => g.id === row.project_group_id)?.name)
+        .filter(Boolean)
+    )],
   })));
 });
 
 app.post('/api/users', auth, adminOnly, (req, res) => {
-  const { username, password, display_name, role, modulePerms, leader_id, department, team_id, team_ids } = req.body;
+  const { username, password, display_name, role, modulePerms, leader_id, department, team_id, team_ids, project_group_ids } = req.body;
   if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
   const hash = bcrypt.hashSync(password, 10);
   try {
@@ -1273,6 +1396,7 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
     const primaryTeamId = normalizedTeamIds[0] || null;
     const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, leader_id, department, team_id) VALUES (?,?,?,?,?,?,?)").run(username, hash, display_name, role || 'member', leader_id || null, department || null, primaryTeamId);
     syncUserTeams(r.lastInsertRowid, normalizedTeamIds);
+    syncUserProjectGroups(r.lastInsertRowid, project_group_ids || []);
     if (role === 'guest' && modulePerms?.length) {
       const ins = db.prepare("INSERT OR REPLACE INTO user_module_perms (user_id, module, can_read, can_write) VALUES (?,?,?,?)");
       modulePerms.forEach(p => ins.run(r.lastInsertRowid, p.module, p.can_read ? 1 : 0, p.can_write ? 1 : 0));
@@ -1289,7 +1413,7 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
 });
 
 app.put('/api/users/:id', auth, adminOnly, (req, res) => {
-  const { display_name, role, password, modulePerms, leader_id, department, team_id, team_ids } = req.body;
+  const { display_name, role, password, modulePerms, leader_id, department, team_id, team_ids, project_group_ids } = req.body;
   const normalizedTeamIds = [...new Set((team_ids?.length ? team_ids : (team_id ? [team_id] : [])).map(id => Number(id)).filter(Boolean))];
   const primaryTeamId = normalizedTeamIds[0] || null;
   if (password) {
@@ -1298,6 +1422,7 @@ app.put('/api/users/:id', auth, adminOnly, (req, res) => {
     db.prepare('UPDATE users SET display_name=?, role=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, leader_id || null, department || null, primaryTeamId, req.params.id);
   }
   syncUserTeams(req.params.id, normalizedTeamIds);
+  syncUserProjectGroups(req.params.id, project_group_ids || []);
   if (role === 'guest') {
     db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
     if (modulePerms?.length) {
@@ -1321,6 +1446,7 @@ app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_menu_perms WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_teams WHERE user_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM user_project_groups WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -1358,6 +1484,56 @@ app.delete('/api/teams/:id', auth, adminOnly, (req, res) => {
   });
   db.prepare('DELETE FROM director_teams WHERE team_id = ?').run(req.params.id);
   db.prepare('DELETE FROM teams WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// =========== 项目组管理 API ===========
+app.get('/api/project-groups', auth, (req, res) => {
+  const rows = db.prepare(`
+    SELECT pg.*, u.display_name as owner_name
+    FROM project_groups pg
+    LEFT JOIN users u ON pg.owner_id = u.id
+    ORDER BY pg.status ASC, pg.name ASC
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/project-groups', auth, adminOnly, (req, res) => {
+  const { name, code, description, owner_id, status } = req.body;
+  if (!name) return res.status(400).json({ error: '项目组名称必填' });
+  try {
+    const result = db.prepare(`
+      INSERT INTO project_groups (name, code, description, owner_id, status)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(name, code || null, description || null, owner_id || null, status || 'active');
+    res.json({ id: result.lastInsertRowid });
+  } catch (e) {
+    res.status(400).json({ error: '项目组名称已存在' });
+  }
+});
+
+app.put('/api/project-groups/:id', auth, adminOnly, (req, res) => {
+  const { name, code, description, owner_id, status } = req.body;
+  try {
+    db.prepare(`
+      UPDATE project_groups SET
+        name = ?,
+        code = ?,
+        description = ?,
+        owner_id = ?,
+        status = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(name, code || null, description || null, owner_id || null, status || 'active', req.params.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(400).json({ error: '更新失败，项目组名称可能重复' });
+  }
+});
+
+app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
+  db.prepare('DELETE FROM user_project_groups WHERE project_group_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM project_groups WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
@@ -1626,7 +1802,7 @@ app.get('/api/interactions', (req, res) => {
 
 app.post('/api/interactions', (req, res) => {
   const { person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
-    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
+    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
   const createdBy = req.user?.id || null;
   const result = db.prepare(`
     INSERT INTO interactions (person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
@@ -1665,12 +1841,16 @@ app.post('/api/interactions', (req, res) => {
       opportunity_assignee, createdBy || 0);
   }
 
+  if (watcher_ids?.length) {
+    syncLeadWatchers('interaction', interactionId, watcher_ids);
+  }
+
   res.json({ id: interactionId });
 });
 
 app.put('/api/interactions/:id', (req, res) => {
   const { type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
-    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
+    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
   const original = db.prepare('SELECT person_id FROM interactions WHERE id=?').get(req.params.id);
   db.prepare(`
     UPDATE interactions SET type=?, date=?, amount=?, description=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, importance=?, gift_name=?,
@@ -1716,6 +1896,8 @@ app.get('/api/opportunities', auth, (req, res) => {
       p.name as person_name, p.company, p.city, p.current_company, p.person_category,
       u.display_name as assignee_name,
       ub.display_name as created_by_name,
+      COALESCE((SELECT GROUP_CONCAT(lw.user_id) FROM lead_watchers lw WHERE lw.source_type='interaction' AND lw.source_id=i.id), '') as watcher_ids,
+      COALESCE((SELECT GROUP_CONCAT(uw.display_name, '、') FROM lead_watchers lw LEFT JOIN users uw ON lw.user_id = uw.id WHERE lw.source_type='interaction' AND lw.source_id=i.id), '') as watcher_names,
       (SELECT COUNT(*) FROM attachments WHERE source_type='interaction' AND source_id=i.id) as attachment_count
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
@@ -1748,6 +1930,8 @@ app.get('/api/opportunities', auth, (req, res) => {
         (SELECT ft.assigned_by FROM follow_up_tasks ft WHERE ft.competitor_research_id = cr.id ORDER BY ft.id ASC LIMIT 1)
       ) as created_by,
       ub.display_name as created_by_name,
+      COALESCE((SELECT GROUP_CONCAT(lw.user_id) FROM lead_watchers lw WHERE lw.source_type='competitor_research' AND lw.source_id=cr.id), '') as watcher_ids,
+      COALESCE((SELECT GROUP_CONCAT(uw.display_name, '、') FROM lead_watchers lw LEFT JOIN users uw ON lw.user_id = uw.id WHERE lw.source_type='competitor_research' AND lw.source_id=cr.id), '') as watcher_names,
       (SELECT COUNT(*) FROM attachments WHERE source_type='competitor_research' AND source_id=cr.id) as attachment_count
     FROM competitor_research cr
     LEFT JOIN companies c ON cr.company_id = c.id
@@ -1896,6 +2080,10 @@ app.put('/api/opportunities/:id', (req, res) => {
     }
   }
 
+  if (watcher_ids !== undefined) {
+    syncLeadWatchers('interaction', req.params.id, watcher_ids);
+  }
+
   res.json({ success: true });
 });
 
@@ -1933,6 +2121,52 @@ app.get('/api/follow-up-tasks/count', (req, res) => {
   const cnt = db.prepare(`
     SELECT COUNT(*) as cnt FROM follow_up_tasks WHERE assigned_to = ? AND status != 'done'
   `).get(me).cnt;
+  res.json({ count: cnt });
+});
+
+app.get('/api/follow-up-tasks/watch', (req, res) => {
+  const { status } = req.query;
+  const { id: me } = req.user;
+  let query = `
+    SELECT DISTINCT
+      f.*,
+      p.name as person_name, p.company, p.city, p.current_company, p.person_category,
+      ua.display_name as assigned_to_name,
+      ub.display_name as assigned_by_name,
+      i.type as interaction_type, i.date as interaction_date, i.description as interaction_desc, i.outcome as interaction_outcome,
+      co.name as company_name
+    FROM follow_up_tasks f
+    LEFT JOIN persons p ON f.person_id = p.id
+    LEFT JOIN users ua ON f.assigned_to = ua.id
+    LEFT JOIN users ub ON f.assigned_by = ub.id
+    LEFT JOIN interactions i ON f.interaction_id = i.id
+    LEFT JOIN companies co ON f.company_id = co.id
+    LEFT JOIN lead_watchers lw ON (
+      (lw.source_type = 'interaction' AND lw.source_id = f.interaction_id)
+      OR (lw.source_type = 'competitor_research' AND lw.source_id = f.competitor_research_id)
+    )
+    WHERE lw.user_id = ? AND f.assigned_to != ?
+  `;
+  const params = [me, me];
+  if (status) {
+    query += ' AND f.status = ?';
+    params.push(status);
+  }
+  query += ' ORDER BY f.created_at DESC';
+  res.json(db.prepare(query).all(...params));
+});
+
+app.get('/api/follow-up-tasks/watch/count', (req, res) => {
+  const { id: me } = req.user;
+  const cnt = db.prepare(`
+    SELECT COUNT(DISTINCT f.id) as cnt
+    FROM follow_up_tasks f
+    LEFT JOIN lead_watchers lw ON (
+      (lw.source_type = 'interaction' AND lw.source_id = f.interaction_id)
+      OR (lw.source_type = 'competitor_research' AND lw.source_id = f.competitor_research_id)
+    )
+    WHERE lw.user_id = ? AND f.assigned_to != ? AND f.status != 'done'
+  `).get(me, me).cnt;
   res.json({ count: cnt });
 });
 
@@ -2722,7 +2956,7 @@ app.get('/api/competitor_research', (req, res) => {
 });
 
 app.post('/api/competitor_research', (req, res) => {
-  const { company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
+  const { company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
   const createdBy = req.user?.id || null;
   const r = db.prepare(`
     INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
@@ -2741,11 +2975,15 @@ app.post('/api/competitor_research', (req, res) => {
       opportunity_assignee, req.user.id);
   }
 
+  if (watcher_ids?.length) {
+    syncLeadWatchers('competitor_research', r.lastInsertRowid, watcher_ids);
+  }
+
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/competitor_research/:id', (req, res) => {
-  const { date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note } = req.body;
+  const { date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
   db.prepare(`
     UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
     WHERE id=?
@@ -2767,6 +3005,10 @@ app.put('/api/competitor_research/:id', (req, res) => {
       `).run(taskTitle, req.params.id, cr?.company_id || 0, opportunity_title, opportunity_note || null,
         opportunity_assignee, req.user.id);
     }
+  }
+
+  if (watcher_ids !== undefined) {
+    syncLeadWatchers('competitor_research', req.params.id, watcher_ids);
   }
 
   res.json({ success: true });
@@ -3141,7 +3383,7 @@ app.get('/api/trips/stats/summary', (req, res) => {
 // =========== 目标管理 API ===========
 // 获取目标列表
 app.get('/api/goals', (req, res) => {
-  const { department, status, goal_type, period, parent_id, owner_id, owner_role } = req.query;
+  const { department, status, goal_type, scope_type, period, parent_id, owner_id, owner_role, project_group_id, team_id } = req.query;
   const { id: userId, role } = req.user;
 
   let q = `
@@ -3150,10 +3392,14 @@ app.get('/api/goals', (req, res) => {
       u.display_name as owner_name,
       u.role as owner_role,
       u.department as owner_department,
-      p.title as parent_title
+      p.title as parent_title,
+      pg.name as project_group_name,
+      tm.name as team_name
     FROM goals g
     LEFT JOIN users u ON g.owner_id = u.id
     LEFT JOIN goals p ON g.parent_id = p.id
+    LEFT JOIN project_groups pg ON g.project_group_id = pg.id
+    LEFT JOIN teams tm ON g.team_id = tm.id
     WHERE 1=1
   `;
   const params = [];
@@ -3179,9 +3425,21 @@ app.get('/api/goals', (req, res) => {
     q += ' AND g.goal_type = ?';
     params.push(goal_type);
   }
+  if (scope_type) {
+    q += ' AND g.scope_type = ?';
+    params.push(scope_type);
+  }
   if (period) {
     q += ' AND g.period = ?';
     params.push(period);
+  }
+  if (project_group_id) {
+    q += ' AND g.project_group_id = ?';
+    params.push(project_group_id);
+  }
+  if (team_id) {
+    q += ' AND g.team_id = ?';
+    params.push(team_id);
   }
   if (owner_id) {
     q += ' AND g.owner_id = ?';
@@ -3232,10 +3490,14 @@ app.get('/api/goals/:id', (req, res) => {
       u.display_name as owner_name,
       u.role as owner_role,
       u.department as owner_department,
-      p.title as parent_title
+      p.title as parent_title,
+      pg.name as project_group_name,
+      tm.name as team_name
     FROM goals g
     LEFT JOIN users u ON g.owner_id = u.id
     LEFT JOIN goals p ON g.parent_id = p.id
+    LEFT JOIN project_groups pg ON g.project_group_id = pg.id
+    LEFT JOIN teams tm ON g.team_id = tm.id
     WHERE g.id = ?
   `).get(id);
 
@@ -3250,9 +3512,13 @@ app.get('/api/goals/:id', (req, res) => {
     SELECT
       g.*,
       u.display_name as owner_name,
-      u.role as owner_role
+      u.role as owner_role,
+      pg.name as project_group_name,
+      tm.name as team_name
     FROM goals g
     LEFT JOIN users u ON g.owner_id = u.id
+    LEFT JOIN project_groups pg ON g.project_group_id = pg.id
+    LEFT JOIN teams tm ON g.team_id = tm.id
     WHERE g.parent_id = ?
     ORDER BY g.period DESC, g.created_at DESC
   `).all(id).map(child => ({
@@ -3268,9 +3534,13 @@ app.get('/api/goals/:id', (req, res) => {
 
 // 创建目标
 app.post('/api/goals', (req, res) => {
-  const { title, description, owner_id, department, deadline, progress, status, result: goalResult, goal_type, period, parent_id } = req.body;
+  const { title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result: goalResult, goal_type, period, parent_id } = req.body;
   if (!title || !owner_id || !goal_type || !period) {
     return res.status(400).json({ error: '标题、负责人、目标类型、周期必填' });
+  }
+  const scopeError = validateGoalScopeFields({ scope_type, project_group_id, department, team_id });
+  if (scopeError) {
+    return res.status(400).json({ error: scopeError });
   }
 
   if (!canManageGoalForOwner(req.user, owner_id)) {
@@ -3280,11 +3550,12 @@ app.post('/api/goals', (req, res) => {
   const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(owner_id);
   const normalizedDepartment = department || owner?.department || null;
   const normalizedStatus = status || 'pending';
+  const normalizedScopeType = scope_type || 'personal';
 
   const insertResult = db.prepare(`
-    INSERT INTO goals (title, description, owner_id, department, deadline, progress, status, result, goal_type, period, parent_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, description, owner_id, normalizedDepartment, deadline, progress || 0, normalizedStatus, goalResult || null, goal_type, period, parent_id || null);
+    INSERT INTO goals (title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result, goal_type, period, parent_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(title, description, owner_id, normalizedDepartment, team_id || null, project_group_id || null, normalizedScopeType, deadline, progress || 0, normalizedStatus, goalResult || null, goal_type, period, parent_id || null);
 
   res.json({ id: insertResult.lastInsertRowid });
 });
@@ -3292,13 +3563,23 @@ app.post('/api/goals', (req, res) => {
 // 更新目标
 app.put('/api/goals/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, owner_id, department, deadline, progress, status, result, goal_type, period, parent_id } = req.body;
-  const existing = db.prepare('SELECT owner_id FROM goals WHERE id = ?').get(id);
+  const { title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result, goal_type, period, parent_id } = req.body;
+  const existing = db.prepare('SELECT owner_id, department, team_id, project_group_id, scope_type FROM goals WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '目标不存在' });
 
   const targetOwnerId = owner_id || existing.owner_id;
   if (!canManageGoalForOwner(req.user, targetOwnerId)) {
     return res.status(403).json({ error: '无权编辑该目标' });
+  }
+
+  const scopeError = validateGoalScopeFields({
+    scope_type: scope_type || existing.scope_type,
+    project_group_id: project_group_id ?? existing.project_group_id,
+    department: department ?? existing.department,
+    team_id: team_id ?? existing.team_id,
+  });
+  if (scopeError) {
+    return res.status(400).json({ error: scopeError });
   }
 
   const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(targetOwnerId);
@@ -3311,6 +3592,9 @@ app.put('/api/goals/:id', (req, res) => {
       description = COALESCE(?, description),
       owner_id = COALESCE(?, owner_id),
       department = COALESCE(?, department),
+      team_id = COALESCE(?, team_id),
+      project_group_id = COALESCE(?, project_group_id),
+      scope_type = COALESCE(?, scope_type),
       deadline = COALESCE(?, deadline),
       progress = COALESCE(?, progress),
       status = COALESCE(?, status),
@@ -3320,7 +3604,7 @@ app.put('/api/goals/:id', (req, res) => {
       parent_id = COALESCE(?, parent_id),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, description, owner_id, normalizedDepartment, deadline, progress, normalizedStatus, result, goal_type, period, parent_id, id);
+  `).run(title, description, owner_id, normalizedDepartment, team_id, project_group_id, scope_type, deadline, progress, normalizedStatus, result, goal_type, period, parent_id, id);
 
   res.json({ success: true });
 });
@@ -3646,12 +3930,28 @@ app.get('/api/strategies', (req, res) => {
 
   // 角色过滤
   if (role === 'member') {
-    q += ' AND (s.owner_id = ? OR s.owner_id IS NULL)';
-    params.push(userId);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'strategies').map(r => r.target_team_id);
+
+    if (crossTeams.length > 0) {
+      const crossMembers = getUsersByTeamIds(crossTeams);
+      q += ' AND (s.owner_id = ? OR s.owner_id IS NULL OR s.owner_id IN (' + crossMembers.map(() => '?').join(',') + '))';
+      params.push(userId, ...crossMembers);
+    } else {
+      q += ' AND (s.owner_id = ? OR s.owner_id IS NULL)';
+      params.push(userId);
+    }
   } else if (role === 'leader') {
     const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
+    // 获取跨团队访问权限
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'strategies').map(r => r.target_team_id);
+
+    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
+
+    if (allTeamIds.length) {
+      const members = getUsersByTeamIds(allTeamIds);
       q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
       params.push(...members);
     } else {
@@ -4594,6 +4894,64 @@ app.delete('/api/attachments/:id', auth, (req, res) => {
   }
   try { fs.unlinkSync(path.join(UPLOADS_DIR, row.filepath)); } catch {}
   db.prepare('DELETE FROM attachments WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// =========== 跨团队访问权限 API ===========
+// 获取跨团队权限列表
+app.get('/api/cross-team-access', (req, res) => {
+  const { role } = req.user;
+  if (role !== 'admin') return res.status(403).json({ error: '仅管理员可访问' });
+
+  const list = db.prepare(`
+    SELECT cta.*,
+      u.display_name as user_name,
+      t.name as team_name,
+      g.display_name as granted_by_name
+    FROM cross_team_access cta
+    LEFT JOIN users u ON cta.user_id = u.id
+    LEFT JOIN teams t ON cta.target_team_id = t.id
+    LEFT JOIN users g ON cta.granted_by = g.id
+    ORDER BY cta.created_at DESC
+  `).all();
+  res.json(list);
+});
+
+// 创建跨团队权限
+app.post('/api/cross-team-access', (req, res) => {
+  const { role, id: grantedBy } = req.user;
+  if (role !== 'admin') return res.status(403).json({ error: '仅管理员可配置' });
+
+  const { user_id, target_team_id, module } = req.body;
+  if (!user_id || !target_team_id || !module) {
+    return res.status(400).json({ error: '用户、团队、模块必填' });
+  }
+
+  const validModules = ['strategies', 'dev_tasks', 'leads', 'goals', 'weekly_reports'];
+  if (!validModules.includes(module)) {
+    return res.status(400).json({ error: '无效的模块名称' });
+  }
+
+  try {
+    const result = db.prepare(`
+      INSERT INTO cross_team_access (user_id, target_team_id, module, granted_by)
+      VALUES (?, ?, ?, ?)
+    `).run(user_id, target_team_id, module, grantedBy);
+    res.json({ id: result.lastInsertRowid });
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) {
+      return res.status(400).json({ error: '该权限已存在' });
+    }
+    throw err;
+  }
+});
+
+// 删除跨团队权限
+app.delete('/api/cross-team-access/:id', (req, res) => {
+  const { role } = req.user;
+  if (role !== 'admin') return res.status(403).json({ error: '仅管理员可删除' });
+
+  db.prepare('DELETE FROM cross_team_access WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
