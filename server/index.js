@@ -322,6 +322,13 @@ db.exec(`
     team_id INTEGER NOT NULL,
     UNIQUE(director_id, team_id)
   );
+
+  CREATE TABLE IF NOT EXISTS user_teams (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    team_id INTEGER NOT NULL,
+    UNIQUE(user_id, team_id)
+  );
 `);
 
 // =========== 动态加列 ===========
@@ -778,6 +785,15 @@ if (userCols.length > 0) {
   }
 }
 
+try {
+  db.exec(`
+    INSERT OR IGNORE INTO user_teams (user_id, team_id)
+    SELECT id, team_id
+    FROM users
+    WHERE team_id IS NOT NULL
+  `);
+} catch (e) {}
+
 // =========== 送礼模块建表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS gifts (
@@ -1028,28 +1044,57 @@ function canWrite(req, res, next) {
   next();
 }
 
+function getUserTeamIds(userId) {
+  const primaryRows = db.prepare('SELECT team_id FROM users WHERE id = ? AND team_id IS NOT NULL').all(userId).map(r => r.team_id);
+  const relationRows = db.prepare('SELECT team_id FROM user_teams WHERE user_id = ?').all(userId).map(r => r.team_id);
+  return [...new Set([...primaryRows, ...relationRows])];
+}
+
+function getUsersByTeamIds(teamIds) {
+  if (!teamIds?.length) return [];
+  const placeholders = teamIds.map(() => '?').join(',');
+  const fromUsers = db.prepare(`SELECT id FROM users WHERE team_id IN (${placeholders})`).all(...teamIds).map(u => u.id);
+  const fromRelations = db.prepare(`SELECT user_id as id FROM user_teams WHERE team_id IN (${placeholders})`).all(...teamIds).map(u => u.id);
+  return [...new Set([...fromUsers, ...fromRelations])];
+}
+
+function getManagedTeamIds(userId, role) {
+  if (isAdmin(role)) return null;
+
+  if (role === 'sales_director') {
+    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
+    return [...new Set([...myTeams, ...ledTeams])];
+  }
+
+  if (role === 'leader') {
+    const memberTeams = getUserTeamIds(userId);
+    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
+    return [...new Set([...memberTeams, ...ledTeams])];
+  }
+
+  return getUserTeamIds(userId);
+}
+
+function syncUserTeams(userId, teamIds = []) {
+  const uniqueTeamIds = [...new Set((teamIds || []).map(id => Number(id)).filter(Boolean))];
+  db.prepare('DELETE FROM user_teams WHERE user_id = ?').run(userId);
+  if (uniqueTeamIds.length > 0) {
+    const insert = db.prepare('INSERT OR IGNORE INTO user_teams (user_id, team_id) VALUES (?, ?)');
+    uniqueTeamIds.forEach(teamId => insert.run(userId, teamId));
+  }
+  db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(uniqueTeamIds[0] || null, userId);
+  return uniqueTeamIds;
+}
+
 // 获取当前用户可见的所有用户ID列表（用于数据过滤）
 function getVisibleUserIds(userId, role) {
   if (isAdmin(role)) return null; // null 表示不限制，看全部
 
-  if (role === 'sales_director') {
-    // 自己 + 自己带的组的成员 + 下辖所有leader带的组的成员
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
-    // 自己带的组（自己作为leader的组）
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    if (allTeamIds.length === 0) return [userId];
-    const members = db.prepare(
-      `SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`
-    ).all(...allTeamIds).map(u => u.id);
-    return [...new Set([userId, ...members])];
-  }
-
-  if (role === 'leader') {
-    // 自己 + 本组所有成员
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
-    if (!myUser?.team_id) return [userId];
-    const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+  if (role === 'sales_director' || role === 'leader') {
+    const visibleTeamIds = getManagedTeamIds(userId, role);
+    if (!visibleTeamIds?.length) return [userId];
+    const members = getUsersByTeamIds(visibleTeamIds);
     return [...new Set([userId, ...members])];
   }
 
@@ -1060,7 +1105,7 @@ function getVisibleUserIds(userId, role) {
 function getVisibleGoalOwnerIds(userId, role) {
   if (isAdmin(role)) return null;
 
-  const me = db.prepare('SELECT id, team_id, leader_id FROM users WHERE id = ?').get(userId);
+  const me = db.prepare('SELECT id, leader_id FROM users WHERE id = ?').get(userId);
   if (!me) return [userId];
 
   if (role === 'sales_director') {
@@ -1068,18 +1113,20 @@ function getVisibleGoalOwnerIds(userId, role) {
   }
 
   if (role === 'leader') {
-    if (!me.team_id) return [userId];
-    const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(me.team_id).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (!managedTeamIds?.length) return [userId];
+    const members = getUsersByTeamIds(managedTeamIds);
     return [...new Set([userId, ...members])];
   }
 
   if (role === 'member') {
     const ids = new Set([userId]);
     if (me.leader_id) ids.add(me.leader_id);
-    if (me.team_id) {
-      const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(me.team_id);
+    const myTeamIds = getUserTeamIds(userId);
+    myTeamIds.forEach(teamId => {
+      const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(teamId);
       if (team?.leader_id) ids.add(team.leader_id);
-    }
+    });
     return [...ids];
   }
 
@@ -1090,19 +1137,18 @@ function canManageGoalForOwner(actor, ownerId) {
   if (isAdmin(actor.role)) return true;
   if (Number(ownerId) === actor.id) return true;
 
-  const owner = db.prepare('SELECT id, team_id FROM users WHERE id = ?').get(ownerId);
-  const me = db.prepare('SELECT id, team_id FROM users WHERE id = ?').get(actor.id);
+  const owner = db.prepare('SELECT id FROM users WHERE id = ?').get(ownerId);
+  const ownerTeamIds = getUserTeamIds(ownerId);
+  const myTeamIds = getManagedTeamIds(actor.id, actor.role) || [];
+  const me = db.prepare('SELECT id FROM users WHERE id = ?').get(actor.id);
   if (!owner || !me) return false;
 
   if (actor.role === 'leader') {
-    return !!me.team_id && me.team_id === owner.team_id;
+    return ownerTeamIds.some(teamId => myTeamIds.includes(teamId));
   }
 
   if (actor.role === 'sales_director') {
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(actor.id).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(actor.id).map(r => r.id);
-    const allTeamIds = new Set([...myTeams, ...ledTeams]);
-    return !!owner.team_id && allTeamIds.has(owner.team_id);
+    return ownerTeamIds.some(teamId => myTeamIds.includes(teamId));
   }
 
   return false;
@@ -1135,6 +1181,7 @@ app.post('/api/auth/login', (req, res) => {
   );
   // 查模块权限
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
+  const teamIds = getUserTeamIds(user.id);
   res.json({
     token,
     user: {
@@ -1144,6 +1191,7 @@ app.post('/api/auth/login', (req, res) => {
       role: user.role,
       department: user.department || null,
       team_id: user.team_id || null,
+      team_ids: teamIds,
       executive_role: user.executive_role,
       modulePerms,
     }
@@ -1154,7 +1202,7 @@ app.get('/api/auth/me', auth, (req, res) => {
   const user = db.prepare('SELECT id, username, display_name, role, department, team_id, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(req.user.id);
   const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(req.user.id).map(r => r.menu_key);
-  res.json({ ...user, modulePerms, menuPerms });
+  res.json({ ...user, team_ids: getUserTeamIds(req.user.id), modulePerms, menuPerms });
 });
 
 app.post('/api/auth/logout', auth, (req, res) => {
@@ -1182,7 +1230,14 @@ app.put('/api/users/:id/reset-password', auth, adminOnly, (req, res) => {
 // 所有登录用户可访问（用于指派选人下拉）
 app.get('/api/users/simple', auth, (req, res) => {
   const users = db.prepare('SELECT id, username, display_name, role, team_id, leader_id, department FROM users WHERE role != ? ORDER BY display_name ASC').all('readonly');
-  res.json(users);
+  const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
+  res.json(users.map(u => ({
+    ...u,
+    team_ids: [...new Set([
+      ...(u.team_id ? [u.team_id] : []),
+      ...userTeams.filter(row => row.user_id === u.id).map(row => row.team_id),
+    ])],
+  })));
 });
 
 // =========== 用户管理 API（admin only）===========
@@ -1190,19 +1245,34 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
   const users = db.prepare('SELECT id, username, display_name, role, department, team_id, created_at, last_login FROM users ORDER BY created_at ASC').all();
   const perms = db.prepare('SELECT * FROM user_module_perms').all();
   const teams = db.prepare('SELECT * FROM teams').all();
+  const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
   res.json(users.map(u => ({
     ...u,
     modulePerms: perms.filter(p => p.user_id === u.id),
+    team_ids: [...new Set([
+      ...(u.team_id ? [u.team_id] : []),
+      ...userTeams.filter(row => row.user_id === u.id).map(row => row.team_id),
+    ])],
     team_name: teams.find(t => t.id === u.team_id)?.name || null,
+    team_names: [...new Set([
+      ...(u.team_id ? [teams.find(t => t.id === u.team_id)?.name].filter(Boolean) : []),
+      ...userTeams
+        .filter(row => row.user_id === u.id)
+        .map(row => teams.find(t => t.id === row.team_id)?.name)
+        .filter(Boolean),
+    ])],
   })));
 });
 
 app.post('/api/users', auth, adminOnly, (req, res) => {
-  const { username, password, display_name, role, modulePerms, leader_id, department, team_id } = req.body;
+  const { username, password, display_name, role, modulePerms, leader_id, department, team_id, team_ids } = req.body;
   if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
   const hash = bcrypt.hashSync(password, 10);
   try {
-    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, leader_id, department, team_id) VALUES (?,?,?,?,?,?,?)").run(username, hash, display_name, role || 'member', leader_id || null, department || null, team_id || null);
+    const normalizedTeamIds = [...new Set((team_ids?.length ? team_ids : (team_id ? [team_id] : [])).map(id => Number(id)).filter(Boolean))];
+    const primaryTeamId = normalizedTeamIds[0] || null;
+    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, leader_id, department, team_id) VALUES (?,?,?,?,?,?,?)").run(username, hash, display_name, role || 'member', leader_id || null, department || null, primaryTeamId);
+    syncUserTeams(r.lastInsertRowid, normalizedTeamIds);
     if (role === 'guest' && modulePerms?.length) {
       const ins = db.prepare("INSERT OR REPLACE INTO user_module_perms (user_id, module, can_read, can_write) VALUES (?,?,?,?)");
       modulePerms.forEach(p => ins.run(r.lastInsertRowid, p.module, p.can_read ? 1 : 0, p.can_write ? 1 : 0));
@@ -1219,12 +1289,15 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
 });
 
 app.put('/api/users/:id', auth, adminOnly, (req, res) => {
-  const { display_name, role, password, modulePerms, leader_id, department, team_id } = req.body;
+  const { display_name, role, password, modulePerms, leader_id, department, team_id, team_ids } = req.body;
+  const normalizedTeamIds = [...new Set((team_ids?.length ? team_ids : (team_id ? [team_id] : [])).map(id => Number(id)).filter(Boolean))];
+  const primaryTeamId = normalizedTeamIds[0] || null;
   if (password) {
-    db.prepare('UPDATE users SET display_name=?, role=?, password_hash=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, bcrypt.hashSync(password, 10), leader_id || null, department || null, team_id || null, req.params.id);
+    db.prepare('UPDATE users SET display_name=?, role=?, password_hash=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, bcrypt.hashSync(password, 10), leader_id || null, department || null, primaryTeamId, req.params.id);
   } else {
-    db.prepare('UPDATE users SET display_name=?, role=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, leader_id || null, department || null, team_id || null, req.params.id);
+    db.prepare('UPDATE users SET display_name=?, role=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, leader_id || null, department || null, primaryTeamId, req.params.id);
   }
+  syncUserTeams(req.params.id, normalizedTeamIds);
   if (role === 'guest') {
     db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
     if (modulePerms?.length) {
@@ -1247,6 +1320,7 @@ app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
   if (parseInt(req.params.id) === req.user.id) return res.status(400).json({ error: '不能删除自己' });
   db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_menu_perms WHERE user_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM user_teams WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -1275,8 +1349,13 @@ app.put('/api/teams/:id', auth, adminOnly, (req, res) => {
 });
 
 app.delete('/api/teams/:id', auth, adminOnly, (req, res) => {
-  // 解绑该小组的用户
+  const affectedUsers = db.prepare('SELECT DISTINCT user_id FROM user_teams WHERE team_id = ?').all(req.params.id).map(r => r.user_id);
+  db.prepare('DELETE FROM user_teams WHERE team_id = ?').run(req.params.id);
   db.prepare('UPDATE users SET team_id = NULL WHERE team_id = ?').run(req.params.id);
+  affectedUsers.forEach(userId => {
+    const nextTeam = db.prepare('SELECT team_id FROM user_teams WHERE user_id = ? ORDER BY id ASC LIMIT 1').get(userId);
+    db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(nextTeam?.team_id || null, userId);
+  });
   db.prepare('DELETE FROM director_teams WHERE team_id = ?').run(req.params.id);
   db.prepare('DELETE FROM teams WHERE id = ?').run(req.params.id);
   res.json({ success: true });
@@ -1902,9 +1981,9 @@ app.get('/api/tasks', (req, res) => {
     q += ' AND (t.assigned_to = ? OR t.created_by = ?)';
     params.push(me, me);
   } else if (role === 'leader') {
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(me);
-    if (myUser?.team_id) {
-      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(me, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       const ids = [...new Set([me, ...members])];
       q += ` AND (t.assigned_to IN (${ids.map(() => '?').join(',')}) OR t.created_by IN (${ids.map(() => '?').join(',')}))`;
       params.push(...ids, ...ids);
@@ -1913,11 +1992,9 @@ app.get('/api/tasks', (req, res) => {
       params.push(me, me);
     }
   } else if (role === 'sales_director') {
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(me).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(me).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    if (allTeamIds.length > 0) {
-      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(me, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       const ids = [...new Set([me, ...members])];
       q += ` AND (t.assigned_to IN (${ids.map(() => '?').join(',')}) OR t.created_by IN (${ids.map(() => '?').join(',')}))`;
       params.push(...ids, ...ids);
@@ -1962,18 +2039,12 @@ app.get('/api/tasks/board', (req, res) => {
   if (isAdmin(role)) {
     visibleIds = db.prepare('SELECT id FROM users WHERE role != ?').all('readonly').map(u => u.id);
   } else if (role === 'leader') {
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(me);
-    visibleIds = myUser?.team_id
-      ? db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id)
-      : [me];
+    const managedTeamIds = getManagedTeamIds(me, role);
+    visibleIds = managedTeamIds?.length ? getUsersByTeamIds(managedTeamIds) : [me];
   } else {
     // sales_director
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(me).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(me).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    visibleIds = allTeamIds.length > 0
-      ? db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id)
-      : [me];
+    const managedTeamIds = getManagedTeamIds(me, role);
+    visibleIds = managedTeamIds?.length ? getUsersByTeamIds(managedTeamIds) : [me];
   }
   if (!visibleIds.includes(me)) visibleIds = [me, ...visibleIds];
 
@@ -3293,9 +3364,9 @@ app.get('/api/weekly-reports', (req, res) => {
     params.push(userId);
   } else if (role === 'leader') {
     // 组长看本组成员的周报
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
-    if (myUser?.team_id) {
-      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
       params.push(...members);
     } else {
@@ -3304,11 +3375,9 @@ app.get('/api/weekly-reports', (req, res) => {
     }
   } else if (role === 'sales_director') {
     // 总监看辖区内的周报
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    if (allTeamIds.length > 0) {
-      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
       params.push(...members);
     }
@@ -3420,9 +3489,9 @@ app.get('/api/leads', (req, res) => {
     q += ' AND (l.assignee_id = ? OR l.created_by = ?)';
     params.push(userId, userId);
   } else if (role === 'leader') {
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
-    if (myUser?.team_id) {
-      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND (l.assignee_id IN (${members.map(() => '?').join(',')}) OR l.created_by IN (${members.map(() => '?').join(',')}))`;
       params.push(...members, ...members);
     } else {
@@ -3430,11 +3499,9 @@ app.get('/api/leads', (req, res) => {
       params.push(userId, userId);
     }
   } else if (role === 'sales_director') {
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    if (allTeamIds.length > 0) {
-      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND (l.assignee_id IN (${members.map(() => '?').join(',')}) OR l.created_by IN (${members.map(() => '?').join(',')}))`;
       params.push(...members, ...members);
     }
@@ -3582,9 +3649,9 @@ app.get('/api/strategies', (req, res) => {
     q += ' AND (s.owner_id = ? OR s.owner_id IS NULL)';
     params.push(userId);
   } else if (role === 'leader') {
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
-    if (myUser?.team_id) {
-      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
       params.push(...members);
     } else {
@@ -3592,11 +3659,9 @@ app.get('/api/strategies', (req, res) => {
       params.push(userId);
     }
   } else if (role === 'sales_director') {
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    if (allTeamIds.length > 0) {
-      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
       params.push(...members);
     }
@@ -3944,9 +4009,9 @@ app.get('/api/dev-tasks', (req, res) => {
     q += ' AND (dt.assignee_id = ? OR dt.created_by = ?)';
     params.push(userId, userId);
   } else if (role === 'leader') {
-    const myUser = db.prepare('SELECT team_id FROM users WHERE id = ?').get(userId);
-    if (myUser?.team_id) {
-      const members = db.prepare('SELECT id FROM users WHERE team_id = ?').all(myUser.team_id).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND (dt.assignee_id IN (${members.map(() => '?').join(',')}) OR dt.created_by IN (${members.map(() => '?').join(',')}))`;
       params.push(...members, ...members);
     } else {
@@ -3954,11 +4019,9 @@ app.get('/api/dev-tasks', (req, res) => {
       params.push(userId, userId);
     }
   } else if (role === 'sales_director') {
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    const allTeamIds = [...new Set([...myTeams, ...ledTeams])];
-    if (allTeamIds.length > 0) {
-      const members = db.prepare(`SELECT id FROM users WHERE team_id IN (${allTeamIds.map(() => '?').join(',')})`).all(...allTeamIds).map(u => u.id);
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
       q += ` AND (dt.assignee_id IN (${members.map(() => '?').join(',')}) OR dt.created_by IN (${members.map(() => '?').join(',')}))`;
       params.push(...members, ...members);
     }

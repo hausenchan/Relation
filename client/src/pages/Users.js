@@ -72,10 +72,11 @@ export default function UsersPage() {
   const openEdit = (r) => {
     setEditing(r);
 
-    // 如果用户有 team_id，自动设置 department 为该小组的 department
+    // 如果用户有 team_id / team_ids，自动设置 department 为主小组的 department
     let userDepartment = r.department;
-    if (r.team_id && !userDepartment) {
-      const userTeam = teams.find(t => t.id === r.team_id);
+    const primaryTeamId = r.team_id || r.team_ids?.[0];
+    if (primaryTeamId && !userDepartment) {
+      const userTeam = teams.find(t => t.id === primaryTeamId);
       if (userTeam) {
         userDepartment = userTeam.department;
       }
@@ -85,7 +86,7 @@ export default function UsersPage() {
       display_name: r.display_name,
       role: r.role,
       department: userDepartment,
-      team_id: r.team_id || undefined,
+      team_ids: r.team_ids?.length ? r.team_ids : (r.team_id ? [r.team_id] : undefined),
       leader_id: r.leader_id || undefined,
       modulePerms: r.modulePerms?.reduce((acc, p) => {
         acc[p.module] = { can_read: p.can_read === 1, can_write: p.can_write === 1 };
@@ -107,7 +108,7 @@ export default function UsersPage() {
     const payload = {
       ...values,
       modulePerms,
-      team_id: values.team_id || null,
+      team_ids: values.team_ids || [],
       leader_id: values.leader_id || null,
       department: values.department || null,
     };
@@ -167,8 +168,15 @@ export default function UsersPage() {
     },
     {
       title: '所属小组',
-      dataIndex: 'team_name',
-      render: v => v || <Text type="secondary" style={{ fontSize: 12 }}>-</Text>,
+      dataIndex: 'team_names',
+      render: (_, record) => {
+        const names = record.team_names?.length
+          ? record.team_names
+          : (record.team_name ? [record.team_name] : []);
+        return names.length
+          ? names.map(name => <Tag key={name} style={{ marginBottom: 2 }}>{name}</Tag>)
+          : <Text type="secondary" style={{ fontSize: 12 }}>-</Text>;
+      },
     },
     { title: '最近登录', dataIndex: 'last_login', render: v => v?.slice(0, 16) || '从未登录' },
     {
@@ -224,7 +232,7 @@ export default function UsersPage() {
             </Form.Item>
           )}
           <Form.Item label="角色" name="role" rules={[{ required: true }]}>
-            <Select onChange={() => { form.setFieldValue('team_id', undefined); }}>
+            <Select onChange={() => { form.setFieldValue('team_ids', undefined); }}>
               {Object.entries(roleMap).map(([k, v]) => (
                 <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
               ))}
@@ -236,13 +244,13 @@ export default function UsersPage() {
               allowClear
               placeholder="请选择部门"
               options={departmentOptions}
-              onChange={() => form.setFieldValue('team_id', undefined)}
+              onChange={() => form.setFieldValue('team_ids', undefined)}
             />
           </Form.Item>
 
-          <Form.Item label="所属小组" name="team_id">
+          <Form.Item label="所属小组" name="team_ids">
             <Select
-              allowClear
+              mode="multiple"
               showSearch
               placeholder={department ? '请选择小组' : '请先选择部门'}
               disabled={!department}

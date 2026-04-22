@@ -179,16 +179,26 @@ function Goals() {
     if (!user) return [];
     if (isExecutive(user.role) || user.role === 'sales_director') return users;
     if (!currentUserMeta) return users.filter(item => item.id === user.id);
+    const currentTeamIds = currentUserMeta.team_ids || (currentUserMeta.team_id ? [currentUserMeta.team_id] : []);
 
     if (user.role === 'leader') {
-      return users.filter(item => item.team_id === currentUserMeta?.team_id || item.id === user.id);
+      return users.filter(item => {
+        const itemTeamIds = item.team_ids || (item.team_id ? [item.team_id] : []);
+        return item.id === user.id || itemTeamIds.some(teamId => currentTeamIds.includes(teamId));
+      });
     }
 
     if (user.role === 'member') {
       const visibleIds = new Set([user.id]);
       if (currentUserMeta?.leader_id) visibleIds.add(currentUserMeta.leader_id);
-      const teamLeader = users.find(item => item.role === 'leader' && item.team_id === currentUserMeta?.team_id);
-      if (teamLeader?.id) visibleIds.add(teamLeader.id);
+      users
+        .filter(item => item.role === 'leader')
+        .forEach(item => {
+          const itemTeamIds = item.team_ids || (item.team_id ? [item.team_id] : []);
+          if (itemTeamIds.some(teamId => currentTeamIds.includes(teamId))) {
+            visibleIds.add(item.id);
+          }
+        });
       return users.filter(item => visibleIds.has(item.id));
     }
 

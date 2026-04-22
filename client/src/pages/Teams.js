@@ -93,7 +93,7 @@ export default function Teams() {
       title: '成员数',
       key: 'members',
       render: (_, record) => {
-        const count = users.filter(u => u.team_id === record.id).length;
+        const count = users.filter(u => (u.team_ids || (u.team_id ? [u.team_id] : [])).includes(record.id)).length;
         return count;
       },
     },
@@ -101,7 +101,7 @@ export default function Teams() {
       title: '成员列表',
       key: 'member_list',
       render: (_, record) => {
-        const members = users.filter(u => u.team_id === record.id);
+        const members = users.filter(u => (u.team_ids || (u.team_id ? [u.team_id] : [])).includes(record.id));
         return members.length > 0
           ? members.map(m => <Tag key={m.id} style={{ marginBottom: 2 }}>{m.display_name || m.username}</Tag>)
           : <span style={{ color: '#aaa' }}>暂无成员</span>;
