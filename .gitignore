@@ -6,7 +6,13 @@ client/node_modules/
 server/data.db
 server/data.db-shm
 server/data.db-wal
+server/database.db
 server/uploads/
+
+# 本地问题截图
+bug*.jpg
+bug*.jpeg
+bug*.png
 
 # 构建产物
 client/build/
