@@ -1494,6 +1494,7 @@ app.delete('/api/teams/:id', auth, adminOnly, (req, res) => {
   const affectedUsers = db.prepare('SELECT DISTINCT user_id FROM user_teams WHERE team_id = ?').all(req.params.id).map(r => r.user_id);
   db.prepare('DELETE FROM user_teams WHERE team_id = ?').run(req.params.id);
   db.prepare('UPDATE users SET team_id = NULL WHERE team_id = ?').run(req.params.id);
+  db.prepare('UPDATE goals SET team_id = NULL WHERE team_id = ?').run(req.params.id);
   affectedUsers.forEach(userId => {
     const nextTeam = db.prepare('SELECT team_id FROM user_teams WHERE user_id = ? ORDER BY id ASC LIMIT 1').get(userId);
     db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(nextTeam?.team_id || null, userId);
@@ -1549,6 +1550,7 @@ app.put('/api/project-groups/:id', auth, adminOnly, (req, res) => {
 
 app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_project_groups WHERE project_group_id = ?').run(req.params.id);
+  db.prepare('UPDATE goals SET project_group_id = NULL WHERE project_group_id = ?').run(req.params.id);
   db.prepare('DELETE FROM project_groups WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
