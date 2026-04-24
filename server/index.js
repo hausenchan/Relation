@@ -121,6 +121,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
     display_name TEXT,
     role TEXT NOT NULL DEFAULT 'member',
+    need_weekly_report INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_login DATETIME
   );
@@ -852,12 +853,16 @@ if (userCols.length > 0) {
   if (!userCols.includes('team_id')) {
     db.exec("ALTER TABLE users ADD COLUMN team_id INTEGER DEFAULT NULL");
   }
+  if (!userCols.includes('need_weekly_report')) {
+    db.exec("ALTER TABLE users ADD COLUMN need_weekly_report INTEGER DEFAULT 0");
+  }
   if (!userCols.includes('executive_role')) {
     db.exec("ALTER TABLE users ADD COLUMN executive_role TEXT DEFAULT NULL");
   }
   if (!userCols.includes('password_version')) {
     db.exec("ALTER TABLE users ADD COLUMN password_version INTEGER DEFAULT 0");
   }
+  db.prepare('UPDATE users SET need_weekly_report = 0 WHERE need_weekly_report IS NULL').run();
 }
 
 try {

@@ -27,6 +27,15 @@ const departmentMap = {
 
 const getDepartmentLabel = (department) => departmentMap[department] || department || '-';
 
+const getErrorMessage = async (res, fallback) => {
+  try {
+    const data = await res.json();
+    return data?.error || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 export default function WeeklyReports() {
   const { user: currentUser } = useAuth();
   const [reports, setReports] = useState([]);
@@ -72,10 +81,11 @@ export default function WeeklyReports() {
       const res = await fetch('/api/weekly-reports/writers', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
+      if (!res.ok) throw new Error(await getErrorMessage(res, '加载失败'));
       const data = await res.json();
       setWriters(data);
     } catch (err) {
-      message.error('加载失败');
+      message.error(err.message || '加载失败');
     }
   };
 
@@ -159,7 +169,7 @@ export default function WeeklyReports() {
 
   const toggleWriter = async (userId, currentValue) => {
     try {
-      await fetch(`/api/users/${userId}/weekly-report`, {
+      const res = await fetch(`/api/users/${userId}/weekly-report`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -167,10 +177,11 @@ export default function WeeklyReports() {
         },
         body: JSON.stringify({ need_weekly_report: !currentValue }),
       });
+      if (!res.ok) throw new Error(await getErrorMessage(res, '更新失败'));
       message.success('更新成功');
       fetchWriters();
     } catch (err) {
-      message.error('更新失败');
+      message.error(err.message || '更新失败');
     }
   };
 
