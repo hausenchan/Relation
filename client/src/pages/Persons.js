@@ -760,6 +760,7 @@ export default function Persons() {
         </Space>
       ),
     },
+    { title: '创建人', dataIndex: 'created_by_name', render: v => v || '-' },
     { title: '更新时间', dataIndex: 'updated_at', render: v => v?.slice(0, 10) },
     {
       title: '操作',

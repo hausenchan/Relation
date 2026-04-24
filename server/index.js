@@ -1800,6 +1800,7 @@ app.post('/api/persons/import', (req, res) => {
 // =========== 互动记录 API ===========
 app.get('/api/interactions', (req, res) => {
   const { person_id, type, city, weight, importance, date_start, date_end } = req.query;
+  const { id: me, role } = req.user;
   let query = `
     SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company, p.city, p.weight
     FROM interactions i
@@ -1807,6 +1808,14 @@ app.get('/api/interactions', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+
+  // 按角色过滤：通过关联的 person 的 created_by / assigned_to 来控制可见范围
+  const filter = buildUserFilter(me, role, 'p');
+  if (filter.sql) {
+    query += filter.sql;
+    params.push(...filter.params);
+  }
+
   if (person_id) { query += ' AND i.person_id = ?'; params.push(person_id); }
   if (type) { query += ' AND i.type = ?'; params.push(type); }
   if (city) { query += ' AND p.city LIKE ?'; params.push(`%${city}%`); }
