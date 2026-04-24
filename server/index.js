@@ -624,6 +624,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_cross_team_module ON cross_team_access(module);
 `);
 
+// =========== 人脉共享用户表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS person_shared_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(person_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_person_shared_person ON person_shared_users(person_id);
+  CREATE INDEX IF NOT EXISTS idx_person_shared_user ON person_shared_users(user_id);
+`);
+
 // =========== 策略执行记录表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS strategy_execution_logs (
@@ -1595,7 +1608,26 @@ app.put('/api/admin/menu-perms/:userId', auth, adminOnly, (req, res) => {
 app.get('/api/persons', (req, res) => {
   const { search, person_category, relation_type, potential_level, recruit_status, intent_level, city, weight } = req.query;
   const { id: me, role } = req.user;
-  let query = 'SELECT p.*, u1.display_name as created_by_name, u2.display_name as assigned_to_name FROM persons p LEFT JOIN users u1 ON p.created_by = u1.id LEFT JOIN users u2 ON p.assigned_to = u2.id WHERE 1=1';
+  let query = `
+    SELECT p.*,
+      u1.display_name as created_by_name,
+      u2.display_name as assigned_to_name,
+      (
+        SELECT GROUP_CONCAT(u.display_name, ', ')
+        FROM person_shared_users psu
+        LEFT JOIN users u ON psu.user_id = u.id
+        WHERE psu.person_id = p.id
+      ) as shared_to_names,
+      (
+        SELECT GROUP_CONCAT(psu.user_id, ',')
+        FROM person_shared_users psu
+        WHERE psu.person_id = p.id
+      ) as shared_to_ids
+    FROM persons p
+    LEFT JOIN users u1 ON p.created_by = u1.id
+    LEFT JOIN users u2 ON p.assigned_to = u2.id
+    WHERE 1=1
+  `;
   const params = [];
 
   // 按角色过滤可见数据
@@ -1676,7 +1708,8 @@ app.post('/api/persons', canWrite, async (req, res) => {
     relationship_level, client_status,
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
-    potential_level, expected_salary, source, heart, brain, mouth, hand, weight
+    potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
+    shared_to
   } = req.body;
   const { lat, lng } = await geocodeAddress(city, address);
   const result = db.prepare(`
@@ -1695,7 +1728,13 @@ app.post('/api/persons', canWrite, async (req, res) => {
     skills, experience_years, education, recruit_status || 'potential', intent_level || 'low',
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium', lat, lng, req.user.id
   );
-  res.json({ id: result.lastInsertRowid });
+
+  const personId = result.lastInsertRowid;
+  if (Array.isArray(shared_to) && shared_to.length > 0) {
+    const insertShared = db.prepare('INSERT OR IGNORE INTO person_shared_users (person_id, user_id) VALUES (?, ?)');
+    shared_to.forEach(uid => insertShared.run(personId, uid));
+  }
+  res.json({ id: personId });
 });
 
 app.put('/api/persons/:id', canWrite, async (req, res) => {
@@ -1712,7 +1751,8 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     relationship_level, client_status,
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
-    potential_level, expected_salary, source, heart, brain, mouth, hand, weight
+    potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
+    shared_to
   } = req.body;
   const { lat, lng } = await geocodeAddress(city, address);
   db.prepare(`
@@ -1733,6 +1773,13 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium',
     lat, lng, req.params.id
   );
+
+  // 更新共享人
+  db.prepare('DELETE FROM person_shared_users WHERE person_id = ?').run(req.params.id);
+  if (Array.isArray(shared_to) && shared_to.length > 0) {
+    const insertShared = db.prepare('INSERT OR IGNORE INTO person_shared_users (person_id, user_id) VALUES (?, ?)');
+    shared_to.forEach(uid => insertShared.run(req.params.id, uid));
+  }
   res.json({ success: true });
 });
 

@@ -436,6 +436,7 @@ export default function Persons() {
   const [assignTarget, setAssignTarget] = useState(null);
   const [assignUserId, setAssignUserId] = useState(undefined);
   const [teamMembers, setTeamMembers] = useState([]);
+  const [commercialUsers, setCommercialUsers] = useState([]);
   const [form] = Form.useForm();
   const category = Form.useWatch('person_category', form);
   const relationTypes = Form.useWatch('relation_types', form) || [];
@@ -493,13 +494,26 @@ export default function Persons() {
     setReminders(rems);
   };
 
+  const loadCommercialUsers = async () => {
+    try {
+      const users = await usersApi.list();
+      setCommercialUsers(users.filter(u => u.department === 'commercial'));
+    } catch {
+      setCommercialUsers([]);
+    }
+  };
+
   const openEdit = (record) => {
     setEditing(record);
     form.setFieldsValue({
       ...record,
       relation_types: parseRelationTypes(record.relation_types),
       city: record.city ? record.city.split(',').map(s => s.trim()).filter(Boolean) : [],
+      shared_to: record.shared_to_ids
+        ? record.shared_to_ids.split(',').map(Number).filter(Boolean)
+        : [],
     });
+    loadCommercialUsers();
     setModalOpen(true);
   };
 
@@ -507,6 +521,7 @@ export default function Persons() {
     setEditing(null);
     form.resetFields();
     form.setFieldsValue({ person_category: 'social', relation_types: [], weight: 'medium' });
+    loadCommercialUsers();
     setModalOpen(true);
   };
 
@@ -761,6 +776,11 @@ export default function Persons() {
       ),
     },
     { title: '创建人', dataIndex: 'created_by_name', render: v => v || '-' },
+    {
+      title: '共享人',
+      dataIndex: 'shared_to_names',
+      render: v => v ? v.split(',').map((name, i) => <Tag key={i} color="cyan">{name}</Tag>) : '-',
+    },
     { title: '更新时间', dataIndex: 'updated_at', render: v => v?.slice(0, 10) },
     {
       title: '操作',
@@ -990,6 +1010,18 @@ export default function Persons() {
           <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>备注</Divider>
           <Form.Item name="notes">
             <TextArea rows={3} placeholder="其他备注..." />
+          </Form.Item>
+          <Form.Item label="共享人" name="shared_to">
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="可选择商务部门成员共享此人脉"
+              optionFilterProp="label"
+              options={commercialUsers.map(u => ({
+                value: u.id,
+                label: u.display_name || u.username,
+              }))}
+            />
           </Form.Item>
         </Form>
       </Modal>
