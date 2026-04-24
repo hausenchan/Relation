@@ -20,6 +20,7 @@ import PersonsMap from '../components/PersonsMap';
 const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
+const PERSON_NAME_MAX_LENGTH = 30;
 
 const CHINA_CITIES = [
   '北京','上海','广州','深圳','杭州','成都','重庆','武汉','南京','西安',
@@ -110,8 +111,15 @@ function commonFields() {
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>基本信息</Divider>
       <Row gutter={16}>
         <Col span={8}>
-          <Form.Item label="姓名" name="name" rules={[{ required: true, message: '请输入姓名' }]}>
-            <Input />
+          <Form.Item
+            label="姓名"
+            name="name"
+            rules={[
+              { required: true, whitespace: true, message: '请输入姓名' },
+              { max: PERSON_NAME_MAX_LENGTH, message: `姓名最多 ${PERSON_NAME_MAX_LENGTH} 个字符` },
+            ]}
+          >
+            <Input maxLength={PERSON_NAME_MAX_LENGTH} showCount placeholder="建议只填姓名，不填公司或职位" />
           </Form.Item>
         </Col>
         <Col span={8}>
@@ -529,6 +537,7 @@ export default function Persons() {
     const values = await form.validateFields();
     const payload = {
       ...values,
+      name: (values.name || '').trim(),
       relation_types: Array.isArray(values.relation_types)
         ? values.relation_types.join(',')
         : (values.relation_types || ''),
@@ -669,7 +678,10 @@ export default function Persons() {
     setImportLoading(true);
     try {
       const result = await personsApi.import(importRows);
-      message.success(`导入成功 ${result.ok} 条${result.skip ? `，跳过 ${result.skip} 条（缺少姓名）` : ''}`);
+      const skipParts = [];
+      if (result.skip_empty_name) skipParts.push(`${result.skip_empty_name} 条缺少姓名`);
+      if (result.skip_name_too_long) skipParts.push(`${result.skip_name_too_long} 条姓名超过 ${PERSON_NAME_MAX_LENGTH} 字`);
+      message.success(`导入成功 ${result.ok} 条${skipParts.length ? `，跳过 ${skipParts.join('，')}` : ''}`);
       setImportOpen(false);
       setImportRows([]);
       load();
@@ -701,10 +713,29 @@ export default function Persons() {
     {
       title: '姓名',
       dataIndex: 'name',
+      width: 168,
       render: (v, r) => (
-        <Button type="link" onClick={() => openDetail(r)} style={{ padding: 0 }}>
-          <strong>{v}</strong>
-        </Button>
+        <Tooltip title={v}>
+          <Button
+            type="link"
+            onClick={() => openDetail(r)}
+            style={{ padding: 0, display: 'block', width: '100%', height: 'auto', textAlign: 'left' }}
+          >
+            <strong
+              style={{
+                display: '-webkit-box',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                WebkitBoxOrient: 'vertical',
+                WebkitLineClamp: 2,
+                lineHeight: 1.4,
+                wordBreak: 'break-all',
+              }}
+            >
+              {v}
+            </strong>
+          </Button>
+        </Tooltip>
       ),
     },
     {
@@ -1260,6 +1291,7 @@ export default function Persons() {
               <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12 }}>
                 <li>请先下载模板，按格式填写后保存为 <b>CSV（UTF-8）</b> 格式</li>
                 <li>Excel 用户：填写完毕后 → 另存为 → CSV UTF-8（逗号分隔）</li>
+                <li><b>姓名</b>建议只填姓名，最长 {PERSON_NAME_MAX_LENGTH} 个字符</li>
                 <li><b>圈子分类</b>填英文值：business / talent / startup / social</li>
                 <li><b>关系类型</b>填英文值（多个用逗号分隔）：client_potential / client_active / talent_external / talent_internal / partner / investor / family / friend / other</li>
               </ul>

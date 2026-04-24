@@ -30,6 +30,12 @@ const upload = multer({
   },
 });
 
+const PERSON_NAME_MAX_LENGTH = 30;
+
+function normalizePersonName(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function uploadAttachments(req, res, next) {
   upload.array('files', 10)(req, res, (err) => {
     if (!err) return next();
@@ -1740,6 +1746,11 @@ app.post('/api/persons', canWrite, async (req, res) => {
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
     shared_to
   } = req.body;
+  const normalizedName = normalizePersonName(name);
+  if (!normalizedName) return res.status(400).json({ error: '姓名必填' });
+  if (normalizedName.length > PERSON_NAME_MAX_LENGTH) {
+    return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
+  }
   const { lat, lng } = await geocodeAddress(city, address);
   const result = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, city, company, position, industry,
@@ -1750,7 +1761,7 @@ app.post('/api/persons', canWrite, async (req, res) => {
       potential_level, expected_salary, source, heart, brain, mouth, hand, weight, lat, lng, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    name, person_category || 'social', relation_types || '', city,
+    normalizedName, person_category || 'social', relation_types || '', city,
     company, position, industry, phone, email, wechat, birthday, address, tags, notes,
     resources, demands, relationship_level || 'normal', client_status || 'active',
     talent_type || 'external', current_company, current_position, target_position,
@@ -1783,6 +1794,11 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
     shared_to
   } = req.body;
+  const normalizedName = normalizePersonName(name);
+  if (!normalizedName) return res.status(400).json({ error: '姓名必填' });
+  if (normalizedName.length > PERSON_NAME_MAX_LENGTH) {
+    return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
+  }
   const { lat, lng } = await geocodeAddress(city, address);
   db.prepare(`
     UPDATE persons SET name=?, person_category=?, relation_types=?, city=?, company=?, position=?, industry=?,
@@ -1794,7 +1810,7 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
       lat=?, lng=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
   `).run(
-    name, person_category, relation_types || '', city,
+    normalizedName, person_category, relation_types || '', city,
     company, position, industry, phone, email, wechat, birthday, address, tags, notes,
     resources, demands, relationship_level, client_status,
     talent_type, current_company, current_position, target_position,
@@ -1852,11 +1868,13 @@ app.post('/api/persons/import', (req, res) => {
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
   const importMany = db.transaction((list) => {
-    let ok = 0, skip = 0;
+    let ok = 0, skip = 0, skipEmptyName = 0, skipNameTooLong = 0;
     for (const r of list) {
-      if (!r.name) { skip++; continue; }
+      const normalizedName = normalizePersonName(r.name);
+      if (!normalizedName) { skip++; skipEmptyName++; continue; }
+      if (normalizedName.length > PERSON_NAME_MAX_LENGTH) { skip++; skipNameTooLong++; continue; }
       insert.run(
-        r.name, r.person_category || 'social', r.relation_types || '',
+        normalizedName, r.person_category || 'social', r.relation_types || '',
         r.city, r.company, r.position, r.industry,
         r.phone, r.email, r.wechat, r.birthday, r.address, r.tags, r.notes,
         r.resources, r.demands,
@@ -1868,7 +1886,7 @@ app.post('/api/persons/import', (req, res) => {
       );
       ok++;
     }
-    return { ok, skip };
+    return { ok, skip, skip_empty_name: skipEmptyName, skip_name_too_long: skipNameTooLong };
   });
   const result = importMany(rows);
   res.json(result);
