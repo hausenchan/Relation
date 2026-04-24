@@ -465,7 +465,7 @@ export default function Persons() {
     setAssignUserId(record.assigned_to || undefined);
     // 加载可见用户列表（同组成员）
     try {
-      const users = await usersApi.list();
+      const users = await usersApi.listSimple();
       setTeamMembers(users.filter(u => u.role !== 'admin'));
     } catch {
       setTeamMembers([]);
@@ -496,8 +496,8 @@ export default function Persons() {
 
   const loadCommercialUsers = async () => {
     try {
-      const users = await usersApi.list();
-      setCommercialUsers(users.filter(u => u.department === 'commercial'));
+      const users = await usersApi.listSimple({ department: 'commercial', include_readonly: true });
+      setCommercialUsers(users);
     } catch {
       setCommercialUsers([]);
     }
@@ -555,6 +555,24 @@ export default function Persons() {
     await personsApi.delete(id);
     message.success('删除成功');
     load();
+  };
+
+  const canEditPerson = (record) => {
+    if (!currentUser || !record) return false;
+    if (['readonly', 'guest'].includes(currentUser.role)) return false;
+    if (currentUser.role === 'member') {
+      return record.created_by === currentUser.id || record.assigned_to === currentUser.id;
+    }
+    return true;
+  };
+
+  const canDeletePerson = (record) => {
+    if (!currentUser || !record) return false;
+    if (['readonly', 'guest'].includes(currentUser.role)) return false;
+    if (currentUser.role === 'member') {
+      return record.created_by === currentUser.id;
+    }
+    return true;
   };
 
   const openIntDrawer = async (record) => {
@@ -787,15 +805,19 @@ export default function Persons() {
       render: (_, r) => (
         <Space>
           <Button size="small" icon={<MessageOutlined />} onClick={() => openIntDrawer(r)}>互动记录</Button>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+          {canEditPerson(r) && (
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+          )}
           {canAssign() && (
             <Tooltip title="指派负责人">
               <Button size="small" icon={<SwapOutlined />} onClick={() => openAssign(r)}>指派</Button>
             </Tooltip>
           )}
-          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
-            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-          </Popconfirm>
+          {canDeletePerson(r) && (
+            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -933,7 +955,7 @@ export default function Persons() {
         scroll={{ x: 1000 }}
         pagination={{ pageSize: 15 }}
         onRow={(record) => ({
-          onDoubleClick: () => openEdit(record),
+          onDoubleClick: () => (canEditPerson(record) ? openEdit(record) : openDetail(record)),
           style: { cursor: 'pointer' }
         })}
         expandable={{
@@ -1058,7 +1080,9 @@ export default function Persons() {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={660}
-        extra={<Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>编辑</Button>}
+        extra={canEditPerson(current)
+          ? <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>编辑</Button>
+          : null}
       >
         {current && (
           <Tabs defaultActiveKey="info" items={[

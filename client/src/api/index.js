@@ -31,7 +31,7 @@ export const authApi = {
 
 export const usersApi = {
   list: () => api.get('/users').then(r => r.data),
-  listSimple: () => api.get('/users/simple').then(r => r.data),
+  listSimple: (params) => api.get('/users/simple', { params }).then(r => r.data),
   create: (data) => api.post('/users', data).then(r => r.data),
   update: (id, data) => api.put(`/users/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/users/${id}`).then(r => r.data),

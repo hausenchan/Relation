@@ -1288,9 +1288,19 @@ function buildUserFilter(userId, role, tableAlias) {
   const ids = getVisibleUserIds(userId, role);
   if (ids === null) return { sql: '', params: [] }; // admin，不过滤
   const col = tableAlias ? `${tableAlias}.` : '';
+  const placeholders = ids.map(() => '?').join(',');
   return {
-    sql: ` AND (${col}created_by IN (${ids.map(() => '?').join(',')}) OR ${col}assigned_to IN (${ids.map(() => '?').join(',')}))`,
-    params: [...ids, ...ids],
+    sql: ` AND (
+      ${col}created_by IN (${placeholders})
+      OR ${col}assigned_to IN (${placeholders})
+      OR EXISTS (
+        SELECT 1
+        FROM person_shared_users psu
+        WHERE psu.person_id = ${col}id
+          AND psu.user_id IN (${placeholders})
+      )
+    )`,
+    params: [...ids, ...ids, ...ids],
   };
 }
 
@@ -1366,7 +1376,26 @@ app.put('/api/users/:id/reset-password', auth, adminOnly, (req, res) => {
 
 // 所有登录用户可访问（用于指派选人下拉）
 app.get('/api/users/simple', auth, (req, res) => {
-  const users = db.prepare('SELECT id, username, display_name, role, team_id, leader_id, department FROM users WHERE role != ? ORDER BY display_name ASC').all('readonly');
+  const { department, include_readonly } = req.query;
+  const where = [];
+  const params = [];
+
+  if (!['1', 'true'].includes(String(include_readonly))) {
+    where.push('role != ?');
+    params.push('readonly');
+  }
+  if (department) {
+    where.push('department = ?');
+    params.push(department);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const users = db.prepare(`
+    SELECT id, username, display_name, role, team_id, leader_id, department
+    FROM users
+    ${whereSql}
+    ORDER BY display_name ASC
+  `).all(...params);
   const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
   const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
   res.json(users.map(u => ({
@@ -1788,6 +1817,7 @@ app.delete('/api/persons/:id', canWrite, (req, res) => {
     const p = db.prepare('SELECT created_by FROM persons WHERE id = ?').get(req.params.id);
     if (p && p.created_by && p.created_by !== req.user.id) return res.status(403).json({ error: '无权删除他人录入的数据' });
   }
+  db.prepare('DELETE FROM person_shared_users WHERE person_id = ?').run(req.params.id);
   db.prepare('DELETE FROM persons WHERE id = ?').run(req.params.id);
   db.prepare('DELETE FROM interactions WHERE person_id = ?').run(req.params.id);
   db.prepare('DELETE FROM reminders WHERE person_id = ?').run(req.params.id);
