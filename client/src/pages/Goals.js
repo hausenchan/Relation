@@ -104,6 +104,20 @@ const getDisplayName = (user) => user?.display_name || user?.username || `用户
 const getRoleLabel = (role) => roleMap[role] || role || '-';
 const getDepartmentLabel = (department) => departmentMap[department] || department || '-';
 const isExecutive = (role) => executiveRoles.has(role);
+const detailTextStyle = {
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+  lineHeight: 1.75,
+  color: '#1f1f1f',
+};
+
+function DetailTextBlock({ value, emptyText = '-' }) {
+  return (
+    <div style={{ ...detailTextStyle, color: value ? '#1f1f1f' : '#999' }}>
+      {value || emptyText}
+    </div>
+  );
+}
 
 function Goals() {
   const { user } = useAuth();
@@ -816,59 +830,123 @@ function Goals() {
       <Drawer
         title="目标详情"
         placement="right"
-        width={680}
+        width={760}
         open={detailVisible}
         onClose={() => setDetailVisible(false)}
+        extra={detailRecord ? (
+          <Button
+            size="small"
+            icon={<EditOutlined />}
+            onClick={() => {
+              setDetailVisible(false);
+              handleEdit(detailRecord);
+            }}
+          >
+            编辑目标
+          </Button>
+        ) : null}
       >
         {detailLoading && <div style={{ textAlign: 'center', padding: 32 }}>加载中...</div>}
         {!detailLoading && detailRecord && (
           <Space direction="vertical" style={{ width: '100%' }} size={16}>
-            <Descriptions column={1} bordered>
-              <Descriptions.Item label="目标类型">
-                <Tag color={(goalTypeMap[detailRecord.goal_type] || { color: 'default' }).color}>
-                  {(goalTypeMap[detailRecord.goal_type] || { label: detailRecord.goal_type }).label}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="归属颗粒度">
-                <Tag color={(scopeTypeMap[detailRecord.scope_type] || { color: 'default' }).color}>
-                  {(scopeTypeMap[detailRecord.scope_type] || { label: detailRecord.scope_type }).label}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="周期">{detailRecord.period}</Descriptions.Item>
-              <Descriptions.Item label="目标标题">{detailRecord.title}</Descriptions.Item>
-              <Descriptions.Item label="目标描述">{detailRecord.description || '-'}</Descriptions.Item>
+            <Card size="small">
+              <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                <Space wrap size={[8, 8]}>
+                  <Tag color={(goalTypeMap[detailRecord.goal_type] || { color: 'default' }).color}>
+                    {(goalTypeMap[detailRecord.goal_type] || { label: detailRecord.goal_type }).label}
+                  </Tag>
+                  <Tag color={(scopeTypeMap[detailRecord.scope_type] || { color: 'default' }).color}>
+                    {(scopeTypeMap[detailRecord.scope_type] || { label: detailRecord.scope_type }).label}
+                  </Tag>
+                  <Tag color={(statusMap[detailRecord.status] || { color: 'default' }).color}>
+                    {(statusMap[detailRecord.status] || { label: detailRecord.status }).label}
+                  </Tag>
+                </Space>
+
+                <div>
+                  <Typography.Title level={5} style={{ margin: 0 }}>
+                    {detailRecord.title}
+                  </Typography.Title>
+                  <Typography.Text type="secondary">
+                    {detailRecord.period || '-'}
+                  </Typography.Text>
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <Typography.Text type="secondary">
+                      负责人：{detailRecord.owner_name || '-'}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      上级目标：{detailRecord.parent_title || '-'}
+                    </Typography.Text>
+                    <Typography.Text type="secondary">
+                      截止日期：{detailRecord.deadline || '-'}
+                    </Typography.Text>
+                  </div>
+                  <Progress percent={Number(detailRecord.progress || 0)} />
+                </div>
+              </Space>
+            </Card>
+
+            <Descriptions column={2} bordered size="small">
               <Descriptions.Item label="负责人">{detailRecord.owner_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="负责人角色">{getRoleLabel(detailRecord.owner_role)}</Descriptions.Item>
               <Descriptions.Item label="项目组">{detailRecord.project_group_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="部门">{getDepartmentLabel(detailRecord.department)}</Descriptions.Item>
               <Descriptions.Item label="小组">{detailRecord.team_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="上级目标">{detailRecord.parent_title || '-'}</Descriptions.Item>
-              <Descriptions.Item label="截止日期">{detailRecord.deadline || '-'}</Descriptions.Item>
-              <Descriptions.Item label="状态">
-                <Tag color={(statusMap[detailRecord.status] || { color: 'default' }).color}>
-                  {(statusMap[detailRecord.status] || { label: detailRecord.status }).label}
-                </Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="进度">
-                <Progress percent={Number(detailRecord.progress || 0)} />
-              </Descriptions.Item>
-              <Descriptions.Item label="目标结果">{detailRecord.result || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建时间">{detailRecord.created_at}</Descriptions.Item>
               <Descriptions.Item label="更新时间">{detailRecord.updated_at}</Descriptions.Item>
             </Descriptions>
 
+            <Card title="目标描述" size="small">
+              <DetailTextBlock value={detailRecord.description} />
+            </Card>
+
+            <Card title="目标结果" size="small">
+              <DetailTextBlock value={detailRecord.result} />
+            </Card>
+
             <Card title={`下级目标（${detailRecord.children?.length || 0}）`} size="small">
               {detailRecord.children?.length ? (
                 <Space direction="vertical" style={{ width: '100%' }}>
-                  {detailRecord.children.map(child => (
-                    <div key={child.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                      <span>
-                        <Tag color={(goalTypeMap[child.goal_type] || { color: 'default' }).color}>
-                          {(goalTypeMap[child.goal_type] || { label: child.goal_type }).label}
-                        </Tag>
-                        {child.period} · {child.title}
-                      </span>
-                      <span>{child.owner_name || '-'}</span>
+                  {detailRecord.children.map((child, index) => (
+                    <div
+                      key={child.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'flex-start',
+                        gap: 16,
+                        paddingBottom: index === detailRecord.children.length - 1 ? 0 : 12,
+                        borderBottom: index === detailRecord.children.length - 1 ? 'none' : '1px solid #f0f0f0',
+                      }}
+                    >
+                      <Space direction="vertical" size={6} style={{ flex: 1 }}>
+                        <Space wrap size={[6, 6]}>
+                          <Tag color={(goalTypeMap[child.goal_type] || { color: 'default' }).color}>
+                            {(goalTypeMap[child.goal_type] || { label: child.goal_type }).label}
+                          </Tag>
+                          <Tag color={(statusMap[child.status] || { color: 'default' }).color}>
+                            {(statusMap[child.status] || { label: child.status }).label}
+                          </Tag>
+                        </Space>
+                        <Button
+                          type="link"
+                          style={{ padding: 0, height: 'auto', textAlign: 'left' }}
+                          onClick={() => showDetail(child)}
+                        >
+                          {child.period} · {child.title}
+                        </Button>
+                        <Typography.Text type="secondary">
+                          {child.owner_name || '-'} · {getDepartmentLabel(child.department)}
+                        </Typography.Text>
+                      </Space>
+
+                      <div style={{ minWidth: 120 }}>
+                        <Progress percent={Number(child.progress || 0)} size="small" />
+                      </div>
                     </div>
                   ))}
                 </Space>

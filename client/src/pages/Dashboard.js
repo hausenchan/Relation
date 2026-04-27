@@ -69,6 +69,8 @@ export default function Dashboard() {
   // 筛选条件 - 团队任务
   const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
   const [teamTaskDateRange, setTeamTaskDateRange] = useState(null);
+  const [teamTaskAssignerFilter, setTeamTaskAssignerFilter] = useState([]);
+  const [teamTaskFollowerFilter, setTeamTaskFollowerFilter] = useState([]);
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
@@ -359,6 +361,8 @@ export default function Dashboard() {
 
   const filteredTeamTasks = teamTasks.filter(t => {
     if (!teamTaskStatusFilter.includes(t.display_status)) return false;
+    if (teamTaskAssignerFilter.length > 0 && !teamTaskAssignerFilter.includes(t.assigner_name)) return false;
+    if (teamTaskFollowerFilter.length > 0 && !teamTaskFollowerFilter.includes(t.follower_name)) return false;
     return isWithinRange(t.plan_date, teamTaskDateRange);
   });
 
@@ -918,18 +922,36 @@ export default function Dashboard() {
                   { label: '已完成', value: 'done' },
                 ]}
               />
+              <Select
+                mode="multiple"
+                placeholder="指派人筛选"
+                value={teamTaskAssignerFilter}
+                onChange={setTeamTaskAssignerFilter}
+                style={{ minWidth: 160 }}
+                options={[...new Set(teamTasks.map(t => t.assigner_name).filter(Boolean))].map(n => ({ label: n, value: n }))}
+              />
+              <Select
+                mode="multiple"
+                placeholder="跟进人筛选"
+                value={teamTaskFollowerFilter}
+                onChange={setTeamTaskFollowerFilter}
+                style={{ minWidth: 160 }}
+                options={[...new Set(teamTasks.map(t => t.follower_name).filter(Boolean))].map(n => ({ label: n, value: n }))}
+              />
               <RangePicker
                 placeholder={['开始日期', '结束日期']}
                 value={teamTaskDateRange}
                 onChange={setTeamTaskDateRange}
                 style={{ width: 240 }}
               />
-              {(teamTaskStatusFilter.length !== 3 || teamTaskDateRange) && (
+              {(teamTaskStatusFilter.length !== 3 || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
                 <Button
                   size="small"
                   onClick={() => {
                     setTeamTaskStatusFilter(['pending', 'in_progress', 'done']);
                     setTeamTaskDateRange(null);
+                    setTeamTaskAssignerFilter([]);
+                    setTeamTaskFollowerFilter([]);
                   }}
                 >
                   重置筛选
