@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Modal, Form, Input, Select,
-  DatePicker, message, Drawer, Descriptions, Radio, Switch, Popconfirm
+  DatePicker, message, Drawer, Descriptions, Radio, Switch, Popconfirm, Grid, List
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, FlagOutlined
@@ -13,6 +13,7 @@ import dayjs from 'dayjs';
 const { Title, Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
+const { useBreakpoint } = Grid;
 
 const statusMap = {
   new_entry: { label: '已入库', color: 'blue' },
@@ -29,6 +30,8 @@ const potentialMap = {
 };
 
 export default function Budgets() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -175,15 +178,84 @@ export default function Budgets() {
     },
   ];
 
+  const renderBudgetCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => showDetail(record)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') showDetail(record);
+        }}
+        style={{
+          width: '100%',
+          padding: 14,
+          border: '1px solid #f0f0f0',
+          borderRadius: 12,
+          background: '#fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          cursor: 'pointer',
+        }}
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.name}</div>
+              <Space wrap size={[6, 6]}>
+                <Tag color={statusMap[record.status]?.color}>{statusMap[record.status]?.label}</Tag>
+                <Tag color={potentialMap[record.potential_level]?.color}>{potentialMap[record.potential_level]?.label}</Tag>
+              </Space>
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>{record.test_start_date || '-'}</Text>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Text type="secondary">预算源：{record.source || '-'}</Text>
+            <Text type="secondary">对接载体：{record.platform || '-'}</Text>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Text type="secondary">对接方式：{record.method || '-'}</Text>
+            <Text type="secondary">创建人：{record.created_by_name || '-'}</Text>
+          </div>
+
+          {(record.market_size || record.competitor_scale) && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {record.market_size && <Text type="secondary">市场规模：{record.market_size}</Text>}
+              {record.competitor_scale && <Text type="secondary">竞对量级：{record.competitor_scale}</Text>}
+            </div>
+          )}
+
+          {record.update_notes && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              更新情况：{record.update_notes}
+            </Typography.Paragraph>
+          )}
+
+          <Space size="small" wrap>
+            <Button size="small" icon={<EyeOutlined />} onClick={(event) => { event.stopPropagation(); showDetail(record); }}>详情</Button>
+            {(record.created_by === user?.id || ['admin', 'sales_director'].includes(user?.role)) && (
+              <>
+                <Button size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>编辑</Button>
+                <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                  <Button size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()}>删除</Button>
+                </Popconfirm>
+              </>
+            )}
+          </Space>
+        </Space>
+      </div>
+    </List.Item>
+  );
+
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Space align="center">
+    <div style={{ padding: isMobile ? 0 : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', marginBottom: 16, gap: 12 }}>
+        <Space align="center" direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <Title level={4} style={{ margin: 0 }}>预算管理</Title>
           <Select
             placeholder="状态筛选"
             allowClear
-            style={{ width: 120 }}
+            style={{ width: isMobile ? '100%' : 120 }}
             value={filterStatus || undefined}
             onChange={setFilterStatus}
           >
@@ -194,7 +266,7 @@ export default function Budgets() {
           <Select
             placeholder="潜力等级"
             allowClear
-            style={{ width: 120 }}
+            style={{ width: isMobile ? '100%' : 120 }}
             value={filterPotential || undefined}
             onChange={setFilterPotential}
           >
@@ -208,14 +280,25 @@ export default function Budgets() {
         </Button>
       </div>
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        scroll={{ x: 1600 }}
-        pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          locale={{ emptyText: '暂无预算记录' }}
+          renderItem={renderBudgetCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          scroll={{ x: 1600 }}
+          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+        />
+      )}
 
       {/* 新建/编辑弹窗 */}
       <Modal
@@ -223,14 +306,15 @@ export default function Budgets() {
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
         onOk={handleSave}
-        width={720}
+        width={isMobile ? '100%' : 720}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         destroyOnClose
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item label="预算名称" name="name" rules={[{ required: true, message: '请输入预算名称' }]}>
             <Input placeholder="请输入预算名称" />
           </Form.Item>
-          <Space style={{ width: '100%' }} size={16}>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={16}>
             <Form.Item label="预算源" name="source" style={{ flex: 1 }}>
               <Input placeholder="请输入预算源" />
             </Form.Item>
@@ -238,7 +322,7 @@ export default function Budgets() {
               <Input placeholder="请输入对接载体" />
             </Form.Item>
           </Space>
-          <Space style={{ width: '100%' }} size={16}>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={16}>
             <Form.Item label="对接方式" name="method" style={{ flex: 1 }}>
               <Input placeholder="请输入对接方式" />
             </Form.Item>
@@ -246,7 +330,7 @@ export default function Budgets() {
               <Input placeholder="请输入考核目标" />
             </Form.Item>
           </Space>
-          <Space style={{ width: '100%' }} size={16}>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={16}>
             <Form.Item label="广告样式" name="ad_format" style={{ flex: 1 }}>
               <Input placeholder="请输入广告样式" />
             </Form.Item>
@@ -254,7 +338,7 @@ export default function Budgets() {
               <Input placeholder="请输入市场规模" />
             </Form.Item>
           </Space>
-          <Space style={{ width: '100%' }} size={16}>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={16}>
             <Form.Item label="竞对量级" name="competitor_scale" style={{ flex: 1 }}>
               <Input placeholder="请输入竞对量级" />
             </Form.Item>
@@ -266,7 +350,7 @@ export default function Budgets() {
               </Select>
             </Form.Item>
           </Space>
-          <Space style={{ width: '100%' }} size={16}>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={16}>
             <Form.Item label="状态" name="status" style={{ flex: 1 }}>
               <Select>
                 <Option value="new_entry">新入口</Option>
@@ -293,7 +377,7 @@ export default function Budgets() {
         title="预算详情"
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        width={640}
+        width={isMobile ? '100%' : 640}
       >
         {detailRecord && (
           <Descriptions column={1} bordered size="small">
