@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Tag, Space, Button, Popconfirm, Badge, Select, message, Modal, Form, Input, DatePicker, Row, Col, Tooltip } from 'antd';
+import { Table, Tag, Space, Button, Popconfirm, Badge, Select, message, Modal, Form, Input, DatePicker, Row, Col, Tooltip, Grid, List, Typography } from 'antd';
 import { CheckOutlined, DeleteOutlined, PlusOutlined, InfoCircleOutlined } from '@ant-design/icons';
 import { remindersApi, personsApi } from '../api';
 import dayjs from 'dayjs';
 
 
 const { Option } = Select;
+const { Text } = Typography;
+const { useBreakpoint } = Grid;
 
 const typeMap = {
   follow_up: { label: '跟进', color: 'blue' },
@@ -16,6 +18,8 @@ const typeMap = {
 };
 
 export default function Reminders() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [showDone, setShowDone] = useState(false);
@@ -128,32 +132,111 @@ export default function Reminders() {
     },
   ];
 
+  const renderReminderCard = (record) => {
+    const targetDate = record.actual_date || record.remind_date;
+    const diff = dayjs(targetDate).startOf('day').diff(dayjs().startOf('day'), 'day');
+    const statusNode = record.done
+      ? <Badge status="default" text="已完成" />
+      : diff < 0
+        ? <Badge status="error" text={`逾期${Math.abs(diff)}天`} />
+        : diff === 0
+          ? <Badge status="warning" text="今天" />
+          : diff <= 3
+            ? <Badge status="processing" text={`${diff}天后`} />
+            : <Badge status="default" text={`${diff}天后`} />;
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            opacity: record.done ? 0.65 : 1,
+          }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.title}</div>
+                <Space size={6} align="center" wrap>
+                  <Text strong>{record.person_name}</Text>
+                  {(record.person_company || record.current_company) && (
+                    <Text type="secondary" style={{ fontSize: 12 }}>({record.person_company || record.current_company})</Text>
+                  )}
+                </Space>
+              </div>
+              {statusNode}
+            </div>
+
+            <Space wrap size={[6, 6]}>
+              <Tag color={typeMap[record.type]?.color}>{typeMap[record.type]?.label || record.type}</Tag>
+              <Tag>提醒：{record.remind_date || '-'}</Tag>
+              {record.actual_date && <Tag color="green">实际跟进：{record.actual_date}</Tag>}
+            </Space>
+
+            {record.note && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                备注：{record.note}
+              </Typography.Paragraph>
+            )}
+
+            <Space size="small" wrap>
+              {!record.done && (
+                <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => handleDone(record.id)}>
+                  完成
+                </Button>
+              )}
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加提醒</Button>
-          <Button onClick={() => setShowDone(v => !v)}>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加提醒</Button>
+          <Button onClick={() => setShowDone(v => !v)} style={{ width: isMobile ? '100%' : undefined }}>
             {showDone ? '仅显示未完成' : '显示全部'}
           </Button>
         </Space>
       </div>
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        rowClassName={r => r.done ? 'done-row' : ''}
-        pagination={{ pageSize: 20 }}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          locale={{ emptyText: '暂无提醒' }}
+          renderItem={renderReminderCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          rowClassName={r => r.done ? 'done-row' : ''}
+          pagination={{ pageSize: 20 }}
+        />
+      )}
 
       <Modal
         title="添加提醒"
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={600}
+        width={isMobile ? '100%' : 600}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -176,12 +259,12 @@ export default function Reminders() {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="提醒日期" name="remind_date" rules={[{ required: true }]}>
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="类型" name="type" initialValue="follow_up">
                 <Select>
                   <Option value="follow_up">跟进</Option>

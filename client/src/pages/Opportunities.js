@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Select, Modal, Form, message,
-  Drawer, Descriptions, Tooltip, Input
+  Drawer, Descriptions, Tooltip, Input, Grid, List
 } from 'antd';
 import { RiseOutlined, EditOutlined, UserOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi } from '../api';
@@ -9,6 +9,7 @@ import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const opportunityStatusMap = {
   new: { label: '新商机', color: 'blue' },
@@ -18,6 +19,8 @@ const opportunityStatusMap = {
 };
 
 export default function Opportunities() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
@@ -140,17 +143,79 @@ export default function Opportunities() {
     },
   ];
 
+  const renderOpportunityCard = (record) => {
+    const status = opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status || '-', color: 'default' };
+    const subject = record.source_type === 'competitor_research'
+      ? `${record.company_name || '-'} (公司)`
+      : `${record.person_name || '-'}${(record.company || record.current_company) ? ` (${record.company || record.current_company})` : ''}`;
+
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => { setDetailRecord(record); setDetailOpen(true); }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              setDetailRecord(record);
+              setDetailOpen(true);
+            }
+          }}
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            cursor: 'pointer',
+          }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>
+                  <RiseOutlined style={{ marginRight: 4 }} />{record.opportunity_title}
+                </div>
+                <Text type="secondary">{subject}</Text>
+              </div>
+              <Tag color={status.color}>{status.label}</Tag>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Text type="secondary">来源：{record.source_type === 'competitor_research' ? '竞品研究记录' : '互动记录'}</Text>
+              <Text type="secondary">日期：{record.date || '-'}</Text>
+              <Text type="secondary">创建人：{record.created_by_name || '-'}</Text>
+            </div>
+
+            <Text type="secondary">指派给：{record.assignee_name || '未指派'}</Text>
+
+            {record.opportunity_note && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                商机说明：{record.opportunity_note}
+              </Typography.Paragraph>
+            )}
+
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>编辑</Button>
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>商机管理</Title>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
         <Select
           placeholder="商机状态"
           allowClear
-          style={{ width: 130 }}
+          style={{ width: isMobile ? '100%' : 130 }}
           value={filterStatus || undefined}
           onChange={v => setFilterStatus(v || '')}
         >
@@ -162,7 +227,7 @@ export default function Opportunities() {
           placeholder="指派人"
           allowClear
           showSearch
-          style={{ width: 160 }}
+          style={{ width: isMobile ? '100%' : 160 }}
           value={filterAssignee || undefined}
           onChange={v => setFilterAssignee(v || '')}
           filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
@@ -170,25 +235,36 @@ export default function Opportunities() {
         />
       </Space>
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        pagination={{ pageSize: 20 }}
-        locale={{ emptyText: '暂无商机记录' }}
-        expandable={{
-          expandedRowRender: r => (
-            <div style={{ padding: '8px 16px', background: '#fafafa', borderRadius: 6 }}>
-              {r.description && <div><Text type="secondary">互动描述：</Text>{r.description}</div>}
-              {r.outcome && <div><Text type="secondary">互动结果：</Text>{r.outcome}</div>}
-              {r.opportunity_note && <div><Text type="secondary">商机说明：</Text>{r.opportunity_note}</div>}
-            </div>
-          ),
-          rowExpandable: r => !!(r.description || r.outcome || r.opportunity_note),
-        }}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          locale={{ emptyText: '暂无商机记录' }}
+          renderItem={renderOpportunityCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          pagination={{ pageSize: 20 }}
+          locale={{ emptyText: '暂无商机记录' }}
+          expandable={{
+            expandedRowRender: r => (
+              <div style={{ padding: '8px 16px', background: '#fafafa', borderRadius: 6 }}>
+                {r.description && <div><Text type="secondary">互动描述：</Text>{r.description}</div>}
+                {r.outcome && <div><Text type="secondary">互动结果：</Text>{r.outcome}</div>}
+                {r.opportunity_note && <div><Text type="secondary">商机说明：</Text>{r.opportunity_note}</div>}
+              </div>
+            ),
+            rowExpandable: r => !!(r.description || r.outcome || r.opportunity_note),
+          }}
+        />
+      )}
 
       {/* 编辑商机弹窗 */}
       <Modal
@@ -198,7 +274,8 @@ export default function Opportunities() {
         onCancel={() => setEditModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        width={520}
+        width={isMobile ? '100%' : 520}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={editForm} layout="vertical">
           <Form.Item label="商机标题" name="opportunity_title" rules={[{ required: true }]}>
@@ -231,7 +308,7 @@ export default function Opportunities() {
         title="商机详情"
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        width={480}
+        width={isMobile ? '100%' : 480}
         extra={
           detailRecord && (
             <Button icon={<EditOutlined />} onClick={() => { setDetailOpen(false); openEdit(detailRecord); }}>
@@ -254,10 +331,10 @@ export default function Opportunities() {
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="指派给">{detailRecord.assignee_name || '-'}</Descriptions.Item>
-            <Descriptions.Item label="商机说明">{detailRecord.opportunity_note || '-'}</Descriptions.Item>
+            <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
             <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
-            <Descriptions.Item label="互动描述">{detailRecord.description || '-'}</Descriptions.Item>
-            <Descriptions.Item label="互动结果">{detailRecord.outcome || '-'}</Descriptions.Item>
+            <Descriptions.Item label="互动描述"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div></Descriptions.Item>
+            <Descriptions.Item label="互动结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.outcome || '-'}</div></Descriptions.Item>
             <Descriptions.Item label="创建人">{detailRecord.created_by_name || '-'}</Descriptions.Item>
           </Descriptions>
         )}
