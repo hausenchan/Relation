@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Card, Select, Tree, Button, Space, message, Spin, Typography, Divider, Tag
+  Card, Select, Tree, Button, Space, message, Spin, Typography, Divider, Tag, Grid
 } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import { usersApi, menuPermsApi } from '../api';
 
 const { Text } = Typography;
+const { useBreakpoint } = Grid;
 
 // 与 App.js 中完全一致的菜单树定义（不含 admin-only 的系统管理）
 const MENU_TREE = [
@@ -72,6 +73,8 @@ const roleLabel = { admin: '管理员', leader: '组长', member: '成员', read
 const roleColor = { admin: 'red', leader: 'volcano', member: 'blue', readonly: 'default', guest: 'orange' };
 
 export default function MenuPerms() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [users, setUsers] = useState([]);
   const [selectedUserId, setSelectedUserId] = useState(null);
   const [checkedKeys, setCheckedKeys] = useState([]);
@@ -128,17 +131,17 @@ export default function MenuPerms() {
   const selectedUser = users.find(u => u.id === selectedUserId);
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+    <div style={{ maxWidth: isMobile ? '100%' : 720, margin: '0 auto', padding: isMobile ? 0 : undefined }}>
       <Text type="secondary">超级管理员可为每位用户单独配置可见的菜单项，未勾选的菜单将对该用户隐藏。</Text>
 
       <Card style={{ marginTop: 16 }}>
         <Space direction="vertical" style={{ width: '100%' }} size={16}>
           {/* 用户选择 */}
           <div>
-            <Text strong style={{ marginRight: 8 }}>选择用户：</Text>
+            <Text strong style={{ display: 'block', marginBottom: 8 }}>选择用户：</Text>
             <Select
               placeholder="请选择要配置的用户"
-              style={{ width: 260 }}
+              style={{ width: isMobile ? '100%' : 260 }}
               onChange={handleUserChange}
               value={selectedUserId}
               options={users.map(u => ({
@@ -166,7 +169,7 @@ export default function MenuPerms() {
                   &nbsp;
                   <Tag color={roleColor[selectedUser.role]}>{roleLabel[selectedUser.role]}</Tag>
                 </Text>
-                <Space style={{ float: 'right' }}>
+                <Space style={{ float: isMobile ? 'none' : 'right', display: isMobile ? 'flex' : undefined, marginTop: isMobile ? 8 : 0 }} wrap>
                   <Button size="small" onClick={handleSelectAll}>全选</Button>
                   <Button size="small" onClick={handleClearAll}>清空</Button>
                 </Space>
@@ -183,7 +186,7 @@ export default function MenuPerms() {
               />
 
               <div style={{ marginTop: 16, textAlign: 'right' }}>
-                <Text type="secondary" style={{ marginRight: 16 }}>
+                <Text type="secondary" style={{ marginRight: isMobile ? 0 : 16, display: isMobile ? 'block' : 'inline', marginBottom: isMobile ? 8 : 0 }}>
                   已勾选 {checkedKeys.length} / {ALL_LEAF_KEYS.length} 个菜单项
                 </Text>
                 <Button
@@ -191,6 +194,7 @@ export default function MenuPerms() {
                   icon={<SaveOutlined />}
                   loading={saving}
                   onClick={handleSave}
+                  style={{ width: isMobile ? '100%' : undefined }}
                 >
                   保存配置
                 </Button>

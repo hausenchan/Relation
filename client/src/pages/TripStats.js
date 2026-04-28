@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Row, Col, Card, Select, Typography, Tag, Table, Alert, Space, Statistic, Badge } from 'antd';
+import { Row, Col, Card, Select, Typography, Tag, Table, Alert, Space, Statistic, Badge, Grid } from 'antd';
 import { WarningOutlined, TeamOutlined, CarOutlined } from '@ant-design/icons';
 import { tripsApi, groupsApi } from '../api';
 
 const { Text } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const expenseTypeMap = {
   meal: '餐饮', hotel: '住宿', flight: '机票', train: '火车票', taxi: '打车', other: '其他',
@@ -65,6 +66,8 @@ function PieChart({ data }) {
 }
 
 export default function TripStats() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [stats, setStats] = useState(null);
   const [groups, setGroups] = useState([]);
   const [year, setYear] = useState(String(new Date().getFullYear()));
@@ -84,13 +87,13 @@ export default function TripStats() {
   const totalTrips = stats?.monthly?.reduce((s, m) => s + (m.trip_count || 0), 0) || 0;
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Space>
-          <Select value={year} onChange={setYear} style={{ width: 90 }}>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12, marginBottom: 16 }}>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+          <Select value={year} onChange={setYear} style={{ width: isMobile ? '100%' : 90 }}>
             {[2024, 2025, 2026, 2027].map(y => <Option key={y} value={String(y)}>{y}年</Option>)}
           </Select>
-          <Select placeholder="全部小组" allowClear style={{ width: 130 }} value={groupId || undefined} onChange={v => setGroupId(v || '')}>
+          <Select placeholder="全部小组" allowClear style={{ width: isMobile ? '100%' : 130 }} value={groupId || undefined} onChange={v => setGroupId(v || '')}>
             {groups.map(g => <Option key={g.id} value={g.id}>{g.name}</Option>)}
           </Select>
         </Space>
@@ -100,22 +103,22 @@ export default function TripStats() {
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic title="年度出差总次数" value={totalTrips} prefix={<CarOutlined />} valueStyle={{ color: '#1677ff' }} suffix="次" />
+            <Statistic title="年度出差总次数" value={totalTrips} prefix={<CarOutlined />} valueStyle={{ color: '#1677ff', fontSize: isMobile ? 22 : undefined }} suffix="次" />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic title="年度报销总额" value={totalAmount.toFixed(0)} prefix="¥" valueStyle={{ color: '#ff4d4f' }} />
+            <Statistic title="年度报销总额" value={totalAmount.toFixed(0)} prefix="¥" valueStyle={{ color: '#ff4d4f', fontSize: isMobile ? 22 : undefined }} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic title="人均出差费用" value={totalTrips > 0 ? (totalAmount / totalTrips).toFixed(0) : 0} prefix="¥/次" valueStyle={{ color: '#fa8c16' }} />
+            <Statistic title="人均出差费用" value={totalTrips > 0 ? (totalAmount / totalTrips).toFixed(0) : 0} prefix="¥/次" valueStyle={{ color: '#fa8c16', fontSize: isMobile ? 22 : undefined }} />
           </Card>
         </Col>
         <Col xs={12} sm={6}>
           <Card size="small">
-            <Statistic title="重要客户预警" value={stats?.alerts?.length || 0} prefix={<WarningOutlined />} valueStyle={{ color: stats?.alerts?.length > 0 ? '#ff4d4f' : '#52c41a' }} suffix="人" />
+            <Statistic title="重要客户预警" value={stats?.alerts?.length || 0} prefix={<WarningOutlined />} valueStyle={{ color: stats?.alerts?.length > 0 ? '#ff4d4f' : '#52c41a', fontSize: isMobile ? 22 : undefined }} suffix="人" />
           </Card>
         </Col>
       </Row>
@@ -134,7 +137,7 @@ export default function TripStats() {
                 />
                 <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>
                   {stats.monthly.map(m => (
-                    <span key={m.month} style={{ marginRight: 16 }}>
+                    <span key={m.month} style={{ marginRight: 16, display: isMobile ? 'inline-block' : 'inline' }}>
                       {m.month}：{m.trip_count}次出差
                     </span>
                   ))}
@@ -195,6 +198,7 @@ export default function TripStats() {
                   pagination={false}
                   dataSource={stats?.alerts || []}
                   rowKey="id"
+                  scroll={{ x: 820 }}
                   columns={[
                     {
                       title: '客户',

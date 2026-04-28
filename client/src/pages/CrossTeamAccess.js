@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Select, Space, Tag, message, Popconfirm, Card } from 'antd';
+import { Table, Button, Modal, Form, Select, Space, Tag, message, Popconfirm, Card, Grid, List, Typography } from 'antd';
 import { PlusOutlined, DeleteOutlined, TeamOutlined } from '@ant-design/icons';
 
 const { Option } = Select;
+const { Text } = Typography;
+const { useBreakpoint } = Grid;
 
 const moduleMap = {
   strategies: { label: '策略', color: 'green' },
@@ -13,6 +15,8 @@ const moduleMap = {
 };
 
 export default function CrossTeamAccess() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [users, setUsers] = useState([]);
   const [teams, setTeams] = useState([]);
@@ -185,6 +189,29 @@ export default function CrossTeamAccess() {
     },
   ];
 
+  const renderAccessCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.user_name || '-'}</div>
+              <Text type="secondary">访问小组：{record.team_name || '-'}</Text>
+            </div>
+            <Tag color={moduleMap[record.module]?.color}>{moduleMap[record.module]?.label || record.module}</Tag>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Text type="secondary">授权人：{record.granted_by_name || '-'}</Text>
+            <Text type="secondary">创建时间：{record.created_at?.replace('T', ' ').substring(0, 19) || '-'}</Text>
+          </div>
+          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
     <div>
       <Card
@@ -195,13 +222,24 @@ export default function CrossTeamAccess() {
           </Button>
         }
       >
-        <Table
-          columns={columns}
-          dataSource={data}
-          rowKey="id"
-          loading={loading}
-          pagination={{ pageSize: 20 }}
-        />
+        {isMobile ? (
+          <List
+            dataSource={data}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            locale={{ emptyText: '暂无权限记录' }}
+            renderItem={renderAccessCard}
+          />
+        ) : (
+          <Table
+            columns={columns}
+            dataSource={data}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20 }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -209,7 +247,8 @@ export default function CrossTeamAccess() {
         open={modalOpen}
         onOk={handleSubmit}
         onCancel={() => setModalOpen(false)}
-        width={500}
+        width={isMobile ? '100%' : 500}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -244,4 +283,3 @@ export default function CrossTeamAccess() {
     </div>
   );
 }
-
