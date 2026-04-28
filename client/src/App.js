@@ -83,6 +83,7 @@ import GiftPlans from './pages/GiftPlans';
 import GiftReview from './pages/GiftReview';
 import Trips from './pages/Trips';
 import TripStats from './pages/TripStats';
+import Budgets from './pages/Budgets';
 import MenuPerms from './pages/MenuPerms';
 import CrossTeamAccess from './pages/CrossTeamAccess';
 import FollowUpTasks from './pages/FollowUpTasks';
@@ -218,6 +219,7 @@ function AppLayout() {
     '/gifts': '礼品库',
     '/trips': '出差申请',
     '/trip-stats': '费用统计',
+    '/budgets': '预算管理',
     '/executive': '经营概览',
     '/executive/talents': '高级人才',
     '/executive/dynamics': '竞品动态',
@@ -309,6 +311,10 @@ function AppLayout() {
     },
     canAccessMenu('/trip-stats') && {
       key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link>,
+    },
+    // 预算管理（高管或 menuPerms 配置的用户可见）
+    (['ceo', 'coo', 'cto', 'cmo'].includes(user?.role) || canAccessMenu('/budgets')) && {
+      key: '/budgets', icon: <FileTextOutlined />, label: <Link to="/budgets">预算管理</Link>,
     },
   ].filter(Boolean);
 
@@ -647,6 +653,7 @@ function AppLayout() {
             <Route path="/project-groups" element={<PrivateRoute><ProjectGroups /></PrivateRoute>} />
             <Route path="/trips" element={<PrivateRoute><Trips /></PrivateRoute>} />
             <Route path="/trip-stats" element={<PrivateRoute><TripStats /></PrivateRoute>} />
+            <Route path="/budgets" element={<PrivateRoute><Budgets /></PrivateRoute>} />
             <Route path="/menu-perms" element={<PrivateRoute><MenuPerms /></PrivateRoute>} />
             <Route path="/cross-team-access" element={<PrivateRoute><CrossTeamAccess /></PrivateRoute>} />
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
