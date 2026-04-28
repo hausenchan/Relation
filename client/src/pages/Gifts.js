@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Modal, Form, Input, InputNumber, Select, Space,
-  Tag, Popconfirm, message, Typography, Divider, Row, Col
+  Tag, Popconfirm, message, Typography, Divider, Row, Col, Grid, List, Card
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { giftsApi } from '../api';
@@ -9,10 +9,13 @@ import { giftsApi } from '../api';
 const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
+const { useBreakpoint } = Grid;
 
 const CATEGORIES = ['节日礼品', '日常维护', '高端礼品', '食品饮料', '文创周边', '其他'];
 
 export default function GiftsPage() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -76,13 +79,63 @@ export default function GiftsPage() {
     },
   ];
 
+  const renderGiftCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.name}</div>
+              <Space wrap size={[6, 6]}>
+                {record.category && <Tag>{record.category}</Tag>}
+                <Tag color={record.stock <= 5 ? 'red' : record.stock <= 20 ? 'orange' : 'green'}>
+                  库存 {record.stock} {record.unit}
+                </Tag>
+              </Space>
+            </div>
+            <Text strong style={{ color: '#fa8c16' }}>¥{(record.price || 0).toFixed(2)}</Text>
+          </div>
+
+          {record.description && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              描述：{record.description}
+            </Typography.Paragraph>
+          )}
+          {record.notes && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              备注：{record.notes}
+            </Typography.Paragraph>
+          )}
+
+          <Space size="small" wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加礼品</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加礼品</Button>
       </div>
 
-      <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={{ pageSize: 20 }} />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          locale={{ emptyText: '暂无礼品数据' }}
+          renderItem={renderGiftCard}
+        />
+      ) : (
+        <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={{ pageSize: 20 }} />
+      )}
 
       <Modal
         title={editing ? '编辑礼品' : '添加礼品'}
@@ -90,33 +143,34 @@ export default function GiftsPage() {
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
         okText="保存" cancelText="取消"
-        width={520}
+        width={isMobile ? '100%' : 520}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={16}>
+            <Col span={isMobile ? 24 : 16}>
               <Form.Item label="礼品名称" name="name" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="分类" name="category">
                 <Select allowClear>
                   {CATEGORIES.map(c => <Option key={c} value={c}>{c}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="单价（元）" name="price">
                 <InputNumber min={0} precision={2} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="库存数量" name="stock">
                 <InputNumber min={0} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="单位" name="unit">
                 <Select>
                   {['个', '套', '盒', '瓶', '份', '张'].map(u => <Option key={u} value={u}>{u}</Option>)}

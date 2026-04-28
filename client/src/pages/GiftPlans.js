@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm,
-  message, Typography, Drawer, Tabs, Descriptions, Row, Col, InputNumber, Divider, Empty
+  message, Typography, Drawer, Tabs, Descriptions, Row, Col, InputNumber, Divider, Empty, Grid, List, Card
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SendOutlined,
@@ -13,6 +13,7 @@ import { useAuth } from '../AuthContext';
 const { Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
+const { useBreakpoint } = Grid;
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
@@ -30,6 +31,8 @@ const requestStatusMap = {
 };
 
 export default function GiftPlansPage() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [plans, setPlans] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -162,30 +165,81 @@ export default function GiftPlansPage() {
     },
   ];
 
+  const renderPlanCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Button type="link" style={{ padding: 0, height: 'auto', fontWeight: 600, textAlign: 'left' }} onClick={() => openDrawer(record)}>
+                {record.title}
+              </Button>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
+                <Text type="secondary">场合：{record.occasion || '-'}</Text>
+                <Text type="secondary">日期：{record.plan_date || '-'}</Text>
+              </div>
+            </div>
+            <Tag color={planStatusMap[record.status]?.color}>{planStatusMap[record.status]?.label}</Tag>
+          </div>
+          <Text type="secondary">创建人：{record.creator_name || '-'}</Text>
+          {record.description && (
+            <Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              说明：{record.description}
+            </Paragraph>
+          )}
+          <Space size="small" wrap>
+            <Button size="small" type="primary" ghost icon={<SendOutlined />} onClick={() => openDrawer(record)}>发起申请</Button>
+            {(isAdmin(user.role) || record.created_by === user.id) && (
+              <>
+                <Button size="small" icon={<EditOutlined />} onClick={() => openPlanEdit(record)}>编辑</Button>
+                <Popconfirm title="确认删除？" onConfirm={async () => { await giftPlansApi.delete(record.id); message.success('已删除'); loadPlans(); }}>
+                  <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>
+              </>
+            )}
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openPlanAdd}>新建计划</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openPlanAdd} style={{ width: isMobile ? '100%' : undefined }}>新建计划</Button>
       </div>
 
-      <Table columns={planColumns} dataSource={plans} rowKey="id" loading={loading} size="small" pagination={{ pageSize: 15 }} />
+      {isMobile ? (
+        <List
+          dataSource={plans}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 15, showSizeChanger: false }}
+          locale={{ emptyText: '暂无送礼计划' }}
+          renderItem={renderPlanCard}
+        />
+      ) : (
+        <Table columns={planColumns} dataSource={plans} rowKey="id" loading={loading} size="small" pagination={{ pageSize: 15 }} />
+      )}
 
       {/* 计划编辑 Modal */}
       <Modal title={editingPlan ? '编辑计划' : '新建送礼计划'} open={planModalOpen}
-        onOk={handlePlanSave} onCancel={() => setPlanModalOpen(false)} okText="保存" cancelText="取消" width={480}>
+        onOk={handlePlanSave} onCancel={() => setPlanModalOpen(false)} okText="保存" cancelText="取消"
+        width={isMobile ? '100%' : 480}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}>
         <Form form={planForm} layout="vertical" size="small">
           <Form.Item label="计划名称" name="title" rules={[{ required: true }]}>
             <Input placeholder="如：2026年中秋送礼计划" />
           </Form.Item>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="节日/场合" name="occasion">
                 <Select allowClear>
                   {['元旦', '春节', '情人节', '三八妇女节', '端午节', '中秋节', '圣诞节', '生日', '日常维护', '其他'].map(v => <Option key={v} value={v}>{v}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="计划日期" name="plan_date">
                 <Input placeholder="如：2026-09-29" />
               </Form.Item>
@@ -209,12 +263,12 @@ export default function GiftPlansPage() {
         title={<Space><CalendarOutlined />{currentPlan?.title}<Tag color={planStatusMap[currentPlan?.status]?.color}>{planStatusMap[currentPlan?.status]?.label}</Tag></Space>}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={800}
+        width={isMobile ? '100%' : 800}
         extra={<Button type="primary" icon={<PlusOutlined />} onClick={openReqModal}>发起送礼申请</Button>}
       >
         {currentPlan && (
           <div>
-            <Descriptions size="small" column={3} style={{ marginBottom: 16 }}>
+            <Descriptions size="small" column={isMobile ? 1 : 3} style={{ marginBottom: 16 }}>
               <Descriptions.Item label="场合">{currentPlan.occasion || '-'}</Descriptions.Item>
               <Descriptions.Item label="日期">{currentPlan.plan_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{currentPlan.creator_name || '-'}</Descriptions.Item>
@@ -224,7 +278,7 @@ export default function GiftPlansPage() {
             <Divider orientation="left" plain style={{ fontSize: 13 }}>申请列表</Divider>
             {requests.length === 0
               ? <Empty description="暂无申请" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-              : <Table columns={reqColumns} dataSource={requests} rowKey="id" size="small" pagination={false} />
+              : <Table columns={reqColumns} dataSource={requests} rowKey="id" size="small" pagination={false} scroll={{ x: 760 }} />
             }
           </div>
         )}
@@ -232,7 +286,9 @@ export default function GiftPlansPage() {
 
       {/* 发起申请 Modal */}
       <Modal title="发起送礼申请" open={reqModalOpen}
-        onOk={handleReqSave} onCancel={() => setReqModalOpen(false)} okText="提交申请" cancelText="取消" width={480}>
+        onOk={handleReqSave} onCancel={() => setReqModalOpen(false)} okText="提交申请" cancelText="取消"
+        width={isMobile ? '100%' : 480}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}>
         <Form form={reqForm} layout="vertical" size="small">
           <Form.Item label="收礼人脉" name="person_id" rules={[{ required: true, message: '请选择收礼人' }]}>
             <Select showSearch placeholder="搜索人脉姓名" optionFilterProp="children" style={{ width: '100%' }}>
@@ -245,7 +301,7 @@ export default function GiftPlansPage() {
             </Select>
           </Form.Item>
           <Row gutter={16}>
-            <Col span={16}>
+            <Col span={isMobile ? 24 : 16}>
               <Form.Item label="选择礼品" name="gift_id" rules={[{ required: true, message: '请选择礼品' }]}>
                 <Select showSearch placeholder="搜索礼品" optionFilterProp="children">
                   {gifts.map(g => (
@@ -257,7 +313,7 @@ export default function GiftPlansPage() {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="数量" name="quantity" initialValue={1} rules={[{ required: true }]}>
                 <InputNumber min={1} style={{ width: '100%' }} />
               </Form.Item>
