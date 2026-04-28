@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm,
-  message, Typography, Checkbox, Divider, Tooltip
+  message, Typography, Checkbox, Divider, Tooltip, Grid, List, Card
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, UserOutlined, LockOutlined } from '@ant-design/icons';
 import { usersApi, teamsApi, projectGroupsApi } from '../api';
@@ -9,6 +9,7 @@ import { useAuth } from '../AuthContext';
 
 const { Text } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const roleMap = {
   admin:          { label: '超级管理员', color: 'red' },
@@ -37,6 +38,8 @@ const MODULE_LIST = [
 ];
 
 export default function UsersPage() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user: currentUser } = useAuth();
   const [data, setData] = useState([]);
   const [teams, setTeams] = useState([]);
@@ -210,13 +213,66 @@ export default function UsersPage() {
     },
   ];
 
+  const renderUserCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.display_name || record.username}</div>
+              <Text type="secondary">用户名：{record.username}</Text>
+            </div>
+            <Tag color={roleMap[record.role]?.color}>{roleMap[record.role]?.label || record.role}</Tag>
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Text type="secondary">部门：{departmentOptions.find(o => o.value === record.department)?.label || '-'}</Text>
+            <Text type="secondary">最近登录：{record.last_login?.slice(0, 16) || '从未登录'}</Text>
+          </div>
+          <div>
+            <Text type="secondary">所属小组：</Text>
+            <Space wrap size={[4, 4]}>
+              {(record.team_names?.length
+                ? record.team_names
+                : (record.team_name ? [record.team_name] : [])
+              ).map(name => <Tag key={`${record.id}-${name}`}>{name}</Tag>)}
+              {!(record.team_names?.length || record.team_name) && <Text type="secondary">-</Text>}
+            </Space>
+          </div>
+          <div>
+            <Text type="secondary">所属项目组：</Text>
+            <Space wrap size={[4, 4]}>
+              {record.project_group_names?.length
+                ? record.project_group_names.map(name => <Tag key={`${record.id}-pg-${name}`} color="blue">{name}</Tag>)
+                : <Text type="secondary">-</Text>}
+            </Space>
+          </div>
+          <Space size="small" wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+            {record.id !== currentUser?.id && (
+              <Button size="small" icon={<LockOutlined />} onClick={() => setResetPwdTarget(record)}>重置密码</Button>
+            )}
+            {record.id !== currentUser?.id && (
+              <Popconfirm title="确认删除该用户？" onConfirm={() => handleDelete(record.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            )}
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建用户</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>新建用户</Button>
       </div>
 
-      <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={false} />
+      {isMobile ? (
+        <List dataSource={data} rowKey="id" loading={loading} locale={{ emptyText: '暂无用户' }} renderItem={renderUserCard} />
+      ) : (
+        <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={false} />
+      )}
 
       {/* 新建/编辑用户 Modal */}
       <Modal
@@ -226,7 +282,8 @@ export default function UsersPage() {
         onCancel={() => setModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        width={520}
+        width={isMobile ? '100%' : 520}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={form} layout="vertical" size="small">
           {!editing && (
@@ -308,6 +365,8 @@ export default function UsersPage() {
         onCancel={() => { setResetPwdTarget(null); resetPwdForm.resetFields(); }}
         okText="确认重置"
         cancelText="取消"
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={resetPwdForm} layout="vertical" onFinish={handleResetPwd} style={{ marginTop: 16 }}>
           <Form.Item name="new_password" label="新密码" rules={[{ required: true, min: 6, message: '至少6位' }]}>

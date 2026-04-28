@@ -1,15 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm, message, Card } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm, message, Card, Grid, List, Typography } from 'antd';
 import { AppstoreOutlined, PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { projectGroupsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 
+const { Text } = Typography;
+const { useBreakpoint } = Grid;
 const statusMap = {
   active: { label: '启用中', color: 'green' },
   inactive: { label: '已停用', color: 'default' },
 };
 
 export default function ProjectGroups() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [rows, setRows] = useState([]);
   const [users, setUsers] = useState([]);
@@ -120,14 +124,47 @@ export default function ProjectGroups() {
     },
   ];
 
+  const renderGroupCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <Space>
+              <AppstoreOutlined />
+              <Text strong>{record.name}</Text>
+            </Space>
+            <Tag color={statusMap[record.status]?.color}>{statusMap[record.status]?.label}</Tag>
+          </div>
+          <Text type="secondary">编码：{record.code || '-'}</Text>
+          <Text type="secondary">负责人：{record.owner_name || '-'}</Text>
+          {record.description && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              说明：{record.description}
+            </Typography.Paragraph>
+          )}
+          <Space size="small" wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+            <Popconfirm title="确认删除该项目组？" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
+              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增项目组</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>新增项目组</Button>
       </div>
 
       <Card>
-        <Table rowKey="id" dataSource={rows} columns={columns} loading={loading} pagination={false} />
+        {isMobile ? (
+          <List rowKey="id" dataSource={rows} loading={loading} locale={{ emptyText: '暂无项目组' }} renderItem={renderGroupCard} />
+        ) : (
+          <Table rowKey="id" dataSource={rows} columns={columns} loading={loading} pagination={false} />
+        )}
       </Card>
 
       <Modal
@@ -136,6 +173,8 @@ export default function ProjectGroups() {
         onCancel={() => setModalOpen(false)}
         onOk={handleSave}
         okText={editing ? '保存' : '创建'}
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="项目组名称" rules={[{ required: true, message: '请输入项目组名称' }]}>

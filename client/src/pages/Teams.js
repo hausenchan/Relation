@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm, message, Card } from 'antd';
+import { Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm, message, Card, Grid, List, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, TeamOutlined } from '@ant-design/icons';
 import { teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 
+const { Text } = Typography;
+const { useBreakpoint } = Grid;
 
 const departmentOptions = [
   { value: 'commercial', label: '商务' },
@@ -15,6 +17,8 @@ const departmentLabel = { commercial: '商务', operation: '产运', rd: '研发
 const departmentColor = { commercial: 'blue', operation: 'green', rd: 'purple' };
 
 export default function Teams() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [teams, setTeams] = useState([]);
   const [users, setUsers] = useState([]);
@@ -124,10 +128,44 @@ export default function Teams() {
   // 按部门分组显示
   const departments = ['commercial', 'operation', 'rd'];
 
+  const renderTeamCard = (record) => {
+    const members = users.filter(u => (u.team_ids || (u.team_id ? [u.team_id] : [])).includes(record.id));
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <Card size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+              <Space>
+                <TeamOutlined />
+                <Text strong>{record.name}</Text>
+              </Space>
+              <Tag color={departmentColor[record.department]}>{departmentLabel[record.department] || record.department}</Tag>
+            </div>
+            <Text type="secondary">组长：{record.leader_name || '未设置'}</Text>
+            <Text type="secondary">成员数：{members.length}</Text>
+            {members.length > 0 ? (
+              <Space wrap size={[4, 4]}>
+                {members.map(member => <Tag key={member.id}>{member.display_name || member.username}</Tag>)}
+              </Space>
+            ) : (
+              <Text type="secondary">暂无成员</Text>
+            )}
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+              <Popconfirm title="确认删除该小组？删除后成员的小组归属将清空。" onConfirm={() => handleDelete(record.id)} okText="删除" cancelText="取消">
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            </Space>
+          </Space>
+        </Card>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新增小组</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>新增小组</Button>
       </div>
 
       {departments.map(dept => {
@@ -140,14 +178,18 @@ export default function Teams() {
             style={{ marginBottom: 16 }}
             size="small"
           >
-            <Table
-              rowKey="id"
-              dataSource={deptTeams}
-              columns={columns}
-              pagination={false}
-              size="small"
-              loading={loading}
-            />
+            {isMobile ? (
+              <List rowKey="id" dataSource={deptTeams} loading={loading} renderItem={renderTeamCard} />
+            ) : (
+              <Table
+                rowKey="id"
+                dataSource={deptTeams}
+                columns={columns}
+                pagination={false}
+                size="small"
+                loading={loading}
+              />
+            )}
           </Card>
         );
       })}
@@ -164,6 +206,8 @@ export default function Teams() {
         onCancel={() => setModalOpen(false)}
         onOk={() => form.submit()}
         okText={editing ? '保存' : '创建'}
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={form} layout="vertical" onFinish={handleSave} style={{ marginTop: 16 }}>
           <Form.Item name="name" label="小组名称" rules={[{ required: true, message: '请输入小组名称' }]}>
