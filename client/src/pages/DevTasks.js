@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber, Card, Row, Col, Typography } from 'antd';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber, Card, Row, Col, Typography, Grid, List } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined, ToolOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 
@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 
 const { TextArea } = Input;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const statusMap = {
   pending: { label: '待开始', color: 'default' },
@@ -30,6 +31,8 @@ const sourceTypeMap = {
 };
 
 export default function DevTasks() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [tasks, setTasks] = useState([]);
   const [users, setUsers] = useState([]);
@@ -373,8 +376,88 @@ export default function DevTasks() {
     blocked: tasks.filter(t => t.status === 'blocked').length,
   };
 
+  const renderTaskCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => showDetail(record)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') showDetail(record);
+        }}
+        style={{
+          width: '100%',
+          padding: 14,
+          border: '1px solid #f0f0f0',
+          borderRadius: 12,
+          background: '#fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          cursor: 'pointer',
+        }}
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>需求ID：{record.id}</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6 }}>{record.title}</div>
+              <Space wrap size={[6, 6]}>
+                {record.source_type && (
+                  <Tag color={sourceTypeMap[record.source_type]?.color} icon={sourceTypeMap[record.source_type]?.icon}>
+                    {sourceTypeMap[record.source_type]?.label || record.source_type}
+                  </Tag>
+                )}
+                <Tag color={statusMap[record.status]?.color}>{statusMap[record.status]?.label || record.status}</Tag>
+                <Tag color={priorityMap[record.priority]?.color}>{priorityMap[record.priority]?.label || record.priority}</Tag>
+              </Space>
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{record.due_date || '-'}</Typography.Text>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Typography.Text type="secondary">负责人：{record.assignee_name || '-'}</Typography.Text>
+            <Typography.Text type="secondary">预估工时：{record.estimated_hours ? `${record.estimated_hours}h` : '-'}</Typography.Text>
+            <Typography.Text type="secondary">实际工时：{record.actual_hours ? `${record.actual_hours}h` : '-'}</Typography.Text>
+          </div>
+
+          {record.source_title && (
+            <Typography.Text type="secondary">
+              来源：{record.source_title}
+            </Typography.Text>
+          )}
+
+          {(record.related_lead_id || record.related_strategy_id) && (
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {record.related_lead_id && (
+                <Typography.Text type="secondary">
+                  关联线索：{record.related_lead_id}{record.related_lead_title ? ` · ${record.related_lead_title}` : ''}
+                </Typography.Text>
+              )}
+              {record.related_strategy_id && (
+                <Typography.Text type="secondary">
+                  关联策略：{record.related_strategy_id}{record.related_strategy_title ? ` · ${record.related_strategy_title}` : ''}
+                </Typography.Text>
+              )}
+            </div>
+          )}
+
+          {record.completion_note && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              完成备注：{record.completion_note}
+            </Typography.Paragraph>
+          )}
+
+          <Space size="small" wrap>
+            <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); showDetail(record); }}>详情</Button>
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); handleEdit(record); }}>编辑</Button>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDelete(record.id); }}>删除</Button>
+          </Space>
+        </Space>
+      </div>
+    </List.Item>
+  );
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 状态统计 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
@@ -386,11 +469,11 @@ export default function DevTasks() {
         ].map((item, idx) => (
           <Col xs={12} sm={4} key={idx}>
             <div className="stat-card" style={{
-              background: item.gradient, borderRadius: 10, padding: '12px 16px',
+              background: item.gradient, borderRadius: 10, padding: isMobile ? '12px 14px' : '12px 16px',
               cursor: 'default',
             }}>
               <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ fontSize: 24, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
+              <div style={{ fontSize: isMobile ? 22 : 24, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
             </div>
           </Col>
         ))}
@@ -399,17 +482,17 @@ export default function DevTasks() {
       {/* 筛选与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-          <Space size={12} wrap>
+          <Space size={12} wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <Input
             placeholder="需求ID"
-            style={{ width: 120 }}
+            style={{ width: isMobile ? '100%' : 120 }}
             allowClear
             value={filters.id}
             onChange={(e) => setFilters({ ...filters, id: e.target.value })}
           />
           <Select
             placeholder="状态"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.status || undefined}
             onChange={(val) => setFilters({ ...filters, status: val || '' })}
@@ -422,7 +505,7 @@ export default function DevTasks() {
           </Select>
           <Select
             placeholder="优先级"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.priority || undefined}
             onChange={(val) => setFilters({ ...filters, priority: val || '' })}
@@ -433,7 +516,7 @@ export default function DevTasks() {
           </Select>
           <Select
             placeholder="负责人"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             showSearch
             optionFilterProp="label"
@@ -446,7 +529,7 @@ export default function DevTasks() {
           />
           <Select
             placeholder="来源类型"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.source_type || undefined}
             onChange={(val) => setFilters({ ...filters, source_type: val || '' })}
@@ -456,17 +539,28 @@ export default function DevTasks() {
             <Option value="manual">手动创建</Option>
           </Select>
         </Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增需求</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} style={{ width: isMobile ? '100%' : undefined }}>新增需求</Button>
         </div>
 
-        <Table
-          columns={columns}
-          dataSource={tasks}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1680 }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
-        />
+        {isMobile ? (
+          <List
+            dataSource={tasks}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            locale={{ emptyText: '暂无需求记录' }}
+            renderItem={renderTaskCard}
+          />
+        ) : (
+          <Table
+            columns={columns}
+            dataSource={tasks}
+            rowKey="id"
+            loading={loading}
+            scroll={{ x: 1680 }}
+            pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -474,7 +568,8 @@ export default function DevTasks() {
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         onOk={handleSubmit}
-        width={700}
+        width={isMobile ? '100%' : 700}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -561,27 +656,27 @@ export default function DevTasks() {
               <Option value="low">低</Option>
             </Select>
           </Form.Item>
-          <Space style={{ width: '100%' }} size="large">
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size="large">
             <Form.Item name="estimated_hours" label="预估工时（小时）" style={{ marginBottom: 0 }}>
-              <InputNumber min={0} step={0.5} placeholder="0" style={{ width: 150 }} />
+              <InputNumber min={0} step={0.5} placeholder="0" style={{ width: isMobile ? '100%' : 150 }} />
             </Form.Item>
             {editingTask && (
               <Form.Item name="actual_hours" label="实际工时（小时）" style={{ marginBottom: 0 }}>
-                <InputNumber min={0} step={0.5} placeholder="0" style={{ width: 150 }} />
+                <InputNumber min={0} step={0.5} placeholder="0" style={{ width: isMobile ? '100%' : 150 }} />
               </Form.Item>
             )}
           </Space>
-          <Space style={{ width: '100%', marginTop: 16 }} size="large">
+          <Space style={{ width: '100%', marginTop: 16, flexDirection: isMobile ? 'column' : 'row' }} size="large">
             <Form.Item name="start_date" label="开始日期" style={{ marginBottom: 0 }}>
-              <DatePicker style={{ width: 200 }} />
+              <DatePicker style={{ width: isMobile ? '100%' : 200 }} />
             </Form.Item>
             <Form.Item name="due_date" label="截止日期" style={{ marginBottom: 0 }}>
-              <DatePicker style={{ width: 200 }} />
+              <DatePicker style={{ width: isMobile ? '100%' : 200 }} />
             </Form.Item>
           </Space>
           {editingTask && (
             <Form.Item name="completed_date" label="完成日期" style={{ marginTop: 16 }}>
-              <DatePicker style={{ width: 200 }} />
+              <DatePicker style={{ width: isMobile ? '100%' : 200 }} />
             </Form.Item>
           )}
           <Form.Item name="completion_note" label="完成备注" style={{ marginTop: 16 }}>
@@ -593,7 +688,7 @@ export default function DevTasks() {
       <Drawer
         title="任务详情"
         placement="right"
-        width={600}
+        width={isMobile ? '100%' : 600}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
       >

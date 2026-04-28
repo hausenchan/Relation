@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Select, Modal, Form, message,
-  Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider, Upload
+  Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider, Upload, Grid, List
 } from 'antd';
 import { RiseOutlined, EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
@@ -9,6 +9,7 @@ import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const opportunityStatusMap = {
   new: { label: '新商机', color: '#4F46E5', bg: '#eef2ff', border: '#c7d2fe' },
@@ -23,6 +24,8 @@ const interactionTypeMap = {
 };
 
 export default function Leads() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
@@ -95,6 +98,20 @@ export default function Leads() {
     personsApi.list().then(setPersons).catch(() => {});
     companiesApi.list().then(setCompanies).catch(() => {});
   }, []);
+
+  const openDetail = async (record) => {
+    setDetailRecord(record);
+    setDetailOpen(true);
+    setAttachmentsLoading(true);
+    try {
+      const atts = await attachmentsApi.list({ source_type: record.source_type, source_id: record.source_id });
+      setAttachments(atts);
+    } catch {
+      setAttachments([]);
+    } finally {
+      setAttachmentsLoading(false);
+    }
+  };
 
   const openAddLead = () => {
     setEditTarget(null);
@@ -295,19 +312,7 @@ export default function Leads() {
         <Button
           type="link"
           style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left', fontWeight: 500, fontSize: 13, color: '#4F46E5' }}
-          onClick={async () => {
-            setDetailRecord(r);
-            setDetailOpen(true);
-            setAttachmentsLoading(true);
-            try {
-              const atts = await attachmentsApi.list({ source_type: r.source_type, source_id: r.source_id });
-              setAttachments(atts);
-            } catch {
-              setAttachments([]);
-            } finally {
-              setAttachmentsLoading(false);
-            }
-          }}
+          onClick={() => openDetail(r)}
         >
           <RiseOutlined style={{ marginRight: 4, fontSize: 12 }} />{r.opportunity_title}
         </Button>
@@ -382,7 +387,7 @@ export default function Leads() {
               }
               Modal.info({
                 title: '附件列表',
-                width: 500,
+                width: isMobile ? '100%' : 500,
                 content: (
                   <div style={{ marginTop: 16 }}>
                     {atts.map(att => (
@@ -430,8 +435,136 @@ export default function Leads() {
     },
   ];
 
+  const renderLeadCard = (record) => {
+    const status = opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status || '-', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' };
+    const isCompetitor = record.source_type === 'competitor_research';
+    const subjectName = isCompetitor ? (record.company_name || '-') : (record.person_name || '-');
+    const subjectSub = isCompetitor ? '公司' : (record.company || record.current_company || '');
+
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => openDetail(record)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') openDetail(record);
+          }}
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            cursor: 'pointer',
+          }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>线索ID：{record.source_id}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6 }}>{record.opportunity_title}</div>
+                <Space size={6} align="center">
+                  <Avatar size={24} style={{ background: isCompetitor ? '#f0f5ff' : '#f0fdf4', color: isCompetitor ? '#4F46E5' : '#059669', fontSize: 12 }} icon={isCompetitor ? <BankOutlined /> : <UserOutlined />} />
+                  <div>
+                    <Text strong style={{ fontSize: 13, color: '#1f2937' }}>{subjectName}</Text>
+                    {subjectSub && <div style={{ fontSize: 11, color: '#9ca3af' }}>{subjectSub}</div>}
+                  </div>
+                </Space>
+              </div>
+              <Space direction="vertical" size={6} align="end">
+                <Tag style={{ borderRadius: 6, fontSize: 12 }} color={isCompetitor ? 'orange' : 'blue'}>
+                  {isCompetitor ? '竞研' : '互动'}
+                </Tag>
+                <span style={{
+                  display: 'inline-block', padding: '2px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500,
+                  color: status.color, background: status.bg, border: `1px solid ${status.border}`,
+                }}>
+                  {status.label}
+                </span>
+              </Space>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Typography.Text type="secondary">指派给：{record.assignee_name || '未指派'}</Typography.Text>
+              <Typography.Text type="secondary">日期：{record.date || '-'}</Typography.Text>
+              <Typography.Text type="secondary">创建人：{record.created_by_name || '-'}</Typography.Text>
+            </div>
+
+            {record.follow_result && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                跟进结果：{record.follow_result}
+              </Typography.Paragraph>
+            )}
+
+            {record.watcher_names && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                关注人：{record.watcher_names}
+              </Typography.Paragraph>
+            )}
+
+            <Space size="small" wrap>
+              <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); openDetail(record); }}>详情</Button>
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>编辑</Button>
+              <Button
+                type="link"
+                size="small"
+                icon={<PaperClipOutlined />}
+                onClick={async (event) => {
+                  event.stopPropagation();
+                  try {
+                    const atts = await attachmentsApi.list({ source_type: record.source_type, source_id: record.source_id });
+                    if (atts.length === 0) {
+                      message.info('暂无附件');
+                      return;
+                    }
+                    Modal.info({
+                      title: '附件列表',
+                      width: isMobile ? '100%' : 500,
+                      content: (
+                        <div style={{ marginTop: 16 }}>
+                          {atts.map(att => (
+                            <div key={att.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                                <div style={{ flex: 1, overflow: 'hidden' }}>
+                                  <div style={{ fontSize: 13, color: '#374151', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {att.filename}
+                                  </div>
+                                  <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                                    {(att.size / 1024).toFixed(1)} KB
+                                  </div>
+                                </div>
+                                <Button
+                                  type="link"
+                                  size="small"
+                                  icon={<DownloadOutlined />}
+                                  onClick={() => attachmentsApi.download(att.id, att.filename).catch(() => message.error('下载失败'))}
+                                >
+                                  下载
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ),
+                    });
+                  } catch {
+                    message.error('加载附件失败');
+                  }
+                }}
+              >
+                附件 {record.attachment_count || 0}
+              </Button>
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计概览 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
@@ -442,11 +575,11 @@ export default function Leads() {
         ].map((item, idx) => (
           <Col xs={12} sm={6} key={idx}>
             <div className="stat-card" style={{
-              background: item.gradient, borderRadius: 10, padding: '14px 18px',
+              background: item.gradient, borderRadius: 10, padding: isMobile ? '12px 14px' : '14px 18px',
               cursor: 'default',
             }}>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
+              <div style={{ fontSize: isMobile ? 22 : 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
             </div>
           </Col>
         ))}
@@ -455,11 +588,11 @@ export default function Leads() {
       {/* 筛选与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-          <Space wrap>
+          <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
             <Select
               placeholder="商机状态"
               allowClear
-              style={{ width: 130 }}
+              style={{ width: isMobile ? '100%' : 130 }}
               value={filterStatus || undefined}
               onChange={v => setFilterStatus(v || '')}
             >
@@ -471,36 +604,47 @@ export default function Leads() {
               placeholder="指派人"
               allowClear
               showSearch
-              style={{ width: 160 }}
+              style={{ width: isMobile ? '100%' : 160 }}
               value={filterAssignee || undefined}
               onChange={v => setFilterAssignee(v || '')}
               filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
               options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
             />
           </Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAddLead}>添加线索</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAddLead} style={{ width: isMobile ? '100%' : undefined }}>添加线索</Button>
         </div>
 
-        <Table
-          columns={columns}
-          dataSource={data}
-          rowKey={(record) => `${record.source_type}-${record.source_id}`}
-          loading={loading}
-          size="small"
-          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-          locale={{ emptyText: '暂无线索记录' }}
-          expandable={{
-            expandedRowRender: r => (
-              <div style={{ padding: '12px 20px', background: '#f8fafc', borderRadius: 10, border: '1px solid #f0f0f5' }}>
-                {r.description && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动描述：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.description}</Text></div>}
-                {r.outcome && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.outcome}</Text></div>}
-                {r.follow_result && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>跟进结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.follow_result}</Text></div>}
-                {r.opportunity_note && <div><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>商机说明：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.opportunity_note}</Text></div>}
-              </div>
-            ),
-            rowExpandable: r => !!(r.description || r.outcome || r.follow_result || r.opportunity_note),
-          }}
-        />
+        {isMobile ? (
+          <List
+            dataSource={data}
+            rowKey={(record) => `${record.source_type}-${record.source_id}`}
+            loading={loading}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            locale={{ emptyText: '暂无线索记录' }}
+            renderItem={renderLeadCard}
+          />
+        ) : (
+          <Table
+            columns={columns}
+            dataSource={data}
+            rowKey={(record) => `${record.source_type}-${record.source_id}`}
+            loading={loading}
+            size="small"
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            locale={{ emptyText: '暂无线索记录' }}
+            expandable={{
+              expandedRowRender: r => (
+                <div style={{ padding: '12px 20px', background: '#f8fafc', borderRadius: 10, border: '1px solid #f0f0f5' }}>
+                  {r.description && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动描述：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.description}</Text></div>}
+                  {r.outcome && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.outcome}</Text></div>}
+                  {r.follow_result && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>跟进结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.follow_result}</Text></div>}
+                  {r.opportunity_note && <div><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>商机说明：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.opportunity_note}</Text></div>}
+                </div>
+              ),
+              rowExpandable: r => !!(r.description || r.outcome || r.follow_result || r.opportunity_note),
+            }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -510,7 +654,8 @@ export default function Leads() {
         onCancel={() => setEditModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        width={520}
+        width={isMobile ? '100%' : 520}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={editForm} layout="vertical" style={{ marginTop: 12 }}>
           <Form.Item label="商机标题" name="opportunity_title" rules={[{ required: true }]}>
@@ -542,7 +687,7 @@ export default function Leads() {
         title={<span style={{ fontWeight: 600, fontSize: 16, color: '#1f2937' }}>商机详情</span>}
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        width={520}
+        width={isMobile ? '100%' : 520}
         extra={
           detailRecord && (
             <Button type="primary" ghost icon={<EditOutlined />} style={{ borderRadius: 8 }} onClick={() => { setDetailOpen(false); openEdit(detailRecord); }}>
@@ -572,11 +717,11 @@ export default function Leads() {
               </Descriptions.Item>
               <Descriptions.Item label="线索ID">{detailRecord.source_id}</Descriptions.Item>
               <Descriptions.Item label="指派给">{detailRecord.assignee_name || <Text style={{ color: '#d1d5db' }}>未指派</Text>}</Descriptions.Item>
-              <Descriptions.Item label="商机说明">{detailRecord.opportunity_note || '-'}</Descriptions.Item>
+              <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
               <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
-              <Descriptions.Item label="互动描述">{detailRecord.description || '-'}</Descriptions.Item>
-              <Descriptions.Item label="互动结果">{detailRecord.outcome || '-'}</Descriptions.Item>
-              <Descriptions.Item label="跟进结果">{detailRecord.follow_result || '-'}</Descriptions.Item>
+              <Descriptions.Item label="互动描述"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div></Descriptions.Item>
+              <Descriptions.Item label="互动结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.outcome || '-'}</div></Descriptions.Item>
+              <Descriptions.Item label="跟进结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.follow_result || '-'}</div></Descriptions.Item>
               <Descriptions.Item label="关注人">{detailRecord.watcher_names || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{detailRecord.created_by_name || '-'}</Descriptions.Item>
             </Descriptions>
@@ -647,7 +792,8 @@ export default function Leads() {
         confirmLoading={addLoading}
         okText="提交"
         cancelText="取消"
-        width={620}
+        width={isMobile ? '100%' : 620}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         destroyOnClose
       >
         <Form form={addForm} layout="vertical" style={{ marginTop: 12 }}>
@@ -696,14 +842,14 @@ export default function Leads() {
             <Input placeholder="简要描述商机内容" />
           </Form.Item>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="商机状态" name="opportunity_status">
                 <Select>
                   {Object.entries(opportunityStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="指派跟进人" name="opportunity_assignee">
                 <Select allowClear showSearch placeholder="选择跟进人" optionFilterProp="label"
                   options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
@@ -732,12 +878,12 @@ export default function Leads() {
 
           {/* 记录详情（通用） */}
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="日期" name="date" rules={[{ required: true, message: '请选择日期' }]}>
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="重要程度" name="importance">
                 <Select placeholder="选择重要程度" allowClear>
                   <Option value="high">重要</Option>
@@ -759,12 +905,12 @@ export default function Leads() {
             </Form.Item>
           )}
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="下一步行动" name="next_action">
                 <Input placeholder="后续跟进事项" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="下一步日期" name="next_action_date">
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>

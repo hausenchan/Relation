@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete } from 'antd';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
@@ -8,6 +8,7 @@ const { Title, Text } = Typography;
 
 const { TextArea } = Input;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const dimensionMap = {
   monetization: { label: '变现策略', color: 'green', icon: <RiseOutlined /> },
@@ -58,6 +59,8 @@ const actionTypeMap = {
 };
 
 export default function Strategies() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [strategies, setStrategies] = useState([]);
   const [users, setUsers] = useState([]);
@@ -542,8 +545,75 @@ export default function Strategies() {
     link: strategies.filter(s => s.dimension === 'link').length,
   };
 
+  const renderStrategyCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => showDetail(record)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') showDetail(record);
+        }}
+        style={{
+          width: '100%',
+          padding: 14,
+          border: '1px solid #f0f0f0',
+          borderRadius: 12,
+          background: '#fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          cursor: 'pointer',
+        }}
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>策略ID：{record.id}</div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6 }}>{record.title}</div>
+              <Space wrap size={[6, 6]}>
+                {record.dimension && <Tag color={dimensionMap[record.dimension]?.color} icon={dimensionMap[record.dimension]?.icon}>{dimensionMap[record.dimension]?.label || record.dimension}</Tag>}
+                {record.status && <Tag color={statusMap[record.status]?.color}>{statusMap[record.status]?.label || record.status}</Tag>}
+              </Space>
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{record.created_at?.slice(0, 10) || '-'}</Typography.Text>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Typography.Text type="secondary">负责人：{record.owner_name || '-'}</Typography.Text>
+            <Typography.Text type="secondary">媒体：{record.media || '-'}</Typography.Text>
+            <Typography.Text type="secondary">对接：{record.access_method || '-'}</Typography.Text>
+          </div>
+
+          {(record.role_type || record.budget_group_type) && (
+            <Space wrap size={[6, 6]}>
+              {record.role_type && <Tag color={roleTypeMap[record.role_type]?.color}>{roleTypeMap[record.role_type]?.label || record.role_type}</Tag>}
+              {record.budget_group_type && <Tag color={budgetGroupTypeMap[record.budget_group_type]?.color}>{budgetGroupTypeMap[record.budget_group_type]?.label || record.budget_group_type}</Tag>}
+            </Space>
+          )}
+
+          {record.source_lead_id && (
+            <Typography.Text type="secondary">
+              来源线索：{record.source_lead_id}{record.source_title ? ` · ${record.source_title}` : ''}
+            </Typography.Text>
+          )}
+
+          {record.latest_result_summary && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              结果摘要：{record.latest_result_summary}
+            </Typography.Paragraph>
+          )}
+
+          <Space size="small" wrap>
+            <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); showDetail(record); }}>详情</Button>
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); handleEdit(record); }}>编辑</Button>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDelete(record.id); }}>删除</Button>
+          </Space>
+        </Space>
+      </div>
+    </List.Item>
+  );
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计卡片 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
@@ -554,11 +624,11 @@ export default function Strategies() {
         ].map((item, idx) => (
           <Col xs={12} sm={6} key={idx}>
             <div className="stat-card" style={{
-              background: item.gradient, borderRadius: 10, padding: '14px 18px',
+              background: item.gradient, borderRadius: 10, padding: isMobile ? '12px 14px' : '14px 18px',
               cursor: 'default',
             }}>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
+              <div style={{ fontSize: isMobile ? 22 : 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
             </div>
           </Col>
         ))}
@@ -567,17 +637,17 @@ export default function Strategies() {
       {/* 筛选、Tabs与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-          <Space size={12} wrap>
+          <Space size={12} wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <Input
             placeholder="策略ID"
-            style={{ width: 120 }}
+            style={{ width: isMobile ? '100%' : 120 }}
             allowClear
             value={filters.id}
             onChange={(e) => setFilters({ ...filters, id: e.target.value })}
           />
           <Select
             placeholder="维度"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.dimension || undefined}
             onChange={(val) => setFilters({ ...filters, dimension: val || '' })}
@@ -588,7 +658,7 @@ export default function Strategies() {
           </Select>
           <Select
             placeholder="岗位类型"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.role_type || undefined}
             onChange={(val) => setFilters({ ...filters, role_type: val || '' })}
@@ -598,7 +668,7 @@ export default function Strategies() {
           </Select>
           <Select
             placeholder="预算组类型"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.budget_group_type || undefined}
             onChange={(val) => setFilters({ ...filters, budget_group_type: val || '' })}
@@ -615,7 +685,7 @@ export default function Strategies() {
           </Select>
           <Select
             placeholder="状态"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.status || undefined}
             onChange={(val) => setFilters({ ...filters, status: val || '' })}
@@ -627,7 +697,7 @@ export default function Strategies() {
           </Select>
           <Input
             placeholder="媒体"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.media}
             onChange={(e) => setFilters({ ...filters, media: e.target.value })}
@@ -636,7 +706,7 @@ export default function Strategies() {
           />
           <Select
             placeholder="对接方式"
-            style={{ width: 150 }}
+            style={{ width: isMobile ? '100%' : 150 }}
             allowClear
             value={filters.access_method || undefined}
             onChange={(val) => setFilters({ ...filters, access_method: val || '' })}
@@ -646,7 +716,7 @@ export default function Strategies() {
             <Option value="yyz_h5">YYZ-H5</Option>
           </Select>
         </Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>新增策略</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} style={{ width: isMobile ? '100%' : undefined }}>新增策略</Button>
         </div>
 
         <Tabs
@@ -660,14 +730,25 @@ export default function Strategies() {
           ]}
         />
 
-        <Table
-          columns={columns}
-          dataSource={getFilteredData()}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1920 }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
-        />
+        {isMobile ? (
+          <List
+            dataSource={getFilteredData()}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            locale={{ emptyText: '暂无策略记录' }}
+            renderItem={renderStrategyCard}
+          />
+        ) : (
+          <Table
+            columns={columns}
+            dataSource={getFilteredData()}
+            rowKey="id"
+            loading={loading}
+            scroll={{ x: 1920 }}
+            pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -675,7 +756,8 @@ export default function Strategies() {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={600}
+        width={isMobile ? '100%' : 600}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -761,7 +843,7 @@ export default function Strategies() {
       <Drawer
         title="策略详情"
         placement="right"
-        width={900}
+        width={isMobile ? '100%' : 900}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
       >
@@ -936,7 +1018,8 @@ export default function Strategies() {
         open={logModalVisible}
         onOk={handleSaveLog}
         onCancel={() => setLogModalVisible(false)}
-        width={640}
+        width={isMobile ? '100%' : 640}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
