@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useContext } from 'react';
 import {
   Table, Button, Tag, Space, Typography, Drawer, Tabs, Modal, Form, Input,
   Select, DatePicker, InputNumber, Row, Col, Popconfirm, message, Alert,
-  Descriptions, Steps, Divider, Empty, Badge
+  Descriptions, Steps, Divider, Empty, Badge, Grid, List
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SendOutlined,
@@ -17,6 +17,7 @@ const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 const { RangePicker } = DatePicker;
+const { useBreakpoint } = Grid;
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
@@ -47,6 +48,8 @@ const expenseTypeMap = {
 
 // ==================== 费用明细组件 ====================
 function ExpensePanel({ tripId, tripStatus, isOwner }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [expenses, setExpenses] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -97,6 +100,7 @@ function ExpensePanel({ tripId, tripStatus, isOwner }) {
           pagination={false}
           dataSource={expenses}
           rowKey="id"
+          scroll={{ x: 640 }}
           columns={[
             { title: '日期', dataIndex: 'date', width: 100 },
             { title: '类型', dataIndex: 'type', width: 80, render: v => <Tag color={expenseTypeMap[v]?.color}>{expenseTypeMap[v]?.label || v}</Tag> },
@@ -125,20 +129,21 @@ function ExpensePanel({ tripId, tripStatus, isOwner }) {
       )}
 
       <Modal title={editing ? '编辑明细' : '添加费用明细'} open={modalOpen} onOk={handleSave}
-        onCancel={() => setModalOpen(false)} okText="保存" cancelText="取消" width={480}>
+        onCancel={() => setModalOpen(false)} okText="保存" cancelText="取消" width={isMobile ? '100%' : 480}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}>
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="类型" name="type" rules={[{ required: true }]}>
                 <Select>{Object.entries(expenseTypeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}</Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="日期" name="date" rules={[{ required: true }]}>
                 <Input placeholder="YYYY-MM-DD" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="金额（元）" name="amount" rules={[{ required: true }]}>
                 <InputNumber min={0} precision={2} style={{ width: '100%' }} prefix="¥" />
               </Form.Item>
@@ -157,6 +162,8 @@ function ExpensePanel({ tripId, tripStatus, isOwner }) {
 
 // ==================== 报销单组件 ====================
 function ReportPanel({ tripId, tripStatus, isOwner, onRefresh }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [report, setReport] = useState(null);
   const [approveOpen, setApproveOpen] = useState(false);
   const [approveAction, setApproveAction] = useState('');
@@ -204,7 +211,7 @@ function ReportPanel({ tripId, tripStatus, isOwner, onRefresh }) {
 
   return (
     <div>
-      <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
+      <Descriptions size="small" bordered column={isMobile ? 1 : 2} style={{ marginBottom: 16 }}>
         <Descriptions.Item label="报销状态">
           <Tag color={reportStatusMap[report.status]?.color}>{reportStatusMap[report.status]?.label}</Tag>
         </Descriptions.Item>
@@ -227,7 +234,9 @@ function ReportPanel({ tripId, tripStatus, isOwner, onRefresh }) {
       </Space>
 
       <Modal title={approveAction === 'approved' ? '批准报销' : '拒绝报销'} open={approveOpen}
-        onOk={handleApprove} onCancel={() => setApproveOpen(false)} okText="确认" cancelText="取消">
+        onOk={handleApprove} onCancel={() => setApproveOpen(false)} okText="确认" cancelText="取消"
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}>
         <Form layout="vertical" size="small">
           <Form.Item label="审批意见">
             <TextArea rows={3} value={approveNote} onChange={e => setApproveNote(e.target.value)} placeholder="选填..." />
@@ -240,6 +249,8 @@ function ReportPanel({ tripId, tripStatus, isOwner, onRefresh }) {
 
 // ==================== 出差详情抽屉 ====================
 function TripDrawer({ trip, open, onClose, onRefresh }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const isOwner = trip?.user_id === user?.id;
   const canApprove = isAdmin(user?.role) || user?.role === 'leader';
@@ -267,7 +278,7 @@ function TripDrawer({ trip, open, onClose, onRefresh }) {
   return (
     <Drawer
       title={<Space><CarOutlined /><span>{trip.destinations}</span><Tag color={status.color}>{status.label}</Tag></Space>}
-      open={open} onClose={onClose} width={720}
+      open={open} onClose={onClose} width={isMobile ? '100%' : 720}
     >
       <Steps
         size="small"
@@ -286,7 +297,7 @@ function TripDrawer({ trip, open, onClose, onRefresh }) {
         {
           key: 'info', label: '申请信息',
           children: (
-            <Descriptions size="small" bordered column={2}>
+            <Descriptions size="small" bordered column={isMobile ? 1 : 2}>
               <Descriptions.Item label="申请人">{trip.user_name}</Descriptions.Item>
               <Descriptions.Item label="所属小组">{trip.group_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="目的地（多城市）" span={2}>{trip.destinations}</Descriptions.Item>
@@ -322,7 +333,9 @@ function TripDrawer({ trip, open, onClose, onRefresh }) {
       </Space>
 
       <Modal title={approveAction === 'approved' ? '批准出差申请' : '拒绝出差申请'} open={approveOpen}
-        onOk={handleApprove} onCancel={() => setApproveOpen(false)} okText="确认" cancelText="取消">
+        onOk={handleApprove} onCancel={() => setApproveOpen(false)} okText="确认" cancelText="取消"
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}>
         <Form layout="vertical" size="small">
           <Form.Item label="审批意见">
             <TextArea rows={3} value={approveNote} onChange={e => setApproveNote(e.target.value)} placeholder="选填..." />
@@ -335,6 +348,8 @@ function TripDrawer({ trip, open, onClose, onRefresh }) {
 
 // ==================== 主页面 ====================
 export default function Trips() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
@@ -457,14 +472,86 @@ export default function Trips() {
     },
   ];
 
+  const renderTripCard = (record) => {
+    const status = statusMap[record.status] || statusMap.draft;
+    const reportStatus = record.report_status ? reportStatusMap[record.report_status] : null;
+    const isOwner = record.user_id === user?.id;
+
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => openDetail(record)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') openDetail(record);
+          }}
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            cursor: 'pointer',
+          }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.destinations}</div>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <Text type="secondary">申请人：{record.user_name || '-'}</Text>
+                  <Text type="secondary">小组：{record.group_name || '-'}</Text>
+                </div>
+              </div>
+              <Space direction="vertical" size={4} align="end">
+                <Tag color={status.color}>{status.label}</Tag>
+                {reportStatus && <Tag color={reportStatus.color}>{reportStatus.label}</Tag>}
+              </Space>
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Text type="secondary">出发：{record.start_date || '-'}</Text>
+              <Text type="secondary">返回：{record.end_date || '-'}</Text>
+            </div>
+
+            {record.total_amount ? (
+              <Text style={{ color: '#ff4d4f' }}>报销金额：¥{record.total_amount.toFixed(2)}</Text>
+            ) : (
+              <Text type="secondary">报销金额：-</Text>
+            )}
+
+            <Space size="small" wrap>
+              {isOwner && ['draft', 'rejected'].includes(record.status) && (
+                <>
+                  <Button size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>编辑</Button>
+                  <Button size="small" type="primary" ghost icon={<SendOutlined />} onClick={(event) => { event.stopPropagation(); handleSubmit(record.id); }}>提交</Button>
+                  <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                    <Button size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()}>删除</Button>
+                  </Popconfirm>
+                </>
+              )}
+              {canApprove && record.status === 'pending' && (
+                <Badge dot>
+                  <Button size="small" onClick={(event) => { event.stopPropagation(); openDetail(record); }}>审批</Button>
+                </Badge>
+              )}
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建出差申请</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>新建出差申请</Button>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Select placeholder="全部状态" allowClear style={{ width: 130 }} value={filterStatus || undefined} onChange={v => setFilterStatus(v || '')}>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
+        <Select placeholder="全部状态" allowClear style={{ width: isMobile ? '100%' : 130 }} value={filterStatus || undefined} onChange={v => setFilterStatus(v || '')}>
           {Object.entries(statusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
         {canApprove && (
@@ -474,19 +561,32 @@ export default function Trips() {
         )}
       </Space>
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        pagination={{ pageSize: 15 }}
-        onRow={r => ({ onDoubleClick: () => openDetail(r), style: { cursor: 'pointer' } })}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 15, showSizeChanger: false }}
+          locale={{ emptyText: '暂无出差申请' }}
+          renderItem={renderTripCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          pagination={{ pageSize: 15 }}
+          onRow={r => ({ onDoubleClick: () => openDetail(r), style: { cursor: 'pointer' } })}
+        />
+      )}
 
       {/* 新建/编辑弹窗 */}
       <Modal title={editing ? '编辑出差申请' : '新建出差申请'} open={modalOpen} onOk={handleSave}
-        onCancel={() => setModalOpen(false)} width={640} okText="保存" cancelText="取消">
+        onCancel={() => setModalOpen(false)} width={isMobile ? '100%' : 640}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        okText="保存" cancelText="取消">
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
             <Col span={24}>
@@ -516,7 +616,7 @@ export default function Trips() {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="预计费用（元）" name="estimated_cost">
                 <InputNumber min={0} precision={2} style={{ width: '100%' }} prefix="¥" />
               </Form.Item>

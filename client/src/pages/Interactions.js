@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider } from 'antd';
+import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
 import dayjs from 'dayjs';
 
 
+const { Text } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const typeMap = {
   visit: { label: '拜访', color: 'blue' },
@@ -39,6 +41,8 @@ const opportunityStatusMap = {
 };
 
 export default function Interactions() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterType, setFilterType] = useState('');
@@ -181,28 +185,100 @@ export default function Interactions() {
     },
   ];
 
+  const renderInteractionCard = (record) => {
+    const type = typeMap[record.type] || { label: record.type, color: 'default' };
+    const importance = importanceMap[record.importance] || importanceMap.normal;
+    const opportunity = record.opportunity_title ? (opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status, color: 'default' }) : null;
+
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.person_name || '-'}</div>
+                <Space wrap size={[6, 6]}>
+                  {record.person_category && <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>}
+                  <Tag color={type.color}>{type.label}</Tag>
+                  <Tag color={importance.color}>{importance.label}</Tag>
+                </Space>
+              </div>
+              <Text type="secondary" style={{ fontSize: 12 }}>{record.date || '-'}</Text>
+            </div>
+
+            {(record.city || record.weight) && (
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                {record.city && <Text type="secondary">城市：{record.city}</Text>}
+                {record.weight && <Text type="secondary">权重：{record.weight}</Text>}
+              </div>
+            )}
+
+            {record.description && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                描述：{record.description}
+              </Typography.Paragraph>
+            )}
+            {record.outcome && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                结果：{record.outcome}
+              </Typography.Paragraph>
+            )}
+            {record.next_action && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                下次跟进：{record.next_action}
+              </Typography.Paragraph>
+            )}
+
+            {record.opportunity_title && (
+              <Space wrap size={[6, 6]}>
+                <Tag color="blue" icon={<RiseOutlined />}>{record.opportunity_title}</Tag>
+                {opportunity && <Tag color={opportunity.color}>{opportunity.label}</Tag>}
+              </Space>
+            )}
+
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加记录</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加记录</Button>
       </div>
-      <Space style={{ marginBottom: 16 }} wrap>
-        <Select placeholder="互动类型" allowClear style={{ width: 120 }} onChange={setFilterType}>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
+        <Select placeholder="互动类型" allowClear style={{ width: isMobile ? '100%' : 120 }} onChange={setFilterType}>
           {Object.entries(typeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
         <Input.Search
           placeholder="城市"
           allowClear
-          style={{ width: 120 }}
+          style={{ width: isMobile ? '100%' : 120 }}
           onSearch={setFilterCity}
           onChange={e => !e.target.value && setFilterCity('')}
         />
-        <Select placeholder="人脉权重" allowClear style={{ width: 110 }} value={filterWeight || undefined} onChange={v => setFilterWeight(v || '')}>
+        <Select placeholder="人脉权重" allowClear style={{ width: isMobile ? '100%' : 110 }} value={filterWeight || undefined} onChange={v => setFilterWeight(v || '')}>
           <Option value="high"><Tag color="red">高</Tag></Option>
           <Option value="medium"><Tag color="orange">中</Tag></Option>
           <Option value="low"><Tag color="default">低</Tag></Option>
         </Select>
-        <Select placeholder="信息重要程度" allowClear style={{ width: 130 }} value={filterImportance || undefined} onChange={v => setFilterImportance(v || '')}>
+        <Select placeholder="信息重要程度" allowClear style={{ width: isMobile ? '100%' : 130 }} value={filterImportance || undefined} onChange={v => setFilterImportance(v || '')}>
           {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
         </Select>
 
@@ -256,22 +332,34 @@ export default function Interactions() {
           </Button>
         </Dropdown>
       </Space>
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        scroll={{ x: 900 }}
-        pagination={{ pageSize: 20 }}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          locale={{ emptyText: '暂无互动记录' }}
+          renderItem={renderInteractionCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          scroll={{ x: 900 }}
+          pagination={{ pageSize: 20 }}
+        />
+      )}
 
       <Modal
         title={editing ? '编辑互动记录' : '添加互动记录'}
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={680}
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -295,12 +383,12 @@ export default function Interactions() {
                 </Form.Item>
               </Col>
             )}
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="日期" name="date" rules={[{ required: true }]}>
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="类型" name="type" rules={[{ required: true }]}>
                 <Select>
                   {Object.entries(typeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
@@ -309,13 +397,13 @@ export default function Interactions() {
             </Col>
             {/* 送礼时显示礼物 */}
             {interactionType === 'gift' && (
-              <Col span={8}>
+              <Col span={isMobile ? 24 : 8}>
                 <Form.Item label="礼物" name="gift_name">
                   <Input placeholder="如：茅台、月饼礼盒" />
                 </Form.Item>
               </Col>
             )}
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="信息重要程度" name="importance" initialValue="normal">
                 <Select>
                   {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
@@ -348,12 +436,12 @@ export default function Interactions() {
           <Collapse ghost>
             <Collapse.Panel key="opp" header={<span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>}>
               <Row gutter={16}>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="商机标题" name="opportunity_title">
                     <Input placeholder="简述商机，如：XX采购合作意向" />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="商机状态" name="opportunity_status" initialValue="new">
                     <Select allowClear placeholder="选择状态">
                       {Object.entries(opportunityStatusMap).map(([k, v]) => (
