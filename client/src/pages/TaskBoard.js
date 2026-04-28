@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Tag, Space, Typography, Button, DatePicker, Modal, Form, Input, Select,
-  Badge, Tooltip, message, Popconfirm, Divider, Empty, Spin, Row, Col, Statistic
+  Badge, Tooltip, message, Popconfirm, Divider, Empty, Spin, Row, Col, Statistic, Grid
 } from 'antd';
 import {
   PlusOutlined, CheckOutlined, PlayCircleOutlined, DeleteOutlined,
@@ -13,6 +13,7 @@ import dayjs from 'dayjs';
 
 const { Text } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const statusMap = {
   pending:     { label: '待处理', color: 'default',  badge: 'default' },
@@ -27,6 +28,8 @@ const priorityMap = {
 };
 
 export default function TaskBoard() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [boardData, setBoardData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -148,66 +151,66 @@ export default function TaskBoard() {
   }, 0);
 
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 头部 */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Space align="center">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12, marginBottom: 16 }}>
+        <Space align="center" direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <DatePicker
             value={selectedDate}
             onChange={(d) => setSelectedDate(d || dayjs())}
             allowClear={false}
-            style={{ width: 140 }}
+            style={{ width: isMobile ? '100%' : 140 }}
           />
-          <Button size="small" onClick={() => setSelectedDate(dayjs())}>今天</Button>
+          <Button size="small" onClick={() => setSelectedDate(dayjs())} style={{ width: isMobile ? '100%' : undefined }}>今天</Button>
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openAdd()}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openAdd()} style={{ width: isMobile ? '100%' : undefined }}>
           新建任务
         </Button>
       </div>
 
       {/* 统计卡片 */}
-      <Row gutter={12} style={{ marginBottom: 16 }}>
-        <Col span={4}>
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+        <Col xs={12} sm={8} lg={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#f0f5ff' }}>
-            <Statistic title="总任务" value={totalTasks} valueStyle={{ fontSize: 20 }} />
+            <Statistic title="总任务" value={totalTasks} valueStyle={{ fontSize: isMobile ? 18 : 20 }} />
           </Card>
         </Col>
-        <Col span={4}>
+        <Col xs={12} sm={8} lg={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#fff7e6' }}>
-            <Statistic title="进行中" value={inProgressTasks} valueStyle={{ fontSize: 20, color: '#fa8c16' }} />
+            <Statistic title="进行中" value={inProgressTasks} valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#fa8c16' }} />
           </Card>
         </Col>
-        <Col span={4}>
+        <Col xs={12} sm={8} lg={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#fff1f0' }}>
-            <Statistic title="待处理" value={pendingTasks} valueStyle={{ fontSize: 20, color: '#ff4d4f' }} />
+            <Statistic title="待处理" value={pendingTasks} valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#ff4d4f' }} />
           </Card>
         </Col>
-        <Col span={4}>
+        <Col xs={12} sm={8} lg={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#f6ffed' }}>
             <Statistic
               title="已完成"
               value={doneTasks}
               suffix={totalTasks > 0 ? `/${totalTasks}` : ''}
-              valueStyle={{ fontSize: 20, color: '#52c41a' }}
+              valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#52c41a' }}
             />
           </Card>
         </Col>
-        <Col span={4}>
+        <Col xs={12} sm={8} lg={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#e6f7ff' }}>
             <Statistic
               title="我指派的"
               value={myAssignedTasks}
-              valueStyle={{ fontSize: 20, color: '#1890ff' }}
+              valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#1890ff' }}
               prefix={<UserOutlined />}
             />
           </Card>
         </Col>
-        <Col span={4}>
+        <Col xs={12} sm={8} lg={4}>
           <Card size="small" style={{ textAlign: 'center', background: '#fff0f6' }}>
             <Statistic
               title="指派给我"
               value={assignedToMeTasks}
-              valueStyle={{ fontSize: 20, color: '#eb2f96' }}
+              valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#eb2f96' }}
               prefix={<TeamOutlined />}
             />
           </Card>
@@ -222,7 +225,7 @@ export default function TaskBoard() {
             <div key={teamName} style={{ marginBottom: 24 }}>
               {/* 小组标题 */}
               <div style={{
-                display: 'flex', alignItems: 'center', gap: 8,
+                display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
                 marginBottom: 12, padding: '6px 0',
                 borderBottom: '2px solid #f0f0f0',
               }}>
@@ -274,7 +277,7 @@ export default function TaskBoard() {
                             />
                           </Tooltip>
                         }
-                        bodyStyle={{ padding: '8px 12px', minHeight: 60 }}
+                        bodyStyle={{ padding: isMobile ? '10px 12px' : '8px 12px', minHeight: 60 }}
                       >
                         {member.tasks.length === 0 ? (
                           <Text type="secondary" style={{ fontSize: 12 }}>暂无任务</Text>
@@ -285,6 +288,7 @@ export default function TaskBoard() {
                                 key={task.id}
                                 task={task}
                                 currentUser={user}
+                                isMobile={isMobile}
                                 onStatus={handleStatus}
                                 onEdit={openEdit}
                                 onDelete={handleDelete}
@@ -316,7 +320,8 @@ export default function TaskBoard() {
         onCancel={() => setModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        width={520}
+        width={isMobile ? '100%' : 520}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={form} layout="vertical">
           <Form.Item label="任务标题" name="title" rules={[{ required: true, message: '请填写任务标题' }]}>
@@ -325,7 +330,7 @@ export default function TaskBoard() {
           <Form.Item label="任务描述" name="description">
             <Input.TextArea rows={2} placeholder="详细说明（选填）" />
           </Form.Item>
-          <Space style={{ width: '100%' }} size={12}>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={12}>
             <Form.Item label="日期" name="date" rules={[{ required: true }]} style={{ flex: 1, marginBottom: 0 }}>
               <DatePicker style={{ width: '100%' }} />
             </Form.Item>
@@ -354,7 +359,7 @@ export default function TaskBoard() {
 }
 
 // 单个任务条目（精简版）
-function TaskItem({ task, currentUser, onStatus, onEdit, onDelete, onAddSub }) {
+function TaskItem({ task, currentUser, isMobile, onStatus, onEdit, onDelete, onAddSub }) {
   const p = priorityMap[task.priority] || { label: task.priority, color: 'default' };
   const s = statusMap[task.status] || { label: task.status, color: 'default', badge: 'default' };
   const isDone = task.status === 'done';
@@ -386,9 +391,9 @@ function TaskItem({ task, currentUser, onStatus, onEdit, onDelete, onAddSub }) {
       {task.result && (
         <div style={{ fontSize: 11, color: '#52c41a', marginBottom: 2, whiteSpace: 'pre-wrap' }}>备注：{task.result}</div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', justifyContent: 'space-between', gap: 4, flexDirection: isMobile ? 'column' : 'row' }}>
         <Badge status={s.badge} text={<Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>} />
-        <Space size={2}>
+        <Space size={2} wrap={isMobile}>
           {task.status === 'pending' && canEdit && (
             <Button size="small" icon={<PlayCircleOutlined />} style={{ fontSize: 11, height: 22, padding: '0 6px' }}
               onClick={() => onStatus(task, 'in_progress')}>开始</Button>
