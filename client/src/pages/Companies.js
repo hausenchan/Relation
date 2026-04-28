@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
   Typography, Drawer, Tabs, Popconfirm, message, Tooltip, Divider,
-  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber, Collapse
+  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber, Collapse, Grid, List
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, BankOutlined,
@@ -19,6 +19,7 @@ import dayjs from 'dayjs';
 const { Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
+const { useBreakpoint } = Grid;
 
 const categoryMap = {
   competitor: { label: '竞品公司',   color: 'red' },
@@ -76,6 +77,8 @@ const importanceMap = {
 
 // ==================== 子表单：添加/编辑公司 ====================
 function CompanyModal({ open, editing, onClose, onSuccess }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [form] = Form.useForm();
   useEffect(() => {
     if (open) {
@@ -103,7 +106,8 @@ function CompanyModal({ open, editing, onClose, onSuccess }) {
       open={open}
       onOk={handleOk}
       onCancel={onClose}
-      width={720}
+      width={isMobile ? '100%' : 720}
+      style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       okText="保存"
       cancelText="取消"
       bodyStyle={{ maxHeight: '70vh', overflowY: 'auto' }}
@@ -111,36 +115,36 @@ function CompanyModal({ open, editing, onClose, onSuccess }) {
       <Form form={form} layout="vertical" size="small">
         <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>基本信息</Divider>
         <Row gutter={16}>
-          <Col span={10}>
+          <Col span={isMobile ? 24 : 10}>
             <Form.Item label="公司名称" name="name" rules={[{ required: true }]}>
               <Input prefix={<BankOutlined />} />
             </Form.Item>
           </Col>
-          <Col span={7}>
+          <Col span={isMobile ? 24 : 7}>
             <Form.Item label="公司分类" name="category" initialValue="competitor" rules={[{ required: true }]}>
               <Select>
                 {Object.entries(categoryMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
               </Select>
             </Form.Item>
           </Col>
-          <Col span={7}>
+          <Col span={isMobile ? 24 : 7}>
             <Form.Item label="行业" name="industry">
               <Input />
             </Form.Item>
           </Col>
-          <Col span={8}>
+          <Col span={isMobile ? 24 : 8}>
             <Form.Item label="规模" name="scale">
               <Select allowClear>
                 {Object.entries(scaleMap).map(([k, v]) => <Option key={k} value={k}>{v}</Option>)}
               </Select>
             </Form.Item>
           </Col>
-          <Col span={8}>
+          <Col span={isMobile ? 24 : 8}>
             <Form.Item label="成立年份" name="founded_year">
               <Input placeholder="如：2018" />
             </Form.Item>
           </Col>
-          <Col span={8}>
+          <Col span={isMobile ? 24 : 8}>
             <Form.Item label="总部城市" name="hq_city">
               <Input placeholder="如：上海" />
             </Form.Item>
@@ -277,6 +281,8 @@ function renderTreeNodes(nodes, onEdit, onToPerson) {
 
 // ==================== 人员 Tab ====================
 function PersonnelTab({ companyId, companyName, entityId }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [viewMode, setViewMode] = useState('list'); // 'list' | 'org'
   const [modalOpen, setModalOpen] = useState(false);
@@ -405,9 +411,53 @@ function PersonnelTab({ companyId, companyName, entityId }) {
   // 编辑时过滤掉自己，避免自己成为自己的上级
   const managerOptions = data.filter(p => !editing || p.id !== editing.id);
 
+  const renderPersonnelCard = (person) => {
+    const mgr = data.find(p => p.id === person.manager_id);
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <Card size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+              <Space>
+                <Text strong>{person.name}</Text>
+                {person.person_id && isLinked(person) && <Tooltip title="已关联人脉库"><LinkOutlined style={{ color: '#1677ff', fontSize: 12 }} /></Tooltip>}
+              </Space>
+              <Space wrap size={[4, 4]}>
+                {person.level && <Tag color={levelMap[person.level]?.color}>{levelMap[person.level]?.label || person.level}</Tag>}
+                {person.status && <Tag color={person.status === 'active' ? 'green' : 'default'}>{personnelStatusMap[person.status]?.label || person.status}</Tag>}
+              </Space>
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Text type="secondary">部门：{person.department || '-'}</Text>
+              <Text type="secondary">职位：{person.title || '-'}</Text>
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Text type="secondary">直属上级：{mgr?.name || '-'}</Text>
+              <Text type="secondary">入职：{person.join_date || '-'}</Text>
+            </div>
+            {person.skills && (
+              <Space wrap size={[4, 4]}>
+                {person.skills.split(',').filter(Boolean).map(skill => <Tag key={`${person.id}-${skill}`}>{skill.trim()}</Tag>)}
+              </Space>
+            )}
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(person)}>编辑</Button>
+              <Button size="small" icon={<UserAddOutlined />} type={isLinked(person) ? 'default' : 'primary'} ghost={!isLinked(person)} onClick={() => handleToPerson(person)}>
+                {isLinked(person) ? '已关联' : '加入人脉库'}
+              </Button>
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(person.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            </Space>
+          </Space>
+        </Card>
+      </List.Item>
+    );
+  };
+
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', marginBottom: 12, gap: 12 }}>
         <Segmented
           value={viewMode}
           onChange={setViewMode}
@@ -416,14 +466,16 @@ function PersonnelTab({ companyId, companyName, entityId }) {
             { value: 'org',  icon: <ApartmentOutlined />,    label: '架构图' },
           ]}
         />
-        <Space>
-          <Text type="secondary" style={{ fontSize: 12 }}>点击"加入人脉库"可将离职骨干转为外部人才</Text>
-          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加人员</Button>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+          {!isMobile && <Text type="secondary" style={{ fontSize: 12 }}>点击"加入人脉库"可将离职骨干转为外部人才</Text>}
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加人员</Button>
         </Space>
       </div>
 
       {viewMode === 'list'
-        ? <Table columns={columns} dataSource={data} rowKey="id" size="small" pagination={false} />
+        ? (isMobile
+          ? <List dataSource={data} rowKey="id" locale={{ emptyText: '暂无人员' }} renderItem={renderPersonnelCard} />
+          : <Table columns={columns} dataSource={data} rowKey="id" size="small" pagination={false} scroll={{ x: 900 }} />)
         : orgView
       }
 
@@ -432,42 +484,43 @@ function PersonnelTab({ companyId, companyName, entityId }) {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={640}
+        width={isMobile ? '100%' : 640}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="姓名" name="name" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="级别" name="level" initialValue="mid">
                 <Select>
                   {Object.entries(levelMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="状态" name="status" initialValue="active">
                 <Select>
                   {Object.entries(personnelStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="部门" name="department">
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="职位" name="title">
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="直属上级" name="manager_id">
                 <Select allowClear placeholder="不设置则为顶级节点">
                   {managerOptions.map(p => (
@@ -479,12 +532,12 @@ function PersonnelTab({ companyId, companyName, entityId }) {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="入职时间" name="join_date">
                 <Input placeholder="如：2022-03" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="离职时间" name="leave_date">
                 <Input placeholder="如：2024-06（离职填写）" />
               </Form.Item>
@@ -513,6 +566,8 @@ function PersonnelTab({ companyId, companyName, entityId }) {
 
 // ==================== 产品 Tab ====================
 function ProductsTab({ companyId, entityId, entities = [] }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -561,7 +616,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加产品</Button>
+        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加产品</Button>
       </div>
 
       {data.length === 0 ? <Empty description="暂无产品信息" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
@@ -569,7 +624,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
           {data.map(p => {
             const entityName = p.entity_id ? entityNameMap[p.entity_id] : null;
             return (
-              <Col span={12} key={p.id}>
+              <Col xs={24} md={12} key={p.id}>
                 <Card
                   size="small"
                   title={
@@ -613,23 +668,24 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={600}
+        width={isMobile ? '100%' : 600}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={10}>
+            <Col span={isMobile ? 24 : 10}>
               <Form.Item label="产品名称" name="name" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={7}>
+            <Col span={isMobile ? 24 : 7}>
               <Form.Item label="产品类型" name="category">
                 <Input placeholder="如：SaaS、APP、小程序" />
               </Form.Item>
             </Col>
-            <Col span={7}>
+            <Col span={isMobile ? 24 : 7}>
               <Form.Item label="状态" name="status" initialValue="active">
                 <Select>
                   {Object.entries(productStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
@@ -650,7 +706,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                 </Form.Item>
               </Col>
             )}
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="上线时间" name="launch_date">
                 <Input placeholder="如：2023-06" />
               </Form.Item>
@@ -660,7 +716,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                 <TextArea rows={2} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="目标用户" name="target_users">
                 <Input placeholder="如：中小企业HR" />
               </Form.Item>
@@ -684,6 +740,8 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
 
 // ==================== 竞品研究记录 Tab ====================
 function CompetitorResearchTab({ companyId }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [users, setUsers] = useState([]);
   const [filterImportance, setFilterImportance] = useState('');
@@ -763,12 +821,12 @@ function CompetitorResearchTab({ companyId }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Space>
+      <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12 }}>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <Select
             placeholder="全部重要程度"
             allowClear
-            style={{ width: 140 }}
+            style={{ width: isMobile ? '100%' : 140 }}
             value={filterImportance || undefined}
             onChange={v => setFilterImportance(v || '')}
           >
@@ -777,7 +835,7 @@ function CompetitorResearchTab({ companyId }) {
           <Select
             placeholder="是否有商机"
             allowClear
-            style={{ width: 140 }}
+            style={{ width: isMobile ? '100%' : 140 }}
             value={filterHasOpportunity || undefined}
             onChange={v => setFilterHasOpportunity(v || '')}
           >
@@ -785,7 +843,7 @@ function CompetitorResearchTab({ companyId }) {
             <Option value="no">无商机</Option>
           </Select>
         </Space>
-        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加记录</Button>
+        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加记录</Button>
       </div>
 
       <Table
@@ -794,6 +852,7 @@ function CompetitorResearchTab({ companyId }) {
         rowKey="id"
         size="small"
         pagination={{ pageSize: 10, showSizeChanger: false }}
+        scroll={{ x: 860 }}
       />
 
       <Modal
@@ -801,25 +860,26 @@ function CompetitorResearchTab({ companyId }) {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={700}
+        width={isMobile ? '100%' : 700}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="日期" name="date" rules={[{ required: true }]}>
                 <Input placeholder="YYYY-MM-DD" />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="重要程度" name="importance" initialValue="normal">
                 <Select>
                   {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="金额" name="amount">
                 <InputNumber style={{ width: '100%' }} placeholder="选填" />
               </Form.Item>
@@ -834,12 +894,12 @@ function CompetitorResearchTab({ companyId }) {
                 <TextArea rows={3} placeholder="详细描述..." />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="信息来源" name="source">
                 <Input placeholder="如：官网、行业报告" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="结果" name="outcome">
                 <Input placeholder="研究结果" />
               </Form.Item>
@@ -849,12 +909,12 @@ function CompetitorResearchTab({ companyId }) {
                 <TextArea rows={2} placeholder="对我们的影响..." />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="下次行动" name="next_action">
                 <Input placeholder="后续跟进计划" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="下次行动日期" name="next_action_date">
                 <Input placeholder="YYYY-MM-DD" />
               </Form.Item>
@@ -865,12 +925,12 @@ function CompetitorResearchTab({ companyId }) {
           <Collapse ghost>
             <Collapse.Panel key="opp" header={<span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>}>
               <Row gutter={16}>
-                  <Col span={12}>
+                  <Col span={isMobile ? 24 : 12}>
                     <Form.Item label="商机标题" name="opportunity_title">
                       <Input placeholder="简述商机，如：XX采购合作意向" />
                     </Form.Item>
                   </Col>
-                  <Col span={12}>
+                  <Col span={isMobile ? 24 : 12}>
                     <Form.Item label="商机状态" name="opportunity_status" initialValue="new">
                       <Select allowClear placeholder="选择状态">
                         {Object.entries(opportunityStatusMap).map(([k, v]) => (
@@ -911,6 +971,8 @@ function CompetitorResearchTab({ companyId }) {
 
 // ==================== 动向 Tab ====================
 function DynamicsTab({ companyId }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [filterType, setFilterType] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
@@ -978,19 +1040,19 @@ function DynamicsTab({ companyId }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, alignItems: 'center' }}>
-        <Space>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12 }}>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <Select
             placeholder="全部类型"
             allowClear
-            style={{ width: 120 }}
+            style={{ width: isMobile ? '100%' : 120 }}
             value={filterType || undefined}
             onChange={v => setFilterType(v || '')}
           >
             {Object.entries(dynamicTypeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
           </Select>
         </Space>
-        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd}>记录动向</Button>
+        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>记录动向</Button>
       </div>
 
       {data.length === 0
@@ -1003,25 +1065,26 @@ function DynamicsTab({ companyId }) {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={600}
+        width={isMobile ? '100%' : 600}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="动向类型" name="type" initialValue="talent" rules={[{ required: true }]}>
                 <Select>
                   {Object.entries(dynamicTypeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="日期" name="date" rules={[{ required: true }]}>
                 <Input placeholder="YYYY-MM-DD" />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="重要程度" name="importance" initialValue="normal">
                 <Select>
                   {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
@@ -1038,7 +1101,7 @@ function DynamicsTab({ companyId }) {
                 <TextArea rows={3} placeholder="详细描述这条动向的内容..." />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="信息来源" name="source">
                 <Input placeholder="如：LinkedIn、内部消息、公众号" />
               </Form.Item>
@@ -1057,6 +1120,8 @@ function DynamicsTab({ companyId }) {
 
 // ==================== 主体管理 ====================
 function EntityManager({ companyId, entities, onRefresh }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
@@ -1092,21 +1157,22 @@ function EntityManager({ companyId, entities, onRefresh }) {
         onCancel={() => setModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        width={500}
+        width={isMobile ? '100%' : 500}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="主体名称（简称）" name="name" rules={[{ required: true }]}>
                 <Input placeholder="如：北京主体、电商品牌" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="注册名称" name="reg_name">
                 <Input placeholder="如：XX科技（北京）有限公司" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="注册城市" name="city">
                 <Input placeholder="如：北京" />
               </Form.Item>
@@ -1166,6 +1232,8 @@ function EntityManager({ companyId, entities, onRefresh }) {
 
 // ==================== 研究摘要卡片 ====================
 function SummaryCard({ companyId }) {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [summary, setSummary] = useState(null);
 
   useEffect(() => {
@@ -1194,25 +1262,25 @@ function SummaryCard({ companyId }) {
       ) : (
         <Row gutter={[16, 8]}>
           {/* 指标行 */}
-          <Col span={6}>
+          <Col xs={12} md={6}>
             <div style={{ textAlign: 'center', padding: '4px 0' }}>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#722ed1' }}>{personnel.active}</div>
               <Text type="secondary" style={{ fontSize: 11 }}>在册骨干</Text>
             </div>
           </Col>
-          <Col span={6}>
+          <Col xs={12} md={6}>
             <div style={{ textAlign: 'center', padding: '4px 0' }}>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#1677ff' }}>{products.active}</div>
               <Text type="secondary" style={{ fontSize: 11 }}>运营产品</Text>
             </div>
           </Col>
-          <Col span={6}>
+          <Col xs={12} md={6}>
             <div style={{ textAlign: 'center', padding: '4px 0' }}>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#fa8c16' }}>{products.developing}</div>
               <Text type="secondary" style={{ fontSize: 11 }}>在研产品</Text>
             </div>
           </Col>
-          <Col span={6}>
+          <Col xs={12} md={6}>
             <div style={{ textAlign: 'center', padding: '4px 0' }}>
               <div style={{ fontSize: 20, fontWeight: 700, color: '#52c41a' }}>{dynamics.total}</div>
               <Text type="secondary" style={{ fontSize: 11 }}>30天动向</Text>
@@ -1275,6 +1343,8 @@ function SummaryCard({ companyId }) {
 
 // ==================== 主页面 ====================
 export default function Companies() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -1366,24 +1436,65 @@ export default function Companies() {
     },
   ];
 
+  const renderCompanyCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Button type="link" onClick={() => openDetail(record)} style={{ padding: 0, height: 'auto', fontWeight: 600, textAlign: 'left' }}>
+                {record.name}
+              </Button>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
+                <Text type="secondary">行业：{record.industry || '-'}</Text>
+                <Text type="secondary">总部：{record.hq_city || '-'}</Text>
+              </div>
+            </div>
+            {record.category && <Tag color={categoryMap[record.category]?.color}>{categoryMap[record.category]?.label}</Tag>}
+          </div>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Text type="secondary">规模：{scaleMap[record.scale] || record.scale || '-'}</Text>
+            <Text type="secondary">更新：{record.updated_at?.slice(0, 10) || '-'}</Text>
+          </div>
+          {record.business && (
+            <Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              主营业务：{record.business}
+            </Paragraph>
+          )}
+          {record.tags && (
+            <Space wrap size={[4, 4]}>
+              {record.tags.split(',').filter(Boolean).map(tag => <Tag key={`${record.id}-${tag}`}>{tag.trim()}</Tag>)}
+            </Space>
+          )}
+          <Space size="small" wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+            <Popconfirm title="确认删除？该公司所有人员、产品、动向将同步删除。" onConfirm={() => handleDelete(record.id)}>
+              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            </Popconfirm>
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加公司</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加公司</Button>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
         <Input.Search
           placeholder="搜索公司名称、行业、业务、标签"
           allowClear
-          style={{ width: 280 }}
+          style={{ width: isMobile ? '100%' : 280 }}
           onSearch={setSearch}
           onChange={e => !e.target.value && setSearch('')}
         />
         <Select
           placeholder="公司分类"
           allowClear
-          style={{ width: 130 }}
+          style={{ width: isMobile ? '100%' : 130 }}
           value={filterCategory || undefined}
           onChange={v => setFilterCategory(v || '')}
         >
@@ -1391,19 +1502,30 @@ export default function Companies() {
         </Select>
       </Space>
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        scroll={{ x: 1000 }}
-        pagination={{ pageSize: 15 }}
-        onRow={record => ({
-          onDoubleClick: () => openDetail(record),
-          style: { cursor: 'pointer' },
-        })}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 15, showSizeChanger: false }}
+          locale={{ emptyText: '暂无公司数据' }}
+          renderItem={renderCompanyCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          scroll={{ x: 1000 }}
+          pagination={{ pageSize: 15 }}
+          onRow={record => ({
+            onDoubleClick: () => openDetail(record),
+            style: { cursor: 'pointer' },
+          })}
+        />
+      )}
 
       {/* 添加/编辑弹窗 */}
       <CompanyModal
@@ -1424,7 +1546,7 @@ export default function Companies() {
         }
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={860}
+        width={isMobile ? '100%' : 860}
         extra={
           <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>
             编辑公司信息
@@ -1450,7 +1572,7 @@ export default function Companies() {
                         label: '基本信息',
                         icon: <BankOutlined />,
                         children: (
-                          <Descriptions column={2} size="small" bordered>
+                          <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
                             <Descriptions.Item label="公司分类">
                               <Tag color={categoryMap[current.category]?.color}>{categoryMap[current.category]?.label}</Tag>
                             </Descriptions.Item>
@@ -1531,7 +1653,7 @@ export default function Companies() {
                     size="small"
                     style={{ marginBottom: 12, background: '#f9f9ff', border: '1px solid #e0e0ff' }}
                   >
-                    <Descriptions column={3} size="small">
+                    <Descriptions column={isMobile ? 1 : 3} size="small">
                       <Descriptions.Item label="主体名称"><Text strong>{entity.name}</Text></Descriptions.Item>
                       {entity.reg_name && <Descriptions.Item label="注册名称">{entity.reg_name}</Descriptions.Item>}
                       {entity.city && <Descriptions.Item label="注册城市">{entity.city}</Descriptions.Item>}
