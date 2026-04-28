@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Modal, Form, Input, DatePicker, message, Drawer, Select, Tag, Tabs } from 'antd';
+import { Table, Button, Space, Modal, Form, Input, DatePicker, message, Drawer, Select, Tag, Grid, List, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
@@ -10,6 +10,7 @@ dayjs.extend(isoWeek);
 const { TextArea } = Input;
 const { Option } = Select;
 const { RangePicker } = DatePicker;
+const { useBreakpoint } = Grid;
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
@@ -37,6 +38,8 @@ const getErrorMessage = async (res, fallback) => {
 };
 
 export default function WeeklyReports() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user: currentUser } = useAuth();
   const [reports, setReports] = useState([]);
   const [writers, setWriters] = useState([]);
@@ -258,6 +261,96 @@ export default function WeeklyReports() {
     },
   ];
 
+  const renderReportCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => showDetail(record)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') showDetail(record);
+        }}
+        style={{
+          width: '100%',
+          padding: 14,
+          border: '1px solid #f0f0f0',
+          borderRadius: 12,
+          background: '#fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          cursor: 'pointer',
+        }}
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.user_name}</div>
+              <Typography.Text type="secondary">{getDepartmentLabel(record.department)} · {record.user_role || '-'}</Typography.Text>
+            </div>
+            <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+              {record.week_start}
+            </Typography.Text>
+          </div>
+
+          <Typography.Text type="secondary">
+            周期：{record.week_start} ~ {record.week_end}
+          </Typography.Text>
+
+          <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+            本周完成：{record.completed || '-'}
+          </Typography.Paragraph>
+          <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+            下周计划：{record.next_week_plan || '-'}
+          </Typography.Paragraph>
+          {record.risks && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              风险与问题：{record.risks}
+            </Typography.Paragraph>
+          )}
+
+          <Space size="small" wrap>
+            <Button
+              type="link"
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation();
+                showDetail(record);
+              }}
+            >
+              详情
+            </Button>
+            {(isAdmin(currentUser?.role) || record.user_id === currentUser?.id) && (
+              <Button
+                type="link"
+                size="small"
+                icon={<EditOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleEdit(record);
+                }}
+              >
+                编辑
+              </Button>
+            )}
+            {isAdmin(currentUser?.role) && (
+              <Button
+                type="link"
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  handleDelete(record.id);
+                }}
+              >
+                删除
+              </Button>
+            )}
+          </Space>
+        </Space>
+      </div>
+    </List.Item>
+  );
+
   const writerColumns = [
     { title: '姓名', dataIndex: 'display_name', key: 'display_name', width: 120 },
     {
@@ -321,11 +414,11 @@ export default function WeeklyReports() {
   }
 
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: isMobile ? 12 : 24 }}>
       <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <Select
           placeholder="选择周"
-          style={{ width: 200 }}
+          style={{ width: isMobile ? '100%' : 200 }}
           allowClear
           value={filters.week_start || undefined}
           onChange={(val) => setFilters({ ...filters, week_start: val || '' })}
@@ -336,7 +429,7 @@ export default function WeeklyReports() {
         </Select>
         <Select
           placeholder="部门"
-          style={{ width: 150 }}
+          style={{ width: isMobile ? '100%' : 150 }}
           allowClear
           value={filters.department || undefined}
           onChange={(val) => setFilters({ ...filters, department: val || '' })}
@@ -347,30 +440,41 @@ export default function WeeklyReports() {
         </Select>
         <div style={{ flex: 1 }} />
         {isAdmin(currentUser?.role) && (
-          <Button icon={<SettingOutlined />} onClick={handleManageWriters}>
+          <Button icon={<SettingOutlined />} onClick={handleManageWriters} style={{ width: isMobile ? '100%' : undefined }}>
             管理周报人员
           </Button>
         )}
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} style={{ width: isMobile ? '100%' : undefined }}>
           写周报
         </Button>
       </div>
 
-      <Table
-        columns={columns}
-        dataSource={reports}
-        rowKey="id"
-        loading={loading}
-        scroll={{ x: 1200 }}
-        pagination={{ pageSize: 20 }}
-      />
+      {isMobile ? (
+        <List
+          loading={loading}
+          dataSource={reports}
+          locale={{ emptyText: '暂无周报数据' }}
+          pagination={{ pageSize: 20, showSizeChanger: false }}
+          renderItem={renderReportCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={reports}
+          rowKey="id"
+          loading={loading}
+          scroll={{ x: 1200 }}
+          pagination={{ pageSize: 20 }}
+        />
+      )}
 
       <Modal
         title="周报"
         open={modalVisible}
         onCancel={() => setModalVisible(false)}
         onOk={handleSubmit}
-        width={700}
+        width={isMobile ? '100%' : 700}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -400,7 +504,8 @@ export default function WeeklyReports() {
         footer={[
           <Button key="close" onClick={() => setWriterModalVisible(false)}>关闭</Button>,
         ]}
-        width={700}
+        width={isMobile ? '100%' : 700}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>
           组长和总监默认需要写周报。老板可以指定普通成员写周报。
@@ -411,13 +516,14 @@ export default function WeeklyReports() {
           rowKey="id"
           pagination={false}
           size="small"
+          scroll={{ x: 520 }}
         />
       </Modal>
 
       <Drawer
         title="周报详情"
         placement="right"
-        width={600}
+        width={isMobile ? '100%' : 600}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
       >

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
-import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message, Watermark } from 'antd';
+import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message, Watermark, Drawer, Grid } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
   BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
@@ -68,6 +68,7 @@ const appTheme = {
 };
 
 const { Header, Sider, Content } = Layout;
+const { useBreakpoint } = Grid;
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Persons from './pages/Persons';
@@ -132,6 +133,8 @@ function PrivateRoute({ children, module }) {
 }
 
 function AppLayout() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const location = useLocation();
   const { user, logout, canAccessModule, canAccessMenu, isExecutive } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
@@ -144,6 +147,7 @@ function AppLayout() {
   const [pwdLoading, setPwdLoading] = useState(false);
   const menuScrollRef = React.useRef(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'biz-coop', 'team-mgmt', 'executive', 'system']);
 
@@ -167,6 +171,16 @@ function AppLayout() {
     // 今日未完成商务任务数（所有商务角色）
     tasksApi.count().then(r => setTodayTaskCount(r.count)).catch(() => {});
   }, [location, user]);
+
+  useEffect(() => {
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (isMobile) {
+      setCollapsed(false);
+    }
+  }, [isMobile]);
 
   const handleChangePwd = async (values) => {
     setPwdLoading(true);
@@ -408,8 +422,98 @@ function AppLayout() {
     if (key === 'change-pwd') setPwdModalOpen(true);
   };
 
+  const handleMenuIconClick = () => {
+    if (isMobile) {
+      setMobileMenuOpen(true);
+      return;
+    }
+    setCollapsed(prev => {
+      const next = !prev;
+      if (prev) return next;
+      setSearchKeyword('');
+      return next;
+    });
+  };
+
+  const menuContent = (
+    <>
+      <div style={{
+        height: DS.header.height, display: 'flex', alignItems: 'center', justifyContent: collapsed && !isMobile ? 'center' : 'flex-start',
+        borderBottom: '1px solid rgba(255,255,255,0.04)', padding: isMobile ? '0 16px' : '0 12px', gap: 8, flexShrink: 0,
+      }}>
+        <svg width="24" height="24" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="slg1" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#667eea" />
+              <stop offset="100%" stopColor="#764ba2" />
+            </linearGradient>
+          </defs>
+          <circle cx="36" cy="36" r="34" fill="url(#slg1)" />
+          <path d="M41 10 L24 38 L34 38 L31 62 L50 32 L39 32 Z" fill="white" opacity="0.95" />
+        </svg>
+        {(!collapsed || isMobile) && (
+          <div>
+            <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, letterSpacing: 1.5, lineHeight: '16px' }}>幂动小智</div>
+            <div style={{ fontSize: 9, letterSpacing: 1, lineHeight: '12px', color: DS.sidebar.accentColor }}>AI赋能 · 协同提效</div>
+          </div>
+        )}
+      </div>
+      {(!collapsed || isMobile) && (
+        <div style={{ padding: isMobile ? '12px 12px 6px' : '8px 10px 4px', flexShrink: 0 }} className="sider-search">
+          <Input
+            placeholder="搜索菜单..."
+            prefix={<SearchOutlined style={{ color: 'rgba(255,255,255,0.35)' }} />}
+            allowClear
+            size="small"
+            value={searchKeyword}
+            onChange={e => setSearchKeyword(e.target.value)}
+            style={{ borderRadius: 6 }}
+          />
+        </div>
+      )}
+      <div
+        ref={menuScrollRef}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          paddingBottom: isMobile ? 24 : 16,
+          scrollBehavior: 'smooth',
+        }}
+        className="menu-scroll-container"
+      >
+        <Menu
+          theme="dark"
+          mode="inline"
+          selectedKeys={[selectedKey]}
+          openKeys={collapsed && !isMobile ? [] : effectiveOpenKeys}
+          items={filteredMenuItems}
+          inlineCollapsed={collapsed && !isMobile}
+          style={{ marginTop: 4, background: 'transparent', border: 'none', height: 'auto' }}
+          onClick={() => {
+            if (isMobile) setMobileMenuOpen(false);
+          }}
+          onOpenChange={(openKeys) => {
+            if (!searchKeyword.trim()) {
+              setMenuOpenKeys(openKeys);
+            }
+            if (openKeys.length > 0 && menuScrollRef.current) {
+              setTimeout(() => {
+                const lastOpenKey = openKeys[openKeys.length - 1];
+                const menuItem = document.querySelector(`[data-menu-id$="${lastOpenKey}"]`);
+                if (menuItem) {
+                  menuItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
+              }, 100);
+            }
+          }}
+        />
+      </div>
+    </>
+  );
+
   return (
-    <Watermark content={user?.display_name || user?.username} gap={[200, 200]} font={{ color: 'rgba(0,0,0,0.06)', fontSize: 14 }} style={{ minHeight: '100vh' }}>
+    <Watermark content={user?.display_name || user?.username} gap={isMobile ? [140, 160] : [200, 200]} font={{ color: 'rgba(0,0,0,0.06)', fontSize: isMobile ? 12 : 14 }} style={{ minHeight: '100vh' }}>
     <Layout style={{ minHeight: '100vh' }}>
       <Modal
         title="修改密码"
@@ -418,6 +522,8 @@ function AppLayout() {
         onOk={() => pwdForm.submit()}
         confirmLoading={pwdLoading}
         okText="确认修改"
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={pwdForm} layout="vertical" onFinish={handleChangePwd} style={{ marginTop: 16 }}>
           <Form.Item name="old_password" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
@@ -443,120 +549,90 @@ function AppLayout() {
         </Form>
       </Modal>
 
-      <Sider
-        collapsed={collapsed}
-        collapsedWidth={DS.sidebar.collapsedWidth}
-        width={DS.sidebar.width}
-        style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', minHeight: '100vh', overflow: 'hidden', position: 'sticky', top: 0, left: 0, borderRight: '1px solid rgba(255,255,255,0.04)', alignSelf: 'stretch' }}
-      >
-        <div style={{
-          height: DS.header.height, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '0 12px', gap: 8, flexShrink: 0,
-        }}>
-          {/* 迷你 Logo SVG */}
-          <svg width="24" height="24" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-              <linearGradient id="slg1" x1="0" y1="0" x2="72" y2="72" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stopColor="#667eea" />
-                <stop offset="100%" stopColor="#764ba2" />
-              </linearGradient>
-            </defs>
-            <circle cx="36" cy="36" r="34" fill="url(#slg1)" />
-            <path d="M41 10 L24 38 L34 38 L31 62 L50 32 L39 32 Z" fill="white" opacity="0.95" />
-          </svg>
-          {!collapsed && (
-            <div>
-              <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, letterSpacing: 1.5, lineHeight: '16px' }}>幂动小智</div>
-              <div style={{ fontSize: 9, letterSpacing: 1, lineHeight: '12px', color: DS.sidebar.accentColor }}>AI赋能 · 协同提效</div>
-            </div>
-          )}
-        </div>
-        {/* 搜索框 */}
-        {!collapsed && (
-          <div style={{ padding: '8px 10px 4px', flexShrink: 0 }} className="sider-search">
-            <Input
-              placeholder="搜索菜单..."
-              prefix={<SearchOutlined style={{ color: 'rgba(255,255,255,0.35)' }} />}
-              allowClear
-              size="small"
-              value={searchKeyword}
-              onChange={e => setSearchKeyword(e.target.value)}
-              style={{ borderRadius: 6 }}
-            />
-          </div>
-        )}
-        <div
-          ref={menuScrollRef}
-          style={{
-            flex: 1,
-            overflowY: 'auto',
-            overflowX: 'hidden',
-            paddingBottom: 16,
-            scrollBehavior: 'smooth',
-          }}
-          className="menu-scroll-container"
+      {!isMobile && (
+        <Sider
+          collapsed={collapsed}
+          collapsedWidth={DS.sidebar.collapsedWidth}
+          width={DS.sidebar.width}
+          style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', minHeight: '100vh', overflow: 'hidden', position: 'sticky', top: 0, left: 0, borderRight: '1px solid rgba(255,255,255,0.04)', alignSelf: 'stretch' }}
         >
-          <Menu
-            theme="dark"
-            mode="inline"
-            selectedKeys={[selectedKey]}
-            openKeys={collapsed ? [] : effectiveOpenKeys}
-            items={filteredMenuItems}
-            inlineCollapsed={collapsed}
-            style={{ marginTop: 4, background: 'transparent', border: 'none', height: 'auto' }}
-            onOpenChange={(openKeys) => {
-              if (!searchKeyword.trim()) {
-                setMenuOpenKeys(openKeys);
-              }
-              // 当展开菜单时，自动滚动到对应位置
-              if (openKeys.length > 0 && menuScrollRef.current) {
-                setTimeout(() => {
-                  const lastOpenKey = openKeys[openKeys.length - 1];
-                  const menuItem = document.querySelector(`[data-menu-id$="${lastOpenKey}"]`);
-                  if (menuItem) {
-                    menuItem.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-                  }
-                }, 100);
-              }
-            }}
-          />
-        </div>
+          {menuContent}
+        </Sider>
+      )}
 
-      </Sider>
+      {isMobile && (
+        <Drawer
+          placement="left"
+          open={mobileMenuOpen}
+          onClose={() => setMobileMenuOpen(false)}
+          closable={false}
+          width={280}
+          bodyStyle={{ padding: 0, background: DS.sidebar.bg }}
+          styles={{ content: { background: DS.sidebar.bg } }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
+            {menuContent}
+          </div>
+        </Drawer>
+      )}
 
       <Layout>
         <Header style={{
-          background: DS.header.bg, padding: '0 24px', height: DS.header.height, lineHeight: `${DS.header.height}px`,
+          background: DS.header.bg, padding: isMobile ? '0 12px' : '0 24px', height: DS.header.height, lineHeight: `${DS.header.height}px`,
           display: 'flex', alignItems: 'center', borderBottom: `1px solid ${DS.header.border}`,
           boxShadow: 'none', position: 'sticky', top: 0, zIndex: 10,
         }}>
           <span
-            onClick={() => { setCollapsed(!collapsed); if (!collapsed) setSearchKeyword(''); }}
+            onClick={handleMenuIconClick}
             style={{
-              fontSize: 18, cursor: 'pointer', color: '#6b7280', marginRight: 12,
+              fontSize: 18, cursor: 'pointer', color: '#6b7280', marginRight: isMobile ? 8 : 12,
               width: 32, height: 32, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
               transition: 'background 0.2s, color 0.2s',
             }}
             onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#374151'; }}
             onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#6b7280'; }}
           >
-            {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+            {isMobile ? <MenuOutlined /> : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
           </span>
-          {currentPageTitle && <span style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginRight: 'auto' }}>{currentPageTitle}</span>}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          {currentPageTitle && (
+            <span
+              style={{
+                fontSize: isMobile ? 14 : 15,
+                fontWeight: 600,
+                color: '#1f2937',
+                marginRight: 'auto',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {currentPageTitle}
+            </span>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16 }}>
             <NotificationBell />
-            <div style={{ width: 1, height: 20, background: '#e8e8ed' }} />
+            {!isMobile && <div style={{ width: 1, height: 20, background: '#e8e8ed' }} />}
             <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight" trigger={['click']}>
               <Space style={{ cursor: 'pointer' }}>
                 <Avatar size={28} style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', fontSize: 12, fontWeight: 600 }}>
                   {(user?.display_name || user?.username || '?')[0].toUpperCase()}
                 </Avatar>
-                <span style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>{user?.display_name || user?.username}</span>
+                {!isMobile && <span style={{ fontSize: 14, fontWeight: 500, color: '#374151' }}>{user?.display_name || user?.username}</span>}
               </Space>
             </Dropdown>
           </div>
         </Header>
-        <Content style={{ margin: 12, padding: 20, background: '#fff', borderRadius: 12, minHeight: 'calc(100vh - 80px)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <Content
+          style={{
+            margin: isMobile ? 0 : 12,
+            padding: isMobile ? 12 : 20,
+            background: '#fff',
+            borderRadius: isMobile ? 0 : 12,
+            minHeight: `calc(100vh - ${DS.header.height}px)`,
+            boxShadow: isMobile ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
+          }}
+        >
           <Routes>
             <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/persons" element={<PrivateRoute module="persons"><Persons /></PrivateRoute>} />

@@ -6,8 +6,10 @@ import {
   Descriptions,
   Drawer,
   Form,
+  Grid,
   Input,
   InputNumber,
+  List,
   Modal,
   Progress,
   Select,
@@ -24,6 +26,7 @@ import { useAuth } from '../AuthContext';
 
 const { TextArea } = Input;
 const { RangePicker } = DatePicker;
+const { useBreakpoint } = Grid;
 const executiveRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 
 const goalTypeMap = {
@@ -120,6 +123,8 @@ function DetailTextBlock({ value, emptyText = '-' }) {
 }
 
 function Goals() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [goals, setGoals] = useState([]);
   const [goalOptions, setGoalOptions] = useState([]);
@@ -536,8 +541,93 @@ function Goals() {
     },
   ];
 
+  const renderGoalCard = (record) => (
+    <Card
+      key={record.id}
+      size="small"
+      hoverable
+      bodyStyle={{ padding: 14 }}
+      onClick={() => showDetail(record)}
+    >
+      <Space direction="vertical" style={{ width: '100%' }} size={10}>
+        <Space wrap size={[6, 6]}>
+          <Tag color={(goalTypeMap[record.goal_type] || { color: 'default' }).color}>
+            {(goalTypeMap[record.goal_type] || { label: record.goal_type }).label}
+          </Tag>
+          <Tag color={(scopeTypeMap[record.scope_type] || { color: 'default' }).color}>
+            {(scopeTypeMap[record.scope_type] || { label: record.scope_type }).label}
+          </Tag>
+          <Tag color={(statusMap[record.status] || { color: 'default' }).color}>
+            {(statusMap[record.status] || { label: record.status }).label}
+          </Tag>
+        </Space>
+
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.title}</div>
+          <Typography.Text type="secondary">{record.period || '-'}</Typography.Text>
+        </div>
+
+        <Typography.Text type="secondary">
+          {record.owner_name || getDisplayName(record)} · {getDepartmentLabel(record.department)}
+        </Typography.Text>
+
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Typography.Text type="secondary">项目组：{record.project_group_name || '-'}</Typography.Text>
+          <Typography.Text type="secondary">小组：{record.team_name || '-'}</Typography.Text>
+        </div>
+
+        <Progress percent={Number(record.progress || 0)} size="small" />
+
+        <Typography.Paragraph
+          style={{ marginBottom: 0 }}
+          type={record.description ? undefined : 'secondary'}
+          ellipsis={{ rows: 2, expandable: false }}
+        >
+          {record.description || '暂无目标描述'}
+        </Typography.Paragraph>
+
+        <Space size="small" wrap>
+          <Button
+            type="link"
+            size="small"
+            icon={<EyeOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              showDetail(record);
+            }}
+          >
+            详情
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            icon={<EditOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleEdit(record);
+            }}
+          >
+            编辑
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            danger
+            icon={<DeleteOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              handleDelete(record);
+            }}
+          >
+            删除
+          </Button>
+        </Space>
+      </Space>
+    </Card>
+  );
+
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: isMobile ? 12 : 24 }}>
       <Card
         title="目标管理"
         extra={(
@@ -550,7 +640,7 @@ function Goals() {
           <Select
             allowClear
             placeholder="部门"
-            style={{ width: 160 }}
+            style={{ width: isMobile ? '100%' : 160 }}
             value={filters.department}
             onChange={(value) => handleFilterChange('department', value)}
             options={departmentOptions}
@@ -558,7 +648,7 @@ function Goals() {
           <Select
             allowClear
             placeholder="项目组"
-            style={{ width: 160 }}
+            style={{ width: isMobile ? '100%' : 160 }}
             value={filters.project_group_id}
             onChange={(value) => handleFilterChange('project_group_id', value)}
             options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
@@ -566,7 +656,7 @@ function Goals() {
           <Select
             allowClear
             placeholder="小组"
-            style={{ width: 160 }}
+            style={{ width: isMobile ? '100%' : 160 }}
             value={filters.team_id}
             onChange={(value) => handleFilterChange('team_id', value)}
             options={teams.map(team => ({ value: team.id, label: team.name }))}
@@ -576,7 +666,7 @@ function Goals() {
             showSearch
             optionFilterProp="label"
             placeholder="负责人姓名"
-            style={{ width: 180 }}
+            style={{ width: isMobile ? '100%' : 180 }}
             value={filters.owner_id}
             onChange={(value) => handleFilterChange('owner_id', value)}
             options={ownerOptions}
@@ -584,7 +674,7 @@ function Goals() {
           <Select
             allowClear
             placeholder="目标类型"
-            style={{ width: 140 }}
+            style={{ width: isMobile ? '100%' : 140 }}
             value={filters.goal_type}
             onChange={(value) => handleFilterChange('goal_type', value)}
             options={goalTypeOptions}
@@ -592,7 +682,7 @@ function Goals() {
           <Select
             allowClear
             placeholder="归属颗粒度"
-            style={{ width: 160 }}
+            style={{ width: isMobile ? '100%' : 160 }}
             value={filters.scope_type}
             onChange={(value) => handleFilterChange('scope_type', value)}
             options={scopeTypeOptions}
@@ -600,7 +690,7 @@ function Goals() {
           <Select
             allowClear
             placeholder="状态"
-            style={{ width: 140 }}
+            style={{ width: isMobile ? '100%' : 140 }}
             value={filters.status}
             onChange={(value) => handleFilterChange('status', value)}
             options={statusOptions}
@@ -608,29 +698,43 @@ function Goals() {
           <Select
             allowClear
             placeholder="负责人角色"
-            style={{ width: 160 }}
+            style={{ width: isMobile ? '100%' : 160 }}
             value={filters.owner_role}
             onChange={(value) => handleFilterChange('owner_role', value)}
             options={ownerRoleOptions}
           />
-          <Button onClick={resetFilters}>重置筛选</Button>
+          <Button onClick={resetFilters} style={{ width: isMobile ? '100%' : undefined }}>重置筛选</Button>
         </Space>
 
         <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-          双击目标行可查看详情
+          {isMobile ? '点击卡片可查看详情' : '双击目标行可查看详情'}
         </Typography.Text>
 
-        <Table
-          rowKey="id"
-          loading={loading}
-          columns={columns}
-          dataSource={goals}
-          pagination={{ pageSize: 10, showSizeChanger: true }}
-          scroll={{ x: 1440 }}
-          onRow={(record) => ({
-            onDoubleClick: () => showDetail(record),
-          })}
-        />
+        {isMobile ? (
+          <List
+            loading={loading}
+            dataSource={goals}
+            locale={{ emptyText: '暂无目标数据' }}
+            pagination={{ pageSize: 10, showSizeChanger: false }}
+            renderItem={(record) => (
+              <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+                {renderGoalCard(record)}
+              </List.Item>
+            )}
+          />
+        ) : (
+          <Table
+            rowKey="id"
+            loading={loading}
+            columns={columns}
+            dataSource={goals}
+            pagination={{ pageSize: 10, showSizeChanger: true }}
+            scroll={{ x: 1440 }}
+            onRow={(record) => ({
+              onDoubleClick: () => showDetail(record),
+            })}
+          />
+        )}
       </Card>
 
       <Modal
@@ -638,7 +742,8 @@ function Goals() {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={680}
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         destroyOnClose
       >
         <Form
@@ -678,7 +783,7 @@ function Goals() {
           </Form.Item>
 
           {goalType === 'quarter' && (
-            <Space style={{ width: '100%' }} size={12}>
+            <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={12}>
               <Form.Item name="period_year" label="年份" rules={[{ required: true, message: '请选择年份' }]} style={{ flex: 1 }}>
                 <Select
                   options={Array.from({ length: 7 }, (_, index) => {
@@ -830,7 +935,7 @@ function Goals() {
       <Drawer
         title="目标详情"
         placement="right"
-        width={760}
+        width={isMobile ? '100%' : 760}
         open={detailVisible}
         onClose={() => setDetailVisible(false)}
         extra={detailRecord ? (
@@ -889,7 +994,7 @@ function Goals() {
               </Space>
             </Card>
 
-            <Descriptions column={2} bordered size="small">
+            <Descriptions column={isMobile ? 1 : 2} bordered size="small">
               <Descriptions.Item label="负责人">{detailRecord.owner_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="负责人角色">{getRoleLabel(detailRecord.owner_role)}</Descriptions.Item>
               <Descriptions.Item label="项目组">{detailRecord.project_group_name || '-'}</Descriptions.Item>

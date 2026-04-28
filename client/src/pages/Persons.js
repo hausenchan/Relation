@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
+  Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col, Grid, List,
   Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Tooltip, Divider,
   Upload, Alert
 } from 'antd';
@@ -20,6 +20,7 @@ import PersonsMap from '../components/PersonsMap';
 const { Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
+const { useBreakpoint } = Grid;
 const PERSON_NAME_MAX_LENGTH = 30;
 
 const CHINA_CITIES = [
@@ -105,12 +106,14 @@ function RelationTags({ value }) {
 }
 
 // 通用字段分区（所有人都有）
-function commonFields() {
+function commonFields({ isMobile }) {
+  const thirdSpan = isMobile ? 24 : 8;
+  const halfSpan = isMobile ? 24 : 12;
   return (
     <>
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>基本信息</Divider>
       <Row gutter={16}>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item
             label="姓名"
             name="name"
@@ -122,14 +125,14 @@ function commonFields() {
             <Input maxLength={PERSON_NAME_MAX_LENGTH} showCount placeholder="建议只填姓名，不填公司或职位" />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="圈子分类" name="person_category" rules={[{ required: true }]}>
             <Select>
               {Object.entries(categoryMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
             </Select>
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item
             label="关系类型（可多选）"
             shouldUpdate={(prev, cur) => prev.person_category !== cur.person_category}
@@ -147,22 +150,22 @@ function commonFields() {
             }}
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="手机" name="phone">
             <Input prefix={<PhoneOutlined />} />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="微信" name="wechat">
             <Input prefix={<WechatOutlined />} />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="邮箱" name="email">
             <Input prefix={<MailOutlined />} />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="城市" name="city">
             <Select
               mode="tags"
@@ -177,32 +180,32 @@ function commonFields() {
             </Select>
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="公司/单位" name="company">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="职位" name="position">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="生日" name="birthday">
             <Input placeholder="如 1990-01-01" />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="地址" name="address">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="标签（逗号分隔）" name="tags">
             <Input placeholder="如：重点维护,高潜力" />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="权重" name="weight">
             <Select>
               {Object.entries(weightMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
@@ -213,12 +216,12 @@ function commonFields() {
 
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>资源与诉求</Divider>
       <Row gutter={16}>
-        <Col span={12}>
+        <Col span={halfSpan}>
           <Form.Item label="拥有资源" name="resources">
             <TextArea rows={2} placeholder="他/她掌握哪些资源、人脉、能力..." />
           </Form.Item>
         </Col>
-        <Col span={12}>
+        <Col span={halfSpan}>
           <Form.Item label="诉求" name="demands">
             <TextArea rows={2} placeholder="他/她当前的需求、痛点、目标..." />
           </Form.Item>
@@ -229,24 +232,25 @@ function commonFields() {
 }
 
 // 商务圈扩展字段
-function businessFields() {
+function businessFields({ isMobile }) {
+  const thirdSpan = isMobile ? 24 : 8;
   return (
     <>
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>商务信息</Divider>
       <Row gutter={16}>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="行业" name="industry">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="关系等级" name="relationship_level">
             <Select>
               {Object.entries(levelMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
             </Select>
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="客户状态" name="client_status">
             <Select>
               <Option value="active">活跃</Option>
@@ -261,44 +265,45 @@ function businessFields() {
 }
 
 // 外部人才扩展字段
-function externalTalentFields() {
+function externalTalentFields({ isMobile }) {
+  const thirdSpan = isMobile ? 24 : 8;
   return (
     <>
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>人才信息</Divider>
       <Row gutter={16}>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="现任公司" name="current_company">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="现任职位" name="current_position">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="目标职位" name="target_position">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="工作年限" name="experience_years">
             <Input type="number" addonAfter="年" />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="最高学历" name="education">
             <Select>
               {['博士','硕士','本科','大专','其他'].map(v => <Option key={v} value={v}>{v}</Option>)}
             </Select>
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="期望薪资" name="expected_salary">
             <Input placeholder="如：30-40K" />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="来源渠道" name="source">
             <Input placeholder="如：内推、LinkedIn" />
           </Form.Item>
@@ -312,21 +317,21 @@ function externalTalentFields() {
 
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>潜力 & 转化阶段</Divider>
       <Row gutter={16}>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="潜力评级" name="potential_level">
             <Select allowClear placeholder="评估潜力">
               {Object.entries(potentialLevelMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
             </Select>
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="转化阶段" name="recruit_status">
             <Select>
               {Object.entries(recruitStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
             </Select>
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="意向程度" name="intent_level">
             <Select>
               {Object.entries(intentMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
@@ -339,32 +344,34 @@ function externalTalentFields() {
 }
 
 // 内部人才扩展字段（员工评估：心脑口手）
-function internalTalentFields() {
+function internalTalentFields({ isMobile }) {
+  const thirdSpan = isMobile ? 24 : 8;
+  const halfSpan = isMobile ? 24 : 12;
   return (
     <>
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>员工信息</Divider>
       <Row gutter={16}>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="现任公司" name="current_company">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="部门/职位" name="current_position">
             <Input />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="入职时间" name="source">
             <Input placeholder="如：2023-06" />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="工作年限" name="experience_years">
             <Input type="number" addonAfter="年" />
           </Form.Item>
         </Col>
-        <Col span={8}>
+        <Col span={thirdSpan}>
           <Form.Item label="最高学历" name="education">
             <Select>
               {['博士','硕士','本科','大专','其他'].map(v => <Option key={v} value={v}>{v}</Option>)}
@@ -380,7 +387,7 @@ function internalTalentFields() {
 
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>员工评估（心·脑·口·手）</Divider>
       <Row gutter={16}>
-        <Col span={12}>
+        <Col span={halfSpan}>
           <Form.Item
             label={<span style={{ color: '#e64980', fontWeight: 600 }}>❤️ 心（价值观·使命感·忠诚度）</span>}
             name="heart"
@@ -388,7 +395,7 @@ function internalTalentFields() {
             <TextArea rows={3} placeholder="对公司使命的认同感、价值观匹配度、忠诚度..." />
           </Form.Item>
         </Col>
-        <Col span={12}>
+        <Col span={halfSpan}>
           <Form.Item
             label={<span style={{ color: '#1677ff', fontWeight: 600 }}>🧠 脑（思维·专业·判断力）</span>}
             name="brain"
@@ -396,7 +403,7 @@ function internalTalentFields() {
             <TextArea rows={3} placeholder="专业能力、思维方式、学习能力、决策判断力..." />
           </Form.Item>
         </Col>
-        <Col span={12}>
+        <Col span={halfSpan}>
           <Form.Item
             label={<span style={{ color: '#fa8c16', fontWeight: 600 }}>🗣️ 口（沟通·表达·影响力）</span>}
             name="mouth"
@@ -404,7 +411,7 @@ function internalTalentFields() {
             <TextArea rows={3} placeholder="沟通表达能力、汇报能力、对外影响力..." />
           </Form.Item>
         </Col>
-        <Col span={12}>
+        <Col span={halfSpan}>
           <Form.Item
             label={<span style={{ color: '#52c41a', fontWeight: 600 }}>🙌 手（执行·落地·结果导向）</span>}
             name="hand"
@@ -418,6 +425,8 @@ function internalTalentFields() {
 }
 
 export default function Persons() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user: currentUser, canAssign } = useAuth();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -858,12 +867,147 @@ export default function Persons() {
   const currentIsExternal = current?.person_category === 'talent' && !currentRelTypes.includes('talent_internal');
   const currentIsInternal = current?.person_category === 'talent' && currentRelTypes.includes('talent_internal');
 
+  const renderPersonCard = (record) => {
+    const relationTags = parseRelationTypes(record.relation_types);
+    const isExternal = record.person_category === 'talent' && relationTags.includes('talent_external');
+
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => openDetail(record)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') openDetail(record);
+          }}
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            cursor: 'pointer',
+          }}
+        >
+          <Space direction="vertical" style={{ width: '100%' }} size={10}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6 }}>{record.name}</div>
+                <Space wrap size={[6, 6]}>
+                  <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>
+                  {record.weight && <Tag color={weightMap[record.weight]?.color}>{weightMap[record.weight]?.label}</Tag>}
+                </Space>
+              </div>
+              <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                {record.updated_at?.slice(0, 10) || '-'}
+              </Typography.Text>
+            </div>
+
+            <RelationTags value={record.relation_types} />
+
+            <Typography.Text type="secondary">
+              {(record.company || record.current_company || '未填写公司')} · {(record.position || record.current_position || '未填写职位')}
+            </Typography.Text>
+
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Typography.Text type="secondary">城市：{record.city || '-'}</Typography.Text>
+              <Typography.Text type="secondary">创建人：{record.created_by_name || '-'}</Typography.Text>
+            </div>
+
+            {(record.phone || record.wechat || record.email) && (
+              <Space size={10} wrap>
+                {record.phone && <Typography.Text copyable={{ text: record.phone }}>手机</Typography.Text>}
+                {record.wechat && <Typography.Text copyable={{ text: record.wechat }}>微信</Typography.Text>}
+                {record.email && <Typography.Text copyable={{ text: record.email }}>邮箱</Typography.Text>}
+              </Space>
+            )}
+
+            {isExternal && (
+              <Space wrap size={[6, 6]}>
+                {record.potential_level && <Tag color={potentialLevelMap[record.potential_level]?.color}>{potentialLevelMap[record.potential_level]?.label}</Tag>}
+                {record.recruit_status && <Tag color={recruitStatusMap[record.recruit_status]?.color}>{recruitStatusMap[record.recruit_status]?.label}</Tag>}
+                {record.intent_level && <Tag color={intentMap[record.intent_level]?.color}>{intentMap[record.intent_level]?.label}</Tag>}
+              </Space>
+            )}
+
+            {record.shared_to_names && (
+              <div>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>共享人：</Typography.Text>
+                <Space wrap size={[6, 6]}>
+                  {record.shared_to_names.split(',').map((name, index) => (
+                    <Tag key={`${record.id}-shared-${index}`} color="cyan">{name.trim()}</Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+
+            <Space size="small" wrap>
+              <Button
+                size="small"
+                icon={<MessageOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openIntDrawer(record);
+                }}
+              >
+                互动记录
+              </Button>
+              {canEditPerson(record) && (
+                <Button
+                  size="small"
+                  icon={<EditOutlined />}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openEdit(record);
+                  }}
+                >
+                  编辑
+                </Button>
+              )}
+              {canAssign() && (
+                <Button
+                  size="small"
+                  icon={<SwapOutlined />}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    openAssign(record);
+                  }}
+                >
+                  指派
+                </Button>
+              )}
+              {canDeletePerson(record) && (
+                <Popconfirm
+                  title="确认删除？"
+                  onConfirm={(event) => {
+                    event?.stopPropagation?.();
+                    handleDelete(record.id);
+                  }}
+                >
+                  <Button
+                    size="small"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    删除
+                  </Button>
+                </Popconfirm>
+              )}
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Space>
-          <Button icon={<UploadOutlined />} onClick={() => { setImportRows([]); setImportOpen(true); }}>导入</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加人脉</Button>
+        <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+          <Button icon={<UploadOutlined />} onClick={() => { setImportRows([]); setImportOpen(true); }} style={{ width: isMobile ? '100%' : undefined }}>导入</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加人脉</Button>
         </Space>
       </div>
 
@@ -878,14 +1022,14 @@ export default function Persons() {
         <Input.Search
           placeholder="搜索姓名、公司、技能、标签"
           allowClear
-          style={{ width: 280 }}
+          style={{ width: isMobile ? '100%' : 280 }}
           onSearch={setSearch}
           onChange={e => !e.target.value && setSearch('')}
         />
         <Select
           placeholder="圈子分类"
           allowClear
-          style={{ width: 120 }}
+          style={{ width: isMobile ? '100%' : 120 }}
           value={filterCategory || undefined}
           onChange={v => {
             setFilterCategory(v || '');
@@ -903,7 +1047,7 @@ export default function Persons() {
         <Select
           placeholder="关系类型"
           allowClear
-          style={{ width: 140 }}
+          style={{ width: isMobile ? '100%' : 140 }}
           value={filterRelationType || undefined}
           onChange={v => setFilterRelationType(v || '')}
         >
@@ -915,7 +1059,7 @@ export default function Persons() {
           mode="multiple"
           placeholder="城市"
           allowClear
-          style={{ width: 200 }}
+          style={{ width: isMobile ? '100%' : 200 }}
           value={filterCity ? filterCity.split(',') : []}
           onChange={v => setFilterCity(v.join(','))}
           filterOption={(input, option) =>
@@ -929,7 +1073,7 @@ export default function Persons() {
         <Select
           placeholder="权重"
           allowClear
-          style={{ width: 100 }}
+          style={{ width: isMobile ? '100%' : 100 }}
           value={filterWeight || undefined}
           onChange={v => setFilterWeight(v || '')}
         >
@@ -939,12 +1083,12 @@ export default function Persons() {
 
       {/* 第二行：人才专属筛选（仅在选择人才圈时显示） */}
       {filterCategory === 'talent' && (
-        <Space style={{ marginBottom: 12, paddingLeft: 8, borderLeft: '3px solid #52c41a' }} wrap>
+        <Space style={{ marginBottom: 12, paddingLeft: 8, borderLeft: '3px solid #52c41a', width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
           <Text type="secondary" style={{ fontSize: 12 }}>人才筛选：</Text>
           <Select
             placeholder="潜力评级"
             allowClear
-            style={{ width: 110 }}
+            style={{ width: isMobile ? '100%' : 110 }}
             value={filterPotentialLevel || undefined}
             onChange={v => setFilterPotentialLevel(v || '')}
           >
@@ -955,7 +1099,7 @@ export default function Persons() {
           <Select
             placeholder="转化阶段"
             allowClear
-            style={{ width: 120 }}
+            style={{ width: isMobile ? '100%' : 120 }}
             value={filterRecruitStatus || undefined}
             onChange={v => setFilterRecruitStatus(v || '')}
           >
@@ -966,7 +1110,7 @@ export default function Persons() {
           <Select
             placeholder="意向程度"
             allowClear
-            style={{ width: 110 }}
+            style={{ width: isMobile ? '100%' : 110 }}
             value={filterIntentLevel || undefined}
             onChange={v => setFilterIntentLevel(v || '')}
           >
@@ -977,43 +1121,53 @@ export default function Persons() {
         </Space>
       )}
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        scroll={{ x: 1000 }}
-        pagination={{ pageSize: 15 }}
-        onRow={(record) => ({
-          onDoubleClick: () => (canEditPerson(record) ? openEdit(record) : openDetail(record)),
-          style: { cursor: 'pointer' }
-        })}
-        expandable={{
-          rowExpandable: r => parseRelationTypes(r.relation_types).includes('talent_internal'),
-          expandedRowRender: r => (
-            <Row gutter={[12, 8]} style={{ padding: '4px 8px' }}>
-              {[
-                { key: 'heart', label: '❤️ 心', desc: '价值观·使命感·忠诚度', color: '#fff0f6', border: '#e64980' },
-                { key: 'brain', label: '🧠 脑', desc: '思维·专业·判断力',    color: '#e6f4ff', border: '#1677ff' },
-                { key: 'mouth', label: '🗣️ 口', desc: '沟通·表达·影响力',    color: '#fff7e6', border: '#fa8c16' },
-                { key: 'hand',  label: '🙌 手', desc: '执行·落地·结果导向',  color: '#f6ffed', border: '#52c41a' },
-              ].map(({ key, label, desc, color, border }) => (
-                <Col span={6} key={key}>
-                  <div style={{ background: color, border: `1px solid ${border}`, borderRadius: 6, padding: '8px 12px', minHeight: 60 }}>
-                    <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 12 }}>
-                      {label} <Text type="secondary" style={{ fontSize: 11 }}>{desc}</Text>
+      {isMobile ? (
+        <List
+          loading={loading}
+          dataSource={data}
+          locale={{ emptyText: '暂无人脉数据' }}
+          pagination={{ pageSize: 15, showSizeChanger: false }}
+          renderItem={renderPersonCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          scroll={{ x: 1000 }}
+          pagination={{ pageSize: 15 }}
+          onRow={(record) => ({
+            onDoubleClick: () => (canEditPerson(record) ? openEdit(record) : openDetail(record)),
+            style: { cursor: 'pointer' }
+          })}
+          expandable={{
+            rowExpandable: r => parseRelationTypes(r.relation_types).includes('talent_internal'),
+            expandedRowRender: r => (
+              <Row gutter={[12, 8]} style={{ padding: '4px 8px' }}>
+                {[
+                  { key: 'heart', label: '❤️ 心', desc: '价值观·使命感·忠诚度', color: '#fff0f6', border: '#e64980' },
+                  { key: 'brain', label: '🧠 脑', desc: '思维·专业·判断力',    color: '#e6f4ff', border: '#1677ff' },
+                  { key: 'mouth', label: '🗣️ 口', desc: '沟通·表达·影响力',    color: '#fff7e6', border: '#fa8c16' },
+                  { key: 'hand',  label: '🙌 手', desc: '执行·落地·结果导向',  color: '#f6ffed', border: '#52c41a' },
+                ].map(({ key, label, desc, color, border }) => (
+                  <Col span={6} key={key}>
+                    <div style={{ background: color, border: `1px solid ${border}`, borderRadius: 6, padding: '8px 12px', minHeight: 60 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 4, fontSize: 12 }}>
+                        {label} <Text type="secondary" style={{ fontSize: 11 }}>{desc}</Text>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#333', whiteSpace: 'pre-wrap' }}>
+                        {r[key] || <Text type="secondary">暂无评估</Text>}
+                      </div>
                     </div>
-                    <div style={{ fontSize: 12, color: '#333', whiteSpace: 'pre-wrap' }}>
-                      {r[key] || <Text type="secondary">暂无评估</Text>}
-                    </div>
-                  </div>
-                </Col>
-              ))}
-            </Row>
-          ),
-        }}
-      />
+                  </Col>
+                ))}
+              </Row>
+            ),
+          }}
+        />
+      )}
             </>
           ),
         },
@@ -1030,30 +1184,31 @@ export default function Persons() {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={760}
+        width={isMobile ? '100%' : 760}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
-        bodyStyle={{ maxHeight: '70vh', overflowY: 'auto', paddingRight: 8 }}
+        bodyStyle={{ maxHeight: isMobile ? 'calc(100vh - 120px)' : '70vh', overflowY: 'auto', paddingRight: 8 }}
       >
         <Form form={form} layout="vertical" size="small">
           {/* 通用字段 */}
-          {commonFields()}
+          {commonFields({ isMobile })}
 
           {/* 商务圈字段 */}
-          {category === 'business' && businessFields()}
+          {category === 'business' && businessFields({ isMobile })}
 
           {/* 外部人才字段 */}
-          {isExternalTalent && externalTalentFields()}
+          {isExternalTalent && externalTalentFields({ isMobile })}
 
           {/* 内部人才字段 */}
-          {isInternalTalent && internalTalentFields()}
+          {isInternalTalent && internalTalentFields({ isMobile })}
 
           {/* 创业/社交圈补充 */}
           {(category === 'startup' || category === 'social') && (
             <>
               <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>补充信息</Divider>
               <Row gutter={16}>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="行业" name="industry"><Input /></Form.Item>
                 </Col>
               </Row>
@@ -1084,7 +1239,7 @@ export default function Persons() {
         title={<Space><MessageOutlined />{intPerson?.name} 的互动记录</Space>}
         open={intDrawerOpen}
         onClose={() => setIntDrawerOpen(false)}
-        width={560}
+        width={isMobile ? '100%' : 560}
       >
         {intPerson && (
           <>
@@ -1110,7 +1265,7 @@ export default function Persons() {
         }
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={660}
+        width={isMobile ? '100%' : 660}
         extra={canEditPerson(current)
           ? <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>编辑</Button>
           : null}
@@ -1122,7 +1277,7 @@ export default function Persons() {
               children: (
                 <>
                   {/* 关系信息 */}
-                  <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }}>
+                  <Descriptions column={isMobile ? 1 : 2} size="small" bordered style={{ marginBottom: 16 }}>
                     <Descriptions.Item label="关系类型" span={2}>
                       <RelationTags value={current.relation_types} />
                     </Descriptions.Item>
@@ -1156,7 +1311,7 @@ export default function Persons() {
 
                   {/* 商务圈专属 */}
                   {current.person_category === 'business' && (current.relationship_level || current.client_status) && (
-                    <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }} title="商务信息">
+                    <Descriptions column={isMobile ? 1 : 2} size="small" bordered style={{ marginBottom: 16 }} title="商务信息">
                       {current.relationship_level && (
                         <Descriptions.Item label="关系等级">
                           <Tag color={levelMap[current.relationship_level]?.color}>{levelMap[current.relationship_level]?.label}</Tag>
@@ -1170,7 +1325,7 @@ export default function Persons() {
 
                   {/* 外部人才专属 */}
                   {currentIsExternal && (
-                    <Descriptions column={2} size="small" bordered style={{ marginBottom: 16 }} title="人才信息">
+                    <Descriptions column={isMobile ? 1 : 2} size="small" bordered style={{ marginBottom: 16 }} title="人才信息">
                       {current.target_position && <Descriptions.Item label="目标职位">{current.target_position}</Descriptions.Item>}
                       {current.experience_years && <Descriptions.Item label="工作年限">{current.experience_years} 年</Descriptions.Item>}
                       {current.education && <Descriptions.Item label="学历">{current.education}</Descriptions.Item>}
@@ -1210,7 +1365,7 @@ export default function Persons() {
                           { key: 'mouth', label: '🗣️ 口', desc: '沟通·表达·影响力',    color: '#fff7e6', border: '#fa8c16' },
                           { key: 'hand',  label: '🙌 手', desc: '执行·落地·结果导向',  color: '#f6ffed', border: '#52c41a' },
                         ].map(({ key, label, desc, color, border }) => (
-                          <Col span={12} key={key}>
+                          <Col span={isMobile ? 24 : 12} key={key}>
                             <div style={{ background: color, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 14px' }}>
                               <div style={{ fontWeight: 600, marginBottom: 4 }}>{label} <Text type="secondary" style={{ fontSize: 11 }}>{desc}</Text></div>
                               <div style={{ fontSize: 13, color: '#333', whiteSpace: 'pre-wrap' }}>
@@ -1280,7 +1435,8 @@ export default function Persons() {
         okText={`确认导入 ${importRows.length} 条`}
         okButtonProps={{ disabled: importRows.length === 0, loading: importLoading }}
         cancelText="取消"
-        width={760}
+        width={isMobile ? '100%' : 760}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <Alert
@@ -1297,14 +1453,14 @@ export default function Persons() {
               </ul>
             }
           />
-          <Space>
-            <Button icon={<DownloadOutlined />} onClick={downloadTemplate}>下载导入模板</Button>
+          <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: '100%' }}>
+            <Button icon={<DownloadOutlined />} onClick={downloadTemplate} style={{ width: isMobile ? '100%' : undefined }}>下载导入模板</Button>
             <Upload
               accept=".csv"
               showUploadList={false}
               beforeUpload={handleCsvFile}
             >
-              <Button icon={<UploadOutlined />} type="primary" ghost>选择 CSV 文件</Button>
+              <Button icon={<UploadOutlined />} type="primary" ghost style={{ width: isMobile ? '100%' : undefined }}>选择 CSV 文件</Button>
             </Upload>
           </Space>
 
@@ -1343,6 +1499,8 @@ export default function Persons() {
         onCancel={() => setAssignTarget(null)}
         onOk={handleAssign}
         okText="确认指派"
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
           原录入人始终保留编辑权限，被指派人获得额外编辑权限。

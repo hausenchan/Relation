@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Row, Col, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm } from 'antd';
+import { Card, Row, Col, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid } from 'antd';
 import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
@@ -14,6 +14,7 @@ import dayjs from 'dayjs';
 const { Text } = Typography;
 const { Option } = Select;
 const { RangePicker } = DatePicker;
+const { useBreakpoint } = Grid;
 
 const interactionTypeMap = {
   visit: '拜访', call: '通话', gift: '送礼', meal: '餐饮', wechat: '微信',
@@ -40,6 +41,8 @@ const priorityMap = {
 };
 
 export default function Dashboard() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user, isExecutive } = useAuth();
   const [stats, setStats] = useState(null);
   const [reminders, setReminders] = useState([]);
@@ -723,6 +726,98 @@ export default function Dashboard() {
     },
   ];
 
+  const renderTaskCard = (record, section) => {
+    const showViewButton = record.task_source === 'opportunity' || section === 'watched' || section === 'team';
+    const canEdit = record.task_source === 'normal' && section !== 'team' && section !== 'watched';
+    const canDelete = record.task_source === 'normal' && section === 'execution';
+    const canStart = record.task_source === 'normal' && section === 'execution' && record.status === 'pending';
+    const canDone = record.task_source === 'normal' && section === 'execution' && record.status === 'in_progress';
+
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.title}</div>
+                {(record.description || record.opportunity_note) && (
+                  <Typography.Paragraph
+                    ellipsis={{ rows: 2, expandable: false }}
+                    type="secondary"
+                    style={{ marginBottom: 0 }}
+                  >
+                    {record.description || record.opportunity_note}
+                  </Typography.Paragraph>
+                )}
+              </div>
+              <Space direction="vertical" size={4} align="end">
+                <Tag color={record.task_source === 'opportunity' ? 'purple' : 'blue'}>{record.task_source_label}</Tag>
+                <Badge status={record.display_status_badge} text={record.display_status_label} />
+              </Space>
+            </div>
+
+            <Space wrap size={[6, 6]}>
+              {record.priority && <Tag color={priorityMap[record.priority]?.color}>{priorityMap[record.priority]?.label}</Tag>}
+              {record.plan_date && <Tag>计划 {dayjs(record.plan_date).format('MM-DD')}</Tag>}
+              {record.start_date && <Tag color="processing">开始 {dayjs(record.start_date).format('MM-DD')}</Tag>}
+              {record.complete_date && <Tag color="success">完成 {dayjs(record.complete_date).format('MM-DD')}</Tag>}
+            </Space>
+
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {record.created_by_name && <Typography.Text type="secondary">指派人：{record.created_by_name}</Typography.Text>}
+              {record.assigned_to_name && <Typography.Text type="secondary">执行人：{record.assigned_to_name}</Typography.Text>}
+              {record.assigner_name && <Typography.Text type="secondary">指派人：{record.assigner_name}</Typography.Text>}
+              {record.follower_name && <Typography.Text type="secondary">跟进人：{record.follower_name}</Typography.Text>}
+            </div>
+
+            {record.display_result && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                结果：{record.display_result}
+              </Typography.Paragraph>
+            )}
+
+            <Space size="small" wrap>
+              {canStart && (
+                <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleUpdateStatus(record.id, 'in_progress')}>
+                  开始
+                </Button>
+              )}
+              {canDone && (
+                <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => handleUpdateStatus(record.id, 'done')}>
+                  完成
+                </Button>
+              )}
+              {canEdit && (
+                <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+                  编辑
+                </Button>
+              )}
+              {canDelete && (
+                <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                  <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                </Popconfirm>
+              )}
+              {showViewButton && (
+                <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>
+                  查看
+                </Button>
+              )}
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   const tabItems = [];
 
   if (canViewAssignedTasks) {
@@ -743,7 +838,7 @@ export default function Dashboard() {
                 placeholder="状态筛选"
                 value={assignedTaskStatusFilter}
                 onChange={setAssignedTaskStatusFilter}
-                style={{ minWidth: 200 }}
+                style={isMobile ? { width: '100%' } : { minWidth: 200 }}
                 options={[
                   { label: '未开始', value: 'pending' },
                   { label: '进行中', value: 'in_progress' },
@@ -754,7 +849,7 @@ export default function Dashboard() {
                 placeholder={['开始日期', '结束日期']}
                 value={assignedTaskDateRange}
                 onChange={setAssignedTaskDateRange}
-                style={{ width: 240 }}
+                style={isMobile ? { width: '100%' } : { width: 240 }}
               />
               {(assignedTaskStatusFilter.length !== 3 || assignedTaskDateRange) && (
                 <Button
@@ -769,15 +864,26 @@ export default function Dashboard() {
               )}
             </Space>
           </div>
-          <Table
-            dataSource={filteredAssignedTasks}
-            columns={assignedTaskColumns}
-            rowKey="id"
-            loading={loading}
-            scroll={{ x: 1120 }}
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-            size="small"
-          />
+          {isMobile ? (
+            <List
+              dataSource={filteredAssignedTasks}
+              rowKey="id"
+              loading={loading}
+              pagination={{ pageSize: 20, showSizeChanger: false }}
+              locale={{ emptyText: '暂无任务数据' }}
+              renderItem={(record) => renderTaskCard(record, 'assigned')}
+            />
+          ) : (
+            <Table
+              dataSource={filteredAssignedTasks}
+              columns={assignedTaskColumns}
+              rowKey="id"
+              loading={loading}
+              scroll={{ x: 1120 }}
+              pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+              size="small"
+            />
+          )}
         </div>
       ),
     });
@@ -801,7 +907,7 @@ export default function Dashboard() {
                 placeholder="状态筛选"
                 value={executionTaskStatusFilter}
                 onChange={setExecutionTaskStatusFilter}
-                style={{ minWidth: 200 }}
+                style={isMobile ? { width: '100%' } : { minWidth: 200 }}
                 options={[
                   { label: '未开始', value: 'pending' },
                   { label: '进行中', value: 'in_progress' },
@@ -812,7 +918,7 @@ export default function Dashboard() {
                 placeholder={['开始日期', '结束日期']}
                 value={executionTaskDateRange}
                 onChange={setExecutionTaskDateRange}
-                style={{ width: 240 }}
+                style={isMobile ? { width: '100%' } : { width: 240 }}
               />
               {(executionTaskStatusFilter.length !== 3 || executionTaskDateRange) && (
                 <Button
@@ -827,15 +933,26 @@ export default function Dashboard() {
               )}
             </Space>
           </div>
-          <Table
-            dataSource={filteredExecutionTasks}
-            columns={executionTaskColumns}
-            rowKey="id"
-            loading={loading}
-            scroll={{ x: 1220 }}
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-            size="small"
-          />
+          {isMobile ? (
+            <List
+              dataSource={filteredExecutionTasks}
+              rowKey="id"
+              loading={loading}
+              pagination={{ pageSize: 20, showSizeChanger: false }}
+              locale={{ emptyText: '暂无任务数据' }}
+              renderItem={(record) => renderTaskCard(record, 'execution')}
+            />
+          ) : (
+            <Table
+              dataSource={filteredExecutionTasks}
+              columns={executionTaskColumns}
+              rowKey="id"
+              loading={loading}
+              scroll={{ x: 1220 }}
+              pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+              size="small"
+            />
+          )}
         </div>
       ),
     }
@@ -858,7 +975,7 @@ export default function Dashboard() {
               placeholder="状态筛选"
               value={watchedTaskStatusFilter}
               onChange={setWatchedTaskStatusFilter}
-              style={{ minWidth: 200 }}
+              style={isMobile ? { width: '100%' } : { minWidth: 200 }}
               options={[
                 { label: '未开始', value: 'pending' },
                 { label: '进行中', value: 'in_progress' },
@@ -869,7 +986,7 @@ export default function Dashboard() {
               placeholder={['开始日期', '结束日期']}
               value={watchedTaskDateRange}
               onChange={setWatchedTaskDateRange}
-              style={{ width: 240 }}
+              style={isMobile ? { width: '100%' } : { width: 240 }}
             />
             {(watchedTaskStatusFilter.length !== 3 || watchedTaskDateRange) && (
               <Button
@@ -884,15 +1001,26 @@ export default function Dashboard() {
             )}
           </Space>
         </div>
-        <Table
-          dataSource={filteredWatchedTasks}
-          columns={watchedTaskColumns}
-          rowKey="id"
-          loading={loading}
-          scroll={{ x: 1380 }}
-          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-          size="small"
-        />
+        {isMobile ? (
+          <List
+            dataSource={filteredWatchedTasks}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showSizeChanger: false }}
+            locale={{ emptyText: '暂无任务数据' }}
+            renderItem={(record) => renderTaskCard(record, 'watched')}
+          />
+        ) : (
+          <Table
+            dataSource={filteredWatchedTasks}
+            columns={watchedTaskColumns}
+            rowKey="id"
+            loading={loading}
+            scroll={{ x: 1380 }}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            size="small"
+          />
+        )}
       </div>
     ),
   });
@@ -915,7 +1043,7 @@ export default function Dashboard() {
                 placeholder="状态筛选"
                 value={teamTaskStatusFilter}
                 onChange={setTeamTaskStatusFilter}
-                style={{ minWidth: 200 }}
+                style={isMobile ? { width: '100%' } : { minWidth: 200 }}
                 options={[
                   { label: '未开始', value: 'pending' },
                   { label: '进行中', value: 'in_progress' },
@@ -927,7 +1055,7 @@ export default function Dashboard() {
                 placeholder="指派人筛选"
                 value={teamTaskAssignerFilter}
                 onChange={setTeamTaskAssignerFilter}
-                style={{ minWidth: 160 }}
+                style={isMobile ? { width: '100%' } : { minWidth: 160 }}
                 options={[...new Set(teamTasks.map(t => t.assigner_name).filter(Boolean))].map(n => ({ label: n, value: n }))}
               />
               <Select
@@ -935,14 +1063,14 @@ export default function Dashboard() {
                 placeholder="跟进人筛选"
                 value={teamTaskFollowerFilter}
                 onChange={setTeamTaskFollowerFilter}
-                style={{ minWidth: 160 }}
+                style={isMobile ? { width: '100%' } : { minWidth: 160 }}
                 options={[...new Set(teamTasks.map(t => t.follower_name).filter(Boolean))].map(n => ({ label: n, value: n }))}
               />
               <RangePicker
                 placeholder={['开始日期', '结束日期']}
                 value={teamTaskDateRange}
                 onChange={setTeamTaskDateRange}
-                style={{ width: 240 }}
+                style={isMobile ? { width: '100%' } : { width: 240 }}
               />
               {(teamTaskStatusFilter.length !== 3 || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
                 <Button
@@ -959,22 +1087,33 @@ export default function Dashboard() {
               )}
             </Space>
           </div>
-          <Table
-            dataSource={filteredTeamTasks}
-            columns={teamTaskColumns}
-            rowKey="id"
-            loading={loading}
-            scroll={{ x: 1380 }}
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-            size="small"
-          />
+          {isMobile ? (
+            <List
+              dataSource={filteredTeamTasks}
+              rowKey="id"
+              loading={loading}
+              pagination={{ pageSize: 20, showSizeChanger: false }}
+              locale={{ emptyText: '暂无任务数据' }}
+              renderItem={(record) => renderTaskCard(record, 'team')}
+            />
+          ) : (
+            <Table
+              dataSource={filteredTeamTasks}
+              columns={teamTaskColumns}
+              rowKey="id"
+              loading={loading}
+              scroll={{ x: 1380 }}
+              pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+              size="small"
+            />
+          )}
         </div>
       ),
     });
   }
 
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计卡片 */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         {[
@@ -996,14 +1135,14 @@ export default function Dashboard() {
             <Card
               className="stat-card"
               style={{ background: card.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
-              styles={{ body: { padding: '20px 24px' } }}
+              styles={{ body: { padding: isMobile ? '16px 18px' : '20px 24px' } }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500 }}>{card.title}</div>
-                  <div style={{ fontSize: 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{card.value}</div>
+                  <div style={{ fontSize: isMobile ? 28 : 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{card.value}</div>
                 </div>
-                <div style={{ width: 48, height: 48, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, color: '#fff' }}>
+                <div style={{ width: isMobile ? 42 : 48, height: isMobile ? 42 : 48, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 20 : 22, color: '#fff' }}>
                   {card.icon}
                 </div>
               </div>
@@ -1014,9 +1153,14 @@ export default function Dashboard() {
 
       {/* 任务管理 Tabs */}
       <Card style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        {isMobile && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: '100%', marginBottom: 12 }}>
+            新建任务
+          </Button>
+        )}
         <Tabs
           items={tabItems}
-          tabBarExtraContent={{
+          tabBarExtraContent={isMobile ? undefined : {
             right: <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>,
           }}
         />
@@ -1083,6 +1227,8 @@ export default function Dashboard() {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Modal, Form, Input, Select,
-  DatePicker, Popconfirm, message, Badge, Tooltip, Drawer, Descriptions, Tree
+  DatePicker, Popconfirm, message, Badge, Tooltip, Drawer, Descriptions, Grid, List
 } from 'antd';
 import {
   PlusOutlined, CheckOutlined, PlayCircleOutlined, DeleteOutlined,
@@ -13,6 +13,7 @@ import dayjs from 'dayjs';
 
 const { Text } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const statusMap = {
   pending:     { label: '待处理', color: 'default',  badge: 'default' },
@@ -33,6 +34,8 @@ const DATE_TABS = [
 ];
 
 export default function MyTasks() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -199,12 +202,98 @@ export default function MyTasks() {
     },
   ];
 
+  const renderTaskCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => openDetail(record)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') openDetail(record);
+        }}
+        style={{
+          width: '100%',
+          padding: 14,
+          border: '1px solid #f0f0f0',
+          borderRadius: 12,
+          background: '#fff',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          cursor: 'pointer',
+        }}
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>
+                {record.parent_id && <ApartmentOutlined style={{ marginRight: 4, color: '#aaa' }} />}
+                {record.title}
+              </div>
+              {record.description && (
+                <Typography.Paragraph type="secondary" ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                  {record.description}
+                </Typography.Paragraph>
+              )}
+            </div>
+            <Space direction="vertical" size={4} align="end">
+              <Tag color={priorityMap[record.priority]?.color} icon={<FlagOutlined />}>{priorityMap[record.priority]?.label}</Tag>
+              <Badge status={statusMap[record.status]?.badge} text={statusMap[record.status]?.label} />
+            </Space>
+          </div>
+
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <Typography.Text type="secondary">日期：{record.date || '-'}</Typography.Text>
+            <Typography.Text type="secondary">指派人：{record.created_by === user?.id ? '自建' : (record.created_by_name || '-')}</Typography.Text>
+          </div>
+
+          {record.result && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              进度/结果：{record.result}
+            </Typography.Paragraph>
+          )}
+
+          <Space size="small" wrap>
+            {record.status === 'pending' && (
+              <Button size="small" icon={<PlayCircleOutlined />} onClick={(event) => { event.stopPropagation(); handleStatus(record, 'in_progress'); }}>
+                开始
+              </Button>
+            )}
+            {record.status === 'in_progress' && (
+              <Button size="small" type="primary" icon={<CheckOutlined />} onClick={(event) => { event.stopPropagation(); handleStatus(record, 'done'); }}>
+                完成
+              </Button>
+            )}
+            {record.status === 'done' && (
+              <Tag color="green">✓ {record.done_at ? dayjs(record.done_at).format('HH:mm') : ''}</Tag>
+            )}
+            {record.status !== 'done' && (
+              <Button size="small" icon={<ApartmentOutlined />} onClick={(event) => { event.stopPropagation(); openAdd(record); }}>
+                子任务
+              </Button>
+            )}
+            {record.status !== 'done' && (
+              <Button size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>
+                编辑
+              </Button>
+            )}
+            {record.created_by === user?.id && record.status === 'pending' && (
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()}>
+                  删除
+                </Button>
+              </Popconfirm>
+            )}
+          </Space>
+        </Space>
+      </div>
+    </List.Item>
+  );
+
   const todayStr = dayjs().format('YYYY-MM-DD');
   const done = data.filter(d => d.status === 'done').length;
   const total = data.length;
 
   return (
-    <div>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Space align="center">
           {total > 0 && (
@@ -213,11 +302,11 @@ export default function MyTasks() {
             </Tag>
           )}
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => openAdd()}>新建任务</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => openAdd()} style={{ width: isMobile ? '100%' : undefined }}>新建任务</Button>
       </div>
 
       {/* 日期快速切换 */}
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
         {DATE_TABS.map(t => {
           const d = t.getDate();
           const active = !customDate && d === selectedDate;
@@ -226,6 +315,7 @@ export default function MyTasks() {
               key={t.label}
               type={active ? 'primary' : 'default'}
               size="small"
+              style={{ width: isMobile ? '100%' : undefined }}
               onClick={() => { setSelectedDate(d); setCustomDate(null); }}
             >
               {t.label}
@@ -236,21 +326,33 @@ export default function MyTasks() {
         <DatePicker
           size="small"
           placeholder="自定义日期"
+          style={{ width: isMobile ? '100%' : undefined }}
           value={customDate ? dayjs(customDate) : null}
           onChange={(_, str) => { setCustomDate(str || null); }}
           allowClear
         />
       </Space>
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        pagination={{ pageSize: 30 }}
-        rowClassName={r => r.status === 'done' ? 'task-done-row' : ''}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 30, showSizeChanger: false }}
+          locale={{ emptyText: '暂无任务数据' }}
+          renderItem={renderTaskCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          pagination={{ pageSize: 30 }}
+          rowClassName={r => r.status === 'done' ? 'task-done-row' : ''}
+        />
+      )}
 
       {/* 新建/编辑弹窗 */}
       <Modal
@@ -260,7 +362,8 @@ export default function MyTasks() {
         onCancel={() => setModalOpen(false)}
         okText="保存"
         cancelText="取消"
-        width={520}
+        width={isMobile ? '100%' : 520}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
       >
         <Form form={form} layout="vertical">
           <Form.Item label="任务标题" name="title" rules={[{ required: true, message: '请填写任务标题' }]}>
@@ -272,7 +375,7 @@ export default function MyTasks() {
           <Form.Item label="任务进度/任务结果" name="result">
             <Input.TextArea rows={3} placeholder="填写当前进度、执行情况或最终结果（选填）" />
           </Form.Item>
-          <Space style={{ width: '100%' }} size={12}>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={12}>
             <Form.Item label="日期" name="date" rules={[{ required: true }]} style={{ flex: 1, marginBottom: 0 }}>
               <DatePicker style={{ width: '100%' }} />
             </Form.Item>
@@ -304,7 +407,7 @@ export default function MyTasks() {
         title="任务详情"
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
-        width={480}
+        width={isMobile ? '100%' : 480}
         extra={
           detailRecord?.status !== 'done' && (
             <Button icon={<EditOutlined />} onClick={() => { setDetailOpen(false); openEdit(detailRecord); }}>编辑</Button>
@@ -315,9 +418,9 @@ export default function MyTasks() {
           <Space direction="vertical" style={{ width: '100%' }} size={16}>
             <Descriptions column={1} bordered size="small">
               <Descriptions.Item label="标题">{detailRecord.title}</Descriptions.Item>
-              <Descriptions.Item label="描述">{detailRecord.description || '-'}</Descriptions.Item>
+              <Descriptions.Item label="描述"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div></Descriptions.Item>
               {detailRecord.result && (
-                <Descriptions.Item label="任务进度/任务结果">{detailRecord.result}</Descriptions.Item>
+                <Descriptions.Item label="任务进度/任务结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.result}</div></Descriptions.Item>
               )}
               <Descriptions.Item label="日期">{detailRecord.date}</Descriptions.Item>
               <Descriptions.Item label="优先级">
