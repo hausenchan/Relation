@@ -89,11 +89,15 @@ function auth(req, res, next) {
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     // 验证 password_version，改密码后旧 token 失效
-    const user = db.prepare('SELECT password_version FROM users WHERE id = ?').get(decoded.id);
+    const user = db.prepare(`
+      SELECT id, username, display_name, role, department, team_id, executive_role, password_version
+      FROM users
+      WHERE id = ?
+    `).get(decoded.id);
     if (!user || (user.password_version || 0) !== (decoded.pwv || 0)) {
       return res.status(401).json({ error: '登录已失效，请重新登录' });
     }
-    req.user = decoded;
+    req.user = { ...decoded, ...user, pwv: user.password_version || 0 };
     next();
   } catch {
     res.status(401).json({ error: 'Token 无效或已过期' });
@@ -1332,6 +1336,7 @@ app.post('/api/auth/login', (req, res) => {
   // 查模块权限
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
   const teamIds = getUserTeamIds(user.id);
+  const managedTeamIds = getManagedTeamIds(user.id, user.role) || [];
   const projectGroupIds = getUserProjectGroupIds(user.id);
   res.json({
     token,
@@ -1343,6 +1348,7 @@ app.post('/api/auth/login', (req, res) => {
       department: user.department || null,
       team_id: user.team_id || null,
       team_ids: teamIds,
+      managed_team_ids: managedTeamIds,
       project_group_ids: projectGroupIds,
       executive_role: user.executive_role,
       modulePerms,
@@ -1357,6 +1363,7 @@ app.get('/api/auth/me', auth, (req, res) => {
   res.json({
     ...user,
     team_ids: getUserTeamIds(req.user.id),
+    managed_team_ids: getManagedTeamIds(req.user.id, user.role) || [],
     project_group_ids: getUserProjectGroupIds(req.user.id),
     modulePerms,
     menuPerms,
