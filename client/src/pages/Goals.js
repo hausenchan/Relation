@@ -564,7 +564,7 @@ function Goals() {
         </Space>
 
         <div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.title}</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4, overflowWrap: 'anywhere' }}>{record.title}</div>
           <Typography.Text type="secondary">{record.period || '-'}</Typography.Text>
         </div>
 
@@ -587,11 +587,12 @@ function Goals() {
           {record.description || '暂无目标描述'}
         </Typography.Paragraph>
 
-        <Space size="small" wrap>
+        <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <Button
-            type="link"
+            type={isMobile ? 'default' : 'link'}
             size="small"
             icon={<EyeOutlined />}
+            style={{ width: isMobile ? '100%' : undefined }}
             onClick={(event) => {
               event.stopPropagation();
               showDetail(record);
@@ -600,9 +601,10 @@ function Goals() {
             详情
           </Button>
           <Button
-            type="link"
+            type={isMobile ? 'default' : 'link'}
             size="small"
             icon={<EditOutlined />}
+            style={{ width: isMobile ? '100%' : undefined }}
             onClick={(event) => {
               event.stopPropagation();
               handleEdit(record);
@@ -611,10 +613,11 @@ function Goals() {
             编辑
           </Button>
           <Button
-            type="link"
+            type={isMobile ? 'default' : 'link'}
             size="small"
             danger
             icon={<DeleteOutlined />}
+            style={{ width: isMobile ? '100%' : undefined }}
             onClick={(event) => {
               event.stopPropagation();
               handleDelete(record);
@@ -672,7 +675,7 @@ function Goals() {
             loading={loading}
             dataSource={goals}
             locale={{ emptyText: '暂无目标数据' }}
-            pagination={{ pageSize: 10, showSizeChanger: false }}
+            pagination={{ pageSize: 10, showSizeChanger: false, simple: isMobile }}
             renderItem={(record) => (
               <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
                 {renderGoalCard(record)}
@@ -912,6 +915,7 @@ function Goals() {
         width={isMobile ? '100%' : 760}
         open={detailVisible}
         onClose={() => setDetailVisible(false)}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
         extra={detailRecord ? (
           <Button
             size="small"
@@ -997,6 +1001,7 @@ function Goals() {
                         display: 'flex',
                         justifyContent: 'space-between',
                         alignItems: 'flex-start',
+                        flexDirection: isMobile ? 'column' : 'row',
                         gap: 16,
                         paddingBottom: index === detailRecord.children.length - 1 ? 0 : 12,
                         borderBottom: index === detailRecord.children.length - 1 ? 'none' : '1px solid #f0f0f0',
@@ -1023,7 +1028,7 @@ function Goals() {
                         </Typography.Text>
                       </Space>
 
-                      <div style={{ minWidth: 120 }}>
+                      <div style={{ minWidth: isMobile ? 0 : 120, width: isMobile ? '100%' : undefined }}>
                         <Progress percent={Number(child.progress || 0)} size="small" />
                       </div>
                     </div>

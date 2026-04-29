@@ -746,9 +746,9 @@ export default function Dashboard() {
           }}
         >
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexDirection: isMobile ? 'column' : 'row' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.title}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4, overflowWrap: 'anywhere' }}>{record.title}</div>
                 {(record.description || record.opportunity_note) && (
                   <Typography.Paragraph
                     ellipsis={{ rows: 2, expandable: false }}
@@ -759,7 +759,7 @@ export default function Dashboard() {
                   </Typography.Paragraph>
                 )}
               </div>
-              <Space direction="vertical" size={4} align="end">
+              <Space direction={isMobile ? 'horizontal' : 'vertical'} size={4} align={isMobile ? 'start' : 'end'} wrap={isMobile} style={{ width: isMobile ? '100%' : undefined }}>
                 <Tag color={record.task_source === 'opportunity' ? 'purple' : 'blue'}>{record.task_source_label}</Tag>
                 <Badge status={record.display_status_badge} text={record.display_status_label} />
               </Space>
@@ -785,29 +785,29 @@ export default function Dashboard() {
               </Typography.Paragraph>
             )}
 
-            <Space size="small" wrap>
+            <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
               {canStart && (
-                <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleUpdateStatus(record.id, 'in_progress')}>
+                <Button type={isMobile ? 'default' : 'link'} size="small" icon={<PlayCircleOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => handleUpdateStatus(record.id, 'in_progress')}>
                   开始
                 </Button>
               )}
               {canDone && (
-                <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => handleUpdateStatus(record.id, 'done')}>
+                <Button type={isMobile ? 'primary' : 'link'} size="small" icon={<CheckOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => handleUpdateStatus(record.id, 'done')}>
                   完成
                 </Button>
               )}
               {canEdit && (
-                <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+                <Button type={isMobile ? 'default' : 'link'} size="small" icon={<EditOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => openEdit(record)}>
                   编辑
                 </Button>
               )}
               {canDelete && (
                 <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                  <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                  <Button type={isMobile ? 'default' : 'link'} size="small" danger icon={<DeleteOutlined />} style={{ width: isMobile ? '100%' : undefined }}>删除</Button>
                 </Popconfirm>
               )}
               {showViewButton && (
-                <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>
+                <Button type={isMobile ? 'default' : 'link'} size="small" style={{ width: isMobile ? '100%' : undefined }} onClick={() => navigate('/follow-up-tasks')}>
                   查看
                 </Button>
               )}
@@ -869,7 +869,7 @@ export default function Dashboard() {
               dataSource={filteredAssignedTasks}
               rowKey="id"
               loading={loading}
-              pagination={{ pageSize: 20, showSizeChanger: false }}
+              pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
               locale={{ emptyText: '暂无任务数据' }}
               renderItem={(record) => renderTaskCard(record, 'assigned')}
             />
@@ -938,7 +938,7 @@ export default function Dashboard() {
               dataSource={filteredExecutionTasks}
               rowKey="id"
               loading={loading}
-              pagination={{ pageSize: 20, showSizeChanger: false }}
+              pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
               locale={{ emptyText: '暂无任务数据' }}
               renderItem={(record) => renderTaskCard(record, 'execution')}
             />
@@ -1006,7 +1006,7 @@ export default function Dashboard() {
             dataSource={filteredWatchedTasks}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
             locale={{ emptyText: '暂无任务数据' }}
             renderItem={(record) => renderTaskCard(record, 'watched')}
           />
@@ -1092,7 +1092,7 @@ export default function Dashboard() {
               dataSource={filteredTeamTasks}
               rowKey="id"
               loading={loading}
-              pagination={{ pageSize: 20, showSizeChanger: false }}
+              pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
               locale={{ emptyText: '暂无任务数据' }}
               renderItem={(record) => renderTaskCard(record, 'team')}
             />
@@ -1115,7 +1115,7 @@ export default function Dashboard() {
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计卡片 */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+      <Row gutter={[isMobile ? 10 : 16, isMobile ? 10 : 16]} style={{ marginBottom: isMobile ? 16 : 24 }}>
         {[
           !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
           !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
@@ -1131,7 +1131,7 @@ export default function Dashboard() {
             gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)'
           },
         ].filter(Boolean).map((card, idx) => (
-          <Col xs={24} sm={12} lg={6} key={idx}>
+          <Col xs={12} sm={12} lg={6} key={idx}>
             <Card
               className="stat-card"
               style={{ background: card.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
@@ -1139,10 +1139,10 @@ export default function Dashboard() {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500 }}>{card.title}</div>
+                  <div style={{ fontSize: isMobile ? 12 : 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500, whiteSpace: 'nowrap' }}>{card.title}</div>
                   <div style={{ fontSize: isMobile ? 28 : 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{card.value}</div>
                 </div>
-                <div style={{ width: isMobile ? 42 : 48, height: isMobile ? 42 : 48, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 20 : 22, color: '#fff' }}>
+                <div style={{ width: isMobile ? 34 : 48, height: isMobile ? 34 : 48, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 18 : 22, color: '#fff' }}>
                   {card.icon}
                 </div>
               </div>
@@ -1152,7 +1152,7 @@ export default function Dashboard() {
       </Row>
 
       {/* 任务管理 Tabs */}
-      <Card style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+      <Card style={{ marginBottom: isMobile ? 16 : 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         {isMobile && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: '100%', marginBottom: 12 }}>
             新建任务
@@ -1160,6 +1160,7 @@ export default function Dashboard() {
         )}
         <Tabs
           items={tabItems}
+          tabBarGutter={isMobile ? 12 : undefined}
           tabBarExtraContent={isMobile ? undefined : {
             right: <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>,
           }}
@@ -1168,24 +1169,24 @@ export default function Dashboard() {
 
       {/* 近期提醒 */}
       {urgentReminders.length > 0 && (
-        <Card title="近期提醒" extra={<Button type="link" onClick={() => navigate('/reminders')}>查看全部</Button>} style={{ marginBottom: 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <Card title="近期提醒" extra={<Button type="link" onClick={() => navigate('/reminders')}>查看全部</Button>} style={{ marginBottom: isMobile ? 16 : 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
           <List
             dataSource={urgentReminders.slice(0, 5)}
             renderItem={item => {
               const daysLeft = dayjs(item.remind_date).diff(dayjs(), 'day');
               const isUrgent = daysLeft <= 1;
               return (
-                <List.Item>
+                <List.Item style={isMobile ? { alignItems: 'stretch', flexDirection: 'column', gap: 8 } : undefined}>
                   <List.Item.Meta
                     title={<Text strong>{item.title}</Text>}
                     description={
-                      <Space>
+                      <Space wrap>
                         {item.person_name && <Tag color="blue">{item.person_name}</Tag>}
                         {item.category && <Tag color={categoryMap[item.category]?.color}>{categoryMap[item.category]?.label}</Tag>}
                       </Space>
                     }
                   />
-                  <Space>
+                  <Space style={{ width: isMobile ? '100%' : undefined, justifyContent: isMobile ? 'space-between' : undefined }}>
                     <Tag color={isUrgent ? 'red' : 'orange'}>
                       {daysLeft === 0 ? '今天' : daysLeft < 0 ? `逾期${Math.abs(daysLeft)}天` : `${daysLeft}天后`}
                     </Tag>
@@ -1204,11 +1205,11 @@ export default function Dashboard() {
           <List
             dataSource={stats.recentInteractions.slice(0, 5)}
             renderItem={item => (
-              <List.Item>
+              <List.Item style={isMobile ? { alignItems: 'stretch', flexDirection: 'column', gap: 8 } : undefined}>
                 <List.Item.Meta
                   title={<Text strong>{item.person_name}</Text>}
                   description={
-                    <Space>
+                    <Space wrap>
                       <Tag color="blue">{interactionTypeMap[item.interaction_type]}</Tag>
                       <Text type="secondary">{item.notes}</Text>
                     </Space>

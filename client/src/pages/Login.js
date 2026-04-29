@@ -64,12 +64,13 @@ export default function Login() {
     <div style={{
       minHeight: '100dvh',
       display: 'flex',
-      alignItems: 'center',
+      alignItems: isMobile ? 'flex-start' : 'center',
       justifyContent: 'center',
-      padding: isMobile ? 16 : 24,
+      padding: isMobile ? '32px 16px 20px' : 24,
       background: 'linear-gradient(135deg, #0f0f23 0%, #1a1145 40%, #0d1f3c 100%)',
       position: 'relative',
-      overflow: 'hidden',
+      overflowY: isMobile ? 'auto' : 'hidden',
+      overflowX: 'hidden',
     }}>
       {/* 背景光晕装饰 */}
       <div style={{

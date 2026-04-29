@@ -181,9 +181,9 @@ export default function FollowUpTasks() {
           }}
         >
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexDirection: isMobile ? 'column' : 'row' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4, overflowWrap: 'anywhere' }}>
                   <RiseOutlined style={{ marginRight: 4, color: '#1677ff' }} />
                   {record.title}
                 </div>
@@ -193,7 +193,7 @@ export default function FollowUpTasks() {
                   {!record.person_name && record.company_name ? ' (公司)' : ''}
                 </Typography.Text>
               </div>
-              <Space direction="vertical" size={4} align="end">
+              <Space direction={isMobile ? 'horizontal' : 'vertical'} size={4} align={isMobile ? 'start' : 'end'} wrap={isMobile} style={{ width: isMobile ? '100%' : undefined }}>
                 <Badge status={statusMap[record.status]?.badge} text={statusMap[record.status]?.label} />
                 {record.due_date && (
                   <Tag color={dayjs(record.due_date).isBefore(dayjs(), 'day') ? 'red' : 'default'}>
@@ -214,14 +214,14 @@ export default function FollowUpTasks() {
               </Typography.Paragraph>
             )}
 
-            <Space size="small" wrap>
+            <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
               {canOperate && record.status === 'pending' && (
-                <Button size="small" icon={<PlayCircleOutlined />} onClick={(event) => { event.stopPropagation(); handleStart(record); }}>
+                <Button size="small" icon={<PlayCircleOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => { event.stopPropagation(); handleStart(record); }}>
                   开始跟进
                 </Button>
               )}
               {canOperate && record.status === 'in_progress' && (
-                <Button size="small" type="primary" icon={<CheckOutlined />} onClick={(event) => { event.stopPropagation(); openDone(record); }}>
+                <Button size="small" type="primary" icon={<CheckOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => { event.stopPropagation(); openDone(record); }}>
                   完成
                 </Button>
               )}
@@ -247,6 +247,7 @@ export default function FollowUpTasks() {
         activeKey={activeTab}
         onChange={key => setActiveTab(key)}
         items={tabItems}
+        tabBarGutter={isMobile ? 12 : undefined}
         style={{ marginBottom: 12 }}
       />
 
@@ -255,7 +256,7 @@ export default function FollowUpTasks() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
+          pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
           locale={{ emptyText: '暂无跟进任务' }}
           renderItem={renderTaskCard}
         />
@@ -296,6 +297,7 @@ export default function FollowUpTasks() {
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         width={isMobile ? '100%' : 480}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
       >
         {detailRecord && (
           <Space direction="vertical" style={{ width: '100%' }} size={16}>

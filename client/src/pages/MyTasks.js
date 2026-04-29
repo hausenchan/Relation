@@ -222,9 +222,9 @@ export default function MyTasks() {
         }}
       >
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexDirection: isMobile ? 'column' : 'row' }}>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4, overflowWrap: 'anywhere' }}>
                 {record.parent_id && <ApartmentOutlined style={{ marginRight: 4, color: '#aaa' }} />}
                 {record.title}
               </div>
@@ -234,7 +234,7 @@ export default function MyTasks() {
                 </Typography.Paragraph>
               )}
             </div>
-            <Space direction="vertical" size={4} align="end">
+            <Space direction={isMobile ? 'horizontal' : 'vertical'} size={4} align={isMobile ? 'start' : 'end'} wrap={isMobile} style={{ width: isMobile ? '100%' : undefined }}>
               <Tag color={priorityMap[record.priority]?.color} icon={<FlagOutlined />}>{priorityMap[record.priority]?.label}</Tag>
               <Badge status={statusMap[record.status]?.badge} text={statusMap[record.status]?.label} />
             </Space>
@@ -251,14 +251,14 @@ export default function MyTasks() {
             </Typography.Paragraph>
           )}
 
-          <Space size="small" wrap>
+          <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
             {record.status === 'pending' && (
-              <Button size="small" icon={<PlayCircleOutlined />} onClick={(event) => { event.stopPropagation(); handleStatus(record, 'in_progress'); }}>
+              <Button size="small" icon={<PlayCircleOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => { event.stopPropagation(); handleStatus(record, 'in_progress'); }}>
                 开始
               </Button>
             )}
             {record.status === 'in_progress' && (
-              <Button size="small" type="primary" icon={<CheckOutlined />} onClick={(event) => { event.stopPropagation(); handleStatus(record, 'done'); }}>
+              <Button size="small" type="primary" icon={<CheckOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => { event.stopPropagation(); handleStatus(record, 'done'); }}>
                 完成
               </Button>
             )}
@@ -266,18 +266,18 @@ export default function MyTasks() {
               <Tag color="green">✓ {record.done_at ? dayjs(record.done_at).format('HH:mm') : ''}</Tag>
             )}
             {record.status !== 'done' && (
-              <Button size="small" icon={<ApartmentOutlined />} onClick={(event) => { event.stopPropagation(); openAdd(record); }}>
+              <Button size="small" icon={<ApartmentOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => { event.stopPropagation(); openAdd(record); }}>
                 子任务
               </Button>
             )}
             {record.status !== 'done' && (
-              <Button size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>
+              <Button size="small" icon={<EditOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>
                 编辑
               </Button>
             )}
             {record.created_by === user?.id && record.status === 'pending' && (
               <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()}>
+                <Button size="small" danger icon={<DeleteOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => event.stopPropagation()}>
                   删除
                 </Button>
               </Popconfirm>
@@ -306,39 +306,41 @@ export default function MyTasks() {
       </div>
 
       {/* 日期快速切换 */}
-      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
-        {DATE_TABS.map(t => {
-          const d = t.getDate();
-          const active = !customDate && d === selectedDate;
-          return (
-            <Button
-              key={t.label}
-              type={active ? 'primary' : 'default'}
-              size="small"
-              style={{ width: isMobile ? '100%' : undefined }}
-              onClick={() => { setSelectedDate(d); setCustomDate(null); }}
-            >
-              {t.label}
-              {d === todayStr ? '' : ` (${d.slice(5)})`}
-            </Button>
-          );
-        })}
+      <div style={{ marginBottom: 16 }}>
+        <div style={isMobile ? { display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 8 } : { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {DATE_TABS.map(t => {
+            const d = t.getDate();
+            const active = !customDate && d === selectedDate;
+            return (
+              <Button
+                key={t.label}
+                type={active ? 'primary' : 'default'}
+                size="small"
+                style={{ flex: isMobile ? '0 0 auto' : undefined }}
+                onClick={() => { setSelectedDate(d); setCustomDate(null); }}
+              >
+                {t.label}
+                {d === todayStr ? '' : ` (${d.slice(5)})`}
+              </Button>
+            );
+          })}
+        </div>
         <DatePicker
           size="small"
           placeholder="自定义日期"
-          style={{ width: isMobile ? '100%' : undefined }}
+          style={{ width: isMobile ? '100%' : 160, marginTop: isMobile ? 4 : 0, marginLeft: isMobile ? 0 : 8 }}
           value={customDate ? dayjs(customDate) : null}
           onChange={(_, str) => { setCustomDate(str || null); }}
           allowClear
         />
-      </Space>
+      </div>
 
       {isMobile ? (
         <List
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 30, showSizeChanger: false }}
+          pagination={{ pageSize: 30, showSizeChanger: false, simple: isMobile }}
           locale={{ emptyText: '暂无任务数据' }}
           renderItem={renderTaskCard}
         />
@@ -409,6 +411,7 @@ export default function MyTasks() {
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         width={isMobile ? '100%' : 480}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
         extra={
           detailRecord?.status !== 'done' && (
             <Button icon={<EditOutlined />} onClick={() => { setDetailOpen(false); openEdit(detailRecord); }}>编辑</Button>
@@ -444,8 +447,8 @@ export default function MyTasks() {
                 <Text strong style={{ display: 'block', marginBottom: 8 }}>子任务（{children.length}）</Text>
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
                   {children.map(c => (
-                    <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Space>
+                    <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'flex-start' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 8 }}>
+                      <Space wrap>
                         <Tag color={priorityMap[c.priority]?.color}>{priorityMap[c.priority]?.label}</Tag>
                         <Text>{c.title}</Text>
                         <Text type="secondary" style={{ fontSize: 11 }}>{c.assigned_to_name}</Text>

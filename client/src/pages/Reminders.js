@@ -158,9 +158,9 @@ export default function Reminders() {
           }}
         >
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexDirection: isMobile ? 'column' : 'row' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.title}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4, overflowWrap: 'anywhere' }}>{record.title}</div>
                 <Space size={6} align="center" wrap>
                   <Text strong>{record.person_name}</Text>
                   {(record.person_company || record.current_company) && (
@@ -168,7 +168,7 @@ export default function Reminders() {
                   )}
                 </Space>
               </div>
-              {statusNode}
+              <div style={{ alignSelf: isMobile ? 'flex-start' : undefined }}>{statusNode}</div>
             </div>
 
             <Space wrap size={[6, 6]}>
@@ -183,14 +183,14 @@ export default function Reminders() {
               </Typography.Paragraph>
             )}
 
-            <Space size="small" wrap>
+            <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
               {!record.done && (
-                <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => handleDone(record.id)}>
+                <Button size="small" type="primary" icon={<CheckOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => handleDone(record.id)}>
                   完成
                 </Button>
               )}
               <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                <Button size="small" danger icon={<DeleteOutlined />} style={{ width: isMobile ? '100%' : undefined }}>删除</Button>
               </Popconfirm>
             </Space>
           </Space>
@@ -214,7 +214,7 @@ export default function Reminders() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
+          pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
           locale={{ emptyText: '暂无提醒' }}
           renderItem={renderReminderCard}
         />

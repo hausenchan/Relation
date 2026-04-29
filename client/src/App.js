@@ -279,8 +279,9 @@ function AppLayout() {
   ].filter(Boolean);
 
   // ── 团队管理 ────────────────────────────────────────────────
+  const canViewTaskBoard = ['leader', 'sales_director', 'admin'].includes(user?.role) || (user?.managed_team_ids?.length > 0);
   const teamChildren = [
-    ['leader', 'sales_director', 'admin'].includes(user?.role) && {
+    canViewTaskBoard && {
       key: '/task-board', icon: <ApartmentOutlined />, label: <Link to="/task-board">任务看板</Link>,
     },
     // 送礼管理子菜单
@@ -530,6 +531,7 @@ function AppLayout() {
         okText="确认修改"
         width={isMobile ? '100%' : undefined}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <Form form={pwdForm} layout="vertical" onFinish={handleChangePwd} style={{ marginTop: 16 }}>
           <Form.Item name="old_password" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
@@ -573,8 +575,7 @@ function AppLayout() {
           onClose={() => setMobileMenuOpen(false)}
           closable={false}
           width={280}
-          bodyStyle={{ padding: 0, background: DS.sidebar.bg }}
-          styles={{ content: { background: DS.sidebar.bg } }}
+          styles={{ body: { padding: 0, background: DS.sidebar.bg }, content: { background: DS.sidebar.bg } }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
             {menuContent}

@@ -282,8 +282,8 @@ export default function WeeklyReports() {
         }}
       >
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-            <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexDirection: isMobile ? 'column' : 'row' }}>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.user_name}</div>
               <Typography.Text type="secondary">{getDepartmentLabel(record.department)} · {record.user_role || '-'}</Typography.Text>
             </div>
@@ -308,10 +308,11 @@ export default function WeeklyReports() {
             </Typography.Paragraph>
           )}
 
-          <Space size="small" wrap>
+          <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
             <Button
-              type="link"
+              type={isMobile ? 'default' : 'link'}
               size="small"
+              style={{ width: isMobile ? '100%' : undefined }}
               onClick={(event) => {
                 event.stopPropagation();
                 showDetail(record);
@@ -321,9 +322,10 @@ export default function WeeklyReports() {
             </Button>
             {(isAdmin(currentUser?.role) || record.user_id === currentUser?.id) && (
               <Button
-                type="link"
+                type={isMobile ? 'default' : 'link'}
                 size="small"
                 icon={<EditOutlined />}
+                style={{ width: isMobile ? '100%' : undefined }}
                 onClick={(event) => {
                   event.stopPropagation();
                   handleEdit(record);
@@ -334,10 +336,11 @@ export default function WeeklyReports() {
             )}
             {isAdmin(currentUser?.role) && (
               <Button
-                type="link"
+                type={isMobile ? 'default' : 'link'}
                 size="small"
                 danger
                 icon={<DeleteOutlined />}
+                style={{ width: isMobile ? '100%' : undefined }}
                 onClick={(event) => {
                   event.stopPropagation();
                   handleDelete(record.id);
@@ -512,7 +515,7 @@ export default function WeeklyReports() {
           loading={loading}
           dataSource={reports}
           locale={{ emptyText: '暂无周报数据' }}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
+          pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
           renderItem={renderReportCard}
         />
       ) : (
@@ -611,6 +614,7 @@ export default function WeeklyReports() {
         width={isMobile ? '100%' : 600}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
       >
         {selectedReport && (
           <div>

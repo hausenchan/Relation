@@ -2403,7 +2403,8 @@ app.get('/api/tasks/count', (req, res) => {
 // 看板数据（按成员分组，供leader/sales_director使用）
 app.get('/api/tasks/board', (req, res) => {
   const { id: me, role } = req.user;
-  if (!['leader', 'sales_director', 'admin'].includes(role)) {
+  const managedTeamIds = getManagedTeamIds(me, role);
+  if (!['leader', 'sales_director', 'admin'].includes(role) && !managedTeamIds?.length) {
     return res.status(403).json({ error: '无权访问看板' });
   }
   const { date } = req.query;
@@ -2414,11 +2415,8 @@ app.get('/api/tasks/board', (req, res) => {
   if (isAdmin(role)) {
     visibleIds = db.prepare('SELECT id FROM users WHERE role != ?').all('readonly').map(u => u.id);
   } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(me, role);
     visibleIds = managedTeamIds?.length ? getUsersByTeamIds(managedTeamIds) : [me];
   } else {
-    // sales_director
-    const managedTeamIds = getManagedTeamIds(me, role);
     visibleIds = managedTeamIds?.length ? getUsersByTeamIds(managedTeamIds) : [me];
   }
   if (!visibleIds.includes(me)) visibleIds = [me, ...visibleIds];

@@ -7,7 +7,7 @@ import {
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
   PhoneOutlined, MailOutlined, WechatOutlined, EnvironmentOutlined, MessageOutlined,
-  UploadOutlined, DownloadOutlined, SwapOutlined
+  UploadOutlined, DownloadOutlined, FilterOutlined, SwapOutlined
 } from '@ant-design/icons';
 import { personsApi, interactionsApi, remindersApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -448,6 +448,7 @@ export default function Persons() {
   const [intPerson, setIntPerson] = useState(null);
   const [intPersonInteractions, setIntPersonInteractions] = useState([]);
   const [importOpen, setImportOpen] = useState(false);
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [importRows, setImportRows] = useState([]);
   const [importLoading, setImportLoading] = useState(false);
   const [assignTarget, setAssignTarget] = useState(null);
@@ -893,7 +894,7 @@ export default function Persons() {
           <Space direction="vertical" style={{ width: '100%' }} size={10}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6 }}>{record.name}</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6, overflowWrap: 'anywhere' }}>{record.name}</div>
                 <Space wrap size={[6, 6]}>
                   <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>
                   {record.weight && <Tag color={weightMap[record.weight]?.color}>{weightMap[record.weight]?.label}</Tag>}
@@ -942,10 +943,11 @@ export default function Persons() {
               </div>
             )}
 
-            <Space size="small" wrap>
+            <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
               <Button
                 size="small"
                 icon={<MessageOutlined />}
+                style={{ width: isMobile ? '100%' : undefined }}
                 onClick={(event) => {
                   event.stopPropagation();
                   openIntDrawer(record);
@@ -957,6 +959,7 @@ export default function Persons() {
                 <Button
                   size="small"
                   icon={<EditOutlined />}
+                  style={{ width: isMobile ? '100%' : undefined }}
                   onClick={(event) => {
                     event.stopPropagation();
                     openEdit(record);
@@ -969,6 +972,7 @@ export default function Persons() {
                 <Button
                   size="small"
                   icon={<SwapOutlined />}
+                  style={{ width: isMobile ? '100%' : undefined }}
                   onClick={(event) => {
                     event.stopPropagation();
                     openAssign(record);
@@ -989,6 +993,7 @@ export default function Persons() {
                     size="small"
                     danger
                     icon={<DeleteOutlined />}
+                    style={{ width: isMobile ? '100%' : undefined }}
                     onClick={(event) => event.stopPropagation()}
                   >
                     删除
@@ -1002,29 +1007,36 @@ export default function Persons() {
     );
   };
 
-  return (
-    <div style={{ padding: isMobile ? 0 : undefined }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
-          <Button icon={<UploadOutlined />} onClick={() => { setImportRows([]); setImportOpen(true); }} style={{ width: isMobile ? '100%' : undefined }}>导入</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加人脉</Button>
-        </Space>
-      </div>
-
-      <Tabs defaultActiveKey="list" items={[
-        {
-          key: 'list',
-          label: '列表视图',
-          children: (
-            <>
-      {/* 第一行：通用筛选 */}
-      <Space style={{ marginBottom: 12 }} wrap>
+  const activeFilterCount = [
+    search,
+    filterCategory,
+    filterRelationType,
+    filterPotentialLevel,
+    filterRecruitStatus,
+    filterIntentLevel,
+    filterCity,
+    filterWeight,
+  ].filter(Boolean).length;
+  const resetFilters = () => {
+    setSearch('');
+    setFilterCategory('');
+    setFilterRelationType('');
+    setFilterPotentialLevel('');
+    setFilterRecruitStatus('');
+    setFilterIntentLevel('');
+    setFilterCity('');
+    setFilterWeight('');
+  };
+  const filterControls = (
+    <>
+      <Space style={{ marginBottom: 12, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
         <Input.Search
           placeholder="搜索姓名、公司、技能、标签"
           allowClear
           style={{ width: isMobile ? '100%' : 280 }}
+          value={search}
           onSearch={setSearch}
-          onChange={e => !e.target.value && setSearch('')}
+          onChange={e => setSearch(e.target.value)}
         />
         <Select
           placeholder="圈子分类"
@@ -1034,7 +1046,6 @@ export default function Persons() {
           onChange={v => {
             setFilterCategory(v || '');
             setFilterRelationType('');
-            // 清空人才专属筛选
             if (v !== 'talent') {
               setFilterPotentialLevel('');
               setFilterRecruitStatus('');
@@ -1081,52 +1092,51 @@ export default function Persons() {
         </Select>
       </Space>
 
-      {/* 第二行：人才专属筛选（仅在选择人才圈时显示） */}
       {filterCategory === 'talent' && (
         <Space style={{ marginBottom: 12, paddingLeft: 8, borderLeft: '3px solid #52c41a', width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
           <Text type="secondary" style={{ fontSize: 12 }}>人才筛选：</Text>
-          <Select
-            placeholder="潜力评级"
-            allowClear
-            style={{ width: isMobile ? '100%' : 110 }}
-            value={filterPotentialLevel || undefined}
-            onChange={v => setFilterPotentialLevel(v || '')}
-          >
-            {Object.entries(potentialLevelMap).map(([k, v]) => (
-              <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
-            ))}
+          <Select placeholder="潜力评级" allowClear style={{ width: isMobile ? '100%' : 110 }} value={filterPotentialLevel || undefined} onChange={v => setFilterPotentialLevel(v || '')}>
+            {Object.entries(potentialLevelMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
           </Select>
-          <Select
-            placeholder="转化阶段"
-            allowClear
-            style={{ width: isMobile ? '100%' : 120 }}
-            value={filterRecruitStatus || undefined}
-            onChange={v => setFilterRecruitStatus(v || '')}
-          >
-            {Object.entries(recruitStatusMap).map(([k, v]) => (
-              <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
-            ))}
+          <Select placeholder="转化阶段" allowClear style={{ width: isMobile ? '100%' : 120 }} value={filterRecruitStatus || undefined} onChange={v => setFilterRecruitStatus(v || '')}>
+            {Object.entries(recruitStatusMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
           </Select>
-          <Select
-            placeholder="意向程度"
-            allowClear
-            style={{ width: isMobile ? '100%' : 110 }}
-            value={filterIntentLevel || undefined}
-            onChange={v => setFilterIntentLevel(v || '')}
-          >
-            {Object.entries(intentMap).map(([k, v]) => (
-              <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
-            ))}
+          <Select placeholder="意向程度" allowClear style={{ width: isMobile ? '100%' : 110 }} value={filterIntentLevel || undefined} onChange={v => setFilterIntentLevel(v || '')}>
+            {Object.entries(intentMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
           </Select>
         </Space>
       )}
+    </>
+  );
+
+  return (
+    <div style={{ padding: isMobile ? 0 : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+        <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+          <Button icon={<UploadOutlined />} onClick={() => { setImportRows([]); setImportOpen(true); }} style={{ width: isMobile ? '100%' : undefined }}>导入</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加人脉</Button>
+          {isMobile && (
+            <Button icon={<FilterOutlined />} onClick={() => setFilterDrawerOpen(true)} style={{ width: '100%' }}>
+              筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+            </Button>
+          )}
+        </Space>
+      </div>
+
+      <Tabs defaultActiveKey="list" tabBarGutter={isMobile ? 12 : undefined} items={[
+        {
+          key: 'list',
+          label: '列表视图',
+          children: (
+            <>
+      {!isMobile && filterControls}
 
       {isMobile ? (
         <List
           loading={loading}
           dataSource={data}
           locale={{ emptyText: '暂无人脉数据' }}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ pageSize: 15, showSizeChanger: false, simple: isMobile }}
           renderItem={renderPersonCard}
         />
       ) : (
@@ -1178,6 +1188,22 @@ export default function Persons() {
         },
       ]} />
 
+      <Drawer
+        title="筛选人脉"
+        placement="right"
+        width="100%"
+        open={filterDrawerOpen}
+        onClose={() => setFilterDrawerOpen(false)}
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Button onClick={resetFilters}>重置</Button>
+            <Button type="primary" onClick={() => setFilterDrawerOpen(false)}>完成</Button>
+          </Space>
+        }
+      >
+        {filterControls}
+      </Drawer>
+
       {/* 新增/编辑弹窗 */}
       <Modal
         title={editing ? '编辑人脉' : '添加人脉'}
@@ -1188,7 +1214,7 @@ export default function Persons() {
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
-        bodyStyle={{ maxHeight: isMobile ? 'calc(100vh - 120px)' : '70vh', overflowY: 'auto', paddingRight: 8 }}
+        styles={{ body: { maxHeight: isMobile ? 'calc(100vh - 120px)' : '70vh', overflowY: 'auto', paddingRight: 8 } }}
       >
         <Form form={form} layout="vertical" size="small">
           {/* 通用字段 */}
@@ -1240,6 +1266,7 @@ export default function Persons() {
         open={intDrawerOpen}
         onClose={() => setIntDrawerOpen(false)}
         width={isMobile ? '100%' : 560}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
       >
         {intPerson && (
           <>
@@ -1258,20 +1285,23 @@ export default function Persons() {
       {/* 详情抽屉 */}
       <Drawer
         title={
-          <Space>
-            {current?.name}
+          <Space wrap size={[6, 4]} style={{ maxWidth: isMobile ? 'calc(100vw - 120px)' : undefined }}>
+            <Text strong ellipsis={{ tooltip: current?.name }} style={{ maxWidth: isMobile ? 160 : 260 }}>
+              {current?.name}
+            </Text>
             {current && <Tag color={categoryMap[current.person_category]?.color}>{categoryMap[current.person_category]?.label}</Tag>}
           </Space>
         }
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={isMobile ? '100%' : 660}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
         extra={canEditPerson(current)
           ? <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>编辑</Button>
           : null}
       >
         {current && (
-          <Tabs defaultActiveKey="info" items={[
+          <Tabs defaultActiveKey="info" tabBarGutter={isMobile ? 12 : undefined} items={[
             {
               key: 'info', label: '基本信息',
               children: (
@@ -1470,21 +1500,45 @@ export default function Persons() {
               <div style={{ color: '#52c41a', fontSize: 13 }}>
                 已解析 <b>{importRows.length}</b> 条记录，预览如下（最多显示 5 条）：
               </div>
-              <Table
-                size="small"
-                pagination={false}
-                dataSource={importRows.slice(0, 5).map((r, i) => ({ ...r, _key: i }))}
-                rowKey="_key"
-                scroll={{ x: 600 }}
-                columns={[
-                  { title: '姓名', dataIndex: 'name', width: 90 },
-                  { title: '圈子', dataIndex: 'person_category', width: 80 },
-                  { title: '关系类型', dataIndex: 'relation_types', ellipsis: true },
-                  { title: '手机', dataIndex: 'phone', width: 120 },
-                  { title: '公司', dataIndex: 'company', ellipsis: true },
-                  { title: '职位', dataIndex: 'position', ellipsis: true },
-                ]}
-              />
+              {isMobile ? (
+                <List
+                  dataSource={importRows.slice(0, 5).map((r, i) => ({ ...r, _key: i }))}
+                  rowKey="_key"
+                  renderItem={(row) => (
+                    <List.Item style={{ padding: 0, marginBottom: 8, border: 'none' }}>
+                      <div style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fff' }}>
+                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                          <Text strong>{row.name || '未填写姓名'}</Text>
+                          <Space wrap size={[6, 6]}>
+                            {row.person_category && <Tag>{row.person_category}</Tag>}
+                            {row.relation_types && <Tag color="blue">{row.relation_types}</Tag>}
+                          </Space>
+                          <Typography.Text type="secondary">
+                            {(row.company || '未填写公司')} · {(row.position || '未填写职位')}
+                          </Typography.Text>
+                          {row.phone && <Typography.Text type="secondary">手机：{row.phone}</Typography.Text>}
+                        </Space>
+                      </div>
+                    </List.Item>
+                  )}
+                />
+              ) : (
+                <Table
+                  size="small"
+                  pagination={false}
+                  dataSource={importRows.slice(0, 5).map((r, i) => ({ ...r, _key: i }))}
+                  rowKey="_key"
+                  scroll={{ x: 600 }}
+                  columns={[
+                    { title: '姓名', dataIndex: 'name', width: 90 },
+                    { title: '圈子', dataIndex: 'person_category', width: 80 },
+                    { title: '关系类型', dataIndex: 'relation_types', ellipsis: true },
+                    { title: '手机', dataIndex: 'phone', width: 120 },
+                    { title: '公司', dataIndex: 'company', ellipsis: true },
+                    { title: '职位', dataIndex: 'position', ellipsis: true },
+                  ]}
+                />
+              )}
               {importRows.length > 5 && (
                 <div style={{ color: '#888', fontSize: 12 }}>...还有 {importRows.length - 5} 条</div>
               )}

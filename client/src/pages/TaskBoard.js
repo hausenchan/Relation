@@ -171,24 +171,24 @@ export default function TaskBoard() {
       {/* 统计卡片 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={8} lg={4}>
-          <Card size="small" style={{ textAlign: 'center', background: '#f0f5ff' }}>
-            <Statistic title="总任务" value={totalTasks} valueStyle={{ fontSize: isMobile ? 18 : 20 }} />
+          <Card size="small" style={{ textAlign: 'center', background: '#f0f5ff' }} styles={isMobile ? { body: { padding: '8px 10px' } } : undefined}>
+            <Statistic title={<span style={{ fontSize: isMobile ? 12 : undefined }}>总任务</span>} value={totalTasks} valueStyle={{ fontSize: isMobile ? 18 : 20 }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card size="small" style={{ textAlign: 'center', background: '#fff7e6' }}>
-            <Statistic title="进行中" value={inProgressTasks} valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#fa8c16' }} />
+          <Card size="small" style={{ textAlign: 'center', background: '#fff7e6' }} styles={isMobile ? { body: { padding: '8px 10px' } } : undefined}>
+            <Statistic title={<span style={{ fontSize: isMobile ? 12 : undefined }}>进行中</span>} value={inProgressTasks} valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#fa8c16' }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card size="small" style={{ textAlign: 'center', background: '#fff1f0' }}>
-            <Statistic title="待处理" value={pendingTasks} valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#ff4d4f' }} />
+          <Card size="small" style={{ textAlign: 'center', background: '#fff1f0' }} styles={isMobile ? { body: { padding: '8px 10px' } } : undefined}>
+            <Statistic title={<span style={{ fontSize: isMobile ? 12 : undefined }}>待处理</span>} value={pendingTasks} valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#ff4d4f' }} />
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card size="small" style={{ textAlign: 'center', background: '#f6ffed' }}>
+          <Card size="small" style={{ textAlign: 'center', background: '#f6ffed' }} styles={isMobile ? { body: { padding: '8px 10px' } } : undefined}>
             <Statistic
-              title="已完成"
+              title={<span style={{ fontSize: isMobile ? 12 : undefined }}>已完成</span>}
               value={doneTasks}
               suffix={totalTasks > 0 ? `/${totalTasks}` : ''}
               valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#52c41a' }}
@@ -196,9 +196,9 @@ export default function TaskBoard() {
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card size="small" style={{ textAlign: 'center', background: '#e6f7ff' }}>
+          <Card size="small" style={{ textAlign: 'center', background: '#e6f7ff' }} styles={isMobile ? { body: { padding: '8px 10px' } } : undefined}>
             <Statistic
-              title="我指派的"
+              title={<span style={{ fontSize: isMobile ? 12 : undefined }}>我指派的</span>}
               value={myAssignedTasks}
               valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#1890ff' }}
               prefix={<UserOutlined />}
@@ -206,9 +206,9 @@ export default function TaskBoard() {
           </Card>
         </Col>
         <Col xs={12} sm={8} lg={4}>
-          <Card size="small" style={{ textAlign: 'center', background: '#fff0f6' }}>
+          <Card size="small" style={{ textAlign: 'center', background: '#fff0f6' }} styles={isMobile ? { body: { padding: '8px 10px' } } : undefined}>
             <Statistic
-              title="指派给我"
+              title={<span style={{ fontSize: isMobile ? 12 : undefined }}>指派给我</span>}
               value={assignedToMeTasks}
               valueStyle={{ fontSize: isMobile ? 18 : 20, color: '#eb2f96' }}
               prefix={<TeamOutlined />}
@@ -219,7 +219,7 @@ export default function TaskBoard() {
 
       <Spin spinning={loading}>
         {Object.keys(grouped).length === 0 && !loading ? (
-          <Empty description="暂无数据" style={{ padding: 48 }} />
+          <Empty description="暂无数据" style={{ padding: isMobile ? 24 : 48 }} />
         ) : (
           Object.entries(grouped).map(([teamName, members]) => (
             <div key={teamName} style={{ marginBottom: 24 }}>
@@ -254,9 +254,9 @@ export default function TaskBoard() {
                           background: allDone ? '#f6ffed' : '#fff',
                         }}
                         title={
-                          <Space>
+                          <Space wrap size={[6, 4]} style={{ maxWidth: isMobile ? '100%' : undefined }}>
                             <UserOutlined />
-                            <Text strong style={{ fontSize: 13 }}>{member.display_name}</Text>
+                            <Text strong style={{ fontSize: 13, maxWidth: isMobile ? 150 : undefined }} ellipsis={{ tooltip: member.display_name }}>{member.display_name}</Text>
                             {mTotal > 0 && (
                               <Badge
                                 count={mTotal - mDone}
@@ -376,11 +376,11 @@ function TaskItem({ task, currentUser, isMobile, onStatus, onEdit, onDelete, onA
       border: '1px solid #f0f0f0',
       opacity: isDone ? 0.7 : 1,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 4 }}>
+      <div style={{ display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 4, marginBottom: 4, flexWrap: isMobile ? 'wrap' : 'nowrap' }}>
         <Tag color={p.color} icon={<FlagOutlined />} style={{ margin: 0, fontSize: 11 }}>{p.label}</Tag>
         {task.depth > 0 && <Tag color="purple" style={{ margin: 0, fontSize: 11 }}>子</Tag>}
         <Text
-          style={{ flex: 1, fontSize: 12, textDecoration: isDone ? 'line-through' : 'none', color: isDone ? '#aaa' : '#333' }}
+          style={{ flex: isMobile ? '1 0 100%' : 1, fontSize: 12, textDecoration: isDone ? 'line-through' : 'none', color: isDone ? '#aaa' : '#333' }}
           ellipsis={{ tooltip: task.title }}
         >
           {task.title}
@@ -394,13 +394,13 @@ function TaskItem({ task, currentUser, isMobile, onStatus, onEdit, onDelete, onA
       )}
       <div style={{ display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', justifyContent: 'space-between', gap: 4, flexDirection: isMobile ? 'column' : 'row' }}>
         <Badge status={s.badge} text={<Tag color={s.color} style={{ margin: 0, fontSize: 11 }}>{s.label}</Tag>} />
-        <Space size={2} wrap={isMobile}>
+        <Space size={2} wrap={isMobile} style={{ width: isMobile ? '100%' : undefined }}>
           {task.status === 'pending' && canEdit && (
-            <Button size="small" icon={<PlayCircleOutlined />} style={{ fontSize: 11, height: 22, padding: '0 6px' }}
+            <Button size="small" icon={<PlayCircleOutlined />} style={{ fontSize: 11, height: 22, padding: '0 6px', flex: isMobile ? '1 0 auto' : undefined }}
               onClick={() => onStatus(task, 'in_progress')}>开始</Button>
           )}
           {task.status === 'in_progress' && canEdit && (
-            <Button size="small" type="primary" icon={<CheckOutlined />} style={{ fontSize: 11, height: 22, padding: '0 6px' }}
+            <Button size="small" type="primary" icon={<CheckOutlined />} style={{ fontSize: 11, height: 22, padding: '0 6px', flex: isMobile ? '1 0 auto' : undefined }}
               onClick={() => onStatus(task, 'done')}>完成</Button>
           )}
           {!isDone && canEdit && (

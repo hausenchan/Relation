@@ -99,6 +99,24 @@
         min-height: 100vh;
         background: #0f0f23 !important;
       }
+
+      @media (max-width: 767px) {
+        input,
+        textarea,
+        select,
+        .ant-input,
+        .ant-input-affix-wrapper,
+        .ant-select-selector {
+          font-size: 16px !important;
+        }
+
+        .ant-pagination {
+          display: flex;
+          justify-content: center;
+          flex-wrap: wrap;
+          row-gap: 8px;
+        }
+      }
     </style>
   </head>
   <body>
