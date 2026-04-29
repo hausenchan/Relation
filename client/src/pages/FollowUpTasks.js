@@ -281,6 +281,7 @@ export default function FollowUpTasks() {
         cancelText="取消"
         width={isMobile ? '100%' : undefined}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <Form form={doneForm} layout="vertical">
           <Form.Item label="完成备注（跟进结果）" name="done_note" rules={[{ required: true, message: '请填写跟进结果' }]}>

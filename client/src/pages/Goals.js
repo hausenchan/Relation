@@ -19,7 +19,7 @@ import {
   Typography,
   message,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, EyeOutlined, FilterOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { goalsApi, usersApi, projectGroupsApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -144,6 +144,7 @@ function Goals() {
     owner_role: undefined,
   });
   const [modalVisible, setModalVisible] = useState(false);
+  const [filterDrawerVisible, setFilterDrawerVisible] = useState(false);
   const [editing, setEditing] = useState(null);
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -626,6 +627,21 @@ function Goals() {
     </Card>
   );
 
+  const activeFilterCount = Object.values(filters).filter(value => value !== undefined && value !== null && value !== '').length;
+  const filterControls = (
+    <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} size={[12, 12]} style={{ marginBottom: isMobile ? 0 : 16, width: isMobile ? '100%' : undefined }}>
+      <Select allowClear placeholder="部门" style={{ width: isMobile ? '100%' : 160 }} value={filters.department} onChange={(value) => handleFilterChange('department', value)} options={departmentOptions} />
+      <Select allowClear placeholder="项目组" style={{ width: isMobile ? '100%' : 160 }} value={filters.project_group_id} onChange={(value) => handleFilterChange('project_group_id', value)} options={projectGroups.map(group => ({ value: group.id, label: group.name }))} />
+      <Select allowClear placeholder="小组" style={{ width: isMobile ? '100%' : 160 }} value={filters.team_id} onChange={(value) => handleFilterChange('team_id', value)} options={teams.map(team => ({ value: team.id, label: team.name }))} />
+      <Select allowClear showSearch optionFilterProp="label" placeholder="负责人姓名" style={{ width: isMobile ? '100%' : 180 }} value={filters.owner_id} onChange={(value) => handleFilterChange('owner_id', value)} options={ownerOptions} />
+      <Select allowClear placeholder="目标类型" style={{ width: isMobile ? '100%' : 140 }} value={filters.goal_type} onChange={(value) => handleFilterChange('goal_type', value)} options={goalTypeOptions} />
+      <Select allowClear placeholder="归属颗粒度" style={{ width: isMobile ? '100%' : 160 }} value={filters.scope_type} onChange={(value) => handleFilterChange('scope_type', value)} options={scopeTypeOptions} />
+      <Select allowClear placeholder="状态" style={{ width: isMobile ? '100%' : 140 }} value={filters.status} onChange={(value) => handleFilterChange('status', value)} options={statusOptions} />
+      <Select allowClear placeholder="负责人角色" style={{ width: isMobile ? '100%' : 160 }} value={filters.owner_role} onChange={(value) => handleFilterChange('owner_role', value)} options={ownerRoleOptions} />
+      <Button onClick={resetFilters} style={{ width: isMobile ? '100%' : undefined }}>重置筛选</Button>
+    </Space>
+  );
+
   return (
     <div style={{ padding: isMobile ? 12 : 24 }}>
       <Card
@@ -637,80 +653,16 @@ function Goals() {
         )}
       >
         {isMobile && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal} style={{ width: '100%', marginBottom: 12 }}>
-            新建目标
-          </Button>
+          <Space direction="vertical" style={{ width: '100%', marginBottom: 12 }}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal} style={{ width: '100%' }}>
+              新建目标
+            </Button>
+            <Button icon={<FilterOutlined />} onClick={() => setFilterDrawerVisible(true)} style={{ width: '100%' }}>
+              筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+            </Button>
+          </Space>
         )}
-        <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} size={[12, 12]} style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }}>
-          <Select
-            allowClear
-            placeholder="部门"
-            style={{ width: isMobile ? '100%' : 160 }}
-            value={filters.department}
-            onChange={(value) => handleFilterChange('department', value)}
-            options={departmentOptions}
-          />
-          <Select
-            allowClear
-            placeholder="项目组"
-            style={{ width: isMobile ? '100%' : 160 }}
-            value={filters.project_group_id}
-            onChange={(value) => handleFilterChange('project_group_id', value)}
-            options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
-          />
-          <Select
-            allowClear
-            placeholder="小组"
-            style={{ width: isMobile ? '100%' : 160 }}
-            value={filters.team_id}
-            onChange={(value) => handleFilterChange('team_id', value)}
-            options={teams.map(team => ({ value: team.id, label: team.name }))}
-          />
-          <Select
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder="负责人姓名"
-            style={{ width: isMobile ? '100%' : 180 }}
-            value={filters.owner_id}
-            onChange={(value) => handleFilterChange('owner_id', value)}
-            options={ownerOptions}
-          />
-          <Select
-            allowClear
-            placeholder="目标类型"
-            style={{ width: isMobile ? '100%' : 140 }}
-            value={filters.goal_type}
-            onChange={(value) => handleFilterChange('goal_type', value)}
-            options={goalTypeOptions}
-          />
-          <Select
-            allowClear
-            placeholder="归属颗粒度"
-            style={{ width: isMobile ? '100%' : 160 }}
-            value={filters.scope_type}
-            onChange={(value) => handleFilterChange('scope_type', value)}
-            options={scopeTypeOptions}
-          />
-          <Select
-            allowClear
-            placeholder="状态"
-            style={{ width: isMobile ? '100%' : 140 }}
-            value={filters.status}
-            onChange={(value) => handleFilterChange('status', value)}
-            options={statusOptions}
-          />
-          <Select
-            allowClear
-            placeholder="负责人角色"
-            style={{ width: isMobile ? '100%' : 160 }}
-            value={filters.owner_role}
-            onChange={(value) => handleFilterChange('owner_role', value)}
-            options={ownerRoleOptions}
-          />
-          <Button onClick={resetFilters} style={{ width: isMobile ? '100%' : undefined }}>重置筛选</Button>
-        </Space>
-
+        {!isMobile && filterControls}
         <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
           {isMobile ? '点击卡片可查看详情' : '双击目标行可查看详情'}
         </Typography.Text>
@@ -742,6 +694,22 @@ function Goals() {
         )}
       </Card>
 
+      <Drawer
+        title="筛选目标"
+        placement="right"
+        width="100%"
+        open={filterDrawerVisible}
+        onClose={() => setFilterDrawerVisible(false)}
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Button onClick={resetFilters}>重置</Button>
+            <Button type="primary" onClick={() => setFilterDrawerVisible(false)}>完成</Button>
+          </Space>
+        }
+      >
+        {filterControls}
+      </Drawer>
+
       <Modal
         title={editing ? '编辑目标' : '新建目标'}
         open={modalVisible}
@@ -749,6 +717,7 @@ function Goals() {
         onCancel={() => setModalVisible(false)}
         width={isMobile ? '100%' : 680}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
         destroyOnClose
       >
         <Form

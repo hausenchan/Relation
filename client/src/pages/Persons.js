@@ -1437,6 +1437,7 @@ export default function Persons() {
         cancelText="取消"
         width={isMobile ? '100%' : 760}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <Space direction="vertical" style={{ width: '100%' }} size={12}>
           <Alert
@@ -1501,6 +1502,7 @@ export default function Persons() {
         okText="确认指派"
         width={isMobile ? '100%' : undefined}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
           原录入人始终保留编辑权限，被指派人获得额外编辑权限。

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Space, Modal, Form, Input, DatePicker, message, Drawer, Select, Tag, Grid, List, Typography } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FilterOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useAuth } from '../AuthContext';
@@ -46,6 +46,7 @@ export default function WeeklyReports() {
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [writerModalVisible, setWriterModalVisible] = useState(false);
+  const [filterDrawerVisible, setFilterDrawerVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
   const [form] = Form.useForm();
@@ -458,32 +459,43 @@ export default function WeeklyReports() {
       value: monday.format('YYYY-MM-DD'),
     });
   }
+  const activeFilterCount = Object.values(filters).filter(Boolean).length;
+  const filterControls = (
+    <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }} wrap>
+      <Select
+        placeholder="选择周"
+        style={{ width: isMobile ? '100%' : 200 }}
+        allowClear
+        value={filters.week_start || undefined}
+        onChange={(val) => setFilters({ ...filters, week_start: val || '' })}
+      >
+        {quickWeeks.map((w) => (
+          <Option key={w.value} value={w.value}>{w.label} ({w.value})</Option>
+        ))}
+      </Select>
+      <Select
+        placeholder="部门"
+        style={{ width: isMobile ? '100%' : 150 }}
+        allowClear
+        value={filters.department || undefined}
+        onChange={(val) => setFilters({ ...filters, department: val || '' })}
+      >
+        <Option value="commercial">商务</Option>
+        <Option value="operation">产运</Option>
+        <Option value="rd">研发</Option>
+      </Select>
+    </Space>
+  );
 
   return (
     <div style={{ padding: isMobile ? 12 : 24 }}>
-      <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-        <Select
-          placeholder="选择周"
-          style={{ width: isMobile ? '100%' : 200 }}
-          allowClear
-          value={filters.week_start || undefined}
-          onChange={(val) => setFilters({ ...filters, week_start: val || '' })}
-        >
-          {quickWeeks.map((w) => (
-            <Option key={w.value} value={w.value}>{w.label} ({w.value})</Option>
-          ))}
-        </Select>
-        <Select
-          placeholder="部门"
-          style={{ width: isMobile ? '100%' : 150 }}
-          allowClear
-          value={filters.department || undefined}
-          onChange={(val) => setFilters({ ...filters, department: val || '' })}
-        >
-          <Option value="commercial">商务</Option>
-          <Option value="operation">产运</Option>
-          <Option value="rd">研发</Option>
-        </Select>
+      <div style={{ marginBottom: 16, display: 'flex', gap: 12, alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', flexWrap: 'wrap' }}>
+        {!isMobile && filterControls}
+        {isMobile && (
+          <Button icon={<FilterOutlined />} onClick={() => setFilterDrawerVisible(true)} style={{ width: '100%' }}>
+            筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+          </Button>
+        )}
         <div style={{ flex: 1 }} />
         {isAdmin(currentUser?.role) && (
           <Button icon={<SettingOutlined />} onClick={handleManageWriters} style={{ width: isMobile ? '100%' : undefined }}>
@@ -521,6 +533,7 @@ export default function WeeklyReports() {
         onOk={handleSubmit}
         width={isMobile ? '100%' : 700}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -543,6 +556,22 @@ export default function WeeklyReports() {
         </Form>
       </Modal>
 
+      <Drawer
+        title="筛选周报"
+        placement="right"
+        width="100%"
+        open={filterDrawerVisible}
+        onClose={() => setFilterDrawerVisible(false)}
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Button onClick={() => setFilters({ week_start: '', department: '' })}>重置</Button>
+            <Button type="primary" onClick={() => setFilterDrawerVisible(false)}>完成</Button>
+          </Space>
+        }
+      >
+        {filterControls}
+      </Drawer>
+
       <Modal
         title="管理周报人员"
         open={writerModalVisible}
@@ -552,6 +581,7 @@ export default function WeeklyReports() {
         ]}
         width={isMobile ? '100%' : 700}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>
           组长和总监默认需要写周报。老板可以指定普通成员写周报。

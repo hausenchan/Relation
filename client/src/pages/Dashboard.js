@@ -1229,6 +1229,7 @@ export default function Dashboard() {
         onCancel={() => setModalOpen(false)}
         width={isMobile ? '100%' : undefined}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
         okText="保存"
         cancelText="取消"
       >

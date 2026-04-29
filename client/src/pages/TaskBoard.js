@@ -322,6 +322,7 @@ export default function TaskBoard() {
         cancelText="取消"
         width={isMobile ? '100%' : 520}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <Form form={form} layout="vertical">
           <Form.Item label="任务标题" name="title" rules={[{ required: true, message: '请填写任务标题' }]}>
@@ -331,10 +332,10 @@ export default function TaskBoard() {
             <Input.TextArea rows={2} placeholder="详细说明（选填）" />
           </Form.Item>
           <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={12}>
-            <Form.Item label="日期" name="date" rules={[{ required: true }]} style={{ flex: 1, marginBottom: 0 }}>
+            <Form.Item label="日期" name="date" rules={[{ required: true }]} style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
               <DatePicker style={{ width: '100%' }} />
             </Form.Item>
-            <Form.Item label="优先级" name="priority" style={{ flex: 1, marginBottom: 0 }}>
+            <Form.Item label="优先级" name="priority" style={{ flex: 1, marginBottom: 0, width: isMobile ? '100%' : undefined }}>
               <Select>
                 {Object.entries(priorityMap).map(([k, v]) => (
                   <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
