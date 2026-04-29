@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Form, Input, Button, Card, Typography, message } from 'antd';
+import { Form, Input, Button, Card, Typography, message, Grid } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 
 const { Title, Text } = Typography;
+const { useBreakpoint } = Grid;
 
 // SVG Logo —— 闪电 + 齿轮融合，充满力量与激情
 function MidongLogo({ size = 72 }) {
@@ -42,6 +43,8 @@ function MidongLogo({ size = 72 }) {
 }
 
 export default function Login() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const { login } = useAuth();
   const [loading, setLoading] = useState(false);
 
@@ -59,10 +62,11 @@ export default function Login() {
 
   return (
     <div style={{
-      minHeight: '100vh',
+      minHeight: '100dvh',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
+      padding: isMobile ? 16 : 24,
       background: 'linear-gradient(135deg, #0f0f23 0%, #1a1145 40%, #0d1f3c 100%)',
       position: 'relative',
       overflow: 'hidden',
@@ -71,29 +75,35 @@ export default function Login() {
       <div style={{
         position: 'absolute', width: 500, height: 500, borderRadius: '50%',
         background: 'radial-gradient(circle, rgba(102,126,234,0.15) 0%, transparent 70%)',
-        top: '-5%', left: '10%', pointerEvents: 'none',
+        top: '-5%', left: '10%', pointerEvents: 'none', display: isMobile ? 'none' : 'block',
       }} />
       <div style={{
         position: 'absolute', width: 400, height: 400, borderRadius: '50%',
         background: 'radial-gradient(circle, rgba(118,75,162,0.12) 0%, transparent 70%)',
-        bottom: '10%', right: '5%', pointerEvents: 'none',
+        bottom: '10%', right: '5%', pointerEvents: 'none', display: isMobile ? 'none' : 'block',
       }} />
       <div style={{
         position: 'absolute', width: 300, height: 300, borderRadius: '50%',
         background: 'radial-gradient(circle, rgba(79,172,254,0.08) 0%, transparent 70%)',
-        bottom: '30%', left: '50%', pointerEvents: 'none',
+        bottom: '30%', left: '50%', pointerEvents: 'none', display: isMobile ? 'none' : 'block',
       }} />
 
       <Card
-        style={{ width: 420, borderRadius: 24, boxShadow: '0 30px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)', border: 'none' }}
-        styles={{ body: { padding: '44px 40px' } }}
+        style={{
+          width: '100%',
+          maxWidth: 420,
+          borderRadius: isMobile ? 16 : 24,
+          boxShadow: isMobile ? '0 18px 50px rgba(0,0,0,0.36)' : '0 30px 80px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)',
+          border: 'none',
+        }}
+        styles={{ body: { padding: isMobile ? '32px 22px' : '44px 40px' } }}
       >
         {/* Logo + 标题区 */}
-        <div style={{ textAlign: 'center', marginBottom: 36 }}>
+        <div style={{ textAlign: 'center', marginBottom: isMobile ? 28 : 36 }}>
           <div style={{ marginBottom: 14 }}>
-            <MidongLogo size={76} />
+            <MidongLogo size={isMobile ? 64 : 76} />
           </div>
-          <Title level={2} style={{ margin: 0, fontSize: 28, letterSpacing: 4, color: '#4F46E5' }}>
+          <Title level={2} style={{ margin: 0, fontSize: isMobile ? 24 : 28, letterSpacing: isMobile ? 2 : 4, color: '#4F46E5' }}>
             幂动小智
           </Title>
           <div style={{ marginTop: 6, fontSize: 12, letterSpacing: 3, color: '#999', fontWeight: 400 }}>

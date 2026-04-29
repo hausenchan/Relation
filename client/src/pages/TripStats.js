@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Row, Col, Card, Select, Typography, Tag, Table, Alert, Space, Statistic, Badge, Grid } from 'antd';
+import { Row, Col, Card, Select, Typography, Tag, Table, Alert, Space, Statistic, Badge, Grid, List } from 'antd';
 import { WarningOutlined, TeamOutlined, CarOutlined } from '@ant-design/icons';
 import { tripsApi, groupsApi } from '../api';
 
@@ -85,6 +85,40 @@ export default function TripStats() {
 
   const totalAmount = stats?.monthly?.reduce((s, m) => s + (m.total_amount || 0), 0) || 0;
   const totalTrips = stats?.monthly?.reduce((s, m) => s + (m.trip_count || 0), 0) || 0;
+
+  const renderAlertCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
+      <div style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 10, background: '#fff' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Text strong>{record.name}</Text>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{record.company || record.current_company || '-'}</div>
+            </div>
+            <Tag color={record.relationship_level === 'vip' ? 'gold' : 'red'}>
+              {record.relationship_level === 'vip' ? 'VIP' : '重要'}
+            </Tag>
+          </div>
+          <Space wrap size={[8, 6]}>
+            <Text type="secondary">上次拜访：{record.last_trip_date || '从未'}</Text>
+            <Badge
+              color={!record.last_trip_date ? '#ff4d4f' : record.days_since > 90 ? '#ff4d4f' : '#fa8c16'}
+              text={
+                <Text style={{ color: !record.last_trip_date ? '#ff4d4f' : record.days_since > 90 ? '#ff4d4f' : '#fa8c16', fontWeight: 600 }}>
+                  {record.last_trip_date ? `${record.days_since}天` : '从未拜访'}
+                </Text>
+              }
+            />
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {!record.last_trip_date ? '尚未建立出差拜访记录，建议尽快安排' :
+             record.days_since > 90 ? '已超过90天，强烈建议安排拜访' :
+             '已超过60天，建议近期安排拜访'}
+          </Text>
+        </Space>
+      </div>
+    </List.Item>
+  );
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
@@ -192,7 +226,13 @@ export default function TripStats() {
           >
             {stats?.alerts?.length === 0
               ? <Alert message="所有重要客户均在60天内有出差拜访记录，保持良好！" type="success" showIcon />
-              : (
+              : isMobile ? (
+                <List
+                  dataSource={stats?.alerts || []}
+                  rowKey="id"
+                  renderItem={renderAlertCard}
+                />
+              ) : (
                 <Table
                   size="small"
                   pagination={false}

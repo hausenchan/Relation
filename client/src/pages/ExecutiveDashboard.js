@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag, Alert, Spin } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Alert, Spin, Grid, List, Typography, Space } from 'antd';
 import { UserOutlined, TeamOutlined, ShopOutlined, FileTextOutlined, WarningOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 export default function ExecutiveDashboard() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
 
@@ -67,10 +69,61 @@ export default function ExecutiveDashboard() {
     { title: '最后互动', dataIndex: 'last_contact_date', key: 'last_contact_date', width: 120 }
   ];
 
+  const renderTalentCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <Typography.Text strong>{record.name}</Typography.Text>
+              <div style={{ fontSize: 12, color: '#6b7280' }}>{record.company || '-'} · {record.position || '-'}</div>
+            </div>
+            <Tag color={record.potential_rating === 'S' ? 'red' : record.potential_rating === 'A' ? 'orange' : 'blue'}>{record.potential_rating}</Tag>
+          </div>
+          <Typography.Text type="secondary">招募状态：{({ pending: '待接触', contacted: '已接触', negotiating: '洽谈中', offered: '已发offer', joined: '已入职', rejected: '已拒绝' }[record.recruit_status] || record.recruit_status || '-')}</Typography.Text>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
+  const renderDynamicCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <Typography.Text strong>{record.company_name || '-'}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{record.date || '-'}</Typography.Text>
+          </div>
+          <Tag>{record.type || '-'}</Tag>
+          <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>{record.content || '-'}</Typography.Paragraph>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
+  const renderCustomerCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <Typography.Text strong>{record.name}</Typography.Text>
+              <div style={{ fontSize: 12, color: '#6b7280' }}>{record.company || '-'} · {record.position || '-'}</div>
+            </div>
+            <span style={{ color: record.days_since_last_contact > 30 ? 'red' : record.days_since_last_contact > 14 ? 'orange' : 'inherit' }}>
+              {record.days_since_last_contact}天
+            </span>
+          </div>
+          <Typography.Text type="secondary">最后互动：{record.last_contact_date || '-'}</Typography.Text>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div style={{ padding: 24 }}>
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={6}>
+    <div style={{ padding: isMobile ? 0 : 24 }}>
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={12} md={6}>
           <Card>
             <Statistic
               title="高潜人才"
@@ -80,7 +133,7 @@ export default function ExecutiveDashboard() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} md={6}>
           <Card>
             <Statistic
               title="招募中人才"
@@ -90,7 +143,7 @@ export default function ExecutiveDashboard() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} md={6}>
           <Card>
             <Statistic
               title="竞品动态"
@@ -100,7 +153,7 @@ export default function ExecutiveDashboard() {
             />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col xs={12} md={6}>
           <Card>
             <Statistic
               title="待跟进客户"
@@ -132,37 +185,25 @@ export default function ExecutiveDashboard() {
       <Row gutter={16}>
         <Col span={24}>
           <Card title="高潜人才动态" style={{ marginBottom: 16 }}>
-            <Table
-              dataSource={data.recent_talents}
-              columns={talentColumns}
-              rowKey="id"
-              pagination={false}
-              size="small"
-            />
+            {isMobile ? <List dataSource={data.recent_talents} rowKey="id" renderItem={renderTalentCard} /> : (
+              <Table dataSource={data.recent_talents} columns={talentColumns} rowKey="id" pagination={false} size="small" />
+            )}
           </Card>
         </Col>
 
         <Col span={24}>
           <Card title="竞品最新动态" style={{ marginBottom: 16 }}>
-            <Table
-              dataSource={data.recent_dynamics}
-              columns={dynamicsColumns}
-              rowKey="id"
-              pagination={false}
-              size="small"
-            />
+            {isMobile ? <List dataSource={data.recent_dynamics} rowKey="id" renderItem={renderDynamicCard} /> : (
+              <Table dataSource={data.recent_dynamics} columns={dynamicsColumns} rowKey="id" pagination={false} size="small" />
+            )}
           </Card>
         </Col>
 
         <Col span={24}>
           <Card title="重点客户待跟进">
-            <Table
-              dataSource={data.customers_need_followup}
-              columns={customerColumns}
-              rowKey="id"
-              pagination={false}
-              size="small"
-            />
+            {isMobile ? <List dataSource={data.customers_need_followup} rowKey="id" renderItem={renderCustomerCard} /> : (
+              <Table dataSource={data.customers_need_followup} columns={customerColumns} rowKey="id" pagination={false} size="small" />
+            )}
           </Card>
         </Col>
       </Row>

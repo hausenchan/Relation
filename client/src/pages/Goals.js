@@ -630,13 +630,18 @@ function Goals() {
     <div style={{ padding: isMobile ? 12 : 24 }}>
       <Card
         title="目标管理"
-        extra={(
+        extra={!isMobile && (
           <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
             新建目标
           </Button>
         )}
       >
-        <Space wrap size={[12, 12]} style={{ marginBottom: 16 }}>
+        {isMobile && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal} style={{ width: '100%', marginBottom: 12 }}>
+            新建目标
+          </Button>
+        )}
+        <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} size={[12, 12]} style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }}>
           <Select
             allowClear
             placeholder="部门"

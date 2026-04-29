@@ -2234,7 +2234,14 @@ app.get('/api/follow-up-tasks', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
-  if (!(isAdmin(role) && all === '1')) {
+  if (all === '1' && isAdmin(role)) {
+    // 管理员和高管查看全量跟进任务。
+  } else if (all === '1' && ['leader', 'sales_director'].includes(role)) {
+    const managedTeamIds = getManagedTeamIds(me, role);
+    const visibleUserIds = managedTeamIds?.length ? [...new Set([me, ...getUsersByTeamIds(managedTeamIds)])] : [me];
+    query += ` AND (f.assigned_to IN (${visibleUserIds.map(() => '?').join(',')}) OR f.assigned_by IN (${visibleUserIds.map(() => '?').join(',')}))`;
+    params.push(...visibleUserIds, ...visibleUserIds);
+  } else {
     query += ' AND (f.assigned_to = ? OR f.assigned_by = ?)';
     params.push(me, me);
   }

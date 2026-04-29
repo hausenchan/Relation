@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Card, Button, Space, Modal, Form, Input, DatePicker, Select, message, Collapse, Divider } from 'antd';
+import { Table, Card, Button, Space, Modal, Form, Input, DatePicker, Select, message, Collapse, Divider, Grid, List, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined, MinusCircleOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 import axios from 'axios';
@@ -17,6 +17,8 @@ const EXECUTIVE_ROLES = [
 ];
 
 export default function OperationalMeeting() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
@@ -225,25 +227,56 @@ export default function OperationalMeeting() {
     }
   ];
 
+  const renderMeetingCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div>
+            <Typography.Text strong>{record.year}年{record.month}月第{record.week}周经营周会</Typography.Text>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{record.meeting_date || '-'}</div>
+          </div>
+          <Typography.Paragraph ellipsis={{ rows: 3, expandable: false }} style={{ marginBottom: 0 }}>
+            {renderSummary(record)}
+          </Typography.Paragraph>
+          <Typography.Text type="secondary">参会人员：{record.attendees || '-'}</Typography.Text>
+          <Space size="small" wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
+            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>删除</Button>
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: isMobile ? 0 : 24 }}>
       <Card
-        extra={
+        extra={!isMobile && (
           <Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
               新建记录
             </Button>
             <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
           </Space>
-        }
+        )}
       >
-        <Table
-          dataSource={data}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-        />
+        {isMobile && (
+          <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} style={{ width: '100%' }}>新建记录</Button>
+            <Button icon={<ReloadOutlined />} onClick={fetchData} style={{ width: '100%' }}>刷新</Button>
+          </Space>
+        )}
+        {isMobile ? (
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderMeetingCard} />
+        ) : (
+          <Table
+            dataSource={data}
+            columns={columns}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -251,7 +284,8 @@ export default function OperationalMeeting() {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={900}
+        width={isMobile ? '100%' : 900}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -260,19 +294,19 @@ export default function OperationalMeeting() {
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
 
-          <Space style={{ width: '100%' }}>
-            <Form.Item label="年份" name="year" rules={[{ required: true, message: '请输入年份' }]}>
-              <Input type="number" placeholder="2026" style={{ width: 100 }} />
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }}>
+            <Form.Item label="年份" name="year" rules={[{ required: true, message: '请输入年份' }]} style={{ width: isMobile ? '100%' : undefined }}>
+              <Input type="number" placeholder="2026" style={{ width: isMobile ? '100%' : 100 }} />
             </Form.Item>
-            <Form.Item label="月份" name="month" rules={[{ required: true, message: '请输入月份' }]}>
-              <Select style={{ width: 100 }}>
+            <Form.Item label="月份" name="month" rules={[{ required: true, message: '请输入月份' }]} style={{ width: isMobile ? '100%' : undefined }}>
+              <Select style={{ width: isMobile ? '100%' : 100 }}>
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(m => (
                   <Option key={m} value={m}>{m}月</Option>
                 ))}
               </Select>
             </Form.Item>
-            <Form.Item label="周次" name="week" rules={[{ required: true, message: '请输入周次' }]}>
-              <Select style={{ width: 100 }}>
+            <Form.Item label="周次" name="week" rules={[{ required: true, message: '请输入周次' }]} style={{ width: isMobile ? '100%' : undefined }}>
+              <Select style={{ width: isMobile ? '100%' : 100 }}>
                 {[1, 2, 3, 4, 5].map(w => (
                   <Option key={w} value={w}>第{w}周</Option>
                 ))}

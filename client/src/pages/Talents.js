@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
-  Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Badge, Tooltip
+  Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Badge, Tooltip, Grid, List
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
@@ -15,6 +15,7 @@ import ReminderList from '../components/ReminderList';
 
 const { Title } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const statusMap = {
   potential: { label: '潜在', color: 'blue' },
@@ -34,6 +35,8 @@ const intentMap = {
 };
 
 export default function Talents() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -161,60 +164,117 @@ export default function Talents() {
     },
   ];
 
+  const renderTalentCard = (record) => {
+    const status = statusMap[record.status] || { label: record.status || '-', color: 'default' };
+    const intent = intentMap[record.intent_level] || { label: record.intent_level || '-', color: 'default' };
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => openDetail(record)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') openDetail(record);
+          }}
+          style={{ width: '100%', padding: 14, border: '1px solid #f0f0f0', borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', cursor: 'pointer' }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.name}</div>
+                <Typography.Text type="secondary">{record.current_company || '-'} · {record.current_position || '-'}</Typography.Text>
+              </div>
+              <Tag color={record.talent_type === 'internal' ? 'green' : 'blue'}>{record.talent_type === 'internal' ? '内部' : '外部'}</Tag>
+            </div>
+            <Space wrap size={[6, 6]}>
+              <Tag color={status.color}>{status.label}</Tag>
+              <Tag color={intent.color}>{intent.label}</Tag>
+              {record.expected_salary && <Tag>{record.expected_salary}</Tag>}
+            </Space>
+            <Space wrap size={[8, 6]}>
+              {record.phone && <Typography.Text copyable={{ text: record.phone }}>手机</Typography.Text>}
+              {record.wechat && <Typography.Text copyable={{ text: record.wechat }}>微信</Typography.Text>}
+              {record.email && <Typography.Text copyable={{ text: record.email }}>邮箱</Typography.Text>}
+            </Space>
+            <Typography.Text type="secondary">更新时间：{record.updated_at?.slice(0, 10) || '-'}</Typography.Text>
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>编辑</Button>
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()}>删除</Button>
+              </Popconfirm>
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12, marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>人才库</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加人才</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加人才</Button>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
         <Input.Search
           placeholder="搜索姓名、公司、技能、标签"
           allowClear
-          style={{ width: 280 }}
+          style={{ width: isMobile ? '100%' : 280 }}
           onSearch={setSearch}
           onChange={e => !e.target.value && setSearch('')}
         />
-        <Select placeholder="人才类型" allowClear style={{ width: 120 }} onChange={v => setFilterTalentType(v || '')}>
+        <Select placeholder="人才类型" allowClear style={{ width: isMobile ? '100%' : 120 }} onChange={v => setFilterTalentType(v || '')}>
           <Option value="external">外部</Option>
           <Option value="internal">内部</Option>
         </Select>
-        <Select placeholder="挖掘状态" allowClear style={{ width: 120 }} onChange={setFilterStatus}>
+        <Select placeholder="挖掘状态" allowClear style={{ width: isMobile ? '100%' : 120 }} onChange={setFilterStatus}>
           {Object.entries(statusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
-        <Select placeholder="意向程度" allowClear style={{ width: 120 }} onChange={setFilterIntent}>
+        <Select placeholder="意向程度" allowClear style={{ width: isMobile ? '100%' : 120 }} onChange={setFilterIntent}>
           {Object.entries(intentMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
       </Space>
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        scroll={{ x: 900 }}
-        pagination={{ pageSize: 15 }}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 15, showSizeChanger: false }}
+          locale={{ emptyText: '暂无人才' }}
+          renderItem={renderTalentCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          scroll={{ x: 900 }}
+          pagination={{ pageSize: 15 }}
+        />
+      )}
 
       <Modal
         title={editing ? '编辑人才信息' : '添加人才'}
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={700}
+        width={isMobile ? '100%' : 700}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
         <Form form={form} layout="vertical" initialValues={{ talent_type: 'external' }}>
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="姓名" name="name" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="人才类型" name="talent_type">
                 <Select onChange={val => setTalentType(val)}>
                   <Option value="external">外部</Option>
@@ -224,42 +284,42 @@ export default function Talents() {
             </Col>
             {talentType === 'external' ? (
               <>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="现任公司" name="current_company">
                     <Input />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="现任职位" name="current_position">
                     <Input />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="目标职位" name="target_position">
                     <Input />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="手机" name="phone">
                     <Input prefix={<PhoneOutlined />} />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="微信" name="wechat">
                     <Input />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="邮箱" name="email">
                     <Input />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="工作年限" name="experience_years">
                     <Input type="number" addonAfter="年" />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="最高学历" name="education">
                     <Select>
                       <Option value="博士">博士</Option>
@@ -270,31 +330,31 @@ export default function Talents() {
                     </Select>
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="期望薪资" name="expected_salary">
                     <Input placeholder="如: 30-40K" />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="挖掘状态" name="status">
                     <Select>
                       {Object.entries(statusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                     </Select>
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="意向程度" name="intent_level">
                     <Select>
                       {Object.entries(intentMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                     </Select>
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="生日" name="birthday">
                     <Input placeholder="如 1990-03-20" />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="来源渠道" name="source">
                     <Input placeholder="如: 内推、LinkedIn、Boss直聘" />
                   </Form.Item>
@@ -317,22 +377,22 @@ export default function Talents() {
               </>
             ) : (
               <>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="心" name="heart">
                     <Input.TextArea rows={2} placeholder="价值观、使命感" />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="脑" name="brain">
                     <Input.TextArea rows={2} placeholder="思维能力、专业能力" />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="口" name="mouth">
                     <Input.TextArea rows={2} placeholder="沟通表达能力" />
                   </Form.Item>
                 </Col>
-                <Col span={12}>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="手" name="hand">
                     <Input.TextArea rows={2} placeholder="执行力、动手能力" />
                   </Form.Item>
@@ -352,7 +412,7 @@ export default function Talents() {
         title={current?.name}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={620}
+        width={isMobile ? '100%' : 620}
         extra={<Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>编辑</Button>}
       >
         {current && (
@@ -360,7 +420,7 @@ export default function Talents() {
             {
               key: 'info', label: '基本信息',
               children: (
-                <Descriptions column={2} size="small" bordered>
+                <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
                   <Descriptions.Item label="人才类型" span={2}>
                     <Tag color={current.talent_type === 'internal' ? 'green' : 'blue'}>
                       {current.talent_type === 'internal' ? '内部' : '外部'}

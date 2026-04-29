@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Card, Select, Space, Button, Tag } from 'antd';
+import { Table, Card, Select, Space, Button, Tag, Grid, List, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 const { Option } = Select;
 
 export default function ExecutiveDynamics() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
   const [companies, setCompanies] = useState([]);
@@ -106,10 +108,45 @@ export default function ExecutiveDynamics() {
     }
   ];
 
+  const renderDynamicCard = (record) => {
+    const map = {
+      product: '产品发布',
+      funding: '融资',
+      partnership: '合作',
+      personnel: '人事变动',
+      market: '市场动态',
+      other: '其他'
+    };
+    const colorMap = {
+      product: 'blue',
+      funding: 'green',
+      partnership: 'cyan',
+      personnel: 'orange',
+      market: 'purple',
+      other: 'default'
+    };
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <Card size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <Typography.Text strong>{record.company_name || '-'}</Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>{record.date || '-'}</Typography.Text>
+            </div>
+            <Tag color={colorMap[record.type]}>{map[record.type] || record.type}</Tag>
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>{record.content || '-'}</Typography.Paragraph>
+            {record.impact && <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>影响：{record.impact}</Typography.Paragraph>}
+            {record.source && <Typography.Text type="secondary">来源：{record.source}</Typography.Text>}
+          </Space>
+        </Card>
+      </List.Item>
+    );
+  };
+
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: isMobile ? 0 : 24 }}>
       <Card
-        extra={
+        extra={!isMobile && (
           <Space>
             <Select
               placeholder="选择公司"
@@ -128,15 +165,37 @@ export default function ExecutiveDynamics() {
             </Select>
             <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
           </Space>
-        }
+        )}
       >
-        <Table
-          dataSource={data}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-        />
+        {isMobile && (
+          <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+            <Select
+              placeholder="选择公司"
+              style={{ width: '100%' }}
+              allowClear
+              value={selectedCompany || undefined}
+              onChange={(val) => setSelectedCompany(val || '')}
+              showSearch
+              filterOption={(input, option) => option.children.toLowerCase().includes(input.toLowerCase())}
+            >
+              {companies.map(c => (
+                <Option key={c.id} value={c.id}>{c.name}</Option>
+              ))}
+            </Select>
+            <Button icon={<ReloadOutlined />} onClick={fetchData} style={{ width: '100%' }}>刷新</Button>
+          </Space>
+        )}
+        {isMobile ? (
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderDynamicCard} />
+        ) : (
+          <Table
+            dataSource={data}
+            columns={columns}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+          />
+        )}
       </Card>
     </div>
   );

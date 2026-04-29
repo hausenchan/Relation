@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
-  Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Badge, Tooltip
+  Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Badge, Tooltip, Grid, List
 } from 'antd';
 import {
   PlusOutlined, SearchOutlined, EditOutlined, DeleteOutlined,
@@ -16,6 +16,7 @@ import dayjs from 'dayjs';
 
 const { Title } = Typography;
 const { Option } = Select;
+const { useBreakpoint } = Grid;
 
 const levelMap = {
   vip: { label: 'VIP', color: 'gold' },
@@ -31,6 +32,8 @@ const statusMap = {
 };
 
 export default function Clients() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -146,22 +149,65 @@ export default function Clients() {
     },
   ];
 
+  const renderClientCard = (record) => {
+    const level = levelMap[record.relationship_level] || { label: record.relationship_level || '-', color: 'default' };
+    const status = statusMap[record.status] || { label: record.status || '-', color: 'default' };
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => openDetail(record)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') openDetail(record);
+          }}
+          style={{ width: '100%', padding: 14, border: '1px solid #f0f0f0', borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', cursor: 'pointer' }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.name}</div>
+                <Typography.Text type="secondary">{record.company || '-'} · {record.position || '-'}</Typography.Text>
+              </div>
+              <Space direction="vertical" size={4} align="end">
+                <Tag color={level.color}>{level.label}</Tag>
+                <Badge status={status.color} text={status.label} />
+              </Space>
+            </div>
+            <Space wrap size={[8, 6]}>
+              {record.phone && <Typography.Text copyable={{ text: record.phone }}>手机</Typography.Text>}
+              {record.wechat && <Typography.Text copyable={{ text: record.wechat }}>微信</Typography.Text>}
+              {record.email && <Typography.Text copyable={{ text: record.email }}>邮箱</Typography.Text>}
+            </Space>
+            <Typography.Text type="secondary">更新时间：{record.updated_at?.slice(0, 10) || '-'}</Typography.Text>
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEdit(record); }}>编辑</Button>
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />} onClick={(event) => event.stopPropagation()}>删除</Button>
+              </Popconfirm>
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+    <div style={{ padding: isMobile ? 0 : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12, marginBottom: 16 }}>
         <Title level={4} style={{ margin: 0 }}>客户管理</Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加客户</Button>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加客户</Button>
       </div>
 
-      <Space style={{ marginBottom: 16 }} wrap>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
         <Input.Search
           placeholder="搜索姓名、公司、手机、标签"
           allowClear
-          style={{ width: 280 }}
+          style={{ width: isMobile ? '100%' : 280 }}
           onSearch={setSearch}
           onChange={e => !e.target.value && setSearch('')}
         />
-        <Select placeholder="关系等级" allowClear style={{ width: 120 }} onChange={setFilterLevel}>
+        <Select placeholder="关系等级" allowClear style={{ width: isMobile ? '100%' : 120 }} onChange={setFilterLevel}>
           <Option value="vip">VIP</Option>
           <Option value="key">重要</Option>
           <Option value="normal">普通</Option>
@@ -169,15 +215,26 @@ export default function Clients() {
         </Select>
       </Space>
 
-      <Table
-        columns={columns}
-        dataSource={data}
-        rowKey="id"
-        loading={loading}
-        size="small"
-        scroll={{ x: 800 }}
-        pagination={{ pageSize: 15 }}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          pagination={{ pageSize: 15, showSizeChanger: false }}
+          locale={{ emptyText: '暂无客户' }}
+          renderItem={renderClientCard}
+        />
+      ) : (
+        <Table
+          columns={columns}
+          dataSource={data}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          scroll={{ x: 800 }}
+          pagination={{ pageSize: 15 }}
+        />
+      )}
 
       {/* 编辑/新增弹窗 */}
       <Modal
@@ -185,53 +242,54 @@ export default function Clients() {
         open={modalOpen}
         onOk={handleSave}
         onCancel={() => setModalOpen(false)}
-        width={680}
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
         <Form form={form} layout="vertical">
           <Row gutter={16}>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="姓名" name="name" rules={[{ required: true }]}>
                 <Input prefix={<UserOutlined />} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="公司" name="company">
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="职位" name="position">
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="行业" name="industry">
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="手机" name="phone">
                 <Input prefix={<PhoneOutlined />} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="微信" name="wechat">
                 <Input prefix={<WechatOutlined />} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="邮箱" name="email">
                 <Input prefix={<MailOutlined />} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="生日" name="birthday">
                 <Input placeholder="如 1985-06-15" />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="关系等级" name="relationship_level">
                 <Select>
                   <Option value="vip">VIP</Option>
@@ -241,7 +299,7 @@ export default function Clients() {
                 </Select>
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="状态" name="status">
                 <Select>
                   <Option value="active">活跃</Option>
@@ -274,7 +332,7 @@ export default function Clients() {
         title={current?.name}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={600}
+        width={isMobile ? '100%' : 600}
         extra={<Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>编辑</Button>}
       >
         {current && (
@@ -282,7 +340,7 @@ export default function Clients() {
             {
               key: 'info', label: '基本信息',
               children: (
-                <Descriptions column={2} size="small" bordered>
+                <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
                   <Descriptions.Item label="公司">{current.company}</Descriptions.Item>
                   <Descriptions.Item label="职位">{current.position}</Descriptions.Item>
                   <Descriptions.Item label="行业">{current.industry}</Descriptions.Item>

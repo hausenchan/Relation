@@ -403,6 +403,52 @@ export default function WeeklyReports() {
     },
   ];
 
+  const renderWriterCard = (record) => {
+    const fixedRequired = ['leader', 'sales_director'].includes(record.role);
+    const roleMap = { leader: '组长', sales_director: '总监', member: '成员' };
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div
+          style={{
+            width: '100%',
+            padding: 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fff',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          }}
+        >
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937' }}>{record.display_name}</div>
+                <Typography.Text type="secondary">
+                  {getDepartmentLabel(record.department)} · {roleMap[record.role] || record.role}
+                </Typography.Text>
+              </div>
+              {fixedRequired ? (
+                <Tag color="blue">默认需要</Tag>
+              ) : record.need_weekly_report ? (
+                <Tag color="green">需要</Tag>
+              ) : (
+                <Tag>不需要</Tag>
+              )}
+            </div>
+            {!fixedRequired && (
+              <Button
+                size="small"
+                style={{ width: '100%' }}
+                onClick={() => toggleWriter(record.id, record.need_weekly_report)}
+              >
+                {record.need_weekly_report ? '取消周报' : '指定周报'}
+              </Button>
+            )}
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   // 快速选择周
   const quickWeeks = [];
   for (let i = 0; i < 8; i++) {
@@ -510,14 +556,23 @@ export default function WeeklyReports() {
         <div style={{ marginBottom: 12, color: '#666', fontSize: 13 }}>
           组长和总监默认需要写周报。老板可以指定普通成员写周报。
         </div>
-        <Table
-          columns={writerColumns}
-          dataSource={writers}
-          rowKey="id"
-          pagination={false}
-          size="small"
-          scroll={{ x: 520 }}
-        />
+        {isMobile ? (
+          <List
+            dataSource={writers}
+            rowKey="id"
+            locale={{ emptyText: '暂无人员' }}
+            renderItem={renderWriterCard}
+          />
+        ) : (
+          <Table
+            columns={writerColumns}
+            dataSource={writers}
+            rowKey="id"
+            pagination={false}
+            size="small"
+            scroll={{ x: 520 }}
+          />
+        )}
       </Modal>
 
       <Drawer

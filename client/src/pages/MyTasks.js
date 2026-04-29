@@ -294,8 +294,8 @@ export default function MyTasks() {
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <Space align="center">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12, marginBottom: 16 }}>
+        <Space align="center" style={{ minHeight: total > 0 ? undefined : 0 }}>
           {total > 0 && (
             <Tag color={done === total ? 'green' : 'blue'}>
               {done}/{total} 已完成

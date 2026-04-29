@@ -819,6 +819,60 @@ function CompetitorResearchTab({ companyId }) {
     },
   ];
 
+  const renderResearchCard = (record) => {
+    const importance = importanceMap[record.importance] || importanceMap.normal;
+    const hasOpportunity = record.opportunity_title && record.opportunity_title.trim() !== '';
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <div style={{ width: '100%', padding: 14, border: '1px solid #f0f0f0', borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4 }}>{record.title}</div>
+                <Text type="secondary" style={{ fontSize: 12 }}>{record.date || '-'}</Text>
+              </div>
+              <Space direction="vertical" size={4} align="end">
+                <Tag color={importance.color}>{importance.label}</Tag>
+                {hasOpportunity ? <Tag color="green">有商机</Tag> : <Tag>无商机</Tag>}
+              </Space>
+            </div>
+            <Space wrap size={[8, 6]}>
+              <Text type="secondary">金额：{record.amount ? `¥${record.amount}` : '-'}</Text>
+              <Text type="secondary">下次日期：{record.next_action_date || '-'}</Text>
+            </Space>
+            {record.content && (
+              <Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                内容：{record.content}
+              </Paragraph>
+            )}
+            {record.outcome && (
+              <Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                结果：{record.outcome}
+              </Paragraph>
+            )}
+            {record.next_action && (
+              <Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                下次行动：{record.next_action}
+              </Paragraph>
+            )}
+            {hasOpportunity && (
+              <Space wrap size={[6, 6]}>
+                <Tag color="blue" icon={<RiseOutlined />}>{record.opportunity_title}</Tag>
+                {record.opportunity_status && <Tag color={opportunityStatusMap[record.opportunity_status]?.color}>{opportunityStatusMap[record.opportunity_status]?.label || record.opportunity_status}</Tag>}
+              </Space>
+            )}
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            </Space>
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
   return (
     <div>
       <div style={{ marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: isMobile ? 'stretch' : 'center', flexDirection: isMobile ? 'column' : 'row', gap: 12 }}>
@@ -846,14 +900,24 @@ function CompetitorResearchTab({ companyId }) {
         <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加记录</Button>
       </div>
 
-      <Table
-        dataSource={data}
-        columns={columns}
-        rowKey="id"
-        size="small"
-        pagination={{ pageSize: 10, showSizeChanger: false }}
-        scroll={{ x: 860 }}
-      />
+      {isMobile ? (
+        <List
+          dataSource={data}
+          rowKey="id"
+          locale={{ emptyText: '暂无研究记录' }}
+          pagination={{ pageSize: 10, showSizeChanger: false }}
+          renderItem={renderResearchCard}
+        />
+      ) : (
+        <Table
+          dataSource={data}
+          columns={columns}
+          rowKey="id"
+          size="small"
+          pagination={{ pageSize: 10, showSizeChanger: false }}
+          scroll={{ x: 860 }}
+        />
+      )}
 
       <Modal
         title={editing ? '编辑记录' : '添加记录'}

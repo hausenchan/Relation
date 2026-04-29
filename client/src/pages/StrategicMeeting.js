@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Card, Button, Space, Modal, Form, Input, DatePicker, Select, message } from 'antd';
+import { Table, Card, Button, Space, Modal, Form, Input, DatePicker, Select, message, Grid, List, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 import axios from 'axios';
@@ -9,6 +9,8 @@ const { TextArea } = Input;
 const { Option } = Select;
 
 export default function StrategicMeeting() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
@@ -156,25 +158,58 @@ export default function StrategicMeeting() {
     }
   ];
 
+  const renderMeetingCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <Typography.Text strong>{record.year}年{record.month}月战略月会</Typography.Text>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{record.meeting_date || '-'}</div>
+            </div>
+          </div>
+          {record.strategic_direction && <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>战略方向：{record.strategic_direction}</Typography.Paragraph>}
+          {record.key_focus && <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>重点关注：{record.key_focus}</Typography.Paragraph>}
+          {record.monthly_summary && <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>月度总结：{record.monthly_summary}</Typography.Paragraph>}
+          <Typography.Text type="secondary">参会人员：{record.attendees || '-'}</Typography.Text>
+          <Space size="small" wrap>
+            <Button size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
+            <Button size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>删除</Button>
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: isMobile ? 0 : 24 }}>
       <Card
-        extra={
+        extra={!isMobile && (
           <Space>
             <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd}>
               新建记录
             </Button>
             <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
           </Space>
-        }
+        )}
       >
-        <Table
-          dataSource={data}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-        />
+        {isMobile && (
+          <Space direction="vertical" style={{ width: '100%', marginBottom: 16 }}>
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleAdd} style={{ width: '100%' }}>新建记录</Button>
+            <Button icon={<ReloadOutlined />} onClick={fetchData} style={{ width: '100%' }}>刷新</Button>
+          </Space>
+        )}
+        {isMobile ? (
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderMeetingCard} />
+        ) : (
+          <Table
+            dataSource={data}
+            columns={columns}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+          />
+        )}
       </Card>
 
       <Modal
@@ -182,7 +217,8 @@ export default function StrategicMeeting() {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={() => setModalVisible(false)}
-        width={800}
+        width={isMobile ? '100%' : 800}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
         cancelText="取消"
       >
@@ -191,12 +227,12 @@ export default function StrategicMeeting() {
             <DatePicker style={{ width: '100%' }} />
           </Form.Item>
 
-          <Space style={{ width: '100%' }}>
-            <Form.Item label="年份" name="year" rules={[{ required: true, message: '请输入年份' }]}>
-              <Input type="number" placeholder="2026" style={{ width: 120 }} />
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }}>
+            <Form.Item label="年份" name="year" rules={[{ required: true, message: '请输入年份' }]} style={{ width: isMobile ? '100%' : undefined }}>
+              <Input type="number" placeholder="2026" style={{ width: isMobile ? '100%' : 120 }} />
             </Form.Item>
-            <Form.Item label="月份" name="month" rules={[{ required: true, message: '请输入月份' }]}>
-              <Select style={{ width: 120 }}>
+            <Form.Item label="月份" name="month" rules={[{ required: true, message: '请输入月份' }]} style={{ width: isMobile ? '100%' : undefined }}>
+              <Select style={{ width: isMobile ? '100%' : 120 }}>
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(m => (
                   <Option key={m} value={m}>{m}月</Option>
                 ))}

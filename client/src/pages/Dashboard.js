@@ -77,7 +77,7 @@ export default function Dashboard() {
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
-  const canViewTeamTasks = isExecutive();
+  const canViewTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || isExecutive();
   const hideRelationshipPanels = stats?.showRelationshipPanels === false || ['operation', 'rd'].includes(user?.department);
 
   useEffect(() => {
@@ -190,7 +190,7 @@ export default function Dashboard() {
 
   const buildTeamTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
-      .filter(t => t.created_by !== user?.id && t.assigned_to !== user?.id)
+      .filter(t => t.assigned_to !== user?.id)
       .map(t => ({
         ...t,
         task_source: 'normal',
@@ -207,7 +207,7 @@ export default function Dashboard() {
       }));
 
     const followUpItems = allFollowUpData
-      .filter(t => t.assigned_by !== user?.id && t.assigned_to !== user?.id)
+      .filter(t => t.assigned_to !== user?.id)
       .map(t => ({
         ...t,
         id: `follow_up_${t.id}`,
@@ -832,7 +832,7 @@ export default function Dashboard() {
       children: (
         <div>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <Space wrap>
+            <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
               <Select
                 mode="multiple"
                 placeholder="状态筛选"
@@ -901,7 +901,7 @@ export default function Dashboard() {
       children: (
         <div>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <Space wrap>
+            <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
               <Select
                 mode="multiple"
                 placeholder="状态筛选"
@@ -969,7 +969,7 @@ export default function Dashboard() {
     children: (
       <div>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-          <Space wrap>
+          <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
             <Select
               mode="multiple"
               placeholder="状态筛选"
@@ -1037,7 +1037,7 @@ export default function Dashboard() {
       children: (
         <div>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <Space wrap>
+            <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
               <Select
                 mode="multiple"
                 placeholder="状态筛选"

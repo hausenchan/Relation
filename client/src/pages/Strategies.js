@@ -40,6 +40,14 @@ const statusMap = {
   paused: { label: '暂停', color: 'orange' },
 };
 
+const devTaskStatusMap = {
+  pending: { label: '待开始', color: 'default' },
+  in_progress: { label: '进行中', color: 'blue' },
+  testing: { label: '测试中', color: 'orange' },
+  completed: { label: '已完成', color: 'green' },
+  blocked: { label: '阻塞', color: 'red' },
+};
+
 const effectJudgementMap = {
   pending: { label: '待观察', color: 'default' },
   effective: { label: '有效', color: 'green' },
@@ -612,6 +620,67 @@ export default function Strategies() {
     </List.Item>
   );
 
+  const renderLinkedDevTaskCard = (row) => {
+    const shortTitle = row.title?.length > 6 ? `${row.title.slice(0, 6)}...` : row.title;
+    const devStatus = devTaskStatusMap[row.status] || { label: row.status || '-', color: 'default' };
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
+        <div style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 10, background: '#fff' }}>
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 4 }}>需求ID：{row.id}</div>
+                <Text strong style={{ display: 'block' }}>{shortTitle || '-'}</Text>
+              </div>
+              <Tag color={devStatus.color}>{devStatus.label}</Tag>
+            </div>
+            <Space wrap size={[8, 6]}>
+              <Text type="secondary">负责人：{row.assignee_name || '-'}</Text>
+              <Text type="secondary">计划：{row.due_date || '-'}</Text>
+            </Space>
+            {row.completion_note && (
+              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+                完成备注：{row.completion_note}
+              </Typography.Paragraph>
+            )}
+          </Space>
+        </div>
+      </List.Item>
+    );
+  };
+
+  const renderExecutionLogCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
+      <div style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 10, background: '#fff' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Text strong>{actionTypeMap[record.action_type] || record.action_type || '-'}</Text>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                {record.execute_date || '-'} · {record.executor_name || '-'}
+              </div>
+            </div>
+            {record.continue_flag ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag>}
+          </div>
+          {record.action_desc && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              动作说明：{record.action_desc}
+            </Typography.Paragraph>
+          )}
+          {record.observation && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              观察结果：{record.observation}
+            </Typography.Paragraph>
+          )}
+          <Space size="small" wrap>
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditLog(record)}>编辑</Button>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteLog(record.id)}>删除</Button>
+          </Space>
+        </Space>
+      </div>
+    </List.Item>
+  );
+
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计卡片 */}
@@ -906,26 +975,34 @@ export default function Strategies() {
 
                       <Card size="small" title={`关联需求 (${selectedStrategy.devTasks?.length || 0})`}>
                         {selectedStrategy.devTasks && selectedStrategy.devTasks.length > 0 ? (
-                          <Table
-                            dataSource={selectedStrategy.devTasks}
-                            rowKey="id"
-                            size="small"
-                            pagination={false}
-                            columns={[
-                              {
-                                title: '需求',
-                                key: 'title',
-                                render: (_, row) => {
-                                  const shortTitle = row.title?.length > 6 ? `${row.title.slice(0, 6)}...` : row.title;
-                                  return `${row.id} · ${shortTitle || '-'}`;
+                          isMobile ? (
+                            <List
+                              dataSource={selectedStrategy.devTasks}
+                              rowKey="id"
+                              renderItem={renderLinkedDevTaskCard}
+                            />
+                          ) : (
+                            <Table
+                              dataSource={selectedStrategy.devTasks}
+                              rowKey="id"
+                              size="small"
+                              pagination={false}
+                              columns={[
+                                {
+                                  title: '需求',
+                                  key: 'title',
+                                  render: (_, row) => {
+                                    const shortTitle = row.title?.length > 6 ? `${row.title.slice(0, 6)}...` : row.title;
+                                    return `${row.id} · ${shortTitle || '-'}`;
+                                  },
                                 },
-                              },
-                              { title: '负责人', dataIndex: 'assignee_name', key: 'assignee_name' },
-                              { title: '状态', dataIndex: 'status', key: 'status', render: (val) => <Tag color={{ pending: 'default', in_progress: 'blue', testing: 'orange', completed: 'green', blocked: 'red' }[val] || 'default'}>{statusMap[val]?.label || val}</Tag> },
-                              { title: '计划日期', dataIndex: 'due_date', key: 'due_date', render: (val) => val || '-' },
-                              { title: '完成备注', dataIndex: 'completion_note', key: 'completion_note', ellipsis: true, render: (val) => val || '-' },
-                            ]}
-                          />
+                                { title: '负责人', dataIndex: 'assignee_name', key: 'assignee_name' },
+                                { title: '状态', dataIndex: 'status', key: 'status', render: (val) => <Tag color={(devTaskStatusMap[val] || { color: 'default' }).color}>{devTaskStatusMap[val]?.label || val}</Tag> },
+                                { title: '计划日期', dataIndex: 'due_date', key: 'due_date', render: (val) => val || '-' },
+                                { title: '完成备注', dataIndex: 'completion_note', key: 'completion_note', ellipsis: true, render: (val) => val || '-' },
+                              ]}
+                            />
+                          )
                         ) : (
                           <Text type="secondary">暂无关联需求</Text>
                         )}
@@ -939,33 +1016,42 @@ export default function Strategies() {
                   children: (
                     <Space direction="vertical" style={{ width: '100%' }} size={16}>
                       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                        <Button type="primary" icon={<PlusOutlined />} onClick={openAddLog}>新增执行记录</Button>
+                        <Button type="primary" icon={<PlusOutlined />} onClick={openAddLog} style={{ width: isMobile ? '100%' : undefined }}>新增执行记录</Button>
                       </div>
-                      <Table
-                        dataSource={selectedStrategy.executionLogs || []}
-                        rowKey="id"
-                        size="small"
-                        pagination={false}
-                        columns={[
-                          { title: '执行日期', dataIndex: 'execute_date', key: 'execute_date', width: 110 },
-                          { title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 100 },
-                          { title: '动作类型', dataIndex: 'action_type', key: 'action_type', width: 120, render: (val) => actionTypeMap[val] || val },
-                          { title: '动作说明', dataIndex: 'action_desc', key: 'action_desc', ellipsis: true },
-                          { title: '观察结果', dataIndex: 'observation', key: 'observation', ellipsis: true },
-                          { title: '是否继续', dataIndex: 'continue_flag', key: 'continue_flag', width: 90, render: (val) => val ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag> },
-                          {
-                            title: '操作',
-                            key: 'action',
-                            width: 120,
-                            render: (_, record) => (
-                              <Space size="small">
-                                <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditLog(record)}>编辑</Button>
-                                <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteLog(record.id)}>删除</Button>
-                              </Space>
-                            ),
-                          },
-                        ]}
-                      />
+                      {isMobile ? (
+                        <List
+                          dataSource={selectedStrategy.executionLogs || []}
+                          rowKey="id"
+                          locale={{ emptyText: '暂无执行记录' }}
+                          renderItem={renderExecutionLogCard}
+                        />
+                      ) : (
+                        <Table
+                          dataSource={selectedStrategy.executionLogs || []}
+                          rowKey="id"
+                          size="small"
+                          pagination={false}
+                          columns={[
+                            { title: '执行日期', dataIndex: 'execute_date', key: 'execute_date', width: 110 },
+                            { title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 100 },
+                            { title: '动作类型', dataIndex: 'action_type', key: 'action_type', width: 120, render: (val) => actionTypeMap[val] || val },
+                            { title: '动作说明', dataIndex: 'action_desc', key: 'action_desc', ellipsis: true },
+                            { title: '观察结果', dataIndex: 'observation', key: 'observation', ellipsis: true },
+                            { title: '是否继续', dataIndex: 'continue_flag', key: 'continue_flag', width: 90, render: (val) => val ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag> },
+                            {
+                              title: '操作',
+                              key: 'action',
+                              width: 120,
+                              render: (_, record) => (
+                                <Space size="small">
+                                  <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditLog(record)}>编辑</Button>
+                                  <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteLog(record.id)}>删除</Button>
+                                </Space>
+                              ),
+                            },
+                          ]}
+                        />
+                      )}
                     </Space>
                   ),
                 },

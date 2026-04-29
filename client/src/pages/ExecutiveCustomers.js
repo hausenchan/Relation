@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Card, Button, Space, Tag } from 'antd';
+import { Table, Card, Button, Space, Tag, Grid, List, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 export default function ExecutiveCustomers() {
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState([]);
 
@@ -81,22 +83,65 @@ export default function ExecutiveCustomers() {
     { title: '备注', dataIndex: 'notes', key: 'notes', ellipsis: true }
   ];
 
+  const renderCustomerCard = (record) => {
+    const levelMap = { A: 'A级', B: 'B级', C: 'C级' };
+    const levelColorMap = { A: 'red', B: 'orange', C: 'blue' };
+    const contactColor = record.days_since_last_contact > 30 ? 'red' : record.days_since_last_contact > 14 ? 'orange' : 'inherit';
+    const contactTypeMap = {
+      meeting: '会面',
+      call: '电话',
+      wechat: '微信',
+      email: '邮件',
+      dinner: '饭局',
+      gift: '送礼',
+      other: '其他'
+    };
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <Card size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <Typography.Text strong>{record.name}</Typography.Text>
+                <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{record.company || '-'} · {record.position || '-'}</div>
+              </div>
+              <Tag color={levelColorMap[record.relationship_level]}>{levelMap[record.relationship_level] || record.relationship_level}</Tag>
+            </div>
+            <Space wrap size={[8, 6]}>
+              <span style={{ color: contactColor, fontWeight: record.days_since_last_contact > 30 ? 'bold' : 'normal' }}>
+                未联系 {record.days_since_last_contact}天
+              </span>
+              <Typography.Text type="secondary">最后互动：{record.last_contact_date || '-'}</Typography.Text>
+              <Typography.Text type="secondary">类型：{contactTypeMap[record.last_contact_type] || record.last_contact_type || '-'}</Typography.Text>
+            </Space>
+            {record.resources && <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>资源：{record.resources}</Typography.Paragraph>}
+            {record.demands && <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>需求：{record.demands}</Typography.Paragraph>}
+          </Space>
+        </Card>
+      </List.Item>
+    );
+  };
+
   return (
-    <div style={{ padding: 24 }}>
+    <div style={{ padding: isMobile ? 0 : 24 }}>
       <Card
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} onClick={fetchData}>刷新</Button>
+            <Button icon={<ReloadOutlined />} onClick={fetchData} style={{ width: isMobile ? '100%' : undefined }}>刷新</Button>
           </Space>
         }
       >
-        <Table
-          dataSource={data}
-          columns={columns}
-          rowKey="id"
-          loading={loading}
-          pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-        />
+        {isMobile ? (
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderCustomerCard} />
+        ) : (
+          <Table
+            dataSource={data}
+            columns={columns}
+            rowKey="id"
+            loading={loading}
+            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+          />
+        )}
       </Card>
     </div>
   );

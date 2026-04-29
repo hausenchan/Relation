@@ -87,45 +87,83 @@ function ExpensePanel({ tripId, tripStatus, isOwner }) {
 
   const total = expenses.reduce((s, e) => s + (e.amount || 0), 0);
 
+  const renderExpenseCard = (expense) => (
+    <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
+      <div style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 10, background: '#fff' }}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Tag color={expenseTypeMap[expense.type]?.color}>{expenseTypeMap[expense.type]?.label || expense.type}</Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>{expense.date || '-'}</Text>
+            </div>
+            <Text strong style={{ color: '#fa8c16' }}>¥{Number(expense.amount || 0).toFixed(2)}</Text>
+          </div>
+          {expense.description && (
+            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
+              {expense.description}
+            </Typography.Paragraph>
+          )}
+          {canEdit && (
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(expense)}>编辑</Button>
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(expense.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+              </Popconfirm>
+            </Space>
+          )}
+        </Space>
+      </div>
+    </List.Item>
+  );
+
   return (
     <div>
       {canEdit && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd}>添加明细</Button>
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加明细</Button>
         </div>
       )}
       {expenses.length === 0 ? <Empty description="暂无费用明细" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
-        <Table
-          size="small"
-          pagination={false}
-          dataSource={expenses}
-          rowKey="id"
-          scroll={{ x: 640 }}
-          columns={[
-            { title: '日期', dataIndex: 'date', width: 100 },
-            { title: '类型', dataIndex: 'type', width: 80, render: v => <Tag color={expenseTypeMap[v]?.color}>{expenseTypeMap[v]?.label || v}</Tag> },
-            { title: '金额', dataIndex: 'amount', width: 90, render: v => <Text strong style={{ color: '#fa8c16' }}>¥{v?.toFixed(2)}</Text> },
-            { title: '说明', dataIndex: 'description', ellipsis: true },
-            canEdit ? {
-              title: '操作', width: 80,
-              render: (_, r) => (
-                <Space size={4}>
-                  <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
-                  <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
-                    <Button size="small" danger icon={<DeleteOutlined />} />
-                  </Popconfirm>
-                </Space>
-              )
-            } : {}
-          ].filter(c => Object.keys(c).length > 0)}
-          summary={() => (
-            <Table.Summary.Row>
-              <Table.Summary.Cell colSpan={2}><Text strong>合计</Text></Table.Summary.Cell>
-              <Table.Summary.Cell><Text strong style={{ color: '#ff4d4f' }}>¥{total.toFixed(2)}</Text></Table.Summary.Cell>
-              <Table.Summary.Cell colSpan={2} />
-            </Table.Summary.Row>
-          )}
-        />
+        isMobile ? (
+          <>
+            <List dataSource={expenses} rowKey="id" renderItem={renderExpenseCard} />
+            <div style={{ padding: '10px 12px', borderRadius: 10, background: '#fff7e6', border: '1px solid #ffe7ba', textAlign: 'right' }}>
+              <Text strong>合计：<span style={{ color: '#ff4d4f' }}>¥{total.toFixed(2)}</span></Text>
+            </div>
+          </>
+        ) : (
+          <Table
+            size="small"
+            pagination={false}
+            dataSource={expenses}
+            rowKey="id"
+            scroll={{ x: 640 }}
+            columns={[
+              { title: '日期', dataIndex: 'date', width: 100 },
+              { title: '类型', dataIndex: 'type', width: 80, render: v => <Tag color={expenseTypeMap[v]?.color}>{expenseTypeMap[v]?.label || v}</Tag> },
+              { title: '金额', dataIndex: 'amount', width: 90, render: v => <Text strong style={{ color: '#fa8c16' }}>¥{v?.toFixed(2)}</Text> },
+              { title: '说明', dataIndex: 'description', ellipsis: true },
+              canEdit ? {
+                title: '操作', width: 80,
+                render: (_, r) => (
+                  <Space size={4}>
+                    <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
+                    <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
+                      <Button size="small" danger icon={<DeleteOutlined />} />
+                    </Popconfirm>
+                  </Space>
+                )
+              } : {}
+            ].filter(c => Object.keys(c).length > 0)}
+            summary={() => (
+              <Table.Summary.Row>
+                <Table.Summary.Cell colSpan={2}><Text strong>合计</Text></Table.Summary.Cell>
+                <Table.Summary.Cell><Text strong style={{ color: '#ff4d4f' }}>¥{total.toFixed(2)}</Text></Table.Summary.Cell>
+                <Table.Summary.Cell colSpan={2} />
+              </Table.Summary.Row>
+            )}
+          />
+        )
       )}
 
       <Modal title={editing ? '编辑明细' : '添加费用明细'} open={modalOpen} onOk={handleSave}
