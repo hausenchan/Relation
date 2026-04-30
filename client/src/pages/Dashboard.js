@@ -190,7 +190,6 @@ export default function Dashboard() {
 
   const buildTeamTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
-      .filter(t => t.assigned_to !== user?.id)
       .map(t => ({
         ...t,
         task_source: 'normal',
@@ -207,7 +206,6 @@ export default function Dashboard() {
       }));
 
     const followUpItems = allFollowUpData
-      .filter(t => t.assigned_to !== user?.id)
       .map(t => ({
         ...t,
         id: `follow_up_${t.id}`,

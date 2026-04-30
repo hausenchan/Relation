@@ -1221,9 +1221,11 @@ function getVisibleUserIds(userId, role) {
 
   if (role === 'sales_director' || role === 'leader') {
     const visibleTeamIds = getManagedTeamIds(userId, role);
-    if (!visibleTeamIds?.length) return [userId];
-    const members = getUsersByTeamIds(visibleTeamIds);
-    return [...new Set([userId, ...members])];
+    const members = visibleTeamIds?.length ? getUsersByTeamIds(visibleTeamIds) : [];
+    const directReports = role === 'leader'
+      ? db.prepare('SELECT id FROM users WHERE leader_id = ?').all(userId).map(u => u.id)
+      : [];
+    return [...new Set([userId, ...members, ...directReports])];
   }
 
   // member / readonly / guest
@@ -2244,8 +2246,7 @@ app.get('/api/follow-up-tasks', (req, res) => {
   if (all === '1' && isAdmin(role)) {
     // 管理员和高管查看全量跟进任务。
   } else if (all === '1' && ['leader', 'sales_director'].includes(role)) {
-    const managedTeamIds = getManagedTeamIds(me, role);
-    const visibleUserIds = managedTeamIds?.length ? [...new Set([me, ...getUsersByTeamIds(managedTeamIds)])] : [me];
+    const visibleUserIds = getVisibleUserIds(me, role) || [];
     query += ` AND (f.assigned_to IN (${visibleUserIds.map(() => '?').join(',')}) OR f.assigned_by IN (${visibleUserIds.map(() => '?').join(',')}))`;
     params.push(...visibleUserIds, ...visibleUserIds);
   } else {
@@ -2356,21 +2357,12 @@ app.get('/api/tasks', (req, res) => {
     q += ' AND (t.assigned_to = ? OR t.created_by = ?)';
     params.push(me, me);
   } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(me, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      const ids = [...new Set([me, ...members])];
-      q += ` AND (t.assigned_to IN (${ids.map(() => '?').join(',')}) OR t.created_by IN (${ids.map(() => '?').join(',')}))`;
-      params.push(...ids, ...ids);
-    } else {
-      q += ' AND (t.assigned_to = ? OR t.created_by = ?)';
-      params.push(me, me);
-    }
+    const ids = getVisibleUserIds(me, role) || [me];
+    q += ` AND (t.assigned_to IN (${ids.map(() => '?').join(',')}) OR t.created_by IN (${ids.map(() => '?').join(',')}))`;
+    params.push(...ids, ...ids);
   } else if (role === 'sales_director') {
-    const managedTeamIds = getManagedTeamIds(me, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      const ids = [...new Set([me, ...members])];
+    const ids = getVisibleUserIds(me, role);
+    if (ids?.length) {
       q += ` AND (t.assigned_to IN (${ids.map(() => '?').join(',')}) OR t.created_by IN (${ids.map(() => '?').join(',')}))`;
       params.push(...ids, ...ids);
     }
@@ -2414,10 +2406,10 @@ app.get('/api/tasks/board', (req, res) => {
   let visibleIds;
   if (isAdmin(role)) {
     visibleIds = db.prepare('SELECT id FROM users WHERE role != ?').all('readonly').map(u => u.id);
-  } else if (role === 'leader') {
-    visibleIds = managedTeamIds?.length ? getUsersByTeamIds(managedTeamIds) : [me];
+  } else if (role === 'leader' || role === 'sales_director') {
+    visibleIds = getVisibleUserIds(me, role) || [me];
   } else {
-    visibleIds = managedTeamIds?.length ? getUsersByTeamIds(managedTeamIds) : [me];
+    visibleIds = getVisibleUserIds(me, role) || [me];
   }
   if (!visibleIds.includes(me)) visibleIds = [me, ...visibleIds];
 
