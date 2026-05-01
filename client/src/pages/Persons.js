@@ -181,7 +181,7 @@ function commonFields({ isMobile }) {
           </Form.Item>
         </Col>
         <Col span={thirdSpan}>
-          <Form.Item label="公司/单位" name="company">
+          <Form.Item label="公司" name="company">
             <Input />
           </Form.Item>
         </Col>
@@ -815,7 +815,7 @@ export default function Persons() {
       render: v => v || '-',
     },
     {
-      title: '公司/单位',
+      title: '公司',
       render: (_, r) => r.company || r.current_company || '-',
       ellipsis: true,
     },
