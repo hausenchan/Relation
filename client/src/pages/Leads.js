@@ -3,11 +3,11 @@ import {
   Table, Tag, Space, Typography, Button, Select, Modal, Form, message,
   Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider, Upload, Grid, List
 } from 'antd';
-import { RiseOutlined, EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
+import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
 import dayjs from 'dayjs';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 
@@ -266,40 +266,79 @@ export default function Leads() {
 
   const columns = [
     {
-      title: '线索ID',
-      dataIndex: 'source_id',
-      width: 90,
-      render: (value) => <Text style={{ fontSize: 12, color: '#374151', fontWeight: 500 }}>{value}</Text>,
+      title: '线索',
+      width: 300,
+      render: (_, r) => (
+        <div style={{ minWidth: 0 }}>
+          <Button
+            type="link"
+            style={{
+              display: 'block',
+              padding: 0,
+              height: 22,
+              maxWidth: '100%',
+              color: '#1f2937',
+              fontSize: 14,
+              fontWeight: 600,
+              textAlign: 'left',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={r.opportunity_title}
+            onClick={() => openDetail(r)}
+          >
+            {r.opportunity_title || '-'}
+          </Button>
+          <Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12, lineHeight: '18px' }}>
+            #{r.source_id}
+          </Text>
+        </div>
+      ),
     },
     {
       title: '来源',
       dataIndex: 'source_type',
-      width: 110,
+      width: 88,
       render: (v) => v === 'competitor_research'
-        ? <Tag style={{ borderRadius: 6, fontSize: 12 }} color="orange">竞研</Tag>
-        : <Tag style={{ borderRadius: 6, fontSize: 12 }} color="blue">互动</Tag>,
+        ? <Tag style={{ margin: 0, borderRadius: 6, fontSize: 12 }} color="orange">竞研</Tag>
+        : <Tag style={{ margin: 0, borderRadius: 6, fontSize: 12 }} color="blue">互动</Tag>,
     },
     {
       title: '关联对象',
+      width: 220,
       render: (_, r) => {
         if (r.source_type === 'competitor_research') {
           return (
-            <Space size={6} align="center">
+            <Space size={6} align="center" style={{ width: '100%' }}>
               <Avatar size={24} style={{ background: '#f0f5ff', color: '#4F46E5', fontSize: 12 }} icon={<BankOutlined />} />
-              <div>
-                <Text strong style={{ fontSize: 13, color: '#1f2937' }}>{r.company_name || '-'}</Text>
-                <div style={{ fontSize: 11, color: '#9ca3af' }}>公司</div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <Text
+                  strong
+                  title={r.company_name || ''}
+                  style={{ display: 'block', maxWidth: 168, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#1f2937' }}
+                >
+                  {r.company_name || '-'}
+                </Text>
+                <div style={{ fontSize: 11, color: '#9ca3af', whiteSpace: 'nowrap' }}>公司</div>
               </div>
             </Space>
           );
         }
+        const companyName = r.company || r.current_company || '';
         return (
-          <Space size={6} align="center">
+          <Space size={6} align="center" style={{ width: '100%' }}>
             <Avatar size={24} style={{ background: '#f0fdf4', color: '#059669', fontSize: 12 }} icon={<UserOutlined />} />
-            <div>
-              <Text strong style={{ fontSize: 13, color: '#1f2937' }}>{r.person_name}</Text>
-              {(r.company || r.current_company) && (
-                <div style={{ fontSize: 11, color: '#9ca3af' }}>{r.company || r.current_company}</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Text
+                strong
+                title={r.person_name || ''}
+                style={{ display: 'block', maxWidth: 168, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#1f2937' }}
+              >
+                {r.person_name || '-'}
+              </Text>
+              {companyName && (
+                <div title={companyName} style={{ maxWidth: 168, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: '#9ca3af' }}>{companyName}</div>
               )}
             </div>
           </Space>
@@ -307,26 +346,14 @@ export default function Leads() {
       },
     },
     {
-      title: '商机标题',
-      render: (_, r) => (
-        <Button
-          type="link"
-          style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left', fontWeight: 500, fontSize: 13, color: '#4F46E5' }}
-          onClick={() => openDetail(r)}
-        >
-          <RiseOutlined style={{ marginRight: 4, fontSize: 12 }} />{r.opportunity_title}
-        </Button>
-      ),
-    },
-    {
       title: '状态',
       dataIndex: 'opportunity_status',
-      width: 100,
+      width: 110,
       render: v => {
         const s = opportunityStatusMap[v] || { label: v || '-', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' };
         return (
           <span style={{
-            display: 'inline-block', padding: '2px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500,
+            display: 'inline-block', minWidth: 64, padding: '2px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500, textAlign: 'center',
             color: s.color, background: s.bg, border: `1px solid ${s.border}`,
           }}>
             {s.label}
@@ -335,49 +362,35 @@ export default function Leads() {
       },
     },
     {
-      title: '跟进结果',
-      dataIndex: 'follow_result',
-      width: 180,
-      ellipsis: true,
-      render: (value) => <Text style={{ fontSize: 12, color: '#4b5563' }}>{value || '-'}</Text>,
-    },
-    {
-      title: '关注人',
-      dataIndex: 'watcher_names',
-      width: 180,
-      ellipsis: true,
-      render: (value) => <Text style={{ fontSize: 12, color: '#4b5563' }}>{value || '-'}</Text>,
-    },
-    {
       title: '指派给',
       dataIndex: 'assignee_name',
-      width: 110,
+      width: 150,
       render: v => v
-        ? <Space size={4}><Avatar size={20} style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', fontSize: 10 }}>{v[0]}</Avatar><Text style={{ fontSize: 13, color: '#374151' }}>{v}</Text></Space>
+        ? (
+          <Space size={6} style={{ maxWidth: '100%' }}>
+            <Avatar size={22} style={{ background: '#4F46E5', fontSize: 10 }}>{v[0]}</Avatar>
+            <Text title={v} style={{ maxWidth: 98, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#374151' }}>{v}</Text>
+          </Space>
+        )
         : <Text style={{ fontSize: 12, color: '#d1d5db' }}>未指派</Text>,
     },
     {
-      title: '互动日期',
+      title: '最近互动',
       dataIndex: 'date',
-      width: 100,
+      width: 120,
       sorter: (a, b) => a.date?.localeCompare(b.date),
       render: v => <Text style={{ fontSize: 12, color: '#6b7280' }}>{v || '-'}</Text>,
     },
     {
-      title: '创建人',
-      dataIndex: 'created_by_name',
-      width: 90,
-      render: v => <Text style={{ fontSize: 12, color: '#9ca3af' }}>{v || '-'}</Text>,
-    },
-    {
       title: '附件',
-      width: 100,
+      width: 80,
+      align: 'center',
       render: (_, r) => (
         <Button
           type="link"
           size="small"
           icon={<PaperClipOutlined />}
-          style={{ fontSize: 12, color: '#6b7280' }}
+          style={{ padding: 0, fontSize: 12, color: '#6b7280' }}
           onClick={async () => {
             try {
               const atts = await attachmentsApi.list({ source_type: r.source_type, source_id: r.source_id });
@@ -426,11 +439,17 @@ export default function Leads() {
     },
     {
       title: '操作',
-      width: 80,
+      width: 120,
+      fixed: 'right',
       render: (_, r) => (
-        <Button type="text" size="small" icon={<EditOutlined />} style={{ color: '#4F46E5', fontSize: 12 }} onClick={() => openEdit(r)}>
-          编辑
-        </Button>
+        <Space size={4} wrap={false}>
+          <Button type="link" size="small" style={{ padding: '0 4px', fontSize: 12 }} onClick={() => openDetail(r)}>
+            详情
+          </Button>
+          <Button type="link" size="small" icon={<EditOutlined />} style={{ padding: '0 4px', color: '#4F46E5', fontSize: 12 }} onClick={() => openEdit(r)}>
+            编辑
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -566,27 +585,35 @@ export default function Leads() {
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计概览 */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {[
-          { label: '全部线索', value: data.length, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
-          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+          { label: '全部线索', value: data.length, color: '#4F46E5', bg: '#eef2ff' },
+          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, color: '#2563eb', bg: '#eff6ff' },
+          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, color: '#D97706', bg: '#fffbeb' },
+          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, color: '#059669', bg: '#ecfdf5' },
         ].map((item, idx) => (
           <Col xs={12} sm={6} key={idx}>
-            <div className="stat-card" style={{
-              background: item.gradient, borderRadius: 10, padding: isMobile ? '12px 14px' : '14px 18px',
+            <div style={{
+              background: '#fff',
+              border: '1px solid #e5e7eb',
+              borderRadius: 8,
+              padding: isMobile ? '12px 14px' : '14px 16px',
               cursor: 'default',
             }}>
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ fontSize: isMobile ? 22 : 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                <div>
+                  <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>{item.label}</div>
+                  <div style={{ marginTop: 4, fontSize: isMobile ? 22 : 24, fontWeight: 700, color: '#111827', lineHeight: 1.2 }}>{item.value}</div>
+                </div>
+                <span style={{ width: 8, height: 36, borderRadius: 999, background: item.bg, border: `1px solid ${item.color}` }} />
+              </div>
             </div>
           </Col>
         ))}
       </Row>
 
       {/* 筛选与表格 */}
-      <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+      <Card style={{ borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: 'none' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
           <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
             <Select
@@ -629,19 +656,26 @@ export default function Leads() {
             dataSource={data}
             rowKey={(record) => `${record.source_type}-${record.source_id}`}
             loading={loading}
-            size="small"
+            size="middle"
+            scroll={{ x: 1188 }}
+            tableLayout="fixed"
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             locale={{ emptyText: '暂无线索记录' }}
             expandable={{
+              columnWidth: 44,
               expandedRowRender: r => (
-                <div style={{ padding: '12px 20px', background: '#f8fafc', borderRadius: 10, border: '1px solid #f0f0f5' }}>
-                  {r.description && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动描述：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.description}</Text></div>}
-                  {r.outcome && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.outcome}</Text></div>}
-                  {r.follow_result && <div style={{ marginBottom: 6 }}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>跟进结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.follow_result}</Text></div>}
-                  {r.opportunity_note && <div><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>商机说明：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.opportunity_note}</Text></div>}
+                <div style={{ padding: '12px 20px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e5e7eb' }}>
+                  <Row gutter={[20, 8]}>
+                    {r.watcher_names && <Col span={12}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>关注人：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.watcher_names}</Text></Col>}
+                    {r.created_by_name && <Col span={12}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>创建人：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.created_by_name}</Text></Col>}
+                    {r.description && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动描述：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.description}</Text></Col>}
+                    {r.outcome && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.outcome}</Text></Col>}
+                    {r.follow_result && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>跟进结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.follow_result}</Text></Col>}
+                    {r.opportunity_note && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>商机说明：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.opportunity_note}</Text></Col>}
+                  </Row>
                 </div>
               ),
-              rowExpandable: r => !!(r.description || r.outcome || r.follow_result || r.opportunity_note),
+              rowExpandable: r => !!(r.watcher_names || r.created_by_name || r.description || r.outcome || r.follow_result || r.opportunity_note),
             }}
           />
         )}
