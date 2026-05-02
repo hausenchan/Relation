@@ -309,8 +309,15 @@ export default function Leads() {
 
   const columns = [
     {
-      title: '商机主体',
+      title: '商机ID',
+      dataIndex: 'source_id',
+      width: 90,
+      render: v => <Text strong style={{ fontSize: 13, color: '#374151' }}>{v || '-'}</Text>,
+    },
+    {
+      title: '商机',
       key: 'subject',
+      width: 360,
       render: (_, r) => {
         const isCompetitor = r.source_type === 'competitor_research';
         const subjectName = isCompetitor ? (r.company_name || '-') : (r.person_name || '-');
@@ -400,6 +407,29 @@ export default function Leads() {
           </Space>
         )
         : <Text style={{ fontSize: 12, color: '#d1d5db' }}>未指派</Text>,
+    },
+    {
+      title: '创建人',
+      dataIndex: 'created_by_name',
+      width: 120,
+      responsive: ['lg'],
+      render: v => v
+        ? (
+          <Space size={6} style={{ maxWidth: '100%' }}>
+            <Avatar size={22} style={{ background: '#6366f1', fontSize: 10 }}>{v[0]}</Avatar>
+            <Text title={v} style={{ maxWidth: 76, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#374151' }}>{v}</Text>
+          </Space>
+        )
+        : <Text style={{ fontSize: 12, color: '#d1d5db' }}>-</Text>,
+    },
+    {
+      title: '关注人',
+      dataIndex: 'watcher_names',
+      width: 160,
+      responsive: ['lg'],
+      render: v => v
+        ? <Text title={v} style={{ display: 'block', maxWidth: 132, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#374151' }}>{v}</Text>
+        : <Text style={{ fontSize: 12, color: '#d1d5db' }}>-</Text>,
     },
     {
       title: '最近互动',
@@ -630,6 +660,7 @@ export default function Leads() {
             rowKey={(record) => `${record.source_type}-${record.source_id}`}
             loading={loading}
             size="middle"
+            scroll={{ x: 1150 }}
             tableLayout="fixed"
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             locale={{ emptyText: '暂无商机记录' }}
