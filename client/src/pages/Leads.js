@@ -264,98 +264,124 @@ export default function Leads() {
     load();
   };
 
+  const openAttachments = async (record, event) => {
+    event?.stopPropagation?.();
+    try {
+      const atts = await attachmentsApi.list({ source_type: record.source_type, source_id: record.source_id });
+      if (atts.length === 0) {
+        message.info('暂无附件');
+        return;
+      }
+      Modal.info({
+        title: '附件列表',
+        width: isMobile ? '100%' : 500,
+        content: (
+          <div style={{ marginTop: 16 }}>
+            {atts.map(att => (
+              <div key={att.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div style={{ flex: 1, overflow: 'hidden' }}>
+                    <div style={{ fontSize: 13, color: '#374151', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {att.filename}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
+                      {(att.size / 1024).toFixed(1)} KB
+                    </div>
+                  </div>
+                  <Button
+                    type="link"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={() => attachmentsApi.download(att.id, att.filename).catch(() => message.error('下载失败'))}
+                  >
+                    下载
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ),
+      });
+    } catch {
+      message.error('加载附件失败');
+    }
+  };
+
   const columns = [
     {
-      title: '线索',
-      width: 300,
-      render: (_, r) => (
-        <div style={{ minWidth: 0 }}>
-          <Button
-            type="link"
-            style={{
-              display: 'block',
-              padding: 0,
-              height: 22,
-              maxWidth: '100%',
-              color: '#1f2937',
-              fontSize: 14,
-              fontWeight: 600,
-              textAlign: 'left',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            title={r.opportunity_title}
-            onClick={() => openDetail(r)}
-          >
-            {r.opportunity_title || '-'}
-          </Button>
-          <Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12, lineHeight: '18px' }}>
-            #{r.source_id}
-          </Text>
-        </div>
-      ),
-    },
-    {
-      title: '来源',
-      dataIndex: 'source_type',
-      width: 88,
-      render: (v) => v === 'competitor_research'
-        ? <Tag style={{ margin: 0, borderRadius: 6, fontSize: 12 }} color="orange">竞研</Tag>
-        : <Tag style={{ margin: 0, borderRadius: 6, fontSize: 12 }} color="blue">互动</Tag>,
-    },
-    {
-      title: '关联对象',
-      width: 220,
+      title: '线索主体',
+      key: 'subject',
       render: (_, r) => {
-        if (r.source_type === 'competitor_research') {
-          return (
-            <Space size={6} align="center" style={{ width: '100%' }}>
-              <Avatar size={24} style={{ background: '#f0f5ff', color: '#4F46E5', fontSize: 12 }} icon={<BankOutlined />} />
-              <div style={{ minWidth: 0, flex: 1 }}>
+        const isCompetitor = r.source_type === 'competitor_research';
+        const subjectName = isCompetitor ? (r.company_name || '-') : (r.person_name || '-');
+        const companyLine = isCompetitor ? '公司线索' : (r.company || r.current_company || '');
+        return (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
+            <Avatar
+              size={32}
+              style={{
+                flex: '0 0 auto',
+                background: isCompetitor ? '#eef2ff' : '#ecfdf5',
+                color: isCompetitor ? '#4F46E5' : '#059669',
+                fontSize: 14,
+              }}
+              icon={isCompetitor ? <BankOutlined /> : <UserOutlined />}
+            />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                 <Text
                   strong
-                  title={r.company_name || ''}
-                  style={{ display: 'block', maxWidth: 168, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#1f2937' }}
+                  title={r.opportunity_title}
+                  style={{ fontSize: 14, color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
-                  {r.company_name || '-'}
+                  {r.opportunity_title || '-'}
                 </Text>
-                <div style={{ fontSize: 11, color: '#9ca3af', whiteSpace: 'nowrap' }}>公司</div>
+                <Tag style={{ margin: 0, borderRadius: 4, fontSize: 11, lineHeight: '16px', padding: '0 6px', flex: '0 0 auto' }} color={isCompetitor ? 'orange' : 'blue'}>
+                  {isCompetitor ? '竞研' : '互动'}
+                </Tag>
+                {r.attachment_count > 0 && (
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<PaperClipOutlined />}
+                    onClick={(e) => openAttachments(r, e)}
+                    style={{ padding: '0 4px', height: 18, fontSize: 11, color: '#6b7280', flex: '0 0 auto' }}
+                  >
+                    {r.attachment_count}
+                  </Button>
+                )}
               </div>
-            </Space>
-          );
-        }
-        const companyName = r.company || r.current_company || '';
-        return (
-          <Space size={6} align="center" style={{ width: '100%' }}>
-            <Avatar size={24} style={{ background: '#f0fdf4', color: '#059669', fontSize: 12 }} icon={<UserOutlined />} />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <Text
-                strong
-                title={r.person_name || ''}
-                style={{ display: 'block', maxWidth: 168, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#1f2937' }}
+              <div
+                title={`${subjectName}${companyLine && !isCompetitor ? ' · ' + companyLine : ''}`}
+                style={{ marginTop: 4, fontSize: 12, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               >
-                {r.person_name || '-'}
-              </Text>
-              {companyName && (
-                <div title={companyName} style={{ maxWidth: 168, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11, color: '#9ca3af' }}>{companyName}</div>
-              )}
+                {subjectName}
+                {companyLine && !isCompetitor && <span style={{ color: '#9ca3af' }}> · {companyLine}</span>}
+                <span style={{ color: '#d1d5db', marginLeft: 8 }}>#{r.source_id}</span>
+              </div>
             </div>
-          </Space>
+          </div>
         );
       },
     },
     {
       title: '状态',
       dataIndex: 'opportunity_status',
-      width: 110,
+      width: 100,
       render: v => {
         const s = opportunityStatusMap[v] || { label: v || '-', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' };
         return (
           <span style={{
-            display: 'inline-block', minWidth: 64, padding: '2px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500, textAlign: 'center',
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            maxWidth: '100%', padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 500,
             color: s.color, background: s.bg, border: `1px solid ${s.border}`,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            boxSizing: 'border-box',
           }}>
+            <span style={{
+              display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+              background: s.color, flexShrink: 0,
+            }} />
             {s.label}
           </span>
         );
@@ -365,6 +391,7 @@ export default function Leads() {
       title: '指派给',
       dataIndex: 'assignee_name',
       width: 150,
+      responsive: ['lg'],
       render: v => v
         ? (
           <Space size={6} style={{ maxWidth: '100%' }}>
@@ -378,78 +405,24 @@ export default function Leads() {
       title: '最近互动',
       dataIndex: 'date',
       width: 120,
-      sorter: (a, b) => a.date?.localeCompare(b.date),
+      sorter: (a, b) => (a.date || '').localeCompare(b.date || ''),
       render: v => <Text style={{ fontSize: 12, color: '#6b7280' }}>{v || '-'}</Text>,
     },
     {
-      title: '附件',
-      width: 80,
-      align: 'center',
+      title: '操作',
+      key: 'actions',
+      width: 90,
+      align: 'right',
       render: (_, r) => (
         <Button
           type="link"
           size="small"
-          icon={<PaperClipOutlined />}
-          style={{ padding: 0, fontSize: 12, color: '#6b7280' }}
-          onClick={async () => {
-            try {
-              const atts = await attachmentsApi.list({ source_type: r.source_type, source_id: r.source_id });
-              if (atts.length === 0) {
-                message.info('暂无附件');
-                return;
-              }
-              Modal.info({
-                title: '附件列表',
-                width: isMobile ? '100%' : 500,
-                content: (
-                  <div style={{ marginTop: 16 }}>
-                    {atts.map(att => (
-                      <div key={att.id} style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <div style={{ flex: 1, overflow: 'hidden' }}>
-                            <div style={{ fontSize: 13, color: '#374151', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {att.filename}
-                            </div>
-                            <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 2 }}>
-                              {(att.size / 1024).toFixed(1)} KB
-                            </div>
-                          </div>
-                          <Button
-                            type="link"
-                            size="small"
-                            icon={<DownloadOutlined />}
-                            onClick={() => attachmentsApi.download(att.id, att.filename).catch(() => message.error('下载失败'))}
-                          >
-                            下载
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ),
-              });
-            } catch {
-              message.error('加载附件失败');
-            }
-          }}
+          icon={<EditOutlined />}
+          style={{ padding: '0 4px', color: '#4F46E5', fontSize: 12 }}
+          onClick={(e) => { e.stopPropagation(); openEdit(r); }}
         >
-          {r.attachment_count || 0}
+          编辑
         </Button>
-      ),
-    },
-    {
-      title: '操作',
-      width: 120,
-      fixed: 'right',
-      render: (_, r) => (
-        <Space size={4} wrap={false}>
-          <Button type="link" size="small" style={{ padding: '0 4px', fontSize: 12 }} onClick={() => openDetail(r)}>
-            详情
-          </Button>
-          <Button type="link" size="small" icon={<EditOutlined />} style={{ padding: '0 4px', color: '#4F46E5', fontSize: 12 }} onClick={() => openEdit(r)}>
-            编辑
-          </Button>
-        </Space>
       ),
     },
   ];
@@ -497,9 +470,15 @@ export default function Leads() {
                   {isCompetitor ? '竞研' : '互动'}
                 </Tag>
                 <span style={{
-                  display: 'inline-block', padding: '2px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500,
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 500,
                   color: status.color, background: status.bg, border: `1px solid ${status.border}`,
+                  whiteSpace: 'nowrap',
                 }}>
+                  <span style={{
+                    display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
+                    background: status.color, flexShrink: 0,
+                  }} />
                   {status.label}
                 </span>
               </Space>
@@ -587,10 +566,10 @@ export default function Leads() {
       {/* 统计概览 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {[
-          { label: '全部线索', value: data.length, color: '#4F46E5', bg: '#eef2ff' },
-          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, color: '#2563eb', bg: '#eff6ff' },
-          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, color: '#D97706', bg: '#fffbeb' },
-          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, color: '#059669', bg: '#ecfdf5' },
+          { label: '全部线索', value: data.length, color: '#4F46E5' },
+          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, color: '#2563eb' },
+          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, color: '#D97706' },
+          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, color: '#059669' },
         ].map((item, idx) => (
           <Col xs={12} sm={6} key={idx}>
             <div style={{
@@ -598,15 +577,11 @@ export default function Leads() {
               border: '1px solid #e5e7eb',
               borderRadius: 8,
               padding: isMobile ? '12px 14px' : '14px 16px',
+              borderLeft: `3px solid ${item.color}`,
               cursor: 'default',
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>{item.label}</div>
-                  <div style={{ marginTop: 4, fontSize: isMobile ? 22 : 24, fontWeight: 700, color: '#111827', lineHeight: 1.2 }}>{item.value}</div>
-                </div>
-                <span style={{ width: 8, height: 36, borderRadius: 999, background: item.bg, border: `1px solid ${item.color}` }} />
-              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>{item.label}</div>
+              <div style={{ marginTop: 4, fontSize: isMobile ? 22 : 24, fontWeight: 700, color: '#111827', lineHeight: 1.2 }}>{item.value}</div>
             </div>
           </Col>
         ))}
@@ -657,26 +632,13 @@ export default function Leads() {
             rowKey={(record) => `${record.source_type}-${record.source_id}`}
             loading={loading}
             size="middle"
-            scroll={{ x: 1188 }}
             tableLayout="fixed"
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             locale={{ emptyText: '暂无线索记录' }}
-            expandable={{
-              columnWidth: 44,
-              expandedRowRender: r => (
-                <div style={{ padding: '12px 20px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e5e7eb' }}>
-                  <Row gutter={[20, 8]}>
-                    {r.watcher_names && <Col span={12}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>关注人：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.watcher_names}</Text></Col>}
-                    {r.created_by_name && <Col span={12}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>创建人：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.created_by_name}</Text></Col>}
-                    {r.description && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动描述：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.description}</Text></Col>}
-                    {r.outcome && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>互动结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.outcome}</Text></Col>}
-                    {r.follow_result && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>跟进结果：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.follow_result}</Text></Col>}
-                    {r.opportunity_note && <Col span={24}><Text style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>商机说明：</Text><Text style={{ fontSize: 13, color: '#374151' }}>{r.opportunity_note}</Text></Col>}
-                  </Row>
-                </div>
-              ),
-              rowExpandable: r => !!(r.watcher_names || r.created_by_name || r.description || r.outcome || r.follow_result || r.opportunity_note),
-            }}
+            onRow={(record) => ({
+              onClick: () => openDetail(record),
+              style: { cursor: 'pointer' },
+            })}
           />
         )}
       </Card>
