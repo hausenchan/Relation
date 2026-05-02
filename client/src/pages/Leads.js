@@ -39,7 +39,7 @@ export default function Leads() {
   const [attachments, setAttachments] = useState([]);
   const [attachmentsLoading, setAttachmentsLoading] = useState(false);
 
-  // 添加线索
+  // 添加商机
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addForm] = Form.useForm();
   const [addLoading, setAddLoading] = useState(false);
@@ -217,7 +217,7 @@ export default function Leads() {
         }
       }
 
-      message.success('线索添加成功');
+      message.success('商机添加成功');
       setAddModalOpen(false);
       load();
     } catch (err) {
@@ -230,7 +230,7 @@ export default function Leads() {
 
   const openEdit = (record) => {
     setEditTarget(record);
-    // 复用添加线索表单，填充完整数据
+    // 复用添加商机表单，填充完整数据
     addForm.setFieldsValue({
       source_type: record.source_type,
       person_id: record.person_id,
@@ -309,12 +309,12 @@ export default function Leads() {
 
   const columns = [
     {
-      title: '线索主体',
+      title: '商机主体',
       key: 'subject',
       render: (_, r) => {
         const isCompetitor = r.source_type === 'competitor_research';
         const subjectName = isCompetitor ? (r.company_name || '-') : (r.person_name || '-');
-        const companyLine = isCompetitor ? '公司线索' : (r.company || r.current_company || '');
+        const companyLine = isCompetitor ? '公司商机' : (r.company || r.current_company || '');
         return (
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
             <Avatar
@@ -455,7 +455,7 @@ export default function Leads() {
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>线索ID：{record.source_id}</div>
+                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>商机ID：{record.source_id}</div>
                 <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6 }}>{record.opportunity_title}</div>
                 <Space size={6} align="center">
                   <Avatar size={24} style={{ background: isCompetitor ? '#f0f5ff' : '#f0fdf4', color: isCompetitor ? '#4F46E5' : '#059669', fontSize: 12 }} icon={isCompetitor ? <BankOutlined /> : <UserOutlined />} />
@@ -566,7 +566,7 @@ export default function Leads() {
       {/* 统计概览 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
-          { label: '全部线索', value: data.length, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          { label: '全部商机', value: data.length, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
           { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
           { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
           { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
@@ -611,7 +611,7 @@ export default function Leads() {
               options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
             />
           </Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAddLead} style={{ width: isMobile ? '100%' : undefined }}>添加线索</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAddLead} style={{ width: isMobile ? '100%' : undefined }}>添加商机</Button>
         </div>
 
         {isMobile ? (
@@ -620,7 +620,7 @@ export default function Leads() {
             rowKey={(record) => `${record.source_type}-${record.source_id}`}
             loading={loading}
             pagination={{ pageSize: 20, showSizeChanger: false }}
-            locale={{ emptyText: '暂无线索记录' }}
+            locale={{ emptyText: '暂无商机记录' }}
             renderItem={renderLeadCard}
           />
         ) : (
@@ -632,7 +632,7 @@ export default function Leads() {
             size="middle"
             tableLayout="fixed"
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-            locale={{ emptyText: '暂无线索记录' }}
+            locale={{ emptyText: '暂无商机记录' }}
             onRow={(record) => ({
               onClick: () => openDetail(record),
               style: { cursor: 'pointer' },
@@ -709,7 +709,7 @@ export default function Leads() {
                 {(detailRecord.company || detailRecord.current_company) &&
                   ` (${detailRecord.company || detailRecord.current_company})`}
               </Descriptions.Item>
-              <Descriptions.Item label="线索ID">{detailRecord.source_id}</Descriptions.Item>
+              <Descriptions.Item label="商机ID">{detailRecord.source_id}</Descriptions.Item>
               <Descriptions.Item label="指派给">{detailRecord.assignee_name || <Text style={{ color: '#d1d5db' }}>未指派</Text>}</Descriptions.Item>
               <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
               <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
@@ -777,9 +777,9 @@ export default function Leads() {
         )}
       </Drawer>
 
-      {/* 添加/编辑线索 Modal */}
+      {/* 添加/编辑商机 Modal */}
       <Modal
-        title={<span style={{ fontWeight: 600, fontSize: 15, color: '#1f2937' }}>{editTarget ? '编辑线索' : '添加线索'}</span>}
+        title={<span style={{ fontWeight: 600, fontSize: 15, color: '#1f2937' }}>{editTarget ? '编辑商机' : '添加商机'}</span>}
         open={addModalOpen}
         onOk={handleAddLead}
         onCancel={() => { setAddModalOpen(false); setEditTarget(null); }}
@@ -792,7 +792,7 @@ export default function Leads() {
       >
         <Form form={addForm} layout="vertical" style={{ marginTop: 12 }}>
           {/* 来源类型 */}
-          <Form.Item label="线索来源" name="source_type" rules={[{ required: true, message: '请选择线索来源' }]}>
+          <Form.Item label="商机来源" name="source_type" rules={[{ required: true, message: '请选择商机来源' }]}>
             <Select onChange={v => { setAddSourceType(v); addForm.setFieldsValue({ person_id: undefined, company_id: undefined }); }}>
               <Option value="interaction">互动</Option>
               <Option value="competitor_research">竞研</Option>
@@ -855,7 +855,7 @@ export default function Leads() {
             <Input.TextArea rows={2} placeholder="背景、需求、补充说明等" />
           </Form.Item>
           <Form.Item label="跟进结果" name="follow_result">
-            <Input.TextArea rows={2} placeholder="填写当前线索跟进结果" />
+            <Input.TextArea rows={2} placeholder="填写当前商机跟进结果" />
           </Form.Item>
           <Form.Item label="关注人" name="watcher_ids">
             <Select
@@ -863,7 +863,7 @@ export default function Leads() {
               allowClear
               showSearch
               optionFilterProp="label"
-              placeholder="可选择需要关注该线索的人"
+              placeholder="可选择需要关注该商机的人"
               options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
             />
           </Form.Item>

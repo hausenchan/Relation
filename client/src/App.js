@@ -204,7 +204,7 @@ function AppLayout() {
     '/': '工作台',
     '/goals': '目标管理',
     '/weekly-reports': '周报管理',
-    '/leads': '线索',
+    '/leads': '商机',
     '/strategies': '策略',
     '/dev-tasks': '需求',
     '/persons': '人脉管理',
@@ -242,7 +242,7 @@ function AppLayout() {
 
   // ── 业务流转 ────────────────────────────────────────────────
   const bizFlowChildren = [
-    { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">线索</Link> },
+    { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">商机</Link> },
     { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
     { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
   ];

@@ -23,7 +23,7 @@ const MENU_TREE = [
     title: '业务流转',
     key: 'biz-flow',
     children: [
-      { title: '线索', key: '/leads' },
+      { title: '商机', key: '/leads' },
       { title: '策略', key: '/strategies' },
       { title: '需求', key: '/dev-tasks' },
     ],
