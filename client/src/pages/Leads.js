@@ -564,24 +564,22 @@ export default function Leads() {
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计概览 */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
-          { label: '全部线索', value: data.length, color: '#4F46E5' },
-          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, color: '#2563eb' },
-          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, color: '#D97706' },
-          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, color: '#059669' },
+          { label: '全部线索', value: data.length, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
         ].map((item, idx) => (
           <Col xs={12} sm={6} key={idx}>
-            <div style={{
-              background: '#fff',
-              border: '1px solid #e5e7eb',
-              borderRadius: 8,
+            <div className="stat-card" style={{
+              background: item.gradient,
+              borderRadius: 10,
               padding: isMobile ? '12px 14px' : '14px 16px',
-              borderLeft: `3px solid ${item.color}`,
               cursor: 'default',
             }}>
-              <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ marginTop: 4, fontSize: isMobile ? 22 : 24, fontWeight: 700, color: '#111827', lineHeight: 1.2 }}>{item.value}</div>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
+              <div style={{ fontSize: isMobile ? 22 : 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
             </div>
           </Col>
         ))}
