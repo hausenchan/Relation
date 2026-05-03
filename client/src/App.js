@@ -133,6 +133,80 @@ function PrivateRoute({ children, module }) {
   return children;
 }
 
+function MobileOverlayBackHandler({ enabled }) {
+  const overlayCountRef = React.useRef(0);
+  const handlingPopRef = React.useRef(false);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+
+    const getVisibleOverlays = () => {
+      const modals = Array.from(document.querySelectorAll('.ant-modal-wrap'))
+        .filter(node => node.offsetParent !== null);
+      const drawers = Array.from(document.querySelectorAll('.ant-drawer:not(.app-mobile-menu-drawer)'))
+        .filter(node => node.classList.contains('ant-drawer-open') && node.offsetParent !== null);
+      return [...modals, ...drawers];
+    };
+
+    const closeTopOverlay = () => {
+      const overlays = getVisibleOverlays();
+      const top = overlays[overlays.length - 1];
+      const closeButton = top?.querySelector(
+        '.ant-modal-close, .ant-drawer-close, .ant-modal-confirm-btns .ant-btn-default, .ant-modal-footer .ant-btn-default'
+      );
+      if (closeButton) {
+        closeButton.click();
+        return true;
+      }
+      return false;
+    };
+
+    const syncOverlayHistory = () => {
+      const nextCount = getVisibleOverlays().length;
+      const prevCount = overlayCountRef.current;
+
+      if (nextCount > prevCount) {
+        for (let i = prevCount; i < nextCount; i += 1) {
+          window.history.pushState(
+            { ...(window.history.state || {}), __mobileOverlayBack: true },
+            '',
+            window.location.href
+          );
+        }
+      } else if (nextCount < prevCount && !handlingPopRef.current && window.history.state?.__mobileOverlayBack) {
+        window.history.back();
+      }
+
+      overlayCountRef.current = nextCount;
+    };
+
+    const onPopState = () => {
+      if (getVisibleOverlays().length === 0) return;
+      handlingPopRef.current = true;
+      closeTopOverlay();
+      window.setTimeout(() => {
+        overlayCountRef.current = getVisibleOverlays().length;
+        handlingPopRef.current = false;
+      }, 80);
+    };
+
+    const observer = new MutationObserver(() => {
+      window.requestAnimationFrame(syncOverlayHistory);
+    });
+
+    overlayCountRef.current = getVisibleOverlays().length;
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+    window.addEventListener('popstate', onPopState);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('popstate', onPopState);
+    };
+  }, [enabled]);
+
+  return null;
+}
+
 function AppLayout() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -182,6 +256,26 @@ function AppLayout() {
       setCollapsed(false);
     }
   }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile || !mobileMenuOpen) return undefined;
+
+    const openedPath = window.location.pathname;
+    const marker = { ...(window.history.state || {}), __mobileMenuBack: true };
+    window.history.pushState(marker, '', window.location.href);
+
+    const onPopState = () => {
+      setMobileMenuOpen(false);
+    };
+
+    window.addEventListener('popstate', onPopState);
+    return () => {
+      window.removeEventListener('popstate', onPopState);
+      if (window.location.pathname === openedPath && window.history.state?.__mobileMenuBack) {
+        window.history.back();
+      }
+    };
+  }, [isMobile, mobileMenuOpen]);
 
   const handleChangePwd = async (values) => {
     setPwdLoading(true);
@@ -521,6 +615,7 @@ function AppLayout() {
 
   return (
     <Watermark content={user?.display_name || user?.username} gap={isMobile ? [140, 160] : [200, 200]} font={{ color: 'rgba(0,0,0,0.06)', fontSize: isMobile ? 12 : 14 }} style={{ minHeight: '100vh' }}>
+    <MobileOverlayBackHandler enabled={isMobile} />
     <Layout style={{ minHeight: '100vh' }}>
       <Modal
         title="修改密码"
@@ -574,6 +669,7 @@ function AppLayout() {
           open={mobileMenuOpen}
           onClose={() => setMobileMenuOpen(false)}
           closable={false}
+          rootClassName="app-mobile-menu-drawer"
           width={280}
           styles={{ body: { padding: 0, background: DS.sidebar.bg }, content: { background: DS.sidebar.bg } }}
         >
