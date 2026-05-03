@@ -140,11 +140,17 @@ function MobileOverlayBackHandler({ enabled }) {
   useEffect(() => {
     if (!enabled) return undefined;
 
+    const isVisibleElement = (node) => {
+      const style = window.getComputedStyle(node);
+      const rect = node.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+
     const getVisibleOverlays = () => {
       const modals = Array.from(document.querySelectorAll('.ant-modal-wrap'))
-        .filter(node => node.offsetParent !== null);
+        .filter(isVisibleElement);
       const drawers = Array.from(document.querySelectorAll('.ant-drawer:not(.app-mobile-menu-drawer)'))
-        .filter(node => node.classList.contains('ant-drawer-open') && node.offsetParent !== null);
+        .filter(node => node.classList.contains('ant-drawer-open') && isVisibleElement(node));
       return [...modals, ...drawers];
     };
 
