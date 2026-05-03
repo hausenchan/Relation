@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Row, Col, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid } from 'antd';
+import { Card, Row, Col, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions } from 'antd';
 import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
@@ -53,6 +53,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailRecord, setDetailRecord] = useState(null);
   const [form] = Form.useForm();
   const [users, setUsers] = useState([]);
   const navigate = useNavigate();
@@ -303,6 +305,23 @@ export default function Dashboard() {
     });
     setModalOpen(true);
   };
+
+  const openTaskDetail = (record) => {
+    setDetailRecord(record);
+    setDetailOpen(true);
+  };
+
+  const ignoreTaskRowEvent = (event) => {
+    return event.target.closest('button, a, input, textarea, .ant-select, .ant-picker, .ant-dropdown-trigger, .ant-popover, .ant-modal');
+  };
+
+  const taskRowProps = (record) => ({
+    onDoubleClick: (event) => {
+      if (ignoreTaskRowEvent(event)) return;
+      openTaskDetail(record);
+    },
+    style: { cursor: 'pointer' },
+  });
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -734,6 +753,10 @@ export default function Dashboard() {
     return (
       <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
         <div
+          onDoubleClick={(event) => {
+            if (ignoreTaskRowEvent(event)) return;
+            openTaskDetail(record);
+          }}
           style={{
             width: '100%',
             padding: 14,
@@ -876,6 +899,7 @@ export default function Dashboard() {
               dataSource={filteredAssignedTasks}
               columns={assignedTaskColumns}
               rowKey="id"
+              onRow={taskRowProps}
               loading={loading}
               scroll={{ x: 1120 }}
               pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
@@ -945,6 +969,7 @@ export default function Dashboard() {
               dataSource={filteredExecutionTasks}
               columns={executionTaskColumns}
               rowKey="id"
+              onRow={taskRowProps}
               loading={loading}
               scroll={{ x: 1220 }}
               pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
@@ -1013,6 +1038,7 @@ export default function Dashboard() {
             dataSource={filteredWatchedTasks}
             columns={watchedTaskColumns}
             rowKey="id"
+            onRow={taskRowProps}
             loading={loading}
             scroll={{ x: 1380 }}
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
@@ -1099,6 +1125,7 @@ export default function Dashboard() {
               dataSource={filteredTeamTasks}
               columns={teamTaskColumns}
               rowKey="id"
+              onRow={taskRowProps}
               loading={loading}
               scroll={{ x: 1380 }}
               pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
@@ -1264,6 +1291,79 @@ export default function Dashboard() {
           )}
         </Form>
       </Modal>
+
+      <Drawer
+        title="任务详情"
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        width={isMobile ? '100%' : 520}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
+        extra={
+          detailRecord?.task_source === 'normal' && (
+            <Button
+              icon={<EditOutlined />}
+              onClick={() => {
+                setDetailOpen(false);
+                openEdit(detailRecord);
+              }}
+            >
+              编辑
+            </Button>
+          )
+        }
+      >
+        {detailRecord && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="任务标题">{detailRecord.title || '-'}</Descriptions.Item>
+              <Descriptions.Item label="任务来源">
+                <Tag color={detailRecord.task_source === 'opportunity' ? 'purple' : 'blue'}>
+                  {detailRecord.task_source_label || '-'}
+                </Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Badge status={detailRecord.display_status_badge} text={detailRecord.display_status_label || '-'} />
+              </Descriptions.Item>
+              {detailRecord.priority && (
+                <Descriptions.Item label="优先级">
+                  <Tag color={priorityMap[detailRecord.priority]?.color}>{priorityMap[detailRecord.priority]?.label || detailRecord.priority}</Tag>
+                </Descriptions.Item>
+              )}
+              <Descriptions.Item label="计划日期">{detailRecord.plan_date || detailRecord.date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="开始日期">{detailRecord.start_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="完成日期">{detailRecord.complete_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="指派人">
+                {detailRecord.created_by_name || detailRecord.assigned_by_name || detailRecord.assigner_name || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="执行人">
+                {detailRecord.assigned_to_name || detailRecord.follower_name || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="任务描述">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || detailRecord.opportunity_note || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="任务进度/结果">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.display_result || detailRecord.result || detailRecord.done_note || '-'}</div>
+              </Descriptions.Item>
+              {detailRecord.task_source === 'opportunity' && (
+                <>
+                  <Descriptions.Item label="商机标题">{detailRecord.opportunity_title || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="关联对象">
+                    {detailRecord.person_name || detailRecord.company_name || '-'}
+                    {detailRecord.person_name && (detailRecord.company || detailRecord.current_company)
+                      ? ` (${detailRecord.company || detailRecord.current_company})`
+                      : ''}
+                    {!detailRecord.person_name && detailRecord.company_name ? ' (公司)' : ''}
+                  </Descriptions.Item>
+                  <Descriptions.Item label="期望跟进日期">{detailRecord.due_date || detailRecord.plan_date || '-'}</Descriptions.Item>
+                  {detailRecord.done_at && (
+                    <Descriptions.Item label="完成时间">{dayjs(detailRecord.done_at).format('YYYY-MM-DD HH:mm')}</Descriptions.Item>
+                  )}
+                </>
+              )}
+            </Descriptions>
+          </Space>
+        )}
+      </Drawer>
     </div>
   );
 }
