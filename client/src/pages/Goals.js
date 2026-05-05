@@ -23,6 +23,7 @@ import { DeleteOutlined, EditOutlined, EyeOutlined, FilterOutlined, PlusOutlined
 import dayjs from 'dayjs';
 import { goalsApi, usersApi, projectGroupsApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
+import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
 
 const { TextArea } = Input;
 const { RangePicker } = DatePicker;
@@ -541,6 +542,10 @@ function Goals() {
       ),
     },
   ];
+  const { columns: resizableColumns, scrollX } = useResizableColumns('goals-table-columns', columns, {
+    defaultWidth: 160,
+    minWidths: { title: 180, description: 180, result: 160, actions: 140 },
+  });
 
   const renderGoalCard = (record) => (
     <Card
@@ -686,10 +691,12 @@ function Goals() {
           <Table
             rowKey="id"
             loading={loading}
-            columns={columns}
+            columns={resizableColumns}
             dataSource={goals}
+            components={resizableTableComponents}
             pagination={{ pageSize: 10, showSizeChanger: true }}
-            scroll={{ x: 1440 }}
+            scroll={{ x: scrollX }}
+            tableLayout="fixed"
             onRow={(record) => ({
               onDoubleClick: () => showDetail(record),
             })}

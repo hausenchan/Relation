@@ -4,6 +4,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, FilterOutlined, SettingOutl
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useAuth } from '../AuthContext';
+import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
 
 dayjs.extend(isoWeek);
 
@@ -261,6 +262,10 @@ export default function WeeklyReports() {
       ),
     },
   ];
+  const { columns: resizableColumns, scrollX } = useResizableColumns('weekly-reports-table-columns', columns, {
+    defaultWidth: 150,
+    minWidths: { completed: 160, next_week_plan: 160, risks: 140, action: 120 },
+  });
 
   const renderReportCard = (record) => (
     <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
@@ -520,11 +525,13 @@ export default function WeeklyReports() {
         />
       ) : (
         <Table
-          columns={columns}
+          columns={resizableColumns}
           dataSource={reports}
           rowKey="id"
           loading={loading}
-          scroll={{ x: 1200 }}
+          components={resizableTableComponents}
+          scroll={{ x: scrollX }}
+          tableLayout="fixed"
           pagination={{ pageSize: 20 }}
         />
       )}

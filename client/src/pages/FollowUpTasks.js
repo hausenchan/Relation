@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons';
 import { followUpTasksApi } from '../api';
 import { useAuth } from '../AuthContext';
+import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;
@@ -261,7 +262,8 @@ export default function FollowUpTasks() {
           renderItem={renderTaskCard}
         />
       ) : (
-        <Table
+        <ResizableTable
+          storageKey="follow-up-tasks-table-columns"
           columns={columns}
           dataSource={data}
           rowKey="id"

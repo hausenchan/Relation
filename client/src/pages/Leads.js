@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
+import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;
@@ -654,7 +655,8 @@ export default function Leads() {
             renderItem={renderLeadCard}
           />
         ) : (
-          <Table
+          <ResizableTable
+            storageKey="leads-table-columns"
             columns={columns}
             dataSource={data}
             rowKey={(record) => `${record.source_type}-${record.source_id}`}

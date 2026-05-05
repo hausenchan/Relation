@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Table, Card, Select, Space, Tag, Button, Grid, List, Typography } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import axios from 'axios';
+import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
 
 const { Option } = Select;
 
@@ -91,6 +92,10 @@ export default function ExecutiveTalents() {
     { title: '需求', dataIndex: 'demands', key: 'demands', ellipsis: true },
     { title: '备注', dataIndex: 'notes', key: 'notes', ellipsis: true }
   ];
+  const { columns: resizableColumns, scrollX } = useResizableColumns('executive-talents-table-columns', columns, {
+    defaultWidth: 150,
+    minWidths: { resources: 150, demands: 150, notes: 150 },
+  });
 
   const renderTalentCard = (record) => {
     const potentialColorMap = { S: 'red', A: 'orange', B: 'blue', C: 'default' };
@@ -198,9 +203,12 @@ export default function ExecutiveTalents() {
         ) : (
           <Table
             dataSource={data}
-            columns={columns}
+            columns={resizableColumns}
             rowKey="id"
             loading={loading}
+            components={resizableTableComponents}
+            scroll={{ x: scrollX }}
+            tableLayout="fixed"
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
           />
         )}

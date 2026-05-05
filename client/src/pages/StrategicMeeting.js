@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Table, Card, Button, Space, Modal, Form, Input, DatePicker, Select, message, Grid, List, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
+import ResizableTable from '../components/ResizableTable';
 import axios from 'axios';
 import dayjs from 'dayjs';
 
@@ -202,7 +203,8 @@ export default function StrategicMeeting() {
         {isMobile ? (
           <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderMeetingCard} />
         ) : (
-          <Table
+          <ResizableTable
+            storageKey="strategic-meeting-table-columns"
             dataSource={data}
             columns={columns}
             rowKey="id"

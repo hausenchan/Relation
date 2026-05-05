@@ -14,6 +14,7 @@ import { Tree, TreeNode } from 'react-organizational-chart';
 import {
   companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi, usersApi
 } from '../api';
+import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
 
 const { Text, Paragraph } = Typography;
@@ -909,7 +910,8 @@ function CompetitorResearchTab({ companyId }) {
           renderItem={renderResearchCard}
         />
       ) : (
-        <Table
+        <ResizableTable
+          storageKey="competitor-research-table-columns"
           dataSource={data}
           columns={columns}
           rowKey="id"
@@ -1576,7 +1578,8 @@ export default function Companies() {
           renderItem={renderCompanyCard}
         />
       ) : (
-        <Table
+        <ResizableTable
+          storageKey="companies-table-columns"
           columns={columns}
           dataSource={data}
           rowKey="id"

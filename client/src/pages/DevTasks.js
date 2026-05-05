@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber, Card, Row, Col, Typography, Grid, List } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined, ToolOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
+import ResizableTable from '../components/ResizableTable';
 
 const { Title, Text } = Typography;
 import dayjs from 'dayjs';
@@ -552,7 +553,8 @@ export default function DevTasks() {
             renderItem={renderTaskCard}
           />
         ) : (
-          <Table
+          <ResizableTable
+            storageKey="dev-tasks-table-columns"
             columns={columns}
             dataSource={tasks}
             rowKey="id"

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
+import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
 
 
@@ -342,7 +343,8 @@ export default function Interactions() {
           renderItem={renderInteractionCard}
         />
       ) : (
-        <Table
+        <ResizableTable
+          storageKey="interactions-table-columns"
           columns={columns}
           dataSource={data}
           rowKey="id"

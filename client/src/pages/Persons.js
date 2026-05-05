@@ -16,6 +16,7 @@ import ReminderForm from '../components/ReminderForm';
 import InteractionList from '../components/InteractionList';
 import ReminderList from '../components/ReminderList';
 import PersonsMap from '../components/PersonsMap';
+import ResizableTable from '../components/ResizableTable';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -1096,7 +1097,8 @@ export default function Persons() {
           renderItem={renderPersonCard}
         />
       ) : (
-        <Table
+        <ResizableTable
+          storageKey="persons-table-columns"
           columns={columns}
           dataSource={data}
           rowKey="id"
