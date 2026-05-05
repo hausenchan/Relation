@@ -40,6 +40,122 @@ const priorityMap = {
   low:    { label: '低', color: 'default' },
 };
 
+const taskTableDefaultWidths = {
+  assigned: {
+    title: 360,
+    task_source_label: 100,
+    assigned_to_name: 100,
+    plan_date: 110,
+    start_date: 110,
+    complete_date: 110,
+    display_result: 220,
+    action: 120,
+    display_status_label: 100,
+  },
+  execution: {
+    title: 360,
+    task_source_label: 100,
+    priority: 80,
+    created_by_name: 100,
+    plan_date: 110,
+    start_date: 110,
+    complete_date: 110,
+    display_status_label: 100,
+    display_result: 220,
+    action: 160,
+  },
+  watched: {
+    title: 360,
+    task_source_label: 100,
+    assigned_by_name: 110,
+    assigned_to_name: 110,
+    plan_date: 110,
+    start_date: 110,
+    complete_date: 110,
+    display_status_label: 100,
+    display_result: 220,
+    action: 100,
+  },
+  team: {
+    title: 360,
+    task_source_label: 100,
+    priority: 80,
+    assigner_name: 110,
+    follower_name: 110,
+    plan_date: 110,
+    start_date: 110,
+    complete_date: 110,
+    display_status_label: 100,
+    display_result: 220,
+  },
+};
+
+const taskTableMinWidths = {
+  title: 180,
+  display_result: 140,
+  action: 90,
+};
+
+const resizableTableComponents = {
+  header: {
+    cell: ResizableTitle,
+  },
+};
+
+function ResizableTitle({ onResize, width, minWidth = 72, children, ...restProps }) {
+  if (!width || !onResize) {
+    return <th {...restProps}>{children}</th>;
+  }
+
+  const handleMouseDown = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startWidth = width;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMouseMove = (moveEvent) => {
+      const nextWidth = Math.max(minWidth, startWidth + moveEvent.clientX - startX);
+      onResize(nextWidth);
+    };
+
+    const handleMouseUp = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  return (
+    <th {...restProps} style={{ ...restProps.style, position: 'relative' }}>
+      {children}
+      <span
+        role="separator"
+        aria-orientation="vertical"
+        title="拖动调整列宽"
+        onMouseDown={handleMouseDown}
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          position: 'absolute',
+          top: 0,
+          right: -4,
+          width: 8,
+          height: '100%',
+          cursor: 'col-resize',
+          userSelect: 'none',
+          zIndex: 2,
+        }}
+      />
+    </th>
+  );
+}
+
 export default function Dashboard() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -55,6 +171,19 @@ export default function Dashboard() {
   const [editing, setEditing] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [taskColumnWidths, setTaskColumnWidths] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('dashboardTaskColumnWidths') || '{}');
+      return {
+        assigned: { ...taskTableDefaultWidths.assigned, ...(saved.assigned || {}) },
+        execution: { ...taskTableDefaultWidths.execution, ...(saved.execution || {}) },
+        watched: { ...taskTableDefaultWidths.watched, ...(saved.watched || {}) },
+        team: { ...taskTableDefaultWidths.team, ...(saved.team || {}) },
+      };
+    } catch {
+      return taskTableDefaultWidths;
+    }
+  });
   const [form] = Form.useForm();
   const [users, setUsers] = useState([]);
   const navigate = useNavigate();
@@ -109,6 +238,10 @@ export default function Dashboard() {
       usersApi.listSimple().then(setUsers).catch(() => {});
     }
   }, [canAssignOthers]);
+
+  useEffect(() => {
+    localStorage.setItem('dashboardTaskColumnWidths', JSON.stringify(taskColumnWidths));
+  }, [taskColumnWidths]);
 
   const toDisplayStatus = (status) => {
     if (status === 'pending') return 'pending';
@@ -322,6 +455,39 @@ export default function Dashboard() {
     },
     style: { cursor: 'pointer' },
   });
+
+  const resizeTaskColumn = (tableKey, columnKey, width) => {
+    setTaskColumnWidths(prev => ({
+      ...prev,
+      [tableKey]: {
+        ...prev[tableKey],
+        [columnKey]: Math.round(width),
+      },
+    }));
+  };
+
+  const withResizableTaskColumns = (tableKey, columns) => {
+    const widths = taskColumnWidths[tableKey] || {};
+    return columns.map(column => {
+      const columnKey = column.key || column.dataIndex;
+      const width = widths[columnKey] || column.width;
+      const minWidth = taskTableMinWidths[columnKey] || 72;
+      return {
+        ...column,
+        width,
+        onHeaderCell: () => ({
+          width,
+          minWidth,
+          onResize: (nextWidth) => resizeTaskColumn(tableKey, columnKey, nextWidth),
+        }),
+      };
+    });
+  };
+
+  const getTaskTableScrollX = (tableKey) => {
+    const widths = taskColumnWidths[tableKey] || {};
+    return Object.values(widths).reduce((sum, width) => sum + width, 0);
+  };
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -897,11 +1063,13 @@ export default function Dashboard() {
           ) : (
             <Table
               dataSource={filteredAssignedTasks}
-              columns={assignedTaskColumns}
+              columns={withResizableTaskColumns('assigned', assignedTaskColumns)}
               rowKey="id"
               onRow={taskRowProps}
+              components={resizableTableComponents}
               loading={loading}
-              scroll={{ x: 1120 }}
+              scroll={{ x: getTaskTableScrollX('assigned') }}
+              tableLayout="fixed"
               pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
               size="small"
             />
@@ -967,11 +1135,13 @@ export default function Dashboard() {
           ) : (
             <Table
               dataSource={filteredExecutionTasks}
-              columns={executionTaskColumns}
+              columns={withResizableTaskColumns('execution', executionTaskColumns)}
               rowKey="id"
               onRow={taskRowProps}
+              components={resizableTableComponents}
               loading={loading}
-              scroll={{ x: 1220 }}
+              scroll={{ x: getTaskTableScrollX('execution') }}
+              tableLayout="fixed"
               pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
               size="small"
             />
@@ -1036,11 +1206,13 @@ export default function Dashboard() {
         ) : (
           <Table
             dataSource={filteredWatchedTasks}
-            columns={watchedTaskColumns}
+            columns={withResizableTaskColumns('watched', watchedTaskColumns)}
             rowKey="id"
             onRow={taskRowProps}
+            components={resizableTableComponents}
             loading={loading}
-            scroll={{ x: 1380 }}
+            scroll={{ x: getTaskTableScrollX('watched') }}
+            tableLayout="fixed"
             pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             size="small"
           />
@@ -1123,11 +1295,13 @@ export default function Dashboard() {
           ) : (
             <Table
               dataSource={filteredTeamTasks}
-              columns={teamTaskColumns}
+              columns={withResizableTaskColumns('team', teamTaskColumns)}
               rowKey="id"
               onRow={taskRowProps}
+              components={resizableTableComponents}
               loading={loading}
-              scroll={{ x: 1380 }}
+              scroll={{ x: getTaskTableScrollX('team') }}
+              tableLayout="fixed"
               pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
               size="small"
             />
