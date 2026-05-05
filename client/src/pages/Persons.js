@@ -7,7 +7,7 @@ import {
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
   PhoneOutlined, MailOutlined, WechatOutlined, EnvironmentOutlined, MessageOutlined,
-  UploadOutlined, DownloadOutlined, FilterOutlined, SwapOutlined
+  UploadOutlined, DownloadOutlined, FilterOutlined
 } from '@ant-design/icons';
 import { personsApi, interactionsApi, remindersApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -427,7 +427,7 @@ function internalTalentFields({ isMobile }) {
 export default function Persons() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
-  const { user: currentUser, canAssign } = useAuth();
+  const { user: currentUser } = useAuth();
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -451,9 +451,6 @@ export default function Persons() {
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [importRows, setImportRows] = useState([]);
   const [importLoading, setImportLoading] = useState(false);
-  const [assignTarget, setAssignTarget] = useState(null);
-  const [assignUserId, setAssignUserId] = useState(undefined);
-  const [teamMembers, setTeamMembers] = useState([]);
   const [commercialUsers, setCommercialUsers] = useState([]);
   const [form] = Form.useForm();
   const category = Form.useWatch('person_category', form);
@@ -477,29 +474,6 @@ export default function Persons() {
   }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight]);
 
   useEffect(() => { load(); }, [load]);
-
-  const openAssign = async (record) => {
-    setAssignTarget(record);
-    setAssignUserId(record.assigned_to || undefined);
-    // 加载可见用户列表（同组成员）
-    try {
-      const users = await usersApi.listSimple();
-      setTeamMembers(users.filter(u => u.role !== 'admin'));
-    } catch {
-      setTeamMembers([]);
-    }
-  };
-
-  const handleAssign = async () => {
-    try {
-      await personsApi.assign(assignTarget.id, { assigned_to: assignUserId || null });
-      message.success('指派成功');
-      setAssignTarget(null);
-      load();
-    } catch (e) {
-      message.error(e.response?.data?.error || '指派失败');
-    }
-  };
 
   const openDetail = async (record) => {
     setCurrent(record);
@@ -849,11 +823,6 @@ export default function Persons() {
           {canEditPerson(r) && (
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
           )}
-          {canAssign() && (
-            <Tooltip title="指派负责人">
-              <Button size="small" icon={<SwapOutlined />} onClick={() => openAssign(r)}>指派</Button>
-            </Tooltip>
-          )}
           {canDeletePerson(r) && (
             <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
               <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
@@ -966,19 +935,6 @@ export default function Persons() {
                   }}
                 >
                   编辑
-                </Button>
-              )}
-              {canAssign() && (
-                <Button
-                  size="small"
-                  icon={<SwapOutlined />}
-                  style={{ width: isMobile ? '100%' : undefined }}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    openAssign(record);
-                  }}
-                >
-                  指派
                 </Button>
               )}
               {canDeletePerson(record) && (
@@ -1545,32 +1501,6 @@ export default function Persons() {
             </>
           )}
         </Space>
-      </Modal>
-
-      {/* 指派负责人 Modal */}
-      <Modal
-        title={`指派负责人 - ${assignTarget?.name}`}
-        open={!!assignTarget}
-        onCancel={() => setAssignTarget(null)}
-        onOk={handleAssign}
-        okText="确认指派"
-        width={isMobile ? '100%' : undefined}
-        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
-        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
-      >
-        <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
-          原录入人始终保留编辑权限，被指派人获得额外编辑权限。
-        </div>
-        <Select
-          style={{ width: '100%' }}
-          allowClear
-          showSearch
-          placeholder="选择负责人（清空则取消指派）"
-          value={assignUserId}
-          onChange={setAssignUserId}
-          optionFilterProp="label"
-          options={teamMembers.map(u => ({ value: u.id, label: `${u.display_name || u.username}${u.team_name ? ` (${u.team_name})` : ''}` }))}
-        />
       </Modal>
     </div>
   );
