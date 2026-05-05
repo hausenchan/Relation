@@ -4781,12 +4781,12 @@ app.get('/api/executive/talents', requireExecutive, (req, res) => {
     SELECT * FROM persons
     WHERE person_category = 'talent'
       AND relation_types LIKE '%talent_external%'
-      AND importance IN ('high', 'vip')
+      AND weight IN ('high', 'vip')
   `;
   const params = [];
 
   if (potential_rating) {
-    query += ' AND potential_rating = ?';
+    query += ' AND potential_level = ?';
     params.push(potential_rating);
   }
   if (recruit_status) {
@@ -4850,7 +4850,7 @@ app.get('/api/executive/key-customers', requireExecutive, (req, res) => {
     LEFT JOIN interactions i ON p.id = i.person_id AND i.date = latest.max_date
     WHERE p.person_category = 'business'
       AND p.relation_types LIKE '%customer_active%'
-      AND p.importance IN ('high', 'vip')
+      AND p.weight IN ('high', 'vip')
     ORDER BY days_since_last_contact DESC
   `).all();
 
@@ -4864,7 +4864,15 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
     SELECT COUNT(*) as count FROM persons
     WHERE person_category = 'talent'
       AND relation_types LIKE '%talent_external%'
-      AND importance IN ('high', 'vip')
+      AND weight IN ('high', 'vip')
+  `).get().count;
+
+  // 招募中人才数量
+  const recruitingCount = db.prepare(`
+    SELECT COUNT(*) as count FROM persons
+    WHERE person_category = 'talent'
+      AND relation_types LIKE '%talent_external%'
+      AND recruit_status IN ('contacted', 'negotiating', 'offered')
   `).get().count;
 
   // 竞争动态数量（近30天）
@@ -4881,16 +4889,17 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
     SELECT COUNT(*) as count FROM persons
     WHERE person_category = 'business'
       AND relation_types LIKE '%customer_active%'
-      AND importance IN ('high', 'vip')
+      AND weight IN ('high', 'vip')
   `).get().count;
 
   // 高级人才最近动态（最近更新的5条）
   const recentTalents = db.prepare(`
-    SELECT name, current_company, current_position, recruit_status, intent_level, updated_at
+    SELECT id, name, current_company as company, current_position as position,
+           potential_level as potential_rating, recruit_status, intent_level, updated_at
     FROM persons
     WHERE person_category = 'talent'
       AND relation_types LIKE '%talent_external%'
-      AND importance IN ('high', 'vip')
+      AND weight IN ('high', 'vip')
     ORDER BY updated_at DESC
     LIMIT 5
   `).all();
@@ -4898,7 +4907,7 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
   // 竞争公司最新动态（最近5条）
   const recentDynamics = db.prepare(`
     SELECT
-      cd.title, cd.date, cd.type, cd.impact_analysis,
+      cd.id, cd.title, cd.date, cd.type, cd.content, cd.impact,
       c.name as company_name
     FROM company_dynamics cd
     LEFT JOIN companies c ON cd.company_id = c.id
@@ -4909,11 +4918,11 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
   `).all();
 
   // 重点客户预警（超过30天未联系）
-  const customerAlerts = db.prepare(`
+  const customersNeedFollowup = db.prepare(`
     SELECT
-      p.name, p.company,
-      i.date as last_interaction_date,
-      i.type as last_interaction_type,
+      p.id, p.name, p.company, p.position,
+      i.date as last_contact_date,
+      i.type as last_contact_type,
       CAST(julianday('now') - julianday(i.date) AS INTEGER) as days_since_last_contact
     FROM persons p
     LEFT JOIN (
@@ -4924,19 +4933,29 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
     LEFT JOIN interactions i ON p.id = i.person_id AND i.date = latest.max_date
     WHERE p.person_category = 'business'
       AND p.relation_types LIKE '%customer_active%'
-      AND p.importance IN ('high', 'vip')
+      AND p.weight IN ('high', 'vip')
       AND (i.date IS NULL OR julianday('now') - julianday(i.date) > 30)
     ORDER BY days_since_last_contact DESC
     LIMIT 5
   `).all();
 
+  const alerts = [];
+  const staleCustomers = customersNeedFollowup.filter(c => c.days_since_last_contact == null || c.days_since_last_contact > 30);
+  if (staleCustomers.length > 0) {
+    alerts.push(`${staleCustomers.length} 位重点客户超过 30 天未联系`);
+  }
+
   res.json({
-    talentCount,
-    dynamicsCount,
-    customerCount,
-    recentTalents,
-    recentDynamics,
-    customerAlerts
+    stats: {
+      high_potential_talents: talentCount,
+      recruiting_talents: recruitingCount,
+      recent_competitor_dynamics: dynamicsCount,
+      customers_need_followup: customerCount,
+    },
+    alerts,
+    recent_talents: recentTalents,
+    recent_dynamics: recentDynamics,
+    customers_need_followup: customersNeedFollowup,
   });
 });
 

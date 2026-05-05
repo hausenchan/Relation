@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Statistic, Table, Tag, Alert, Spin, Grid, List, Typography, Space } from 'antd';
+import { Card, Row, Col, Statistic, Table, Tag, Alert, Grid, List, Typography, Space } from 'antd';
 import { UserOutlined, TeamOutlined, ShopOutlined, FileTextOutlined, WarningOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
 export default function ExecutiveDashboard() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [data, setData] = useState(null);
 
   useEffect(() => {
@@ -20,13 +20,17 @@ export default function ExecutiveDashboard() {
       setData(res.data);
     } catch (err) {
       console.error('获取经营概览失败:', err);
+      setData(null);
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />;
-  if (!data) return <Alert message="加载失败" type="error" />;
+  const stats = data?.stats || {};
+  const alerts = data?.alerts || [];
+  const recentTalents = data?.recent_talents || [];
+  const recentDynamics = data?.recent_dynamics || [];
+  const customersNeedFollowup = data?.customers_need_followup || [];
 
   const talentColumns = [
     { title: '姓名', dataIndex: 'name', key: 'name' },
@@ -127,7 +131,7 @@ export default function ExecutiveDashboard() {
           <Card>
             <Statistic
               title="高潜人才"
-              value={data.stats.high_potential_talents}
+              value={stats.high_potential_talents || 0}
               prefix={<UserOutlined />}
               suffix="人"
             />
@@ -137,7 +141,7 @@ export default function ExecutiveDashboard() {
           <Card>
             <Statistic
               title="招募中人才"
-              value={data.stats.recruiting_talents}
+              value={stats.recruiting_talents || 0}
               prefix={<TeamOutlined />}
               suffix="人"
             />
@@ -147,7 +151,7 @@ export default function ExecutiveDashboard() {
           <Card>
             <Statistic
               title="竞品动态"
-              value={data.stats.recent_competitor_dynamics}
+              value={stats.recent_competitor_dynamics || 0}
               prefix={<ShopOutlined />}
               suffix="条"
             />
@@ -157,7 +161,7 @@ export default function ExecutiveDashboard() {
           <Card>
             <Statistic
               title="待跟进客户"
-              value={data.stats.customers_need_followup}
+              value={stats.customers_need_followup || 0}
               prefix={<FileTextOutlined />}
               suffix="人"
             />
@@ -165,12 +169,12 @@ export default function ExecutiveDashboard() {
         </Col>
       </Row>
 
-      {data.alerts.length > 0 && (
+      {alerts.length > 0 && (
         <Alert
           message="重要提醒"
           description={
             <ul style={{ marginBottom: 0 }}>
-              {data.alerts.map((alert, idx) => (
+              {alerts.map((alert, idx) => (
                 <li key={idx}>{alert}</li>
               ))}
             </ul>
@@ -185,24 +189,24 @@ export default function ExecutiveDashboard() {
       <Row gutter={16}>
         <Col span={24}>
           <Card title="高潜人才动态" style={{ marginBottom: 16 }}>
-            {isMobile ? <List dataSource={data.recent_talents} rowKey="id" renderItem={renderTalentCard} /> : (
-              <Table dataSource={data.recent_talents} columns={talentColumns} rowKey="id" pagination={false} size="small" />
+            {isMobile ? <List dataSource={recentTalents} rowKey="id" loading={loading} renderItem={renderTalentCard} /> : (
+              <Table dataSource={recentTalents} columns={talentColumns} rowKey="id" loading={loading} pagination={false} size="small" />
             )}
           </Card>
         </Col>
 
         <Col span={24}>
           <Card title="竞品最新动态" style={{ marginBottom: 16 }}>
-            {isMobile ? <List dataSource={data.recent_dynamics} rowKey="id" renderItem={renderDynamicCard} /> : (
-              <Table dataSource={data.recent_dynamics} columns={dynamicsColumns} rowKey="id" pagination={false} size="small" />
+            {isMobile ? <List dataSource={recentDynamics} rowKey="id" loading={loading} renderItem={renderDynamicCard} /> : (
+              <Table dataSource={recentDynamics} columns={dynamicsColumns} rowKey="id" loading={loading} pagination={false} size="small" />
             )}
           </Card>
         </Col>
 
         <Col span={24}>
           <Card title="重点客户待跟进">
-            {isMobile ? <List dataSource={data.customers_need_followup} rowKey="id" renderItem={renderCustomerCard} /> : (
-              <Table dataSource={data.customers_need_followup} columns={customerColumns} rowKey="id" pagination={false} size="small" />
+            {isMobile ? <List dataSource={customersNeedFollowup} rowKey="id" loading={loading} renderItem={renderCustomerCard} /> : (
+              <Table dataSource={customersNeedFollowup} columns={customerColumns} rowKey="id" loading={loading} pagination={false} size="small" />
             )}
           </Card>
         </Col>
