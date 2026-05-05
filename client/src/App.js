@@ -8,7 +8,7 @@ import {
   ApartmentOutlined, LockOutlined, ThunderboltOutlined, MenuOutlined,
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined
+  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined, RadarChartOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -100,6 +100,8 @@ import ExecutiveDynamics from './pages/ExecutiveDynamics';
 import ExecutiveCustomers from './pages/ExecutiveCustomers';
 import StrategicMeeting from './pages/StrategicMeeting';
 import OperationalMeeting from './pages/OperationalMeeting';
+import RecruitRadar from './pages/RecruitRadar';
+import RecruitRadarConfig from './pages/RecruitRadarConfig';
 import NotificationBell from './components/NotificationBell';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
 
@@ -323,6 +325,8 @@ function AppLayout() {
     '/executive': '经营概览',
     '/executive/talents': '高级人才',
     '/executive/dynamics': '竞品动态',
+    '/executive/recruit-radar': '招聘雷达',
+    '/executive/recruit-radar/config': '雷达配置',
     '/executive/customers': '重点客户',
     '/executive/strategic': '战略月会',
     '/executive/operational': '经营周会',
@@ -424,6 +428,8 @@ function AppLayout() {
     { key: '/executive', icon: <DashboardOutlined />, label: <Link to="/executive">经营概览</Link> },
     { key: '/executive/talents', icon: <UserOutlined />, label: <Link to="/executive/talents">高级人才</Link> },
     { key: '/executive/dynamics', icon: <RiseOutlined />, label: <Link to="/executive/dynamics">竞品动态</Link> },
+    { key: '/executive/recruit-radar', icon: <RadarChartOutlined />, label: <Link to="/executive/recruit-radar">招聘雷达</Link> },
+    { key: '/executive/recruit-radar/config', icon: <SettingOutlined />, label: <Link to="/executive/recruit-radar/config">雷达配置</Link> },
     { key: '/executive/customers', icon: <TeamOutlined />, label: <Link to="/executive/customers">重点客户</Link> },
     { key: '/executive/strategic', icon: <AimOutlined />, label: <Link to="/executive/strategic">战略月会</Link> },
     { key: '/executive/operational', icon: <FileTextOutlined />, label: <Link to="/executive/operational">经营周会</Link> },
@@ -772,6 +778,8 @@ function AppLayout() {
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
             <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />
             <Route path="/executive/dynamics" element={<PrivateRoute><ExecutiveDynamics /></PrivateRoute>} />
+            <Route path="/executive/recruit-radar" element={<PrivateRoute><RecruitRadar /></PrivateRoute>} />
+            <Route path="/executive/recruit-radar/config" element={<PrivateRoute><RecruitRadarConfig /></PrivateRoute>} />
             <Route path="/executive/customers" element={<PrivateRoute><ExecutiveCustomers /></PrivateRoute>} />
             <Route path="/executive/strategic" element={<PrivateRoute><StrategicMeeting /></PrivateRoute>} />
             <Route path="/executive/operational" element={<PrivateRoute><OperationalMeeting /></PrivateRoute>} />

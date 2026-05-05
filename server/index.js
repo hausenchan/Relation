@@ -5189,6 +5189,12 @@ app.delete('/api/cross-team-access/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// 招聘雷达模块
+const bossWatcherRoutes = require('./boss-watcher/routes');
+app.use('/api/boss-watcher', auth, bossWatcherRoutes);
+const bossScheduler = require('./boss-watcher/scheduler');
+bossScheduler.start();
+
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
     // 只有非 API 路由才返回 index.html
