@@ -310,6 +310,12 @@ export default function Leads() {
 
   const columns = [
     {
+      title: '商机ID',
+      dataIndex: 'source_id',
+      width: 90,
+      render: v => <Text strong style={{ fontSize: 13, color: '#374151' }}>{v || '-'}</Text>,
+    },
+    {
       title: '商机',
       key: 'subject',
       width: 360,
