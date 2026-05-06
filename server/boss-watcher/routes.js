@@ -8,6 +8,7 @@ const { syncPositions, getPositions } = require('./sync-positions');
 const { executeJob, getJob, getLatestJob, getRunningJob, applyCron } = require('./scheduler');
 const { encryptRow } = require('../lib/cryptoDao');
 const crawlerConfig = require('./crawler-config');
+const personOverlap = require('./person-overlap');
 
 function logAccess(userId, eventId, action, extra) {
   if (!userId) return;
@@ -281,6 +282,7 @@ router.post('/events/:id/import-to-persons', (req, res) => {
 
   try {
     const personId = tx();
+    personOverlap.invalidate();
     logAccess(req.user.id, evt.id, 'import_to_persons', { person_id: personId });
     res.json({ success: true, person_id: personId });
   } catch (err) {
@@ -498,23 +500,68 @@ router.get('/access-log', (req, res) => {
   res.json({ data: rows });
 });
 
-// 抓取参数配置
+// 检查候选人在 persons 表中是否曾出现过（重合度）
+router.get('/events/:id/overlap', (req, res) => {
+  const evt = db.prepare('SELECT id, candidate_name, person_id FROM boss_watch_event WHERE id = ?').get(req.params.id);
+  if (!evt) return res.status(404).json({ error: '事件不存在' });
+  const matches = personOverlap.findByName(evt.candidate_name).filter(p => p.id !== evt.person_id);
+  res.json({ candidate_name: evt.candidate_name, matches });
+});
+
+// 近 N 天事件趋势
+router.get('/stats/trend', (req, res) => {
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 30));
+  const { boss_company_id } = req.query;
+  let sql = `
+    SELECT substr(created_at, 1, 10) as day, event_type, COUNT(*) as cnt
+    FROM boss_watch_event
+    WHERE created_at >= date('now', '-' || ? || ' days', 'localtime')
+  `;
+  const params = [days];
+  if (boss_company_id) { sql += ' AND boss_company_id = ?'; params.push(boss_company_id); }
+  sql += ' GROUP BY day, event_type ORDER BY day';
+  const rows = db.prepare(sql).all(...params);
+
+  // 补全每日空值，前端折线图更直观
+  const TYPES = ['new', 'gone', 'status_change'];
+  const TYPE_LABEL = { new: '新出现', gone: '已消失', status_change: '状态变化' };
+  const map = new Map();
+  for (const r of rows) {
+    const key = `${r.day}|${r.event_type}`;
+    map.set(key, r.cnt);
+  }
+  const data = [];
+  const today = new Date();
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const dayStr = d.toISOString().slice(0, 10);
+    for (const t of TYPES) {
+      data.push({ day: dayStr, type: TYPE_LABEL[t], count: map.get(`${dayStr}|${t}`) || 0 });
+    }
+  }
+  res.json({ days, data });
+});
+
+// 近 N 天事件趋势 - end
 router.get('/crawler-config', (req, res) => {
   res.json(crawlerConfig.load());
 });
 
 router.put('/crawler-config', (req, res) => {
-  const { cronMorning, cronAfternoon, pageSize, maxPagesPerJob, concurrency, cityWhitelist } = req.body || {};
+  const { cronMorning, cronAfternoon, pageSize, maxPagesPerJob, concurrency, cityWhitelist, alertKeywords } = req.body || {};
   for (const expr of [cronMorning, cronAfternoon]) {
     if (expr && !cron.validate(expr)) {
       return res.status(400).json({ error: `非法 cron 表达式：${expr}` });
     }
   }
+  const toList = (v) => Array.isArray(v) ? v
+    : typeof v === 'string' ? v.split(/[,，\s]+/).filter(Boolean)
+    : [];
   const next = crawlerConfig.save({
     cronMorning, cronAfternoon, pageSize, maxPagesPerJob, concurrency,
-    cityWhitelist: Array.isArray(cityWhitelist) ? cityWhitelist
-      : typeof cityWhitelist === 'string' ? cityWhitelist.split(/[,，\s]+/).filter(Boolean)
-      : []
+    cityWhitelist: toList(cityWhitelist),
+    alertKeywords: toList(alertKeywords)
   });
   applyCron();
   res.json(next);

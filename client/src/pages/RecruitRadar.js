@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Table, Card, Select, Space, Button, Tag, Grid, List, Typography, Watermark, Row, Col, Statistic, Alert, Drawer, Descriptions, Switch, Popconfirm, Empty, Segmented, message } from 'antd';
-import { ReloadOutlined, RadarChartOutlined, SettingOutlined, CheckOutlined, StopOutlined, UndoOutlined, UserAddOutlined, DownloadOutlined } from '@ant-design/icons';
+import { ReloadOutlined, RadarChartOutlined, SettingOutlined, CheckOutlined, StopOutlined, UndoOutlined, UserAddOutlined, DownloadOutlined, LineChartOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router-dom';
+import { Line } from '@ant-design/plots';
 import axios from 'axios';
 
 const { Option } = Select;
@@ -42,6 +43,10 @@ export default function RecruitRadar() {
   const [detailRecord, setDetailRecord] = useState(null);
   const [related, setRelated] = useState([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
+  const [overlap, setOverlap] = useState([]);
+  const [trendData, setTrendData] = useState([]);
+  const [trendOpen, setTrendOpen] = useState(false);
+  const [trendDays, setTrendDays] = useState(30);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -123,6 +128,7 @@ export default function RecruitRadar() {
     setDetailRecord(record);
     setDetailOpen(true);
     setRelated([]);
+    setOverlap([]);
     if ((record.handle_status || 'new') === 'new') {
       try {
         await axios.patch(`/api/boss-watcher/events/${record.id}/status`, { handle_status: 'viewed' });
@@ -131,8 +137,12 @@ export default function RecruitRadar() {
     }
     setRelatedLoading(true);
     try {
-      const res = await axios.get(`/api/boss-watcher/events/${record.id}/related`);
-      setRelated(res.data.events || []);
+      const [relRes, ovRes] = await Promise.all([
+        axios.get(`/api/boss-watcher/events/${record.id}/related`),
+        axios.get(`/api/boss-watcher/events/${record.id}/overlap`)
+      ]);
+      setRelated(relRes.data.events || []);
+      setOverlap(ovRes.data.matches || []);
     } catch (err) { console.error(err); }
     finally { setRelatedLoading(false); }
   };
@@ -209,6 +219,20 @@ export default function RecruitRadar() {
     } catch (err) {
       message.error(err.response?.data?.error || '触发失败');
     }
+  };
+
+  const fetchTrend = async (days = trendDays) => {
+    try {
+      const params = { days };
+      if (filterCompany) params.boss_company_id = filterCompany;
+      const res = await axios.get('/api/boss-watcher/stats/trend', { params });
+      setTrendData(res.data.data || []);
+    } catch (err) { console.error(err); }
+  };
+
+  const openTrend = () => {
+    setTrendOpen(true);
+    fetchTrend(trendDays);
   };
 
   const handleExport = async () => {
@@ -316,6 +340,7 @@ export default function RecruitRadar() {
     { title: '候选人', dataIndex: 'candidate_name', key: 'candidate_name', width: 120,
       render: (val, r) => (
         <Space size={4}>
+          {r.alert_hit ? <Tag color="red" style={{ marginInlineEnd: 0 }}>⚠️</Tag> : null}
           <span>{val}</span>
           {r.person_id && <Tag color="success" style={{ marginInlineEnd: 0 }}>已入库</Tag>}
         </Space>
@@ -397,6 +422,7 @@ export default function RecruitRadar() {
         {runningJob ? '抓取中...' : '手动抓取'}
       </Button>
       <Button icon={<DownloadOutlined />} onClick={handleExport}>导出 CSV</Button>
+      <Button icon={<LineChartOutlined />} onClick={openTrend}>趋势</Button>
       <Button icon={<ReloadOutlined />} onClick={() => { fetchEvents(); fetchStats(); }}>刷新</Button>
       <Link to="/executive/recruit-radar/config">
         <Button icon={<SettingOutlined />}>配置</Button>
@@ -499,6 +525,15 @@ export default function RecruitRadar() {
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
               <Descriptions column={1} size="small" bordered>
                 <Descriptions.Item label="类型">{eventTypeTag(detailRecord.event_type)}</Descriptions.Item>
+                {detailRecord.alert_hit ? (
+                  <Descriptions.Item label="关键词命中">
+                    <Space size={4} wrap>
+                      {(detailRecord.alert_keywords || '').split(',').filter(Boolean).map(k => (
+                        <Tag key={k} color="red">⚠️ {k}</Tag>
+                      ))}
+                    </Space>
+                  </Descriptions.Item>
+                ) : null}
                 <Descriptions.Item label="处理状态">
                   {handleStatusTag(detailRecord)}
                   {detailRecord.handled_by_name && (
@@ -520,6 +555,30 @@ export default function RecruitRadar() {
                   </pre>
                 </Descriptions.Item>
               </Descriptions>
+
+              {overlap.length > 0 && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={`此候选人姓名与人才库中 ${overlap.length} 条记录同名`}
+                  description={
+                    <List
+                      size="small"
+                      dataSource={overlap}
+                      renderItem={p => (
+                        <List.Item style={{ padding: '4px 0' }}>
+                          <Space size={6} wrap>
+                            <Link to={`/persons?highlight=${p.id}`}>#{p.id} {p.name}</Link>
+                            {p.current_company && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{p.current_company}</Typography.Text>}
+                            {p.current_position && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{p.current_position}</Typography.Text>}
+                            {p.weight && <Tag>{p.weight}</Tag>}
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                  }
+                />
+              )}
 
               <Card size="small" title={`同候选人历史事件 (${related.length})`} loading={relatedLoading}>
                 {related.length === 0 && !relatedLoading ? <Empty description="暂无更多记录" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
@@ -545,6 +604,46 @@ export default function RecruitRadar() {
               </Card>
             </Space>
           )}
+        </Drawer>
+
+        <Drawer
+          title="事件趋势"
+          open={trendOpen}
+          onClose={() => setTrendOpen(false)}
+          width={isMobile ? '100%' : 720}
+          extra={
+            <Space>
+              <Select
+                size="small"
+                value={trendDays}
+                onChange={(v) => { setTrendDays(v); fetchTrend(v); }}
+                options={[7, 14, 30, 60, 90].map(d => ({ value: d, label: `近 ${d} 天` }))}
+                style={{ width: 110 }}
+              />
+            </Space>
+          }
+        >
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {filterCompany && (
+              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                已应用公司过滤：{targets.find(t => t.boss_company_id === filterCompany)?.company_name || filterCompany}
+              </Typography.Text>
+            )}
+            <div style={{ height: 360 }}>
+              <Line
+                data={trendData}
+                xField="day"
+                yField="count"
+                seriesField="type"
+                smooth
+                point={{ size: 3 }}
+                color={['#52c41a', '#fa8c16', '#f5222d']}
+                xAxis={{ tickCount: 8 }}
+                legend={{ position: 'top' }}
+                tooltip={{ shared: true }}
+              />
+            </div>
+          </Space>
         </Drawer>
       </div>
     </Watermark>

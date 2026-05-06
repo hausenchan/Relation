@@ -9,7 +9,8 @@ const DEFAULTS = {
   pageSize: 30,
   maxPagesPerJob: 10,
   concurrency: 2,
-  cityWhitelist: []
+  cityWhitelist: [],
+  alertKeywords: []
 };
 
 function load() {
@@ -25,6 +26,7 @@ function load() {
 function save(partial) {
   const next = { ...load(), ...partial };
   if (!Array.isArray(next.cityWhitelist)) next.cityWhitelist = [];
+  if (!Array.isArray(next.alertKeywords)) next.alertKeywords = [];
   next.pageSize = clampInt(next.pageSize, 5, 50, DEFAULTS.pageSize);
   next.maxPagesPerJob = clampInt(next.maxPagesPerJob, 1, 50, DEFAULTS.maxPagesPerJob);
   next.concurrency = clampInt(next.concurrency, 1, 5, DEFAULTS.concurrency);

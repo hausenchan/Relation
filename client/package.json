@@ -4,6 +4,7 @@
   "private": true,
   "dependencies": {
     "@ant-design/icons": "^5.3.6",
+    "@ant-design/plots": "^2.6.8",
     "antd": "^5.15.0",
     "axios": "^1.6.8",
     "dayjs": "^1.11.10",

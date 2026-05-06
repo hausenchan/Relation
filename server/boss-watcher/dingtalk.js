@@ -88,9 +88,13 @@ function buildDetailLink(baseUrl, params = {}) {
 }
 
 function buildEventMarkdown(roleLabel, events, baseUrl) {
+  // 命中关键词的事件置顶，单独一节
+  const alerts = events.filter(e => e.alert_hit);
+  const normal = events.filter(e => !e.alert_hit);
+
   // 按公司聚合：每家公司一节
   const byCompany = new Map();
-  for (const evt of events) {
+  for (const evt of normal) {
     const key = evt.boss_company_id || evt.company_name || '_';
     if (!byCompany.has(key)) {
       byCompany.set(key, { name: evt.company_name || '(未知公司)', companyId: evt.boss_company_id, items: [] });
@@ -99,7 +103,18 @@ function buildEventMarkdown(roleLabel, events, baseUrl) {
   }
 
   let text = `## 招聘雷达 - ${roleLabel} 关注岗位变动\n\n`;
-  text += `> 共 ${events.length} 条变动，涉及 ${byCompany.size} 家公司\n\n`;
+  text += `> 共 ${events.length} 条变动${alerts.length > 0 ? `，⚠️ ${alerts.length} 条命中关键词` : ''}，涉及 ${byCompany.size} 家公司\n\n`;
+
+  if (alerts.length > 0) {
+    text += `### ⚠️ 关键词命中\n\n`;
+    for (const evt of alerts) {
+      const tag = TYPE_LABEL[evt.event_type] || evt.event_type;
+      const status = evt.candidate_status ? ` · ${evt.candidate_status}` : '';
+      const kws = evt.alert_keywords ? ` 【${evt.alert_keywords}】` : '';
+      text += `- ${tag} **${evt.candidate_name}** ${evt.candidate_title || ''}${status}${kws}（${evt.company_name || '-'} / ${evt.position_title || '-'}）\n`;
+    }
+    text += `\n---\n\n`;
+  }
 
   for (const { name, companyId, items } of byCompany.values()) {
     const counts = items.reduce((acc, e) => { acc[e.event_type] = (acc[e.event_type] || 0) + 1; return acc; }, {});

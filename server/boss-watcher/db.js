@@ -98,7 +98,14 @@ try {
   if (!cols.includes('person_id')) {
     db.exec("ALTER TABLE boss_watch_event ADD COLUMN person_id INTEGER");
   }
+  if (!cols.includes('alert_hit')) {
+    db.exec("ALTER TABLE boss_watch_event ADD COLUMN alert_hit INTEGER DEFAULT 0");
+  }
+  if (!cols.includes('alert_keywords')) {
+    db.exec("ALTER TABLE boss_watch_event ADD COLUMN alert_keywords TEXT DEFAULT ''");
+  }
   db.exec('CREATE INDEX IF NOT EXISTS idx_event_handle_status ON boss_watch_event(handle_status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_event_alert_hit ON boss_watch_event(alert_hit)');
 } catch (e) {
   console.error('[boss-watcher] migrate handle_status failed:', e.message);
 }

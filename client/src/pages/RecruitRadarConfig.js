@@ -50,7 +50,8 @@ export default function RecruitRadarConfig() {
       setCrawlerCfg(res.data);
       crawlerForm.setFieldsValue({
         ...res.data,
-        cityWhitelist: (res.data.cityWhitelist || []).join(', ')
+        cityWhitelist: (res.data.cityWhitelist || []).join(', '),
+        alertKeywords: (res.data.alertKeywords || []).join(', ')
       });
     } catch (err) { console.error(err); }
   };
@@ -58,11 +59,11 @@ export default function RecruitRadarConfig() {
   const handleSaveCrawler = async (values) => {
     setCrawlerSaving(true);
     try {
+      const toList = (v) => typeof v === 'string' ? v.split(/[,，\s]+/).filter(Boolean) : (v || []);
       const payload = {
         ...values,
-        cityWhitelist: typeof values.cityWhitelist === 'string'
-          ? values.cityWhitelist.split(/[,，\s]+/).filter(Boolean)
-          : (values.cityWhitelist || [])
+        cityWhitelist: toList(values.cityWhitelist),
+        alertKeywords: toList(values.alertKeywords)
       };
       const res = await axios.put('/api/boss-watcher/crawler-config', payload);
       setCrawlerCfg(res.data);
@@ -346,6 +347,9 @@ export default function RecruitRadarConfig() {
             </Space>
             <Form.Item name="cityWhitelist" label="城市白名单" extra="留空=不限；多个用空格或逗号分隔">
               <Input placeholder="北京 上海 深圳" />
+            </Form.Item>
+            <Form.Item name="alertKeywords" label="关键词告警" extra="命中候选人姓名/职位/活跃状态/岗位/公司任意字段时高亮 + 钉钉置顶推送；多个用空格或逗号分隔">
+              <Input placeholder="高级 总监 50K AI" />
             </Form.Item>
           </Form>
         </Card>

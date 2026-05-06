@@ -1,6 +1,19 @@
 const db = require('./db');
+const crawlerConfig = require('./crawler-config');
 
 const BASELINE_MAX_DAYS = 3;
+
+function matchKeywords(evt, keywords) {
+  if (!keywords || keywords.length === 0) return [];
+  const haystack = [evt.candidate_name, evt.candidate_title, evt.candidate_status, evt.position_title, evt.company_name]
+    .filter(Boolean).join(' ').toLowerCase();
+  const hit = [];
+  for (const kw of keywords) {
+    const k = String(kw).trim().toLowerCase();
+    if (k && haystack.includes(k)) hit.push(kw);
+  }
+  return hit;
+}
 
 function diffSnapshots(today, baseline) {
   if (!baseline) baseline = getLatestSnapshotDateBefore(today);
@@ -89,11 +102,20 @@ function makeEvent(type, candidate, prev) {
 
 function saveEvents(events) {
   if (events.length === 0) return;
+  const cfg = crawlerConfig.load();
+  const keywords = cfg.alertKeywords || [];
+  for (const evt of events) {
+    const hit = matchKeywords(evt, keywords);
+    evt.alert_hit = hit.length > 0 ? 1 : 0;
+    evt.alert_keywords = hit.join(',');
+  }
   const insert = db.prepare(`
     INSERT INTO boss_watch_event (event_type, boss_company_id, company_name, position_id, position_title,
-      candidate_name, candidate_title, candidate_city, candidate_status, detail_json, created_at)
+      candidate_name, candidate_title, candidate_city, candidate_status, detail_json,
+      alert_hit, alert_keywords, created_at)
     VALUES (@event_type, @boss_company_id, @company_name, @position_id, @position_title,
-      @candidate_name, @candidate_title, @candidate_city, @candidate_status, @detail_json, datetime('now','localtime'))
+      @candidate_name, @candidate_title, @candidate_city, @candidate_status, @detail_json,
+      @alert_hit, @alert_keywords, datetime('now','localtime'))
   `);
   const tx = db.transaction((items) => { for (const item of items) insert.run(item); });
   tx(events);
