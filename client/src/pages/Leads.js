@@ -310,12 +310,6 @@ export default function Leads() {
 
   const columns = [
     {
-      title: '商机ID',
-      dataIndex: 'source_id',
-      width: 90,
-      render: v => <Text strong style={{ fontSize: 13, color: '#374151' }}>{v || '-'}</Text>,
-    },
-    {
       title: '商机',
       key: 'subject',
       width: 360,
@@ -365,7 +359,6 @@ export default function Leads() {
               >
                 {subjectName}
                 {companyLine && !isCompetitor && <span style={{ color: '#9ca3af' }}> · {companyLine}</span>}
-                <span style={{ color: '#d1d5db', marginLeft: 8 }}>#{r.source_id}</span>
               </div>
             </div>
           </div>
@@ -486,7 +479,6 @@ export default function Leads() {
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>商机ID：{record.source_id}</div>
                 <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6 }}>{record.opportunity_title}</div>
                 <Space size={6} align="center">
                   <Avatar size={24} style={{ background: isCompetitor ? '#f0f5ff' : '#f0fdf4', color: isCompetitor ? '#4F46E5' : '#059669', fontSize: 12 }} icon={isCompetitor ? <BankOutlined /> : <UserOutlined />} />
@@ -742,7 +734,6 @@ export default function Leads() {
                 {(detailRecord.company || detailRecord.current_company) &&
                   ` (${detailRecord.company || detailRecord.current_company})`}
               </Descriptions.Item>
-              <Descriptions.Item label="商机ID">{detailRecord.source_id}</Descriptions.Item>
               <Descriptions.Item label="指派给">{detailRecord.assignee_name || <Text style={{ color: '#d1d5db' }}>未指派</Text>}</Descriptions.Item>
               <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
               <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
