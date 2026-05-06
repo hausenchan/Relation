@@ -5189,9 +5189,15 @@ app.delete('/api/cross-team-access/:id', (req, res) => {
   res.json({ success: true });
 });
 
-// 招聘雷达模块
+// 招聘雷达模块（仅 CEO/COO/CTO/CMO 可访问）
+const BOSS_ROLES = new Set(['ceo', 'coo', 'cto', 'cmo']);
+function requireBoss(req, res, next) {
+  const { role, executive_role } = req.user || {};
+  if (BOSS_ROLES.has(role) || BOSS_ROLES.has(executive_role)) return next();
+  return res.status(403).json({ error: '招聘雷达仅限老板访问' });
+}
 const bossWatcherRoutes = require('./boss-watcher/routes');
-app.use('/api/boss-watcher', auth, bossWatcherRoutes);
+app.use('/api/boss-watcher', auth, requireBoss, bossWatcherRoutes);
 const bossScheduler = require('./boss-watcher/scheduler');
 bossScheduler.start();
 

@@ -1,15 +1,21 @@
 const db = require('./db');
 
-function diffSnapshots(today, yesterday) {
-  if (!yesterday) yesterday = getPreviousDate(today);
+const BASELINE_MAX_DAYS = 3;
+
+function diffSnapshots(today, baseline) {
+  if (!baseline) baseline = getLatestSnapshotDateBefore(today);
 
   const todayRows = db.prepare(
     'SELECT position_id, boss_company_id, candidates_json FROM boss_watch_snapshot WHERE snapshot_date = ?'
   ).all(today);
 
+  if (!baseline) return [];
+
+  const stale = isStaleBaseline(baseline, today);
+
   const yesterdayRows = db.prepare(
     'SELECT position_id, boss_company_id, candidates_json FROM boss_watch_snapshot WHERE snapshot_date = ?'
-  ).all(yesterday);
+  ).all(baseline);
 
   const yesterdayMap = buildCandidateMap(yesterdayRows);
   const todayMap = buildCandidateMap(todayRows);
@@ -27,13 +33,22 @@ function diffSnapshots(today, yesterday) {
     }
   }
 
-  for (const [key, candidate] of yesterdayMap.entries()) {
-    if (!todayMap.has(key)) {
-      events.push(makeEvent('gone', candidate));
+  // 基线超过 BASELINE_MAX_DAYS，跳过 gone：
+  // 中间漏抓多日时，候选人池里的"消失"无法区分是真消失还是没抓到，全标 gone 会刷屏
+  if (!stale) {
+    for (const [key, candidate] of yesterdayMap.entries()) {
+      if (!todayMap.has(key)) {
+        events.push(makeEvent('gone', candidate));
+      }
     }
   }
 
   return events;
+}
+
+function isStaleBaseline(baseline, today) {
+  const diff = (new Date(today) - new Date(baseline)) / 86400000;
+  return diff > BASELINE_MAX_DAYS;
 }
 
 function buildCandidateMap(rows) {
@@ -86,16 +101,17 @@ function saveEvents(events) {
 
 function runDiff(today) {
   if (!today) today = new Date().toISOString().slice(0, 10);
-  const yesterday = getPreviousDate(today);
-  const events = diffSnapshots(today, yesterday);
+  const baseline = getLatestSnapshotDateBefore(today);
+  const events = diffSnapshots(today, baseline);
   saveEvents(events);
   return events;
 }
 
-function getPreviousDate(dateStr) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
+function getLatestSnapshotDateBefore(dateStr) {
+  const row = db.prepare(
+    'SELECT MAX(snapshot_date) as d FROM boss_watch_snapshot WHERE snapshot_date < ?'
+  ).get(dateStr);
+  return row?.d || null;
 }
 
-module.exports = { diffSnapshots, runDiff, saveEvents };
+module.exports = { diffSnapshots, runDiff, saveEvents, getLatestSnapshotDateBefore, isStaleBaseline, BASELINE_MAX_DAYS };

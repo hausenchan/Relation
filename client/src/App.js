@@ -120,10 +120,18 @@ const roleLabel = { admin: '管理员', leader: '组长', member: '成员', read
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
 
 // 路由守卫
-function PrivateRoute({ children, module }) {
-  const { user, loading, canAccessModule } = useAuth();
+function PrivateRoute({ children, module, executiveOnly }) {
+  const { user, loading, canAccessModule, isExecutive } = useAuth();
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
+  if (executiveOnly && !isExecutive()) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🚫</div>
+        <div>该页面仅限老板访问</div>
+      </div>
+    );
+  }
   if (module && !canAccessModule(module)) {
     return (
       <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
@@ -424,16 +432,16 @@ function AppLayout() {
   ].filter(Boolean);
 
   // ── 公司经营（仅高管或admin）────────────────────────────────────────
-  const executiveChildren = (isExecutive() || isAdmin(user?.role)) ? [
+  const executiveChildren = ((isExecutive() || isAdmin(user?.role)) ? [
     { key: '/executive', icon: <DashboardOutlined />, label: <Link to="/executive">经营概览</Link> },
     { key: '/executive/talents', icon: <UserOutlined />, label: <Link to="/executive/talents">高级人才</Link> },
     { key: '/executive/dynamics', icon: <RiseOutlined />, label: <Link to="/executive/dynamics">竞品动态</Link> },
-    { key: '/executive/recruit-radar', icon: <RadarChartOutlined />, label: <Link to="/executive/recruit-radar">招聘雷达</Link> },
-    { key: '/executive/recruit-radar/config', icon: <SettingOutlined />, label: <Link to="/executive/recruit-radar/config">雷达配置</Link> },
+    isExecutive() && { key: '/executive/recruit-radar', icon: <RadarChartOutlined />, label: <Link to="/executive/recruit-radar">招聘雷达</Link> },
+    isExecutive() && { key: '/executive/recruit-radar/config', icon: <SettingOutlined />, label: <Link to="/executive/recruit-radar/config">雷达配置</Link> },
     { key: '/executive/customers', icon: <TeamOutlined />, label: <Link to="/executive/customers">重点客户</Link> },
     { key: '/executive/strategic', icon: <AimOutlined />, label: <Link to="/executive/strategic">战略月会</Link> },
     { key: '/executive/operational', icon: <FileTextOutlined />, label: <Link to="/executive/operational">经营周会</Link> },
-  ] : [];
+  ] : []).filter(Boolean);
 
   const menuItems = [
     // 工作台
@@ -778,8 +786,8 @@ function AppLayout() {
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
             <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />
             <Route path="/executive/dynamics" element={<PrivateRoute><ExecutiveDynamics /></PrivateRoute>} />
-            <Route path="/executive/recruit-radar" element={<PrivateRoute><RecruitRadar /></PrivateRoute>} />
-            <Route path="/executive/recruit-radar/config" element={<PrivateRoute><RecruitRadarConfig /></PrivateRoute>} />
+            <Route path="/executive/recruit-radar" element={<PrivateRoute executiveOnly><RecruitRadar /></PrivateRoute>} />
+            <Route path="/executive/recruit-radar/config" element={<PrivateRoute executiveOnly><RecruitRadarConfig /></PrivateRoute>} />
             <Route path="/executive/customers" element={<PrivateRoute><ExecutiveCustomers /></PrivateRoute>} />
             <Route path="/executive/strategic" element={<PrivateRoute><StrategicMeeting /></PrivateRoute>} />
             <Route path="/executive/operational" element={<PrivateRoute><OperationalMeeting /></PrivateRoute>} />

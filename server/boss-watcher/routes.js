@@ -4,7 +4,8 @@ const db = require('./db');
 const auth = require('./auth');
 const dingtalk = require('./dingtalk');
 const { syncPositions, getPositions } = require('./sync-positions');
-const { executeJob } = require('./scheduler');
+const { executeJob, getJob, getLatestJob, getRunningJob } = require('./scheduler');
+const { encryptRow } = require('../lib/cryptoDao');
 
 // 目标公司 CRUD
 router.get('/targets', (req, res) => {
@@ -64,12 +65,20 @@ router.post('/positions/sync', async (req, res) => {
 
 // 事件列表
 router.get('/events', (req, res) => {
-  const { boss_company_id, position_id, page = 1, pageSize = 50 } = req.query;
-  let sql = 'SELECT * FROM boss_watch_event WHERE 1=1';
+  const { boss_company_id, position_id, event_type, handle_status, include_ignored, page = 1, pageSize = 50 } = req.query;
+  let sql = `
+    SELECT e.*, u.display_name AS handled_by_name
+    FROM boss_watch_event e
+    LEFT JOIN users u ON u.id = e.handled_by
+    WHERE 1=1
+  `;
   const params = [];
-  if (boss_company_id) { sql += ' AND boss_company_id = ?'; params.push(boss_company_id); }
-  if (position_id) { sql += ' AND position_id = ?'; params.push(position_id); }
-  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  if (boss_company_id) { sql += ' AND e.boss_company_id = ?'; params.push(boss_company_id); }
+  if (position_id) { sql += ' AND e.position_id = ?'; params.push(position_id); }
+  if (event_type) { sql += ' AND e.event_type = ?'; params.push(event_type); }
+  if (handle_status) { sql += ' AND e.handle_status = ?'; params.push(handle_status); }
+  else if (include_ignored !== '1') { sql += " AND COALESCE(e.handle_status,'new') != 'ignored'"; }
+  sql += ' ORDER BY e.created_at DESC LIMIT ? OFFSET ?';
   params.push(Number(pageSize), (Number(page) - 1) * Number(pageSize));
 
   const rows = db.prepare(sql).all(...params);
@@ -78,9 +87,116 @@ router.get('/events', (req, res) => {
   const countParams = [];
   if (boss_company_id) { countSql += ' AND boss_company_id = ?'; countParams.push(boss_company_id); }
   if (position_id) { countSql += ' AND position_id = ?'; countParams.push(position_id); }
+  if (event_type) { countSql += ' AND event_type = ?'; countParams.push(event_type); }
+  if (handle_status) { countSql += ' AND handle_status = ?'; countParams.push(handle_status); }
+  else if (include_ignored !== '1') { countSql += " AND COALESCE(handle_status,'new') != 'ignored'"; }
   const { total } = db.prepare(countSql).get(...countParams);
 
   res.json({ data: rows, total, page: Number(page), pageSize: Number(pageSize) });
+});
+
+// 更新事件处理状态
+router.patch('/events/:id/status', (req, res) => {
+  const { handle_status } = req.body;
+  const allowed = ['new', 'viewed', 'followed', 'ignored'];
+  if (!allowed.includes(handle_status)) {
+    return res.status(400).json({ error: '非法状态' });
+  }
+  const result = db.prepare(`
+    UPDATE boss_watch_event
+    SET handle_status = ?, handled_by = ?, handled_at = datetime('now','localtime')
+    WHERE id = ?
+  `).run(handle_status, req.user.id, req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: '事件不存在' });
+  res.json({ success: true });
+});
+
+// 同一候选人历史事件
+router.get('/events/:id/related', (req, res) => {
+  const event = db.prepare('SELECT detail_json FROM boss_watch_event WHERE id = ?').get(req.params.id);
+  if (!event) return res.status(404).json({ error: '事件不存在' });
+  let geekId = '';
+  try { geekId = JSON.parse(event.detail_json || '{}').geek_id || ''; } catch {}
+  if (!geekId) return res.json({ geek_id: '', events: [] });
+
+  const rows = db.prepare(`
+    SELECT id, event_type, position_title, candidate_status, company_name, candidate_city, detail_json, created_at, handle_status
+    FROM boss_watch_event
+    WHERE detail_json LIKE ?
+    ORDER BY created_at DESC
+    LIMIT 100
+  `).all(`%"geek_id":"${geekId}"%`);
+  res.json({ geek_id: geekId, events: rows });
+});
+
+// 一键入库到 persons（人才库）
+router.post('/events/:id/import-to-persons', (req, res) => {
+  const evt = db.prepare('SELECT * FROM boss_watch_event WHERE id = ?').get(req.params.id);
+  if (!evt) return res.status(404).json({ error: '事件不存在' });
+  if (evt.person_id) {
+    return res.status(409).json({ error: '该候选人已入库', person_id: evt.person_id });
+  }
+  if (!evt.candidate_name) {
+    return res.status(400).json({ error: '候选人姓名为空，无法入库' });
+  }
+
+  // 聚合同 geek_id 的历史事件，写成 notes
+  let historyNote = '';
+  try {
+    const geekId = JSON.parse(evt.detail_json || '{}').geek_id || '';
+    if (geekId) {
+      const related = db.prepare(`
+        SELECT event_type, position_title, candidate_status, created_at
+        FROM boss_watch_event
+        WHERE detail_json LIKE ?
+        ORDER BY created_at DESC
+        LIMIT 20
+      `).all(`%"geek_id":"${geekId}"%`);
+      if (related.length > 0) {
+        historyNote = '\n\n招聘雷达事件记录：\n' + related.map(r =>
+          `- ${r.created_at} ${r.event_type} @ ${r.position_title} (${r.candidate_status || '-'})`
+        ).join('\n');
+      }
+    }
+  } catch {}
+
+  const notesText = `来源：招聘雷达 event#${evt.id}\n关联岗位：${evt.position_title}\n关联公司：${evt.company_name}\n抓取时间：${evt.created_at}${historyNote}`;
+
+  const enc = encryptRow('persons', {
+    name: evt.candidate_name,
+    company: evt.company_name,
+    position: evt.candidate_title,
+    current_company: evt.company_name,
+    current_position: evt.candidate_title,
+    notes: notesText,
+    source: '招聘雷达',
+  });
+
+  const tx = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO persons (name, person_category, relation_types, city, company, position,
+        notes, talent_type, current_company, current_position, recruit_status, intent_level,
+        source, weight, created_by)
+      VALUES (?, 'talent', 'talent_external', ?, ?, ?, ?, 'external', ?, ?, 'potential', 'low', ?, 'medium', ?)
+    `).run(
+      enc.name, evt.candidate_city || '', enc.company, enc.position,
+      enc.notes, enc.current_company, enc.current_position, enc.source, req.user.id
+    );
+    const personId = result.lastInsertRowid;
+    db.prepare(`
+      UPDATE boss_watch_event
+      SET person_id = ?, handle_status = 'followed', handled_by = ?, handled_at = datetime('now','localtime')
+      WHERE id = ?
+    `).run(personId, req.user.id, evt.id);
+    return personId;
+  });
+
+  try {
+    const personId = tx();
+    res.json({ success: true, person_id: personId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Boss 账号状态
@@ -107,22 +223,114 @@ router.get('/dingtalk-status', (req, res) => {
 });
 
 router.post('/dingtalk-config', (req, res) => {
-  const { appKey, appSecret, agentId, receiverUserId } = req.body;
-  if (!appKey || !appSecret || !agentId || !receiverUserId) {
-    return res.status(400).json({ error: '所有字段必填' });
+  const { appKey, appSecret, agentId, receivers } = req.body;
+  if (!appKey || !appSecret || !agentId) {
+    return res.status(400).json({ error: 'appKey/appSecret/agentId 必填' });
   }
-  dingtalk.saveConfig({ appKey, appSecret, agentId, receiverUserId });
+  if (!receivers || typeof receivers !== 'object') {
+    return res.status(400).json({ error: 'receivers 必填' });
+  }
+  const roles = ['ceo', 'coo', 'cto', 'cmo'];
+  const filtered = {};
+  for (const r of roles) {
+    if (receivers[r]) filtered[r] = String(receivers[r]).trim();
+  }
+  if (Object.keys(filtered).length === 0) {
+    return res.status(400).json({ error: '至少填写一位老板的 userId' });
+  }
+  dingtalk.saveConfig({ appKey, appSecret, agentId, receivers: filtered });
   res.json({ success: true });
 });
 
-// 手动触发抓取
-router.post('/trigger', async (req, res) => {
+// 手动触发抓取（异步）。date 仅用于重跑 diff，不重新抓 Boss
+router.post('/trigger', (req, res) => {
   try {
-    await executeJob();
-    res.json({ success: true, message: '抓取任务已完成' });
+    const { date } = req.body || {};
+    if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return res.status(400).json({ error: 'date 格式应为 YYYY-MM-DD' });
+    }
+    const { jobId, alreadyRunning } = executeJob('manual', date ? { date } : {});
+    res.json({ success: true, jobId, alreadyRunning, diffOnly: !!date });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get('/jobs/latest', (req, res) => {
+  const running = getRunningJob();
+  const latest = getLatestJob();
+  res.json({ running: running || null, latest: latest || null });
+});
+
+router.get('/jobs/:id', (req, res) => {
+  const job = getJob(Number(req.params.id));
+  if (!job) return res.status(404).json({ error: '任务不存在' });
+  res.json(job);
+});
+
+// 统计概览
+router.get('/stats', (req, res) => {
+  const latest = getLatestJob();
+  const running = getRunningJob();
+  const today = new Date().toISOString().slice(0, 10);
+  const { today_events } = db.prepare(
+    "SELECT COUNT(*) as today_events FROM boss_watch_event WHERE substr(created_at,1,10) = ?"
+  ).get(today);
+  const { total_events } = db.prepare('SELECT COUNT(*) as total_events FROM boss_watch_event').get();
+  const { target_count } = db.prepare('SELECT COUNT(*) as target_count FROM boss_watch_target WHERE enabled = 1').get();
+  const { position_count } = db.prepare('SELECT COUNT(*) as position_count FROM boss_watch_position WHERE active = 1').get();
+  res.json({
+    latestJob: latest || null,
+    runningJob: running || null,
+    todayEvents: today_events,
+    totalEvents: total_events,
+    targetCount: target_count,
+    positionCount: position_count
+  });
+});
+
+// 钉钉测试推送
+router.post('/dingtalk-test', async (req, res) => {
+  try {
+    const config = dingtalk.loadConfig();
+    const receivers = dingtalk.getReceivers(config);
+    const { role } = req.body || {};
+    const targets = role
+      ? (receivers[role] ? [[role, receivers[role]]] : [])
+      : Object.entries(receivers);
+    if (targets.length === 0) {
+      return res.status(400).json({ error: '没有可用的接收人' });
+    }
+    const ROLE_LABEL = { ceo: 'CEO', coo: 'COO', cto: 'CTO', cmo: 'CMO' };
+    const results = [];
+    for (const [r, userId] of targets) {
+      try {
+        await dingtalk.sendWorkNotice(
+          userId,
+          `招聘雷达 - 测试推送 (${ROLE_LABEL[r]})`,
+          `## 招聘雷达测试推送\n\n这是发给 **${ROLE_LABEL[r]}** 的测试消息，收到即表示配置生效。\n\n*发送时间: ${new Date().toLocaleString('zh-CN')}*`
+        );
+        results.push({ role: r, success: true });
+      } catch (err) {
+        results.push({ role: r, success: false, error: err.message });
+      }
+    }
+    res.json({ success: results.every(r => r.success), results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 分发规则预览：把现有岗位按规则分桶展示
+router.get('/dispatch-preview', (req, res) => {
+  const { classifyPosition } = require('./dispatch-rules');
+  const positions = db.prepare('SELECT boss_position_id, title FROM boss_watch_position WHERE active = 1').all();
+  const buckets = { ceo: [], coo: [], cto: [], cmo: [] };
+  for (const p of positions) {
+    const role = classifyPosition(p.title);
+    buckets[role].push(p);
+  }
+  res.json(buckets);
 });
 
 module.exports = router;

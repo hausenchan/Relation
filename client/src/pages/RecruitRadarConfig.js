@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Button, Table, Modal, Form, Input, Space, Tag, message, Popconfirm, Descriptions, Grid, List, Switch } from 'antd';
+import { Card, Button, Table, Modal, Form, Input, Space, Tag, message, Popconfirm, Descriptions, Grid, List, Switch, Drawer, Typography } from 'antd';
 import { PlusOutlined, DeleteOutlined, SettingOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons';
 import axios from 'axios';
+
+const ROLE_LABEL = { ceo: 'CEO', coo: 'COO', cto: 'CTO', cmo: 'CMO' };
+const ROLE_DESC = {
+  ceo: '其他岗位',
+  coo: '产品 / 运营',
+  cto: '研发 / 技术',
+  cmo: '商务 / 销售'
+};
 
 export default function RecruitRadarConfig() {
   const screens = Grid.useBreakpoint();
@@ -12,6 +20,8 @@ export default function RecruitRadarConfig() {
   const [targetModal, setTargetModal] = useState(false);
   const [cookieModal, setCookieModal] = useState(false);
   const [dingtalkModal, setDingtalkModal] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [targetForm] = Form.useForm();
   const [cookieForm] = Form.useForm();
@@ -85,7 +95,13 @@ export default function RecruitRadarConfig() {
 
   const handleSaveDingtalk = async (values) => {
     try {
-      await axios.post('/api/boss-watcher/dingtalk-config', values);
+      const { appKey, appSecret, agentId, ceo, coo, cto, cmo } = values;
+      const receivers = {};
+      if (ceo) receivers.ceo = ceo;
+      if (coo) receivers.coo = coo;
+      if (cto) receivers.cto = cto;
+      if (cmo) receivers.cmo = cmo;
+      await axios.post('/api/boss-watcher/dingtalk-config', { appKey, appSecret, agentId, receivers });
       message.success('钉钉配置已保存');
       setDingtalkModal(false);
       dingtalkForm.resetFields();
@@ -105,6 +121,43 @@ export default function RecruitRadarConfig() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleTestDingtalk = async () => {
+    try {
+      const res = await axios.post('/api/boss-watcher/dingtalk-test');
+      const failed = (res.data.results || []).filter(r => !r.success);
+      if (failed.length === 0) {
+        message.success('测试消息已发送，请在钉钉查收');
+      } else {
+        message.warning(`部分发送失败：${failed.map(f => `${ROLE_LABEL[f.role]}(${f.error})`).join(', ')}`);
+      }
+    } catch (err) {
+      message.error(err.response?.data?.error || '发送失败');
+    }
+  };
+
+  const handlePreview = async () => {
+    try {
+      const res = await axios.get('/api/boss-watcher/dispatch-preview');
+      setPreviewData(res.data);
+      setPreviewOpen(true);
+    } catch (err) {
+      message.error(err.response?.data?.error || '加载失败');
+    }
+  };
+
+  const openDingtalkModal = () => {
+    dingtalkForm.setFieldsValue({
+      appKey: undefined,
+      appSecret: undefined,
+      agentId: dingtalkStatus.agentId || undefined,
+      ceo: dingtalkStatus.receivers?.ceo,
+      coo: dingtalkStatus.receivers?.coo,
+      cto: dingtalkStatus.receivers?.cto,
+      cmo: dingtalkStatus.receivers?.cmo,
+    });
+    setDingtalkModal(true);
   };
 
   const targetColumns = [
@@ -161,9 +214,15 @@ export default function RecruitRadarConfig() {
             </Descriptions.Item>
             <Descriptions.Item label="钉钉推送">
               {dingtalkStatus.configured ? <Tag icon={<CheckCircleOutlined />} color="success">已配置</Tag> : <Tag color="default">未配置</Tag>}
-              <Button type="link" size="small" onClick={() => setDingtalkModal(true)}>
+              <Button type="link" size="small" onClick={openDingtalkModal}>
                 {dingtalkStatus.configured ? '修改' : '配置'}
               </Button>
+              {dingtalkStatus.configured && (
+                <>
+                  <Button type="link" size="small" onClick={handleTestDingtalk}>测试</Button>
+                  <Button type="link" size="small" onClick={handlePreview}>分发预览</Button>
+                </>
+              )}
             </Descriptions.Item>
             <Descriptions.Item label="岗位同步">
               <Button type="link" size="small" icon={<SyncOutlined />} loading={loading} onClick={handleSyncPositions}>
@@ -214,7 +273,7 @@ export default function RecruitRadarConfig() {
       </Modal>
 
       {/* 钉钉配置弹窗 */}
-      <Modal title="钉钉推送配置" open={dingtalkModal} onCancel={() => setDingtalkModal(false)} onOk={() => dingtalkForm.submit()} destroyOnClose>
+      <Modal title="钉钉推送配置" open={dingtalkModal} onCancel={() => setDingtalkModal(false)} onOk={() => dingtalkForm.submit()} destroyOnClose width={600}>
         <Form form={dingtalkForm} onFinish={handleSaveDingtalk} layout="vertical">
           <Form.Item name="appKey" label="AppKey" rules={[{ required: true }]}>
             <Input placeholder="钉钉应用 AppKey" />
@@ -225,12 +284,35 @@ export default function RecruitRadarConfig() {
           <Form.Item name="agentId" label="AgentId" rules={[{ required: true }]}>
             <Input placeholder="钉钉应用 AgentId" />
           </Form.Item>
-          <Form.Item name="receiverUserId" label="接收人 UserId" rules={[{ required: true }]}
-            extra="钉钉管理后台 → 通讯录 → 找到自己 → userId">
-            <Input placeholder="你的钉钉 userId" />
-          </Form.Item>
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
+            按岗位分发：产品/运营 → COO，研发/技术 → CTO，商务/销售 → CMO，其他 → CEO
+          </Typography.Text>
+          {['ceo', 'coo', 'cto', 'cmo'].map(r => (
+            <Form.Item key={r} name={r} label={`${ROLE_LABEL[r]}（${ROLE_DESC[r]}）UserId`}>
+              <Input placeholder="钉钉 userId，可留空" />
+            </Form.Item>
+          ))}
         </Form>
       </Modal>
+
+      <Drawer title="分发规则预览" open={previewOpen} onClose={() => setPreviewOpen(false)} width={isMobile ? '100%' : 480}>
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <Typography.Text type="secondary">以下是当前在抓岗位按关键词归属到各位老板的分桶结果：</Typography.Text>
+          {['ceo', 'coo', 'cto', 'cmo'].map(r => (
+            <Card key={r} size="small" title={`${ROLE_LABEL[r]}（${ROLE_DESC[r]}）· ${previewData?.[r]?.length || 0} 个岗位`}>
+              {previewData?.[r]?.length > 0 ? (
+                <List
+                  size="small"
+                  dataSource={previewData[r]}
+                  renderItem={p => <List.Item>{p.title}</List.Item>}
+                />
+              ) : (
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>暂无归属岗位</Typography.Text>
+              )}
+            </Card>
+          ))}
+        </Space>
+      </Drawer>
     </div>
   );
 }

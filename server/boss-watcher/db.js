@@ -45,13 +45,51 @@ db.exec(`
     candidate_status TEXT DEFAULT '',
     detail_json TEXT DEFAULT '{}',
     pushed INTEGER DEFAULT 0,
+    handle_status TEXT DEFAULT 'new',
+    handled_by INTEGER,
+    handled_at TEXT,
+    person_id INTEGER,
     created_at TEXT DEFAULT (datetime('now', 'localtime'))
+  );
+
+  CREATE TABLE IF NOT EXISTS boss_watch_job_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'running',
+    trigger_type TEXT NOT NULL DEFAULT 'manual',
+    started_at TEXT DEFAULT (datetime('now', 'localtime')),
+    finished_at TEXT,
+    total_count INTEGER DEFAULT 0,
+    matched_count INTEGER DEFAULT 0,
+    event_count INTEGER DEFAULT 0,
+    error TEXT DEFAULT '',
+    progress TEXT DEFAULT ''
   );
 
   CREATE INDEX IF NOT EXISTS idx_snapshot_date_pos ON boss_watch_snapshot(snapshot_date, position_id);
   CREATE INDEX IF NOT EXISTS idx_snapshot_company ON boss_watch_snapshot(boss_company_id);
   CREATE INDEX IF NOT EXISTS idx_event_company ON boss_watch_event(boss_company_id);
   CREATE INDEX IF NOT EXISTS idx_event_created ON boss_watch_event(created_at);
+  CREATE INDEX IF NOT EXISTS idx_job_log_started ON boss_watch_job_log(started_at);
 `);
+
+// 兼容老数据库：补字段
+try {
+  const cols = db.prepare("PRAGMA table_info(boss_watch_event)").all().map(c => c.name);
+  if (!cols.includes('handle_status')) {
+    db.exec("ALTER TABLE boss_watch_event ADD COLUMN handle_status TEXT DEFAULT 'new'");
+  }
+  if (!cols.includes('handled_by')) {
+    db.exec("ALTER TABLE boss_watch_event ADD COLUMN handled_by INTEGER");
+  }
+  if (!cols.includes('handled_at')) {
+    db.exec("ALTER TABLE boss_watch_event ADD COLUMN handled_at TEXT");
+  }
+  if (!cols.includes('person_id')) {
+    db.exec("ALTER TABLE boss_watch_event ADD COLUMN person_id INTEGER");
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_event_handle_status ON boss_watch_event(handle_status)');
+} catch (e) {
+  console.error('[boss-watcher] migrate handle_status failed:', e.message);
+}
 
 module.exports = db;
