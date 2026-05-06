@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, Button, Table, Modal, Form, Input, AutoComplete, Space, Tag, message, Popconfirm, Descriptions, Grid, List, Switch, Drawer, Typography } from 'antd';
+import { Card, Button, Table, Modal, Form, Input, InputNumber, AutoComplete, Space, Tag, message, Popconfirm, Descriptions, Grid, List, Switch, Drawer, Typography } from 'antd';
 import { PlusOutlined, DeleteOutlined, SettingOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
@@ -25,10 +25,13 @@ export default function RecruitRadarConfig() {
   const [loading, setLoading] = useState(false);
   const [companyOptions, setCompanyOptions] = useState([]);
   const [companySearching, setCompanySearching] = useState(false);
+  const [crawlerCfg, setCrawlerCfg] = useState(null);
+  const [crawlerSaving, setCrawlerSaving] = useState(false);
   const searchTimerRef = useRef(null);
   const [targetForm] = Form.useForm();
   const [cookieForm] = Form.useForm();
   const [dingtalkForm] = Form.useForm();
+  const [crawlerForm] = Form.useForm();
 
   useEffect(() => {
     fetchAll();
@@ -38,6 +41,37 @@ export default function RecruitRadarConfig() {
     fetchTargets();
     fetchBossStatus();
     fetchDingtalkStatus();
+    fetchCrawlerCfg();
+  };
+
+  const fetchCrawlerCfg = async () => {
+    try {
+      const res = await axios.get('/api/boss-watcher/crawler-config');
+      setCrawlerCfg(res.data);
+      crawlerForm.setFieldsValue({
+        ...res.data,
+        cityWhitelist: (res.data.cityWhitelist || []).join(', ')
+      });
+    } catch (err) { console.error(err); }
+  };
+
+  const handleSaveCrawler = async (values) => {
+    setCrawlerSaving(true);
+    try {
+      const payload = {
+        ...values,
+        cityWhitelist: typeof values.cityWhitelist === 'string'
+          ? values.cityWhitelist.split(/[,，\s]+/).filter(Boolean)
+          : (values.cityWhitelist || [])
+      };
+      const res = await axios.put('/api/boss-watcher/crawler-config', payload);
+      setCrawlerCfg(res.data);
+      message.success('抓取配置已保存，定时任务已重载');
+    } catch (err) {
+      message.error(err.response?.data?.error || '保存失败');
+    } finally {
+      setCrawlerSaving(false);
+    }
   };
 
   const fetchTargets = async () => {
@@ -286,6 +320,34 @@ export default function RecruitRadarConfig() {
           ) : (
             <Table dataSource={targets} columns={targetColumns} rowKey="id" size="small" pagination={false} />
           )}
+        </Card>
+
+        {/* 抓取参数 */}
+        <Card title="抓取参数" size="small" extra={
+          <Button type="primary" size="small" loading={crawlerSaving} onClick={() => crawlerForm.submit()}>保存</Button>
+        }>
+          <Form form={crawlerForm} layout="vertical" onFinish={handleSaveCrawler} initialValues={crawlerCfg || {}}>
+            <Space direction={isMobile ? 'vertical' : 'horizontal'} wrap style={{ width: '100%' }}>
+              <Form.Item name="cronMorning" label="上午 cron" extra="如 0 9 * * *" style={{ minWidth: 180 }}>
+                <Input placeholder="0 9 * * *" />
+              </Form.Item>
+              <Form.Item name="cronAfternoon" label="下午 cron" extra="如 0 14 * * *" style={{ minWidth: 180 }}>
+                <Input placeholder="0 14 * * *" />
+              </Form.Item>
+              <Form.Item name="pageSize" label="pageSize" extra="5–50">
+                <InputNumber min={5} max={50} style={{ width: 100 }} />
+              </Form.Item>
+              <Form.Item name="maxPagesPerJob" label="最大翻页" extra="1–50">
+                <InputNumber min={1} max={50} style={{ width: 100 }} />
+              </Form.Item>
+              <Form.Item name="concurrency" label="岗位并发" extra="1–5">
+                <InputNumber min={1} max={5} style={{ width: 100 }} />
+              </Form.Item>
+            </Space>
+            <Form.Item name="cityWhitelist" label="城市白名单" extra="留空=不限；多个用空格或逗号分隔">
+              <Input placeholder="北京 上海 深圳" />
+            </Form.Item>
+          </Form>
         </Card>
       </Space>
 

@@ -65,11 +65,22 @@ db.exec(`
     progress TEXT DEFAULT ''
   );
 
+  CREATE TABLE IF NOT EXISTS boss_watch_access_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    event_id INTEGER,
+    action TEXT NOT NULL,
+    extra TEXT,
+    at TEXT DEFAULT (datetime('now', 'localtime'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_snapshot_date_pos ON boss_watch_snapshot(snapshot_date, position_id);
   CREATE INDEX IF NOT EXISTS idx_snapshot_company ON boss_watch_snapshot(boss_company_id);
   CREATE INDEX IF NOT EXISTS idx_event_company ON boss_watch_event(boss_company_id);
   CREATE INDEX IF NOT EXISTS idx_event_created ON boss_watch_event(created_at);
   CREATE INDEX IF NOT EXISTS idx_job_log_started ON boss_watch_job_log(started_at);
+  CREATE INDEX IF NOT EXISTS idx_access_log_event ON boss_watch_access_log(event_id);
+  CREATE INDEX IF NOT EXISTS idx_access_log_at ON boss_watch_access_log(at);
 `);
 
 // 兼容老数据库：补字段

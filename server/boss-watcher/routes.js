@@ -1,11 +1,23 @@
 const express = require('express');
 const router = express.Router();
+const cron = require('node-cron');
 const db = require('./db');
 const auth = require('./auth');
 const dingtalk = require('./dingtalk');
 const { syncPositions, getPositions } = require('./sync-positions');
-const { executeJob, getJob, getLatestJob, getRunningJob } = require('./scheduler');
+const { executeJob, getJob, getLatestJob, getRunningJob, applyCron } = require('./scheduler');
 const { encryptRow } = require('../lib/cryptoDao');
+const crawlerConfig = require('./crawler-config');
+
+function logAccess(userId, eventId, action, extra) {
+  if (!userId) return;
+  try {
+    db.prepare('INSERT INTO boss_watch_access_log (user_id, event_id, action, extra) VALUES (?, ?, ?, ?)')
+      .run(userId, eventId || null, action, extra ? JSON.stringify(extra) : null);
+  } catch (err) {
+    console.error('[boss-watcher] access log failed:', err.message);
+  }
+}
 
 // 目标公司 CRUD
 router.get('/targets', (req, res) => {
@@ -131,7 +143,45 @@ router.get('/events', (req, res) => {
   res.json({ data: rows, total, page: Number(page), pageSize: Number(pageSize) });
 });
 
-// 更新事件处理状态
+// 同一候选人合并视图：按 geek_id 取最新事件 + 同人计数
+router.get('/events/grouped', (req, res) => {
+  const { boss_company_id, position_id, event_type, handle_status, include_ignored } = req.query;
+
+  // SQLite 无窗口函数前提下，先查筛选后的所有事件取 geek_id，再用聚合
+  let sql = `
+    SELECT e.id, e.event_type, e.boss_company_id, e.company_name, e.position_id, e.position_title,
+           e.candidate_name, e.candidate_title, e.candidate_city, e.candidate_status,
+           e.detail_json, e.handle_status, e.handled_by, e.handled_at, e.person_id, e.created_at,
+           u.display_name AS handled_by_name
+    FROM boss_watch_event e
+    LEFT JOIN users u ON u.id = e.handled_by
+    WHERE 1=1
+  `;
+  const params = [];
+  if (boss_company_id) { sql += ' AND e.boss_company_id = ?'; params.push(boss_company_id); }
+  if (position_id) { sql += ' AND e.position_id = ?'; params.push(position_id); }
+  if (event_type) { sql += ' AND e.event_type = ?'; params.push(event_type); }
+  if (handle_status) { sql += ' AND e.handle_status = ?'; params.push(handle_status); }
+  else if (include_ignored !== '1') { sql += " AND COALESCE(e.handle_status,'new') != 'ignored'"; }
+  sql += ' ORDER BY e.created_at DESC LIMIT 2000';
+
+  const rows = db.prepare(sql).all(...params);
+  const groups = new Map();
+  for (const r of rows) {
+    let geekId = '';
+    try { geekId = JSON.parse(r.detail_json || '{}').geek_id || ''; } catch {}
+    const key = geekId || `_${r.id}`;
+    if (!groups.has(key)) {
+      groups.set(key, { geek_id: geekId, latest: r, total: 0, counts: { new: 0, gone: 0, status_change: 0 } });
+    }
+    const g = groups.get(key);
+    g.total++;
+    g.counts[r.event_type] = (g.counts[r.event_type] || 0) + 1;
+  }
+  res.json({ data: [...groups.values()], total: groups.size });
+});
+
+
 router.patch('/events/:id/status', (req, res) => {
   const { handle_status } = req.body;
   const allowed = ['new', 'viewed', 'followed', 'ignored'];
@@ -144,6 +194,7 @@ router.patch('/events/:id/status', (req, res) => {
     WHERE id = ?
   `).run(handle_status, req.user.id, req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: '事件不存在' });
+  logAccess(req.user.id, Number(req.params.id), 'status_change', { handle_status });
   res.json({ success: true });
 });
 
@@ -153,6 +204,7 @@ router.get('/events/:id/related', (req, res) => {
   if (!event) return res.status(404).json({ error: '事件不存在' });
   let geekId = '';
   try { geekId = JSON.parse(event.detail_json || '{}').geek_id || ''; } catch {}
+  logAccess(req.user.id, Number(req.params.id), 'view_detail');
   if (!geekId) return res.json({ geek_id: '', events: [] });
 
   const rows = db.prepare(`
@@ -229,6 +281,7 @@ router.post('/events/:id/import-to-persons', (req, res) => {
 
   try {
     const personId = tx();
+    logAccess(req.user.id, evt.id, 'import_to_persons', { person_id: personId });
     res.json({ success: true, person_id: personId });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -367,6 +420,104 @@ router.get('/dispatch-preview', (req, res) => {
     buckets[role].push(p);
   }
   res.json(buckets);
+});
+
+// CSV 导出（UTF-8 BOM，Excel 可直接打开）
+function csvEscape(v) {
+  if (v === null || v === undefined) return '';
+  const s = String(v);
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+router.get('/events/export', (req, res) => {
+  const { from, to, boss_company_id, position_id, event_type, handle_status, include_ignored } = req.query;
+  let sql = `
+    SELECT e.id, e.event_type, e.boss_company_id, e.company_name, e.position_id, e.position_title,
+           e.candidate_name, e.candidate_title, e.candidate_city, e.candidate_status,
+           e.detail_json, e.handle_status, e.handled_at, e.person_id, e.created_at,
+           u.display_name AS handled_by_name
+    FROM boss_watch_event e
+    LEFT JOIN users u ON u.id = e.handled_by
+    WHERE 1=1
+  `;
+  const params = [];
+  if (from) { sql += ' AND substr(e.created_at,1,10) >= ?'; params.push(from); }
+  if (to) { sql += ' AND substr(e.created_at,1,10) <= ?'; params.push(to); }
+  if (boss_company_id) { sql += ' AND e.boss_company_id = ?'; params.push(boss_company_id); }
+  if (position_id) { sql += ' AND e.position_id = ?'; params.push(position_id); }
+  if (event_type) { sql += ' AND e.event_type = ?'; params.push(event_type); }
+  if (handle_status) { sql += ' AND e.handle_status = ?'; params.push(handle_status); }
+  else if (include_ignored !== '1') { sql += " AND COALESCE(e.handle_status,'new') != 'ignored'"; }
+  sql += ' ORDER BY e.created_at DESC LIMIT 10000';
+
+  const rows = db.prepare(sql).all(...params);
+  const headers = ['id', '时间', '类型', '公司', '岗位', '候选人', '职位', '城市', '活跃状态', '处理状态', '处理人', '处理时间', '已入库人才ID', '前置状态', '新状态', 'geek_id'];
+  const lines = [headers.join(',')];
+  const TYPE_LABEL = { new: '新出现', gone: '已消失', status_change: '状态变化' };
+  const HANDLE_LABEL = { new: '未处理', viewed: '已查看', followed: '已跟进', ignored: '已忽略' };
+  for (const r of rows) {
+    let prev = '', next = '', geek = '';
+    try {
+      const d = JSON.parse(r.detail_json || '{}');
+      prev = d.prev_status || ''; next = d.new_status || ''; geek = d.geek_id || '';
+    } catch {}
+    lines.push([
+      r.id, r.created_at, TYPE_LABEL[r.event_type] || r.event_type,
+      r.company_name, r.position_title, r.candidate_name, r.candidate_title,
+      r.candidate_city, r.candidate_status,
+      HANDLE_LABEL[r.handle_status || 'new'] || r.handle_status,
+      r.handled_by_name || '', r.handled_at || '',
+      r.person_id || '', prev, next, geek
+    ].map(csvEscape).join(','));
+  }
+  const csv = '﻿' + lines.join('\r\n');
+  const filename = `招聘雷达_${(from || '').replace(/-/g, '') || 'all'}_${(to || '').replace(/-/g, '') || 'now'}.csv`;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  logAccess(req.user.id, null, 'export_csv', { count: rows.length, from, to });
+  res.send(csv);
+});
+
+// 审计日志查询
+router.get('/access-log', (req, res) => {
+  const { event_id, user_id, action, page = 1, pageSize = 100 } = req.query;
+  let sql = `
+    SELECT al.*, u.display_name AS user_name
+    FROM boss_watch_access_log al
+    LEFT JOIN users u ON u.id = al.user_id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (event_id) { sql += ' AND al.event_id = ?'; params.push(event_id); }
+  if (user_id) { sql += ' AND al.user_id = ?'; params.push(user_id); }
+  if (action) { sql += ' AND al.action = ?'; params.push(action); }
+  sql += ' ORDER BY al.id DESC LIMIT ? OFFSET ?';
+  params.push(Number(pageSize), (Number(page) - 1) * Number(pageSize));
+  const rows = db.prepare(sql).all(...params);
+  res.json({ data: rows });
+});
+
+// 抓取参数配置
+router.get('/crawler-config', (req, res) => {
+  res.json(crawlerConfig.load());
+});
+
+router.put('/crawler-config', (req, res) => {
+  const { cronMorning, cronAfternoon, pageSize, maxPagesPerJob, concurrency, cityWhitelist } = req.body || {};
+  for (const expr of [cronMorning, cronAfternoon]) {
+    if (expr && !cron.validate(expr)) {
+      return res.status(400).json({ error: `非法 cron 表达式：${expr}` });
+    }
+  }
+  const next = crawlerConfig.save({
+    cronMorning, cronAfternoon, pageSize, maxPagesPerJob, concurrency,
+    cityWhitelist: Array.isArray(cityWhitelist) ? cityWhitelist
+      : typeof cityWhitelist === 'string' ? cityWhitelist.split(/[,，\s]+/).filter(Boolean)
+      : []
+  });
+  applyCron();
+  res.json(next);
 });
 
 module.exports = router;

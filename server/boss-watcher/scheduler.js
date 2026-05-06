@@ -4,6 +4,7 @@ const { runDiff } = require('./diff');
 const { sendEventNotice, sendWorkNotice, loadConfig, getReceivers } = require('./dingtalk');
 const auth = require('./auth');
 const db = require('./db');
+const crawlerConfig = require('./crawler-config');
 
 let tasks = [];
 
@@ -137,10 +138,21 @@ function start() {
         finished_at = datetime('now','localtime')
     WHERE status = 'running'
   `).run();
-  const morning = cron.schedule('0 9 * * *', () => executeJob('cron'), { timezone: 'Asia/Shanghai' });
-  const afternoon = cron.schedule('0 14 * * *', () => executeJob('cron'), { timezone: 'Asia/Shanghai' });
-  tasks = [morning, afternoon];
-  console.log('[boss-watcher] 调度器已启动 (9:00, 14:00)');
+  applyCron();
+}
+
+function applyCron() {
+  for (const t of tasks) { try { t.stop(); } catch {} }
+  tasks = [];
+  const cfg = crawlerConfig.load();
+  for (const expr of [cfg.cronMorning, cfg.cronAfternoon].filter(Boolean)) {
+    if (!cron.validate(expr)) {
+      console.warn('[boss-watcher] 非法 cron 表达式，已跳过:', expr);
+      continue;
+    }
+    tasks.push(cron.schedule(expr, () => executeJob('cron'), { timezone: 'Asia/Shanghai' }));
+  }
+  console.log(`[boss-watcher] 调度器已启动 (${[cfg.cronMorning, cfg.cronAfternoon].filter(Boolean).join(', ')})`);
 }
 
 function stop() {
@@ -156,8 +168,9 @@ function cleanOldData() {
   db.prepare('DELETE FROM boss_watch_snapshot WHERE snapshot_date < ?').run(cutoffStr);
   db.prepare('DELETE FROM boss_watch_event WHERE created_at < ?').run(cutoffStr);
   db.prepare('DELETE FROM boss_watch_job_log WHERE started_at < ?').run(cutoffStr);
+  db.prepare('DELETE FROM boss_watch_access_log WHERE at < ?').run(cutoffStr);
 }
 
 cron.schedule('30 3 * * *', () => cleanOldData(), { timezone: 'Asia/Shanghai' });
 
-module.exports = { start, stop, executeJob, getRunningJob, getJob, getLatestJob };
+module.exports = { start, stop, executeJob, getRunningJob, getJob, getLatestJob, applyCron };

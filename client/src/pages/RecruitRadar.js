@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Table, Card, Select, Space, Button, Tag, Grid, List, Typography, Watermark, Row, Col, Statistic, Alert, Drawer, Descriptions, Switch, Popconfirm, Empty, message } from 'antd';
-import { ReloadOutlined, RadarChartOutlined, SettingOutlined, CheckOutlined, StopOutlined, UndoOutlined, UserAddOutlined } from '@ant-design/icons';
+import { Table, Card, Select, Space, Button, Tag, Grid, List, Typography, Watermark, Row, Col, Statistic, Alert, Drawer, Descriptions, Switch, Popconfirm, Empty, Segmented, message } from 'antd';
+import { ReloadOutlined, RadarChartOutlined, SettingOutlined, CheckOutlined, StopOutlined, UndoOutlined, UserAddOutlined, DownloadOutlined } from '@ant-design/icons';
 import { Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 
@@ -34,6 +34,8 @@ export default function RecruitRadar() {
   const [filterType, setFilterType] = useState(searchParams.get('type') || '');
   const [filterHandle, setFilterHandle] = useState('');
   const [showIgnored, setShowIgnored] = useState(false);
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'grouped'
+  const [groups, setGroups] = useState([]);
   const [stats, setStats] = useState(null);
   const [runningJob, setRunningJob] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -50,8 +52,9 @@ export default function RecruitRadar() {
   }, []);
 
   useEffect(() => {
-    fetchEvents();
-  }, [filterCompany, filterPosition, filterType, filterHandle, showIgnored, page]);
+    if (viewMode === 'grouped') fetchGrouped();
+    else fetchEvents();
+  }, [filterCompany, filterPosition, filterType, filterHandle, showIgnored, page, viewMode]);
 
   const fetchTargets = async () => {
     try {
@@ -89,6 +92,25 @@ export default function RecruitRadar() {
       if (showIgnored) params.include_ignored = 1;
       const res = await axios.get('/api/boss-watcher/events', { params });
       setEvents(res.data.data);
+      setTotal(res.data.total);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchGrouped = async () => {
+    setLoading(true);
+    try {
+      const params = {};
+      if (filterCompany) params.boss_company_id = filterCompany;
+      if (filterPosition) params.position_id = filterPosition;
+      if (filterType) params.event_type = filterType;
+      if (filterHandle) params.handle_status = filterHandle;
+      if (showIgnored) params.include_ignored = 1;
+      const res = await axios.get('/api/boss-watcher/events/grouped', { params });
+      setGroups(res.data.data);
       setTotal(res.data.total);
     } catch (err) {
       console.error(err);
@@ -189,6 +211,36 @@ export default function RecruitRadar() {
     }
   };
 
+  const handleExport = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (filterCompany) params.set('boss_company_id', filterCompany);
+      if (filterPosition) params.set('position_id', filterPosition);
+      if (filterType) params.set('event_type', filterType);
+      if (filterHandle) params.set('handle_status', filterHandle);
+      if (showIgnored) params.set('include_ignored', '1');
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/boss-watcher/events/export?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || '导出失败');
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get('Content-Disposition') || '';
+      const m = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+      const filename = m ? decodeURIComponent(m[1]) : `招聘雷达_${new Date().toISOString().slice(0, 10)}.csv`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+      message.success('导出完成');
+    } catch (err) {
+      message.error(err.message || '导出失败');
+    }
+  };
+
   const eventTypeTag = (type) => {
     const cfg = EVENT_TYPE_MAP[type] || { label: type, color: 'default' };
     return <Tag color={cfg.color}>{cfg.label}</Tag>;
@@ -232,6 +284,32 @@ export default function RecruitRadar() {
       </Space>
     );
   };
+
+  const groupColumns = [
+    { title: '候选人', key: 'name', width: 140, render: (_, g) => (
+      <Space size={4}>
+        <strong>{g.latest.candidate_name}</strong>
+        {g.latest.person_id && <Tag color="success" style={{ marginInlineEnd: 0 }}>已入库</Tag>}
+      </Space>
+    ) },
+    { title: '最新职位', key: 'title', width: 160, ellipsis: true, render: (_, g) => g.latest.candidate_title },
+    { title: '公司', key: 'company', width: 130, render: (_, g) => g.latest.company_name },
+    { title: '城市', key: 'city', width: 80, render: (_, g) => g.latest.candidate_city },
+    { title: '事件总数', key: 'total', width: 90, render: (_, g) => g.total },
+    { title: '类型分布', key: 'counts', width: 200, render: (_, g) => (
+      <Space size={4} wrap>
+        {g.counts.new > 0 && <Tag color="green">新 {g.counts.new}</Tag>}
+        {g.counts.status_change > 0 && <Tag color="orange">变 {g.counts.status_change}</Tag>}
+        {g.counts.gone > 0 && <Tag color="red">走 {g.counts.gone}</Tag>}
+      </Space>
+    ) },
+    { title: '最新动态', key: 'latest', width: 160, render: (_, g) => (
+      <Space direction="vertical" size={0}>
+        {eventTypeTag(g.latest.event_type)}
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>{g.latest.created_at}</Typography.Text>
+      </Space>
+    ) }
+  ];
 
   const columns = [
     { title: '类型', dataIndex: 'event_type', key: 'event_type', width: 100, render: eventTypeTag },
@@ -306,9 +384,19 @@ export default function RecruitRadar() {
         <Switch size="small" checked={showIgnored} onChange={(v) => { setShowIgnored(v); setPage(1); }} />
         <Typography.Text style={{ fontSize: 12 }}>显示已忽略</Typography.Text>
       </Space>
+      <Segmented
+        size="small"
+        value={viewMode}
+        onChange={(v) => { setViewMode(v); setPage(1); }}
+        options={[
+          { label: '明细', value: 'list' },
+          { label: '按人合并', value: 'grouped' }
+        ]}
+      />
       <Button icon={<RadarChartOutlined />} loading={!!runningJob} onClick={handleTrigger}>
         {runningJob ? '抓取中...' : '手动抓取'}
       </Button>
+      <Button icon={<DownloadOutlined />} onClick={handleExport}>导出 CSV</Button>
       <Button icon={<ReloadOutlined />} onClick={() => { fetchEvents(); fetchStats(); }}>刷新</Button>
       <Link to="/executive/recruit-radar/config">
         <Button icon={<SettingOutlined />}>配置</Button>
@@ -356,7 +444,17 @@ export default function RecruitRadar() {
 
           <Card extra={!isMobile && filters}>
             {isMobile && filters}
-            {isMobile ? (
+            {viewMode === 'grouped' ? (
+              <Table
+                dataSource={groups}
+                columns={groupColumns}
+                rowKey={(g) => g.geek_id || `_${g.latest.id}`}
+                loading={loading}
+                onRow={(g) => ({ onClick: () => openDetail(g.latest), style: { cursor: 'pointer' } })}
+                pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 人` }}
+                scroll={isMobile ? { x: 800 } : undefined}
+              />
+            ) : isMobile ? (
               <List
                 dataSource={events}
                 rowKey="id"

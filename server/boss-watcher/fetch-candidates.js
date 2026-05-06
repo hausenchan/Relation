@@ -1,5 +1,6 @@
 const db = require('./db');
 const auth = require('./auth');
+const crawlerConfig = require('./crawler-config');
 
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
@@ -8,14 +9,15 @@ function getTargetCompanyIds() {
     .map(r => r.boss_company_id);
 }
 
-async function fetchCandidatesForPosition(positionId, cookie) {
+async function fetchCandidatesForPosition(positionId, cookie, opts = {}) {
+  const pageSize = opts.pageSize || 30;
+  const maxPages = opts.maxPages || 10;
   const candidates = [];
   let page = 1;
-  let hasMore = true;
 
-  while (hasMore) {
+  while (page <= maxPages) {
     const res = await fetch(
-      `https://www.zhipin.com/wapi/zprelation/friend/geekRecommendList?jobId=${positionId}&page=${page}&pageSize=30`, {
+      `https://www.zhipin.com/wapi/zprelation/friend/geekRecommendList?jobId=${positionId}&page=${page}&pageSize=${pageSize}`, {
         headers: { 'Cookie': cookie, 'User-Agent': UA }
       }
     );
@@ -23,7 +25,7 @@ async function fetchCandidatesForPosition(positionId, cookie) {
     if (data.code !== 0) break;
 
     const list = data.zpData?.result || data.zpData?.list || [];
-    if (list.length === 0) { hasMore = false; break; }
+    if (list.length === 0) break;
 
     for (const item of list) {
       candidates.push({
@@ -37,30 +39,56 @@ async function fetchCandidatesForPosition(positionId, cookie) {
       });
     }
 
-    if (list.length < 30) hasMore = false;
-    else page++;
-
+    if (list.length < pageSize) break;
+    page++;
     await sleep(1500 + Math.random() * 1500);
   }
 
   return candidates;
 }
 
+function pLimit(concurrency) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= concurrency || queue.length === 0) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    Promise.resolve().then(fn).then(
+      v => { active--; resolve(v); next(); },
+      e => { active--; reject(e); next(); }
+    );
+  };
+  return (fn) => new Promise((resolve, reject) => {
+    queue.push({ fn, resolve, reject });
+    next();
+  });
+}
+
 async function fetchAndFilter() {
   const cookie = auth.getCookie();
   if (!cookie) throw new Error('Boss 账号未登录');
 
+  const cfg = crawlerConfig.load();
   const targetIds = getTargetCompanyIds();
   if (targetIds.length === 0) return { total: 0, matched: 0, positions: [] };
 
   const positions = db.prepare('SELECT * FROM boss_watch_position WHERE active = 1').all();
   const today = new Date().toISOString().slice(0, 10);
-  const results = [];
+  const cityWhitelist = (cfg.cityWhitelist || []).filter(Boolean);
+  const limit = pLimit(cfg.concurrency || 2);
 
-  for (const pos of positions) {
-    const allCandidates = await fetchCandidatesForPosition(pos.boss_position_id, cookie);
+  const tasks = positions.map(pos => limit(async () => {
+    const allCandidates = await fetchCandidatesForPosition(
+      pos.boss_position_id, cookie,
+      { pageSize: cfg.pageSize, maxPages: cfg.maxPagesPerJob }
+    );
 
-    const matched = allCandidates.filter(c => targetIds.includes(c.boss_company_id));
+    const matched = allCandidates.filter(c => {
+      if (!targetIds.includes(c.boss_company_id)) return false;
+      if (cityWhitelist.length > 0 && c.city && !cityWhitelist.includes(c.city)) return false;
+      return true;
+    });
 
     if (matched.length > 0) {
       for (const companyId of [...new Set(matched.map(c => c.boss_company_id))]) {
@@ -72,11 +100,16 @@ async function fetchAndFilter() {
       }
     }
 
-    results.push({ position: pos.title, total: allCandidates.length, matched: matched.length });
-    await sleep(2000 + Math.random() * 2000);
-  }
+    await sleep(1000 + Math.random() * 1500);
+    return { position: pos.title, total: allCandidates.length, matched: matched.length };
+  }));
 
-  return { total: results.reduce((s, r) => s + r.total, 0), matched: results.reduce((s, r) => s + r.matched, 0), positions: results };
+  const results = await Promise.all(tasks);
+  return {
+    total: results.reduce((s, r) => s + r.total, 0),
+    matched: results.reduce((s, r) => s + r.matched, 0),
+    positions: results
+  };
 }
 
 function sleep(ms) {
