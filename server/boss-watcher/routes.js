@@ -13,6 +13,42 @@ router.get('/targets', (req, res) => {
   res.json(rows);
 });
 
+// Boss 公司搜索代理（用于添加目标公司时按名搜 ID）
+const COMPANY_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
+router.get('/companies/search', async (req, res) => {
+  const keyword = String(req.query.keyword || '').trim();
+  if (!keyword) return res.json([]);
+  const cookie = auth.getCookie();
+  if (!cookie) return res.status(400).json({ error: 'Boss 账号未配置' });
+
+  try {
+    const url = `https://www.zhipin.com/wapi/zpgeek/search/joblist.json?query=${encodeURIComponent(keyword)}&page=1&pageSize=30&scene=1`;
+    const r = await fetch(url, { headers: { Cookie: cookie, 'User-Agent': COMPANY_UA } });
+    const data = await r.json();
+    if (data.code !== 0) {
+      return res.status(502).json({ error: `Boss 接口返回 ${data.code}: ${data.message || ''}` });
+    }
+    const list = data.zpData?.jobList || data.zpData?.list || [];
+    const seen = new Map();
+    for (const item of list) {
+      const id = item.encryptBrandId || item.brandComId || item.encBrandId || item.companyId || item.encryptCompanyId;
+      const name = item.brandName || item.companyName || item.brandFullName;
+      if (!id || !name) continue;
+      if (!seen.has(id)) {
+        seen.set(id, {
+          boss_company_id: String(id),
+          company_name: String(name),
+          industry: item.brandIndustry || item.industryName || '',
+          scale: item.brandScaleName || item.scaleName || ''
+        });
+      }
+    }
+    res.json([...seen.values()].slice(0, 20));
+  } catch (err) {
+    res.status(500).json({ error: '搜索失败：' + err.message });
+  }
+});
+
 router.post('/targets', (req, res) => {
   const { boss_company_id, company_name, keyword_memo } = req.body;
   if (!boss_company_id || !company_name) {
@@ -223,7 +259,7 @@ router.get('/dingtalk-status', (req, res) => {
 });
 
 router.post('/dingtalk-config', (req, res) => {
-  const { appKey, appSecret, agentId, receivers } = req.body;
+  const { appKey, appSecret, agentId, receivers, baseUrl } = req.body;
   if (!appKey || !appSecret || !agentId) {
     return res.status(400).json({ error: 'appKey/appSecret/agentId 必填' });
   }
@@ -238,7 +274,7 @@ router.post('/dingtalk-config', (req, res) => {
   if (Object.keys(filtered).length === 0) {
     return res.status(400).json({ error: '至少填写一位老板的 userId' });
   }
-  dingtalk.saveConfig({ appKey, appSecret, agentId, receivers: filtered });
+  dingtalk.saveConfig({ appKey, appSecret, agentId, receivers: filtered, baseUrl: (baseUrl || '').trim() });
   res.json({ success: true });
 });
 

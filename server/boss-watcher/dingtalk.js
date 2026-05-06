@@ -74,15 +74,54 @@ async function sendWorkNotice(userId, title, content) {
   return data;
 }
 
-function buildEventMarkdown(roleLabel, events) {
-  let text = `## 招聘雷达 - ${roleLabel} 关注岗位变动\n\n`;
+const PER_COMPANY_LIMIT = 5;
+const TYPE_LABEL = { new: '🆕 新出现', gone: '👋 已消失', status_change: '🔄 状态变化' };
+
+function buildDetailLink(baseUrl, params = {}) {
+  const root = (baseUrl || '').replace(/\/+$/, '');
+  const qs = Object.entries(params)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+    .join('&');
+  const path = '/executive/recruit-radar' + (qs ? `?${qs}` : '');
+  return root ? root + path : path;
+}
+
+function buildEventMarkdown(roleLabel, events, baseUrl) {
+  // 按公司聚合：每家公司一节
+  const byCompany = new Map();
   for (const evt of events) {
-    const typeLabel = evt.event_type === 'new' ? '🆕 新出现' :
-                      evt.event_type === 'gone' ? '👋 已消失' : '🔄 状态变化';
-    text += `**${typeLabel}** ${evt.candidate_name} - ${evt.candidate_title}\n\n`;
-    text += `> 公司: ${evt.company_name} | 城市: ${evt.candidate_city}\n\n`;
-    text += `> 关联岗位: ${evt.position_title}\n\n---\n\n`;
+    const key = evt.boss_company_id || evt.company_name || '_';
+    if (!byCompany.has(key)) {
+      byCompany.set(key, { name: evt.company_name || '(未知公司)', companyId: evt.boss_company_id, items: [] });
+    }
+    byCompany.get(key).items.push(evt);
   }
+
+  let text = `## 招聘雷达 - ${roleLabel} 关注岗位变动\n\n`;
+  text += `> 共 ${events.length} 条变动，涉及 ${byCompany.size} 家公司\n\n`;
+
+  for (const { name, companyId, items } of byCompany.values()) {
+    const counts = items.reduce((acc, e) => { acc[e.event_type] = (acc[e.event_type] || 0) + 1; return acc; }, {});
+    const summary = Object.entries(counts).map(([t, n]) => `${TYPE_LABEL[t] || t} ${n}`).join(' · ');
+    text += `### ${name}\n\n`;
+    text += `${summary}\n\n`;
+
+    const shown = items.slice(0, PER_COMPANY_LIMIT);
+    for (const evt of shown) {
+      const tag = TYPE_LABEL[evt.event_type] || evt.event_type;
+      const status = evt.candidate_status ? ` · ${evt.candidate_status}` : '';
+      text += `- ${tag} **${evt.candidate_name}** ${evt.candidate_title || ''}${status}（${evt.position_title || '-'}）\n`;
+    }
+    if (items.length > PER_COMPANY_LIMIT) {
+      const link = buildDetailLink(baseUrl, { company: companyId });
+      text += `\n[查看全部 ${items.length} 条 →](${link})\n`;
+    }
+    text += `\n---\n\n`;
+  }
+
+  const allLink = buildDetailLink(baseUrl);
+  text += `[在系统中查看 →](${allLink})\n\n`;
   text += `*仅限内部参考，数据来源 Boss 直聘公开展示*`;
   return text;
 }
@@ -92,6 +131,7 @@ async function sendEventNotice(events) {
   const config = loadConfig();
   if (!config) return;
   const receivers = getReceivers(config);
+  const baseUrl = config.baseUrl || '';
 
   const buckets = groupEventsByRole(events);
   const errors = [];
@@ -103,7 +143,7 @@ async function sendEventNotice(events) {
       errors.push(`${ROLE_LABEL[role]} 未配置接收人，跳过 ${list.length} 条`);
       continue;
     }
-    const text = buildEventMarkdown(ROLE_LABEL[role], list);
+    const text = buildEventMarkdown(ROLE_LABEL[role], list, baseUrl);
     try {
       await sendWorkNotice(userId, `招聘雷达: ${list.length}条变动 (${ROLE_LABEL[role]})`, text);
     } catch (err) {
@@ -115,12 +155,13 @@ async function sendEventNotice(events) {
 
 function getConfigStatus() {
   const config = loadConfig();
-  if (!config) return { configured: false, receivers: {} };
+  if (!config) return { configured: false, receivers: {}, baseUrl: '' };
   const receivers = getReceivers(config);
   return {
     configured: !!(config.appKey && config.appSecret && config.agentId),
     appKey: config.appKey ? '***' + config.appKey.slice(-4) : '',
     agentId: config.agentId || '',
+    baseUrl: config.baseUrl || '',
     receivers
   };
 }

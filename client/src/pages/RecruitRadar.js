@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Table, Card, Select, Space, Button, Tag, Grid, List, Typography, Watermark, Row, Col, Statistic, Alert, Drawer, Descriptions, Switch, Popconfirm, Empty, message } from 'antd';
 import { ReloadOutlined, RadarChartOutlined, SettingOutlined, CheckOutlined, StopOutlined, UndoOutlined, UserAddOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 
 const { Option } = Select;
@@ -22,15 +22,16 @@ const HANDLE_STATUS_MAP = {
 export default function RecruitRadar() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [events, setEvents] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [targets, setTargets] = useState([]);
   const [positions, setPositions] = useState([]);
-  const [filterCompany, setFilterCompany] = useState('');
+  const [filterCompany, setFilterCompany] = useState(searchParams.get('company') || '');
   const [filterPosition, setFilterPosition] = useState('');
-  const [filterType, setFilterType] = useState('');
+  const [filterType, setFilterType] = useState(searchParams.get('type') || '');
   const [filterHandle, setFilterHandle] = useState('');
   const [showIgnored, setShowIgnored] = useState(false);
   const [stats, setStats] = useState(null);

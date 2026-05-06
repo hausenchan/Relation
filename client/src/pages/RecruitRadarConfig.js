@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Card, Button, Table, Modal, Form, Input, Space, Tag, message, Popconfirm, Descriptions, Grid, List, Switch, Drawer, Typography } from 'antd';
+import React, { useState, useEffect, useRef } from 'react';
+import { Card, Button, Table, Modal, Form, Input, AutoComplete, Space, Tag, message, Popconfirm, Descriptions, Grid, List, Switch, Drawer, Typography } from 'antd';
 import { PlusOutlined, DeleteOutlined, SettingOutlined, CheckCircleOutlined, CloseCircleOutlined, SyncOutlined } from '@ant-design/icons';
 import axios from 'axios';
 
@@ -23,6 +23,9 @@ export default function RecruitRadarConfig() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [companyOptions, setCompanyOptions] = useState([]);
+  const [companySearching, setCompanySearching] = useState(false);
+  const searchTimerRef = useRef(null);
   const [targetForm] = Form.useForm();
   const [cookieForm] = Form.useForm();
   const [dingtalkForm] = Form.useForm();
@@ -64,9 +67,48 @@ export default function RecruitRadarConfig() {
       message.success('添加成功');
       setTargetModal(false);
       targetForm.resetFields();
+      setCompanyOptions([]);
       fetchTargets();
     } catch (err) {
       message.error(err.response?.data?.error || '添加失败');
+    }
+  };
+
+  const searchCompany = (keyword) => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!keyword || keyword.length < 2) {
+      setCompanyOptions([]);
+      return;
+    }
+    searchTimerRef.current = setTimeout(async () => {
+      setCompanySearching(true);
+      try {
+        const res = await axios.get('/api/boss-watcher/companies/search', { params: { keyword } });
+        const opts = (res.data || []).map(c => ({
+          value: c.company_name,
+          label: (
+            <Space direction="vertical" size={0} style={{ width: '100%' }}>
+              <span><strong>{c.company_name}</strong> <Typography.Text type="secondary" style={{ fontSize: 12 }}>{c.boss_company_id}</Typography.Text></span>
+              {(c.industry || c.scale) && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{[c.industry, c.scale].filter(Boolean).join(' · ')}</Typography.Text>}
+            </Space>
+          ),
+          data: c
+        }));
+        setCompanyOptions(opts);
+      } catch (err) {
+        setCompanyOptions([]);
+      } finally {
+        setCompanySearching(false);
+      }
+    }, 400);
+  };
+
+  const handleSelectCompany = (_value, option) => {
+    if (option?.data) {
+      targetForm.setFieldsValue({
+        company_name: option.data.company_name,
+        boss_company_id: option.data.boss_company_id
+      });
     }
   };
 
@@ -95,13 +137,13 @@ export default function RecruitRadarConfig() {
 
   const handleSaveDingtalk = async (values) => {
     try {
-      const { appKey, appSecret, agentId, ceo, coo, cto, cmo } = values;
+      const { appKey, appSecret, agentId, baseUrl, ceo, coo, cto, cmo } = values;
       const receivers = {};
       if (ceo) receivers.ceo = ceo;
       if (coo) receivers.coo = coo;
       if (cto) receivers.cto = cto;
       if (cmo) receivers.cmo = cmo;
-      await axios.post('/api/boss-watcher/dingtalk-config', { appKey, appSecret, agentId, receivers });
+      await axios.post('/api/boss-watcher/dingtalk-config', { appKey, appSecret, agentId, baseUrl, receivers });
       message.success('钉钉配置已保存');
       setDingtalkModal(false);
       dingtalkForm.resetFields();
@@ -152,6 +194,7 @@ export default function RecruitRadarConfig() {
       appKey: undefined,
       appSecret: undefined,
       agentId: dingtalkStatus.agentId || undefined,
+      baseUrl: dingtalkStatus.baseUrl || undefined,
       ceo: dingtalkStatus.receivers?.ceo,
       coo: dingtalkStatus.receivers?.coo,
       cto: dingtalkStatus.receivers?.cto,
@@ -247,13 +290,21 @@ export default function RecruitRadarConfig() {
       </Space>
 
       {/* 添加目标公司弹窗 */}
-      <Modal title="添加监控公司" open={targetModal} onCancel={() => setTargetModal(false)} onOk={() => targetForm.submit()} destroyOnClose>
+      <Modal title="添加监控公司" open={targetModal} onCancel={() => { setTargetModal(false); setCompanyOptions([]); }} onOk={() => targetForm.submit()} destroyOnClose>
         <Form form={targetForm} onFinish={handleAddTarget} layout="vertical">
-          <Form.Item name="company_name" label="公司名称" rules={[{ required: true, message: '请输入公司名称' }]}>
-            <Input placeholder="如：字节跳动" />
+          <Form.Item name="company_name" label="公司名称" rules={[{ required: true, message: '请输入公司名称' }]}
+            extra="输入 2 个字以上自动搜索 Boss 在搜公司，选中后自动填 ID；找不到也可手填">
+            <AutoComplete
+              options={companyOptions}
+              onSearch={searchCompany}
+              onSelect={handleSelectCompany}
+              placeholder="如：字节跳动"
+              allowClear
+              notFoundContent={companySearching ? '搜索中...' : null}
+            />
           </Form.Item>
           <Form.Item name="boss_company_id" label="Boss 公司ID" rules={[{ required: true, message: '请输入 Boss 公司ID' }]}
-            extra="在 Boss 直聘搜索公司，复制公司主页 URL 中的 ID（如 encXXXXXX）">
+            extra="选中搜索结果会自动填充；也可手动从 Boss 公司主页 URL 复制（如 encXXXXXX）">
             <Input placeholder="如：enc1234567890" />
           </Form.Item>
           <Form.Item name="keyword_memo" label="备注">
@@ -283,6 +334,9 @@ export default function RecruitRadarConfig() {
           </Form.Item>
           <Form.Item name="agentId" label="AgentId" rules={[{ required: true }]}>
             <Input placeholder="钉钉应用 AgentId" />
+          </Form.Item>
+          <Form.Item name="baseUrl" label="系统访问地址（可选）" extra="用于钉钉消息中拼接“查看详情”链接，如 https://relation.example.com">
+            <Input placeholder="https://your-domain" />
           </Form.Item>
           <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 8 }}>
             按岗位分发：产品/运营 → COO，研发/技术 → CTO，商务/销售 → CMO，其他 → CEO
