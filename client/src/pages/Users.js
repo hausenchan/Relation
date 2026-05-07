@@ -31,8 +31,8 @@ const departmentOptions = [
 ];
 
 const MODULE_LIST = [
-  { key: 'persons',      label: '人脉管理' },
   { key: 'companies',    label: '公司研究' },
+  { key: 'persons',      label: '人脉管理' },
   { key: 'interactions', label: '互动记录' },
   { key: 'reminders',    label: '提醒事项' },
 ];

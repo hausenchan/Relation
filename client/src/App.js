@@ -361,6 +361,9 @@ function AppLayout() {
 
   // ── 商务协作 ────────────────────────────────────────────────
   const bizCoopChildren = [
+    canAccessMenu('/companies') && canAccessModule('companies') && {
+      key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link>,
+    },
     canAccessMenu('/persons') && canAccessModule('persons') && {
       key: '/persons', icon: <TeamOutlined />, label: <Link to="/persons">人脉管理</Link>,
     },
@@ -375,9 +378,6 @@ function AppLayout() {
           {pendingCount > 0 && <Badge count={pendingCount} size="small" style={{ marginLeft: 8 }} />}
         </span>
       ),
-    },
-    canAccessMenu('/companies') && canAccessModule('companies') && {
-      key: '/companies', icon: <BankOutlined />, label: <Link to="/companies">公司研究</Link>,
     },
     {
       key: '/follow-up-tasks', icon: <ThunderboltOutlined />,

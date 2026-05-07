@@ -32,10 +32,10 @@ const MENU_TREE = [
     title: '商务协作',
     key: 'biz-coop',
     children: [
+      { title: '公司研究', key: '/companies' },
       { title: '人脉管理', key: '/persons' },
       { title: '互动记录', key: '/interactions' },
       { title: '提醒事项', key: '/reminders' },
-      { title: '公司研究', key: '/companies' },
       { title: '商机管理', key: '/opportunities' },
       { title: '待跟进任务', key: '/follow-up-tasks' },
     ],
