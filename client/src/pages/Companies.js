@@ -841,6 +841,16 @@ function CompetitorResearchTab({ companyId }) {
     { title: '下次行动', dataIndex: 'next_action', ellipsis: true },
     { title: '下次日期', dataIndex: 'next_action_date', width: 110 },
     {
+      title: '创建人',
+      dataIndex: 'created_by',
+      width: 90,
+      render: (v) => {
+        if (!v) return '-';
+        const u = users.find(x => x.id === v);
+        return u ? (u.display_name || u.username) : '-';
+      },
+    },
+    {
       title: '共享人',
       dataIndex: 'shared_with',
       width: 160,
@@ -1693,6 +1703,16 @@ export default function Companies() {
       render: v => v ? v.split(',').map(t => <Tag key={t} style={{ marginBottom: 2 }}>{t.trim()}</Tag>) : '-',
     },
     { title: '更新时间', dataIndex: 'updated_at', render: v => v?.slice(0, 10) },
+    {
+      title: '创建人',
+      dataIndex: 'created_by',
+      width: 90,
+      render: (v) => {
+        if (!v) return '-';
+        const u = users.find(x => x.id === v);
+        return u ? (u.display_name || u.username) : '-';
+      },
+    },
     {
       title: '共享人',
       dataIndex: 'shared_with',
