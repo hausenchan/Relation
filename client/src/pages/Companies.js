@@ -15,6 +15,7 @@ import {
   companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi, usersApi
 } from '../api';
 import ResizableTable from '../components/ResizableTable';
+import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 
 const { Text, Paragraph } = Typography;
@@ -844,7 +845,7 @@ function CompetitorResearchTab({ companyId }) {
             </Space>
             {record.content && (
               <Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                内容：{record.content}
+                内容：{richTextToPlain(record.content)}
               </Paragraph>
             )}
             {record.outcome && (
@@ -961,8 +962,8 @@ function CompetitorResearchTab({ companyId }) {
               </Form.Item>
             </Col>
             <Col span={24}>
-              <Form.Item label="详细内容" name="content">
-                <TextArea rows={3} placeholder="详细描述..." />
+              <Form.Item label="详细内容" name="content" valuePropName="value" trigger="onChange">
+                <RichTextEditor placeholder="详细描述..." minHeight={140} />
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>
@@ -1064,7 +1065,7 @@ function CompetitorResearchTab({ companyId }) {
               <Descriptions.Item label="金额">{r.amount ? `¥${r.amount}` : '-'}</Descriptions.Item>
               <Descriptions.Item label="信息来源">{r.source || '-'}</Descriptions.Item>
               <Descriptions.Item label="详细内容" span={2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.content || '-'}</div>
+                <RichTextView value={r.content} />
               </Descriptions.Item>
               <Descriptions.Item label="结果" span={2}>
                 <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
