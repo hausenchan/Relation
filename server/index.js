@@ -5442,12 +5442,6 @@ app.use('/api/boss-watcher', auth, requireBoss, bossWatcherRoutes);
 const bossScheduler = require('./boss-watcher/scheduler');
 bossScheduler.start();
 
-// 发票邮箱模块：暂未完成，相关目录尚未入库，先注释避免线上启动崩溃
-// const invoiceMailboxRoutes = require('./invoice-mailbox/routes');
-// app.use('/api/invoice-mailbox', auth, invoiceMailboxRoutes);
-// const invoiceMailboxScheduler = require('./invoice-mailbox/scheduler');
-// invoiceMailboxScheduler.start();
-
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
     // 只有非 API 路由才返回 index.html

@@ -136,14 +136,4 @@ module.exports = {
     indexed: [],
     skip: true,
   },
-
-  invoice_mailbox_account: {
-    fields: ['email', 'imap_host', 'auth_password'],
-    indexed: [],
-  },
-
-  invoice_mailbox_attachment: {
-    fields: ['mail_subject', 'mail_from', 'attachment_filename'],
-    indexed: [],
-  },
 };
