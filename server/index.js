@@ -548,8 +548,9 @@ try {
 } catch(e) { /* 表不存在时忽略 */ }
 
 const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.name);
-if (companyCols.length > 0 && !companyCols.includes('created_by')) {
-  db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");
+if (companyCols.length > 0) {
+  if (!companyCols.includes('created_by')) db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");
+  if (!companyCols.includes('shared_with')) db.exec("ALTER TABLE companies ADD COLUMN shared_with TEXT DEFAULT NULL");
 }
 
 // =========== 商务任务表 ===========
@@ -2950,6 +2951,11 @@ app.get('/api/companies', (req, res) => {
   const p = [];
   // name / business / tags 已加密，无法 SQL LIKE；search 全部走内存过滤
   if (category) { q += ' AND category = ?'; p.push(category); }
+  if (!isAdmin(req.user.role)) {
+    const uid = req.user.id;
+    q += " AND (created_by = ? OR (',' || IFNULL(shared_with,'') || ',') LIKE ?)";
+    p.push(uid, `%,${uid},%`);
+  }
   q += ' ORDER BY updated_at DESC';
   const rows = decryptRows('companies', db.prepare(q).all(...p));
   if (search) {
@@ -2965,27 +2971,36 @@ app.get('/api/companies', (req, res) => {
 app.get('/api/companies/:id', (req, res) => {
   const c = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: '未找到' });
+  if (!isAdmin(req.user.role)) {
+    const uid = req.user.id;
+    const shared = String(c.shared_with || '').split(',').filter(Boolean).map(Number);
+    if (c.created_by !== uid && !shared.includes(uid)) {
+      return res.status(403).json({ error: '无权访问' });
+    }
+  }
   res.json(decryptRow('companies', c));
 });
 
 app.post('/api/companies', canWrite, (req, res) => {
-  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes } = req.body;
+  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with } = req.body;
   const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
+  const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   const r = db.prepare(`
-    INSERT INTO companies (name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(enc.name, category || 'competitor', industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, req.user.id);
+    INSERT INTO companies (name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, created_by, shared_with)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(enc.name, category || 'competitor', industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, req.user.id, sharedCsv);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/companies/:id', canWrite, (req, res) => {
-  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes } = req.body;
+  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with } = req.body;
   const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
+  const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   db.prepare(`
     UPDATE companies SET name=?, category=?, industry=?, scale=?, founded_year=?, hq_city=?, website=?,
-      business=?, business_model=?, revenue_scale=?, tags=?, notes=?, updated_at=CURRENT_TIMESTAMP
+      business=?, business_model=?, revenue_scale=?, tags=?, notes=?, shared_with=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
-  `).run(enc.name, category, industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, req.params.id);
+  `).run(enc.name, category, industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, sharedCsv, req.params.id);
   res.json({ success: true });
 });
 

@@ -82,10 +82,20 @@ function CompanyModal({ open, editing, onClose, onSuccess }) {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [form] = Form.useForm();
+  const [users, setUsers] = useState([]);
+  useEffect(() => {
+    if (open) usersApi.listSimple().then(setUsers).catch(() => {});
+  }, [open]);
   useEffect(() => {
     if (open) {
-      if (editing) form.setFieldsValue(editing);
-      else form.resetFields();
+      if (editing) {
+        const sharedArr = editing.shared_with
+          ? String(editing.shared_with).split(',').filter(Boolean).map(Number)
+          : [];
+        form.setFieldsValue({ ...editing, shared_with: sharedArr });
+      } else {
+        form.resetFields();
+      }
     }
   }, [open, editing, form]);
 
@@ -182,6 +192,23 @@ function CompanyModal({ open, editing, onClose, onSuccess }) {
           <Col span={24}>
             <Form.Item label="备注" name="notes">
               <TextArea rows={2} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="共享人" name="shared_with" tooltip="被共享的用户可查看此公司；管理员/CXO 默认可见全部">
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                placeholder="选择可查看此公司的用户"
+                filterOption={(input, option) =>
+                  (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+                options={users.map(u => ({
+                  value: u.id,
+                  label: u.display_name || u.username,
+                }))}
+              />
             </Form.Item>
           </Col>
         </Row>
