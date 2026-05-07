@@ -1863,6 +1863,7 @@ export default function Companies() {
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         width={isMobile ? '100%' : 860}
+        bodyStyle={isMobile ? { padding: 12 } : undefined}
         extra={
           <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>
             编辑公司信息
@@ -1882,6 +1883,8 @@ export default function Companies() {
                   <Tabs
                     size="small"
                     defaultActiveKey="info"
+                    tabBarGutter={isMobile ? 8 : 16}
+                    moreIcon={<span style={{ fontSize: 14 }}>⋯</span>}
                     items={[
                       {
                         key: 'info',
@@ -1981,6 +1984,8 @@ export default function Companies() {
                   <Tabs
                     size="small"
                     defaultActiveKey="personnel"
+                    tabBarGutter={isMobile ? 8 : 16}
+                    moreIcon={<span style={{ fontSize: 14 }}>⋯</span>}
                     items={[
                       {
                         key: 'personnel',
@@ -2015,7 +2020,10 @@ export default function Companies() {
             <Tabs
               activeKey={activeEntity}
               onChange={setActiveEntity}
-              type="card"
+              type={isMobile ? 'line' : 'card'}
+              size={isMobile ? 'small' : undefined}
+              tabBarGutter={isMobile ? 8 : 16}
+              moreIcon={<span style={{ fontSize: 14 }}>⋯</span>}
               style={{ marginTop: -8 }}
               items={entityTabItems}
             />
