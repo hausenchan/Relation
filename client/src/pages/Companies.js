@@ -749,6 +749,7 @@ function CompetitorResearchTab({ companyId }) {
   const [filterHasOpportunity, setFilterHasOpportunity] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [detailRecord, setDetailRecord] = useState(null);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -810,7 +811,7 @@ function CompetitorResearchTab({ companyId }) {
       title: '操作',
       width: 120,
       render: (_, record) => (
-        <Space size="small">
+        <Space size="small" onDoubleClick={(e) => e.stopPropagation()}>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} />
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
             <Button size="small" danger icon={<DeleteOutlined />} />
@@ -918,6 +919,10 @@ function CompetitorResearchTab({ companyId }) {
           size="small"
           pagination={{ pageSize: 10, showSizeChanger: false }}
           scroll={{ x: 860 }}
+          onRow={(record) => ({
+            onDoubleClick: () => setDetailRecord(record),
+            style: { cursor: 'pointer' },
+          })}
         />
       )}
 
@@ -1031,6 +1036,69 @@ function CompetitorResearchTab({ companyId }) {
           </Collapse>
         </Form>
       </Modal>
+
+      <Modal
+        title="竞品研究记录详情"
+        open={!!detailRecord}
+        onCancel={() => setDetailRecord(null)}
+        width={isMobile ? '100%' : 720}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        footer={[
+          <Button key="close" onClick={() => setDetailRecord(null)}>关闭</Button>,
+        ]}
+      >
+        {detailRecord && (() => {
+          const r = detailRecord;
+          const imp = importanceMap[r.importance] || importanceMap.normal;
+          const hasOpp = r.opportunity_title && r.opportunity_title.trim() !== '';
+          const oppStatus = hasOpp
+            ? (opportunityStatusMap[r.opportunity_status] || { label: r.opportunity_status, color: 'default' })
+            : null;
+          const assignee = users.find(u => u.id === r.opportunity_assignee);
+          const creator = users.find(u => u.id === r.created_by);
+          return (
+            <Descriptions size="small" column={isMobile ? 1 : 2} bordered labelStyle={{ width: 110 }}>
+              <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="重要程度"><Tag color={imp.color}>{imp.label}</Tag></Descriptions.Item>
+              <Descriptions.Item label="标题" span={2}>{r.title || '-'}</Descriptions.Item>
+              <Descriptions.Item label="金额">{r.amount ? `¥${r.amount}` : '-'}</Descriptions.Item>
+              <Descriptions.Item label="信息来源">{r.source || '-'}</Descriptions.Item>
+              <Descriptions.Item label="详细内容" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.content || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="结果" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="影响分析" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.impact || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="下次行动" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="下次日期">{r.next_action_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="跟进结果">{r.follow_result || '-'}</Descriptions.Item>
+              <Descriptions.Item label="商机" span={2}>
+                {hasOpp ? (
+                  <Space size={4} wrap>
+                    <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
+                    {oppStatus && <Tag color={oppStatus.color}>{oppStatus.label}</Tag>}
+                  </Space>
+                ) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="商机跟进人">
+                {assignee ? (assignee.display_name || assignee.username) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="商机说明">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="创建人">
+                {creator ? (creator.display_name || creator.username) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+            </Descriptions>
+          );
+        })()}
+      </Modal>
     </div>
   );
 }
@@ -1043,6 +1111,7 @@ function DynamicsTab({ companyId }) {
   const [filterType, setFilterType] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [detailRecord, setDetailRecord] = useState(null);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -1079,7 +1148,10 @@ function DynamicsTab({ companyId }) {
       color: d.importance === 'high' ? 'red' : d.type === 'talent' ? 'purple' : d.type === 'product' ? 'blue' : 'gray',
       dot: tm.icon,
       children: (
-        <div style={{ marginBottom: 8 }}>
+        <div
+          style={{ marginBottom: 8, cursor: 'pointer' }}
+          onDoubleClick={() => setDetailRecord(d)}
+        >
           <Space style={{ marginBottom: 4 }} wrap>
             <Text type="secondary" style={{ fontSize: 12 }}>{d.date}</Text>
             <Tag color={tm.color}>{tm.label}</Tag>
@@ -1093,7 +1165,7 @@ function DynamicsTab({ companyId }) {
               <Text type="warning">影响分析：</Text>{d.impact}
             </div>
           )}
-          <Space style={{ marginTop: 6 }} size={4}>
+          <Space style={{ marginTop: 6 }} size={4} onDoubleClick={(e) => e.stopPropagation()}>
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} />
             <Popconfirm title="确认删除？" onConfirm={() => handleDelete(d.id)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
@@ -1179,6 +1251,39 @@ function DynamicsTab({ companyId }) {
             </Col>
           </Row>
         </Form>
+      </Modal>
+
+      <Modal
+        title="动向记录详情"
+        open={!!detailRecord}
+        onCancel={() => setDetailRecord(null)}
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        footer={[
+          <Button key="close" onClick={() => setDetailRecord(null)}>关闭</Button>,
+        ]}
+      >
+        {detailRecord && (() => {
+          const r = detailRecord;
+          const tm = dynamicTypeMap[r.type] || dynamicTypeMap.other;
+          const im = importanceMap[r.importance] || importanceMap.normal;
+          return (
+            <Descriptions size="small" column={isMobile ? 1 : 2} bordered labelStyle={{ width: 110 }}>
+              <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="类型"><Tag color={tm.color}>{tm.label}</Tag></Descriptions.Item>
+              <Descriptions.Item label="重要程度"><Tag color={im.color}>{im.label}</Tag></Descriptions.Item>
+              <Descriptions.Item label="信息来源">{r.source || '-'}</Descriptions.Item>
+              <Descriptions.Item label="标题" span={2}>{r.title || '-'}</Descriptions.Item>
+              <Descriptions.Item label="详细内容" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.content || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="影响分析" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.impact || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="创建时间" span={2}>{r.created_at || '-'}</Descriptions.Item>
+            </Descriptions>
+          );
+        })()}
       </Modal>
     </div>
   );
