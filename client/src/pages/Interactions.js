@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography } from 'antd';
+import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography, Descriptions } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
@@ -64,6 +64,7 @@ export default function Interactions() {
   ];
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [detailRecord, setDetailRecord] = useState(null);
   const [persons, setPersons] = useState([]);
   const [form] = Form.useForm();
   const interactionType = Form.useWatch('type', form);
@@ -176,7 +177,7 @@ export default function Interactions() {
     {
       title: '操作',
       render: (_, r) => (
-        <Space>
+        <Space onDoubleClick={(e) => e.stopPropagation()}>
           <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
@@ -352,6 +353,10 @@ export default function Interactions() {
           size="small"
           scroll={{ x: 900 }}
           pagination={{ pageSize: 20 }}
+          onRow={(record) => ({
+            onDoubleClick: () => setDetailRecord(record),
+            style: { cursor: 'pointer' },
+          })}
         />
       )}
 
@@ -477,6 +482,79 @@ export default function Interactions() {
             </Collapse.Panel>
           </Collapse>
         </Form>
+      </Modal>
+
+      <Modal
+        title="互动记录详情"
+        open={!!detailRecord}
+        onCancel={() => setDetailRecord(null)}
+        width={isMobile ? '100%' : 720}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        footer={[
+          <Button key="close" onClick={() => setDetailRecord(null)}>关闭</Button>,
+        ]}
+      >
+        {detailRecord && (() => {
+          const r = detailRecord;
+          const cat = categoryMap[r.person_category];
+          const t = typeMap[r.type] || { label: r.type, color: 'default' };
+          const imp = importanceMap[r.importance] || importanceMap.normal;
+          const oppStatus = r.opportunity_title
+            ? (opportunityStatusMap[r.opportunity_status] || { label: r.opportunity_status, color: 'default' })
+            : null;
+          const assignee = users.find(u => u.id === r.opportunity_assignee);
+          const creator = users.find(u => u.id === r.created_by);
+          return (
+            <Descriptions
+              size="small"
+              column={isMobile ? 1 : 2}
+              bordered
+              labelStyle={{ width: 110 }}
+            >
+              <Descriptions.Item label="圈子">
+                {cat ? <Tag color={cat.color}>{cat.label}</Tag> : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="姓名">{r.person_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="类型">
+                <Tag color={t.color}>{t.label}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="重要程度">
+                <Tag color={imp.color}>{imp.label}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="城市">{r.city || '-'}</Descriptions.Item>
+              <Descriptions.Item label="人脉权重">{r.weight || '-'}</Descriptions.Item>
+              <Descriptions.Item label="跟进日期">{r.next_action_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="描述" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.description || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="结果" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="下次跟进" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="商机" span={2}>
+                {r.opportunity_title ? (
+                  <Space size={4} wrap>
+                    <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
+                    {oppStatus && <Tag color={oppStatus.color}>{oppStatus.label}</Tag>}
+                  </Space>
+                ) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="商机跟进人">
+                {assignee ? (assignee.display_name || assignee.username) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="商机说明" span={isMobile ? 1 : 1}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="创建人">
+                {creator ? (creator.display_name || creator.username) : '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+            </Descriptions>
+          );
+        })()}
       </Modal>
     </div>
   );
