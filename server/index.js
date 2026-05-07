@@ -5442,11 +5442,11 @@ app.use('/api/boss-watcher', auth, requireBoss, bossWatcherRoutes);
 const bossScheduler = require('./boss-watcher/scheduler');
 bossScheduler.start();
 
-// 发票邮箱模块（每个登录用户都可用，自管自的邮箱配置）
-const invoiceMailboxRoutes = require('./invoice-mailbox/routes');
-app.use('/api/invoice-mailbox', auth, invoiceMailboxRoutes);
-const invoiceMailboxScheduler = require('./invoice-mailbox/scheduler');
-invoiceMailboxScheduler.start();
+// 发票邮箱模块：暂未完成，相关目录尚未入库，先注释避免线上启动崩溃
+// const invoiceMailboxRoutes = require('./invoice-mailbox/routes');
+// app.use('/api/invoice-mailbox', auth, invoiceMailboxRoutes);
+// const invoiceMailboxScheduler = require('./invoice-mailbox/scheduler');
+// invoiceMailboxScheduler.start();
 
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
