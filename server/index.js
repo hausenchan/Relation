@@ -6,6 +6,8 @@ const Database = require('better-sqlite3');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
+const { encryptRow, decryptRow, decryptRows } = require('./lib/cryptoDao');
+const { decrypt } = require('./lib/crypto');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -425,6 +427,7 @@ if (crCols.length > 0) {
   if (!crCols.includes('opportunity_note')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_note TEXT DEFAULT NULL");
   if (!crCols.includes('follow_result')) db.exec("ALTER TABLE competitor_research ADD COLUMN follow_result TEXT DEFAULT NULL");
   if (!crCols.includes('created_by')) db.exec("ALTER TABLE competitor_research ADD COLUMN created_by INTEGER DEFAULT NULL");
+  if (!crCols.includes('shared_with')) db.exec("ALTER TABLE competitor_research ADD COLUMN shared_with TEXT DEFAULT NULL");
 }
 
 const leadCols = db.prepare("PRAGMA table_info(leads)").all().map(c => c.name);
@@ -524,14 +527,24 @@ if (futCols.length > 0) {
 
 // 补创建竞品研究商机对应的 follow_up_tasks（修复历史数据）
 try {
-  db.exec(`
-    INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, assigned_to, assigned_by, status)
-    SELECT c.name || ' - ' || cr.opportunity_title, 0, 0, cr.id, cr.company_id, cr.opportunity_title, cr.opportunity_assignee, 1, 'pending'
+  // 改 JS 实现：companies.name 加密后无法在 SQL 里拼接 title
+  const missing = db.prepare(`
+    SELECT cr.id as cr_id, cr.company_id, cr.opportunity_title, cr.opportunity_assignee, c.name as company_name
     FROM competitor_research cr
     LEFT JOIN companies c ON cr.company_id = c.id
     LEFT JOIN follow_up_tasks ft ON ft.competitor_research_id = cr.id
     WHERE cr.opportunity_title IS NOT NULL AND cr.opportunity_assignee IS NOT NULL AND ft.id IS NULL
+  `).all();
+  const insertFt = db.prepare(`
+    INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, assigned_to, assigned_by, status)
+    VALUES (?, 0, 0, ?, ?, ?, ?, 1, 'pending')
   `);
+  for (const m of missing) {
+    const companyName = decrypt(m.company_name) || '未知公司';
+    const title = `${companyName} - ${m.opportunity_title}`;
+    const enc = encryptRow('follow_up_tasks', { title, opportunity_title: m.opportunity_title });
+    insertFt.run(enc.title, m.cr_id, m.company_id, enc.opportunity_title, m.opportunity_assignee);
+  }
 } catch(e) { /* 表不存在时忽略 */ }
 
 const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.name);
@@ -1111,13 +1124,14 @@ app.put('/api/gift_records/:id', (req, res) => {
     // 状态变为「已接收」且之前不是「已接收」时，自动生成互动记录
     if (status === 'received' && record.status !== 'received') {
       const gift = db.prepare('SELECT name FROM gifts WHERE id = ?').get(record.gift_id);
-      const giftName = gift ? gift.name : '礼品';
+      const giftName = decrypt(gift?.name) || '礼品';
       const interactionDate = send_date || new Date().toISOString().slice(0, 10);
       const description = `送出礼品：${giftName} × ${record.quantity}${feedback ? `\n收礼反馈：${feedback}` : ''}`;
+      const enc = encryptRow('interactions', { description });
       db.prepare(`
         INSERT INTO interactions (person_id, type, date, description, importance, created_at)
         VALUES (?, 'gift', ?, ?, 'normal', CURRENT_TIMESTAMP)
-      `).run(record.person_id, interactionDate, description);
+      `).run(record.person_id, interactionDate, enc.description);
     }
   });
 
@@ -1697,9 +1711,8 @@ app.get('/api/persons', (req, res) => {
   }
 
   if (search) {
-    query += ' AND (p.name LIKE ? OR p.company LIKE ? OR p.current_company LIKE ? OR p.phone LIKE ? OR p.tags LIKE ? OR p.skills LIKE ?)';
-    const s = `%${search}%`;
-    params.push(s, s, s, s, s, s);
+    // name / company / current_company / phone / tags / skills 加密存储，
+    // 无法用 SQL LIKE 匹配，改为先 SELECT 解密后在内存过滤
   }
   if (person_category) { query += ' AND p.person_category = ?'; params.push(person_category); }
   if (relation_type) { query += ' AND (p.relation_types = ? OR p.relation_types LIKE ? OR p.relation_types LIKE ? OR p.relation_types LIKE ?)'; params.push(relation_type, `${relation_type},%`, `%,${relation_type}`, `%,${relation_type},%`); }
@@ -1720,7 +1733,16 @@ app.get('/api/persons', (req, res) => {
   if (created_by) { query += ' AND p.created_by = ?'; params.push(created_by); }
 
   query += ' ORDER BY p.updated_at DESC';
-  res.json(db.prepare(query).all(...params));
+  const rows = decryptRows('persons', db.prepare(query).all(...params));
+  if (search) {
+    const s = String(search).toLowerCase();
+    const hit = v => v && String(v).toLowerCase().includes(s);
+    return res.json(rows.filter(r =>
+      hit(r.name) || hit(r.company) || hit(r.current_company) ||
+      hit(r.phone) || hit(r.tags) || hit(r.skills)
+    ));
+  }
+  res.json(rows);
 });
 
 // 人脉地图数据（精简字段 + 上次联系时间）
@@ -1751,14 +1773,14 @@ app.get('/api/persons/map', (req, res) => {
   if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
 
   query += ' ORDER BY p.city, p.name';
-  res.json(db.prepare(query).all(...params));
+  res.json(decryptRows('persons', db.prepare(query).all(...params)));
 });
 
 app.get('/api/persons/:id', (req, res, next) => {
   if (!/^\d+$/.test(req.params.id)) return next();
   const p = db.prepare('SELECT p.*, u1.display_name as created_by_name, u2.display_name as assigned_to_name FROM persons p LEFT JOIN users u1 ON p.created_by = u1.id LEFT JOIN users u2 ON p.assigned_to = u2.id WHERE p.id = ?').get(req.params.id);
   if (!p) return res.status(404).json({ error: '未找到' });
-  res.json(p);
+  res.json(decryptRow('persons', p));
 });
 
 app.post('/api/persons', canWrite, async (req, res) => {
@@ -1777,6 +1799,12 @@ app.post('/api/persons', canWrite, async (req, res) => {
     return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
   }
   const { lat, lng } = await geocodeAddress(city, address);
+  const enc = encryptRow('persons', {
+    name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
+    current_company, current_position, target_position,
+    skills, education, expected_salary, source,
+    heart, brain, mouth, hand, resources, demands,
+  });
   const result = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, city, company, position, industry,
       phone, email, wechat, birthday, address, tags, notes, resources, demands,
@@ -1786,12 +1814,12 @@ app.post('/api/persons', canWrite, async (req, res) => {
       potential_level, expected_salary, source, heart, brain, mouth, hand, weight, lat, lng, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    normalizedName, person_category || 'social', relation_types || '', city,
-    company, position, industry, phone, email, wechat, birthday, address, tags, notes,
-    resources, demands, relationship_level || 'normal', client_status || 'active',
-    talent_type || 'external', current_company, current_position, target_position,
-    skills, experience_years, education, recruit_status || 'potential', intent_level || 'low',
-    potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium', lat, lng, req.user.id
+    enc.name, person_category || 'social', relation_types || '', city,
+    enc.company, enc.position, industry, enc.phone, enc.email, enc.wechat, birthday, enc.address, enc.tags, enc.notes,
+    enc.resources, enc.demands, relationship_level || 'normal', client_status || 'active',
+    talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
+    enc.skills, experience_years, enc.education, recruit_status || 'potential', intent_level || 'low',
+    potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium', lat, lng, req.user.id
   );
 
   const personId = result.lastInsertRowid;
@@ -1825,6 +1853,12 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
   }
   const { lat, lng } = await geocodeAddress(city, address);
+  const enc = encryptRow('persons', {
+    name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
+    current_company, current_position, target_position,
+    skills, education, expected_salary, source,
+    heart, brain, mouth, hand, resources, demands,
+  });
   db.prepare(`
     UPDATE persons SET name=?, person_category=?, relation_types=?, city=?, company=?, position=?, industry=?,
       phone=?, email=?, wechat=?, birthday=?, address=?, tags=?, notes=?, resources=?, demands=?,
@@ -1835,12 +1869,12 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
       lat=?, lng=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
   `).run(
-    normalizedName, person_category, relation_types || '', city,
-    company, position, industry, phone, email, wechat, birthday, address, tags, notes,
-    resources, demands, relationship_level, client_status,
-    talent_type, current_company, current_position, target_position,
-    skills, experience_years, education, recruit_status, intent_level,
-    potential_level, expected_salary, source, heart, brain, mouth, hand, weight || 'medium',
+    enc.name, person_category, relation_types || '', city,
+    enc.company, enc.position, industry, enc.phone, enc.email, enc.wechat, birthday, enc.address, enc.tags, enc.notes,
+    enc.resources, enc.demands, relationship_level, client_status,
+    talent_type, enc.current_company, enc.current_position, enc.target_position,
+    enc.skills, experience_years, enc.education, recruit_status, intent_level,
+    potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium',
     lat, lng, req.params.id
   );
 
@@ -1898,16 +1932,24 @@ app.post('/api/persons/import', (req, res) => {
       const normalizedName = normalizePersonName(r.name);
       if (!normalizedName) { skip++; skipEmptyName++; continue; }
       if (normalizedName.length > PERSON_NAME_MAX_LENGTH) { skip++; skipNameTooLong++; continue; }
+      const enc = encryptRow('persons', {
+        name: normalizedName,
+        company: r.company, position: r.position,
+        phone: r.phone, email: r.email, wechat: r.wechat, address: r.address,
+        tags: r.tags, notes: r.notes, resources: r.resources, demands: r.demands,
+        current_company: r.current_company, current_position: r.current_position, target_position: r.target_position,
+        skills: r.skills, education: r.education, expected_salary: r.expected_salary, source: r.source,
+      });
       insert.run(
-        normalizedName, r.person_category || 'social', r.relation_types || '',
-        r.city, r.company, r.position, r.industry,
-        r.phone, r.email, r.wechat, r.birthday, r.address, r.tags, r.notes,
-        r.resources, r.demands,
+        enc.name, r.person_category || 'social', r.relation_types || '',
+        r.city, enc.company, enc.position, r.industry,
+        enc.phone, enc.email, enc.wechat, r.birthday, enc.address, enc.tags, enc.notes,
+        enc.resources, enc.demands,
         r.relationship_level || 'normal', r.client_status || 'active',
-        r.talent_type || 'external', r.current_company, r.current_position, r.target_position,
-        r.skills, r.experience_years || null, r.education,
+        r.talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
+        enc.skills, r.experience_years || null, enc.education,
         r.recruit_status || 'potential', r.intent_level || 'low',
-        r.potential_level, r.expected_salary, r.source, r.weight || 'medium'
+        r.potential_level, enc.expected_salary, enc.source, r.weight || 'medium'
       );
       ok++;
     }
@@ -1944,19 +1986,31 @@ app.get('/api/interactions', (req, res) => {
   if (date_start) { query += ' AND i.date >= ?'; params.push(date_start); }
   if (date_end) { query += ' AND i.date <= ?'; params.push(date_end); }
   query += ' ORDER BY i.date DESC';
-  res.json(db.prepare(query).all(...params));
+  const rows = db.prepare(query).all(...params);
+  // interactions.* 用 interactions 解密；p.name/company/current_company 来自 persons
+  const out = decryptRows('interactions', rows).map(r => ({
+    ...r,
+    person_name: decrypt(r.person_name),
+    company: decrypt(r.company),
+    current_company: decrypt(r.current_company),
+  }));
+  res.json(out);
 });
 
 app.post('/api/interactions', (req, res) => {
   const { person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
     opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
   const createdBy = req.user?.id || null;
+  const enc = encryptRow('interactions', {
+    description, outcome, follow_result, next_action,
+    opportunity_title, opportunity_note, gift_name,
+  });
   const result = db.prepare(`
     INSERT INTO interactions (person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
       opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(person_id, type, date, amount, description, outcome, follow_result || null, next_action, next_action_date, importance || 'normal', gift_name || null,
-    opportunity_title || null, opportunity_status || null, opportunity_assignee || null, opportunity_note || null, createdBy);
+  `).run(person_id, type, date, amount, enc.description, enc.outcome, enc.follow_result || null, enc.next_action, next_action_date, importance || 'normal', enc.gift_name || null,
+    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null, createdBy);
 
   const interactionId = result.lastInsertRowid;
 
@@ -1966,25 +2020,32 @@ app.post('/api/interactions', (req, res) => {
     remindDate.setDate(remindDate.getDate() - 3);
     const remindDateStr = remindDate.toISOString().split('T')[0];
     const title = `跟进: ${next_action}`;
-    const existing = db.prepare(`
-      SELECT id FROM reminders WHERE person_id=? AND actual_date=? AND title=? AND done=0
-    `).get(person_id, next_action_date, title);
+    const remEnc = encryptRow('reminders', { title, note: description });
+    // title 加密存储，无法 WHERE title=? 去重，改为内存过滤
+    const candidates = db.prepare(
+      'SELECT id, title FROM reminders WHERE person_id=? AND actual_date=? AND done=0'
+    ).all(person_id, next_action_date);
+    const existing = candidates.find(c => decrypt(c.title) === title);
     if (existing) {
-      db.prepare('UPDATE reminders SET remind_date=?, note=? WHERE id=?').run(remindDateStr, description, existing.id);
+      db.prepare('UPDATE reminders SET remind_date=?, note=? WHERE id=?').run(remindDateStr, remEnc.note, existing.id);
     } else {
       db.prepare(`INSERT INTO reminders (person_id, title, remind_date, actual_date, type, note) VALUES (?,?,?,?,'follow_up',?)`)
-        .run(person_id, title, remindDateStr, next_action_date, description);
+        .run(person_id, remEnc.title, remindDateStr, next_action_date, remEnc.note);
     }
   }
 
   // 自动创建待跟进任务
   if (opportunity_title && opportunity_assignee) {
     const person = db.prepare('SELECT name FROM persons WHERE id = ?').get(person_id);
-    const taskTitle = `${person?.name || '未知人脉'} - ${opportunity_title}`;
+    const personName = decrypt(person?.name) || '未知人脉';
+    const taskTitle = `${personName} - ${opportunity_title}`;
+    const ftEnc = encryptRow('follow_up_tasks', {
+      title: taskTitle, opportunity_title, opportunity_note,
+    });
     db.prepare(`
       INSERT INTO follow_up_tasks (title, interaction_id, person_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
       VALUES (?,?,?,?,?,?,?)
-    `).run(taskTitle, interactionId, person_id, opportunity_title, opportunity_note || null,
+    `).run(ftEnc.title, interactionId, person_id, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
       opportunity_assignee, createdBy || 0);
   }
 
@@ -1999,12 +2060,16 @@ app.put('/api/interactions/:id', (req, res) => {
   const { type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
     opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
   const original = db.prepare('SELECT person_id FROM interactions WHERE id=?').get(req.params.id);
+  const enc = encryptRow('interactions', {
+    description, outcome, follow_result, next_action,
+    opportunity_title, opportunity_note, gift_name,
+  });
   db.prepare(`
     UPDATE interactions SET type=?, date=?, amount=?, description=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, importance=?, gift_name=?,
       opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
     WHERE id=?
-  `).run(type, date, amount, description, outcome, follow_result || null, next_action, next_action_date, importance || 'normal', gift_name || null,
-    opportunity_title || null, opportunity_status || null, opportunity_assignee || null, opportunity_note || null,
+  `).run(type, date, amount, enc.description, enc.outcome, enc.follow_result || null, enc.next_action, next_action_date, importance || 'normal', enc.gift_name || null,
+    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null,
     req.params.id);
 
   if (next_action_date && next_action && original) {
@@ -2012,14 +2077,17 @@ app.put('/api/interactions/:id', (req, res) => {
     remindDate.setDate(remindDate.getDate() - 3);
     const remindDateStr = remindDate.toISOString().split('T')[0];
     const title = `跟进: ${next_action}`;
-    const existing = db.prepare(`
-      SELECT id FROM reminders WHERE person_id=? AND actual_date=? AND title=? AND done=0
-    `).get(original.person_id, next_action_date, title);
+    const remEnc = encryptRow('reminders', { title, note: description });
+    // title 加密存储，无法 WHERE title=? 去重，先查同日未完成，再内存匹配
+    const candidates = db.prepare(
+      'SELECT id, title FROM reminders WHERE person_id=? AND actual_date=? AND done=0'
+    ).all(original.person_id, next_action_date);
+    const existing = candidates.find(c => decrypt(c.title) === title);
     if (existing) {
-      db.prepare('UPDATE reminders SET remind_date=?, note=? WHERE id=?').run(remindDateStr, description, existing.id);
+      db.prepare('UPDATE reminders SET remind_date=?, note=? WHERE id=?').run(remindDateStr, remEnc.note, existing.id);
     } else {
       db.prepare(`INSERT INTO reminders (person_id, title, remind_date, actual_date, type, note) VALUES (?,?,?,?,'follow_up',?)`)
-        .run(original.person_id, title, remindDateStr, next_action_date, description);
+        .run(original.person_id, remEnc.title, remindDateStr, next_action_date, remEnc.note);
     }
   }
   res.json({ success: true });
@@ -2106,7 +2174,13 @@ app.get('/api/opportunities', auth, (req, res) => {
   if (assignee) { query2 += ' AND cr.opportunity_assignee = ?'; params2.push(assignee); }
 
   try {
-    const results1 = db.prepare(query1).all(...params1);
+    const results1Raw = db.prepare(query1).all(...params1);
+    const results1 = decryptRows('interactions', results1Raw).map(r => ({
+      ...r,
+      person_name: decrypt(r.person_name),
+      company: decrypt(r.company),
+      current_company: decrypt(r.current_company),
+    }));
     let results2 = [];
 
     // 尝试查询 competitor_research 表，如果表不存在则跳过
@@ -2187,6 +2261,16 @@ app.put('/api/opportunities/:id', (req, res) => {
     const original = db.prepare('SELECT * FROM interactions WHERE id = ?').get(req.params.id);
     if (!original) return res.status(404).json({ error: '未找到' });
 
+    // original.* 的加密字段保持密文，new value 是明文；encryptRow 幂等（密文穿透）
+    const merged = encryptRow('interactions', {
+      description: description ?? original.description,
+      outcome: outcome ?? original.outcome,
+      follow_result: follow_result ?? original.follow_result,
+      next_action: next_action ?? original.next_action,
+      opportunity_title: opportunity_title ?? original.opportunity_title,
+      opportunity_note: opportunity_note ?? original.opportunity_note,
+    });
+
     db.prepare(`
       UPDATE interactions SET
         type=?,
@@ -2206,15 +2290,15 @@ app.put('/api/opportunities/:id', (req, res) => {
       interaction_type ?? original.type,
       date ?? original.date,
       importance ?? original.importance,
-      description ?? original.description,
-      outcome ?? original.outcome,
-      follow_result ?? original.follow_result,
-      next_action ?? original.next_action,
+      merged.description,
+      merged.outcome,
+      merged.follow_result,
+      merged.next_action,
       next_action_date ?? original.next_action_date,
-      opportunity_title ?? original.opportunity_title,
+      merged.opportunity_title,
       opportunity_status ?? original.opportunity_status,
       opportunity_assignee ?? original.opportunity_assignee,
-      opportunity_note ?? original.opportunity_note,
+      merged.opportunity_note,
       req.params.id
     );
 
@@ -2266,7 +2350,16 @@ app.get('/api/follow-up-tasks', (req, res) => {
   }
   if (status) { query += ' AND f.status = ?'; params.push(status); }
   query += ' ORDER BY f.created_at DESC';
-  res.json(db.prepare(query).all(...params));
+  const rows = db.prepare(query).all(...params);
+  res.json(decryptRows('follow_up_tasks', rows).map(r => ({
+    ...r,
+    person_name: decrypt(r.person_name),
+    company: decrypt(r.company),
+    current_company: decrypt(r.current_company),
+    interaction_desc: decrypt(r.interaction_desc),
+    interaction_outcome: decrypt(r.interaction_outcome),
+    company_name: decrypt(r.company_name),
+  })));
 });
 
 app.get('/api/follow-up-tasks/count', (req, res) => {
@@ -2306,7 +2399,16 @@ app.get('/api/follow-up-tasks/watch', (req, res) => {
     params.push(status);
   }
   query += ' ORDER BY f.created_at DESC';
-  res.json(db.prepare(query).all(...params));
+  const watchRows = db.prepare(query).all(...params);
+  res.json(decryptRows('follow_up_tasks', watchRows).map(r => ({
+    ...r,
+    person_name: decrypt(r.person_name),
+    company: decrypt(r.company),
+    current_company: decrypt(r.current_company),
+    interaction_desc: decrypt(r.interaction_desc),
+    interaction_outcome: decrypt(r.interaction_outcome),
+    company_name: decrypt(r.company_name),
+  })));
 });
 
 app.get('/api/follow-up-tasks/watch/count', (req, res) => {
@@ -2335,9 +2437,10 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
     ? (task.started_at || now)
     : task.started_at;
   const doneAt = status === 'done' ? now : (status && status !== 'done' ? null : task.done_at);
+  const enc = encryptRow('follow_up_tasks', { done_note: done_note ?? task.done_note });
   db.prepare(`
     UPDATE follow_up_tasks SET status=?, done_note=?, due_date=?, started_at=?, done_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
-  `).run(status ?? task.status, done_note ?? task.done_note, due_date ?? task.due_date, startedAt, doneAt, req.params.id);
+  `).run(status ?? task.status, enc.done_note, due_date ?? task.due_date, startedAt, doneAt, req.params.id);
   res.json({ success: true });
 });
 
@@ -2389,7 +2492,11 @@ app.get('/api/tasks', (req, res) => {
   else if (parent_id) { q += ' AND t.parent_id = ?'; params.push(parent_id); }
 
   q += ' ORDER BY CASE t.priority WHEN \'high\' THEN 1 WHEN \'medium\' THEN 2 ELSE 3 END, t.created_at ASC';
-  res.json(db.prepare(q).all(...params));
+  // parent_title 来自 tasks.title（加密）
+  res.json(decryptRows('tasks', db.prepare(q).all(...params)).map(r => ({
+    ...r,
+    parent_title: decrypt(r.parent_title),
+  })));
 });
 
 // 今日未完成任务数（用于Badge）
@@ -2433,7 +2540,7 @@ app.get('/api/tasks/board', (req, res) => {
   `).all(...visibleIds);
 
   // 获取这些成员当天的任务
-  const tasks = db.prepare(`
+  const tasksRaw = db.prepare(`
     SELECT t.*, uc.display_name as created_by_name, p.title as parent_title
     FROM tasks t
     LEFT JOIN users uc ON t.created_by = uc.id
@@ -2441,6 +2548,10 @@ app.get('/api/tasks/board', (req, res) => {
     WHERE t.assigned_to IN (${visibleIds.map(() => '?').join(',')}) AND t.date = ?
     ORDER BY CASE t.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, t.created_at ASC
   `).all(...visibleIds, targetDate);
+  const tasks = decryptRows('tasks', tasksRaw).map(r => ({
+    ...r,
+    parent_title: decrypt(r.parent_title),
+  }));
 
   // 按成员组装
   const board = members.map(m => ({
@@ -2471,12 +2582,13 @@ app.post('/api/tasks', (req, res) => {
     resolvedTeamId = assignee?.team_id || null;
   }
 
+  const enc = encryptRow('tasks', { title, description, result });
   const r = db.prepare(`
     INSERT INTO tasks (title, description, date, status, priority, created_by, assigned_to, team_id, parent_id, depth, result)
     VALUES (?,?,?,'pending',?,?,?,?,?,?,?)
   `).run(
-    title,
-    description || null,
+    enc.title,
+    enc.description || null,
     date,
     priority || 'medium',
     me,
@@ -2484,7 +2596,7 @@ app.post('/api/tasks', (req, res) => {
     resolvedTeamId,
     parent_id || null,
     depth,
-    result || null
+    enc.result || null
   );
 
   res.json({ id: r.lastInsertRowid });
@@ -2507,17 +2619,22 @@ app.put('/api/tasks/:id', (req, res) => {
     ? (task.started_at || now)
     : task.started_at;
   const doneAt = status === 'done' ? now : (status && status !== 'done' ? null : task.done_at);
+  const merged = encryptRow('tasks', {
+    title: title ?? task.title,
+    description: description ?? task.description,
+    result: result !== undefined ? result : task.result,
+  });
   db.prepare(`
     UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, started_at=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(
-    title ?? task.title,
-    description ?? task.description,
+    merged.title,
+    merged.description,
     status ?? task.status,
     priority ?? task.priority,
     date ?? task.date,
     startedAt,
     doneAt,
-    result !== undefined ? result : task.result,
+    merged.result,
     req.params.id
   );
   res.json({ success: true });
@@ -2721,12 +2838,16 @@ app.get('/api/stats', (req, res) => {
   ).get(userId).cnt;
   const monthlyTotal = monthlyInteractions + monthlyResearch;
   const pendingReminders = db.prepare("SELECT COUNT(*) as cnt FROM reminders WHERE done=0 AND remind_date <= date('now', '+7 days')").get().cnt;
-  const recentInteractions = db.prepare(`
+  const recentInteractionsRaw = db.prepare(`
     SELECT i.*, p.name as person_name, p.person_category
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
     ORDER BY i.date DESC LIMIT 5
   `).all();
+  const recentInteractions = decryptRows('interactions', recentInteractionsRaw).map(r => ({
+    ...r,
+    person_name: decrypt(r.person_name),
+  }));
   res.json({
     personCount,
     categoryStats,
@@ -2827,38 +2948,44 @@ app.get('/api/companies', (req, res) => {
   const { search, category } = req.query;
   let q = 'SELECT * FROM companies WHERE 1=1';
   const p = [];
-  if (search) {
-    q += ' AND (name LIKE ? OR industry LIKE ? OR tags LIKE ? OR business LIKE ?)';
-    const s = `%${search}%`;
-    p.push(s, s, s, s);
-  }
+  // name / business / tags 已加密，无法 SQL LIKE；search 全部走内存过滤
   if (category) { q += ' AND category = ?'; p.push(category); }
   q += ' ORDER BY updated_at DESC';
-  res.json(db.prepare(q).all(...p));
+  const rows = decryptRows('companies', db.prepare(q).all(...p));
+  if (search) {
+    const s = String(search).toLowerCase();
+    const hit = v => v && String(v).toLowerCase().includes(s);
+    return res.json(rows.filter(r =>
+      hit(r.name) || hit(r.industry) || hit(r.tags) || hit(r.business)
+    ));
+  }
+  res.json(rows);
 });
 
 app.get('/api/companies/:id', (req, res) => {
   const c = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: '未找到' });
-  res.json(c);
+  res.json(decryptRow('companies', c));
 });
 
 app.post('/api/companies', canWrite, (req, res) => {
   const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes } = req.body;
+  const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
   const r = db.prepare(`
     INSERT INTO companies (name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, created_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(name, category || 'competitor', industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, req.user.id);
+  `).run(enc.name, category || 'competitor', industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, req.user.id);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/companies/:id', canWrite, (req, res) => {
   const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes } = req.body;
+  const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
   db.prepare(`
     UPDATE companies SET name=?, category=?, industry=?, scale=?, founded_year=?, hq_city=?, website=?,
       business=?, business_model=?, revenue_scale=?, tags=?, notes=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
-  `).run(name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, req.params.id);
+  `).run(enc.name, category, industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, req.params.id);
   res.json({ success: true });
 });
 
@@ -2879,7 +3006,9 @@ app.get('/api/companies/:id/summary', (req, res) => {
   const devProducts = db.prepare("SELECT COUNT(*) as cnt FROM company_products WHERE company_id = ? AND (status = 'developing' OR status = 'beta')").get(id).cnt;
 
   // 动向统计（最近30天）
-  const recentDynamics = db.prepare(`SELECT * FROM company_dynamics WHERE company_id = ? AND date >= ${since30} ORDER BY date DESC`).all(id);
+  const recentDynamics = decryptRows('company_dynamics',
+    db.prepare(`SELECT * FROM company_dynamics WHERE company_id = ? AND date >= ${since30} ORDER BY date DESC`).all(id)
+  );
   const talentDynamics = recentDynamics.filter(d => d.type === 'talent');
   const productDynamics = recentDynamics.filter(d => d.type === 'product');
   const highImportance = recentDynamics.filter(d => d.importance === 'high');
@@ -2983,11 +3112,18 @@ app.delete('/api/company_personnel/:id', (req, res) => {
 app.post('/api/company_personnel/:id/to_person', (req, res) => {
   const cp = db.prepare('SELECT cp.*, c.name as company_name FROM company_personnel cp LEFT JOIN companies c ON cp.company_id = c.id WHERE cp.id = ?').get(req.params.id);
   if (!cp) return res.status(404).json({ error: '未找到' });
+  // company_name 来自 companies.name（将来加密），cp.skills/notes/background 来自未加密的 company_personnel
+  const companyName = decrypt(cp.company_name);
+  const enc = encryptRow('persons', {
+    name: cp.name, company: companyName, position: cp.title,
+    skills: cp.skills, notes: cp.notes || cp.background,
+    current_company: companyName, current_position: cp.title,
+  });
   const r = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, company, position,
       skills, notes, talent_type, current_company, current_position, recruit_status, intent_level)
     VALUES (?, 'talent', 'talent_external', ?, ?, ?, ?, 'external', ?, ?, 'potential', 'low')
-  `).run(cp.name, cp.company_name, cp.title, cp.skills, cp.notes || cp.background, cp.company_name, cp.title);
+  `).run(enc.name, enc.company, enc.position, enc.skills, enc.notes, enc.current_company, enc.current_position);
   // 回写 person_id
   db.prepare('UPDATE company_personnel SET person_id = ? WHERE id = ?').run(r.lastInsertRowid, cp.id);
   res.json({ id: r.lastInsertRowid });
@@ -3036,15 +3172,16 @@ app.get('/api/company_dynamics', (req, res) => {
   if (company_id) { q += ' AND company_id = ?'; params.push(company_id); }
   if (type) { q += ' AND type = ?'; params.push(type); }
   q += ' ORDER BY date DESC, created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  res.json(decryptRows('company_dynamics', db.prepare(q).all(...params)));
 });
 
 app.post('/api/company_dynamics', (req, res) => {
   const { company_id, type, title, date, importance, content, source, impact, personnel_id, product_id } = req.body;
+  const enc = encryptRow('company_dynamics', { title, content, source, impact });
   const r = db.prepare(`
     INSERT INTO company_dynamics (company_id, type, title, date, importance, content, source, impact, personnel_id, product_id)
     VALUES (?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, type || 'talent', title, date, importance || 'normal', content, source, impact, personnel_id || null, product_id || null);
+  `).run(company_id, type || 'talent', enc.title, date, importance || 'normal', enc.content, enc.source, enc.impact, personnel_id || null, product_id || null);
   // 更新公司 updated_at
   db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
   res.json({ id: r.lastInsertRowid });
@@ -3052,10 +3189,11 @@ app.post('/api/company_dynamics', (req, res) => {
 
 app.put('/api/company_dynamics/:id', (req, res) => {
   const { type, title, date, importance, content, source, impact, personnel_id, product_id } = req.body;
+  const enc = encryptRow('company_dynamics', { title, content, source, impact });
   db.prepare(`
     UPDATE company_dynamics SET type=?, title=?, date=?, importance=?, content=?, source=?, impact=?, personnel_id=?, product_id=?
     WHERE id=?
-  `).run(type, title, date, importance, content, source, impact, personnel_id || null, product_id || null, req.params.id);
+  `).run(type, enc.title, date, importance, enc.content, enc.source, enc.impact, personnel_id || null, product_id || null, req.params.id);
   res.json({ success: true });
 });
 
@@ -3093,27 +3231,37 @@ app.get('/api/competitor_research', (req, res) => {
   let q = 'SELECT * FROM competitor_research WHERE 1=1';
   const params = [];
   if (company_id) { q += ' AND company_id = ?'; params.push(company_id); }
+  if (!isAdmin(req.user.role)) {
+    const uid = req.user.id;
+    q += " AND (created_by = ? OR (',' || IFNULL(shared_with,'') || ',') LIKE ?)";
+    params.push(uid, `%,${uid},%`);
+  }
   q += ' ORDER BY date DESC, created_at DESC';
   res.json(db.prepare(q).all(...params));
 });
 
 app.post('/api/competitor_research', (req, res) => {
-  const { company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
+  const { company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids, shared_with } = req.body;
   const createdBy = req.user?.id || null;
+  const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   const r = db.prepare(`
-    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, createdBy);
+    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by, shared_with)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, createdBy, sharedCsv);
   db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
 
   // 自动创建待跟进任务（商机指派）
   if (opportunity_title && opportunity_assignee) {
     const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(company_id);
-    const taskTitle = `${company?.name || '未知公司'} - ${opportunity_title}`;
+    const companyName = decrypt(company?.name) || '未知公司';
+    const taskTitle = `${companyName} - ${opportunity_title}`;
+    const ftEnc = encryptRow('follow_up_tasks', {
+      title: taskTitle, opportunity_title, opportunity_note,
+    });
     db.prepare(`
       INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
       VALUES (?,0,0,?,?,?,?,?,?)
-    `).run(taskTitle, r.lastInsertRowid, company_id, opportunity_title, opportunity_note || null,
+    `).run(ftEnc.title, r.lastInsertRowid, company_id, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
       opportunity_assignee, req.user.id);
   }
 
@@ -3125,26 +3273,32 @@ app.post('/api/competitor_research', (req, res) => {
 });
 
 app.put('/api/competitor_research/:id', (req, res) => {
-  const { date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
+  const { date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids, shared_with } = req.body;
+  const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   db.prepare(`
-    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
+    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?, shared_with=?
     WHERE id=?
-  `).run(date, title, importance, content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, req.params.id);
+  `).run(date, title, importance, content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, sharedCsv, req.params.id);
 
   // 同步更新待跟进任务
   if (opportunity_title && opportunity_assignee) {
     const existing = db.prepare('SELECT id FROM follow_up_tasks WHERE competitor_research_id = ? AND status != ?').get(req.params.id, 'done');
     if (existing) {
+      const ftUpd = encryptRow('follow_up_tasks', { opportunity_title, opportunity_note });
       db.prepare('UPDATE follow_up_tasks SET assigned_to=?, opportunity_title=?, opportunity_note=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-        .run(opportunity_assignee, opportunity_title, opportunity_note || null, existing.id);
+        .run(opportunity_assignee, ftUpd.opportunity_title, ftUpd.opportunity_note || null, existing.id);
     } else {
       const cr = db.prepare('SELECT company_id FROM competitor_research WHERE id = ?').get(req.params.id);
       const company = cr ? db.prepare('SELECT name FROM companies WHERE id = ?').get(cr.company_id) : null;
-      const taskTitle = `${company?.name || '未知公司'} - ${opportunity_title}`;
+      const companyName = decrypt(company?.name) || '未知公司';
+      const taskTitle = `${companyName} - ${opportunity_title}`;
+      const ftEnc = encryptRow('follow_up_tasks', {
+        title: taskTitle, opportunity_title, opportunity_note,
+      });
       db.prepare(`
         INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
         VALUES (?,0,0,?,?,?,?,?,?)
-      `).run(taskTitle, req.params.id, cr?.company_id || 0, opportunity_title, opportunity_note || null,
+      `).run(ftEnc.title, req.params.id, cr?.company_id || 0, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
         opportunity_assignee, req.user.id);
     }
   }
@@ -3280,7 +3434,7 @@ app.get('/api/trips', (req, res) => {
   if (user_id) { q += ' AND t.user_id = ?'; params.push(user_id); }
   if (group_id) { q += ' AND u.group_id = ?'; params.push(group_id); }
   q += ' ORDER BY t.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  res.json(decryptRows('business_trips', db.prepare(q).all(...params)));
 });
 
 app.get('/api/trips/:id', (req, res) => {
@@ -3294,18 +3448,19 @@ app.get('/api/trips/:id', (req, res) => {
   `).get(req.params.id);
   if (!t) return res.status(404).json({ error: '未找到' });
   if (!canAccessTrip(req, t.user_id)) return res.status(403).json({ error: '无权限' });
-  const expenses = db.prepare('SELECT * FROM trip_expenses WHERE trip_id = ? ORDER BY date ASC').all(req.params.id);
+  const expenses = decryptRows('trip_expenses', db.prepare('SELECT * FROM trip_expenses WHERE trip_id = ? ORDER BY date ASC').all(req.params.id));
   const report = db.prepare('SELECT * FROM expense_reports WHERE trip_id = ?').get(req.params.id);
-  res.json({ ...t, expenses, report });
+  res.json({ ...decryptRow('business_trips', t), expenses, report: report ? decryptRow('expense_reports', report) : null });
 });
 
 app.post('/api/trips', (req, res) => {
   const { destinations, start_date, end_date, purpose, related_persons, estimated_cost } = req.body;
   const user = db.prepare('SELECT group_id FROM users WHERE id=?').get(req.user.id);
+  const enc = encryptRow('business_trips', { destinations, purpose, related_persons });
   const r = db.prepare(`
     INSERT INTO business_trips (user_id, group_id, destinations, start_date, end_date, purpose, related_persons, estimated_cost, status)
     VALUES (?,?,?,?,?,?,?,?,'draft')
-  `).run(req.user.id, user?.group_id || null, destinations, start_date, end_date, purpose, related_persons || '', estimated_cost || null);
+  `).run(req.user.id, user?.group_id || null, enc.destinations, start_date, end_date, enc.purpose, enc.related_persons || '', estimated_cost || null);
   res.json({ id: r.lastInsertRowid });
 });
 
@@ -3315,10 +3470,11 @@ app.put('/api/trips/:id', (req, res) => {
   if (t.user_id !== req.user.id && !isAdmin(req.user.role)) return res.status(403).json({ error: '无权限' });
   if (!['draft', 'rejected'].includes(t.status)) return res.status(400).json({ error: '当前状态不可编辑' });
   const { destinations, start_date, end_date, purpose, related_persons, estimated_cost } = req.body;
+  const enc = encryptRow('business_trips', { destinations, purpose, related_persons });
   db.prepare(`
     UPDATE business_trips SET destinations=?, start_date=?, end_date=?, purpose=?, related_persons=?, estimated_cost=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
-  `).run(destinations, start_date, end_date, purpose, related_persons || '', estimated_cost || null, req.params.id);
+  `).run(enc.destinations, start_date, end_date, enc.purpose, enc.related_persons || '', estimated_cost || null, req.params.id);
   res.json({ success: true });
 });
 
@@ -3337,10 +3493,11 @@ app.post('/api/trips/:id/approve', (req, res) => {
   if (!isAdmin(role) && role !== 'leader' && role !== 'sales_director') return res.status(403).json({ error: '无审批权限' });
   const { action, note } = req.body; // action: approved | rejected
   if (!['approved', 'rejected'].includes(action)) return res.status(400).json({ error: '无效操作' });
+  const enc = encryptRow('business_trips', { approve_note: note || '' });
   db.prepare(`
     UPDATE business_trips SET status=?, approve_note=?, approved_by=?, approved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
-  `).run(action, note || '', req.user.id, req.params.id);
+  `).run(action, enc.approve_note, req.user.id, req.params.id);
   res.json({ success: true });
 });
 
@@ -3365,7 +3522,7 @@ app.delete('/api/trips/:id', (req, res) => {
 
 // =========== 费用明细 API ===========
 app.get('/api/trips/:id/expenses', (req, res) => {
-  res.json(db.prepare('SELECT * FROM trip_expenses WHERE trip_id=? ORDER BY date ASC').all(req.params.id));
+  res.json(decryptRows('trip_expenses', db.prepare('SELECT * FROM trip_expenses WHERE trip_id=? ORDER BY date ASC').all(req.params.id)));
 });
 
 app.post('/api/trips/:id/expenses', (req, res) => {
@@ -3373,8 +3530,9 @@ app.post('/api/trips/:id/expenses', (req, res) => {
   if (!t) return res.status(404).json({ error: '未找到' });
   if (!['approved', 'completed'].includes(t.status)) return res.status(400).json({ error: '出差审批通过后才能录入费用' });
   const { type, date, amount, description } = req.body;
+  const enc = encryptRow('trip_expenses', { description });
   const r = db.prepare('INSERT INTO trip_expenses (trip_id, type, date, amount, description) VALUES (?,?,?,?,?)')
-    .run(req.params.id, type, date, amount, description);
+    .run(req.params.id, type, date, amount, enc.description);
   // 更新报销单总额
   const total = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM trip_expenses WHERE trip_id=?').get(req.params.id).t;
   db.prepare('UPDATE expense_reports SET total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE trip_id=?').run(total, req.params.id);
@@ -3384,7 +3542,8 @@ app.post('/api/trips/:id/expenses', (req, res) => {
 app.put('/api/trip_expenses/:id', (req, res) => {
   const { type, date, amount, description } = req.body;
   const exp = db.prepare('SELECT trip_id FROM trip_expenses WHERE id=?').get(req.params.id);
-  db.prepare('UPDATE trip_expenses SET type=?, date=?, amount=?, description=? WHERE id=?').run(type, date, amount, description, req.params.id);
+  const enc = encryptRow('trip_expenses', { description });
+  db.prepare('UPDATE trip_expenses SET type=?, date=?, amount=?, description=? WHERE id=?').run(type, date, amount, enc.description, req.params.id);
   if (exp) {
     const total = db.prepare('SELECT COALESCE(SUM(amount),0) as t FROM trip_expenses WHERE trip_id=?').get(exp.trip_id).t;
     db.prepare('UPDATE expense_reports SET total_amount=?, updated_at=CURRENT_TIMESTAMP WHERE trip_id=?').run(total, exp.trip_id);
@@ -3501,7 +3660,7 @@ app.get('/api/trips/stats/summary', (req, res) => {
   `).all();
 
   // 重点客户预警：relationship_level in (vip,key)，超过60天未有出差互动
-  const alerts = db.prepare(`
+  const alertsRaw = db.prepare(`
     SELECT p.id, p.name, p.company, p.current_company, p.relationship_level,
            MAX(t.end_date) as last_trip_date,
            CAST(julianday('now') - julianday(MAX(t.end_date)) AS INTEGER) as days_since
@@ -3518,6 +3677,12 @@ app.get('/api/trips/stats/summary', (req, res) => {
     ORDER BY days_since DESC
     LIMIT 20
   `).all();
+  const alerts = alertsRaw.map(r => ({
+    ...r,
+    name: decrypt(r.name),
+    company: decrypt(r.company),
+    current_company: decrypt(r.current_company),
+  }));
 
   res.json({ monthly, byType, byUser, byGroup, alerts });
 });
@@ -3611,7 +3776,10 @@ app.get('/api/goals', (req, res) => {
       g.period DESC,
       g.created_at DESC
   `;
-  const goals = db.prepare(q).all(...params);
+  const goals = decryptRows('goals', db.prepare(q).all(...params)).map(g => ({
+    ...g,
+    parent_title: decrypt(g.parent_title),
+  }));
 
   // 为每个目标加载子目标数量
   goals.forEach(g => {
@@ -3650,7 +3818,7 @@ app.get('/api/goals/:id', (req, res) => {
     return res.status(403).json({ error: '无权限查看该目标' });
   }
 
-  const children = db.prepare(`
+  const childrenRaw = db.prepare(`
     SELECT
       g.*,
       u.display_name as owner_name,
@@ -3663,13 +3831,14 @@ app.get('/api/goals/:id', (req, res) => {
     LEFT JOIN teams tm ON g.team_id = tm.id
     WHERE g.parent_id = ?
     ORDER BY g.period DESC, g.created_at DESC
-  `).all(id).map(child => ({
-    ...child,
-  }));
+  `).all(id);
+  const children = decryptRows('goals', childrenRaw);
 
+  const decGoal = decryptRow('goals', goal);
+  decGoal.parent_title = decrypt(decGoal.parent_title);
   res.json({
-    ...goal,
-    department: goal.department || goal.owner_department || null,
+    ...decGoal,
+    department: decGoal.department || decGoal.owner_department || null,
     children,
   });
 });
@@ -3694,10 +3863,11 @@ app.post('/api/goals', (req, res) => {
   const normalizedStatus = status || 'pending';
   const normalizedScopeType = scope_type || 'personal';
 
+  const enc = encryptRow('goals', { title, description, result: goalResult });
   const insertResult = db.prepare(`
     INSERT INTO goals (title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result, goal_type, period, parent_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, description, owner_id, normalizedDepartment, team_id || null, project_group_id || null, normalizedScopeType, deadline, progress || 0, normalizedStatus, goalResult || null, goal_type, period, parent_id || null);
+  `).run(enc.title, enc.description, owner_id, normalizedDepartment, team_id || null, project_group_id || null, normalizedScopeType, deadline, progress || 0, normalizedStatus, enc.result || null, goal_type, period, parent_id || null);
 
   res.json({ id: insertResult.lastInsertRowid });
 });
@@ -3728,6 +3898,7 @@ app.put('/api/goals/:id', (req, res) => {
   const normalizedDepartment = department || owner?.department || null;
   const normalizedStatus = status;
 
+  const enc = encryptRow('goals', { title, description, result });
   db.prepare(`
     UPDATE goals SET
       title = COALESCE(?, title),
@@ -3746,7 +3917,7 @@ app.put('/api/goals/:id', (req, res) => {
       parent_id = COALESCE(?, parent_id),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, description, owner_id, normalizedDepartment, team_id, project_group_id, scope_type, deadline, progress, normalizedStatus, result, goal_type, period, parent_id, id);
+  `).run(enc.title, enc.description, owner_id, normalizedDepartment, team_id, project_group_id, scope_type, deadline, progress, normalizedStatus, enc.result, goal_type, period, parent_id, id);
 
   res.json({ success: true });
 });
@@ -3837,7 +4008,7 @@ app.get('/api/weekly-reports', (req, res) => {
   if (department) { q += ' AND u.department = ?'; params.push(department); }
 
   q += ' ORDER BY wr.week_start DESC, u.display_name ASC';
-  res.json(db.prepare(q).all(...params));
+  res.json(decryptRows('weekly_reports', db.prepare(q).all(...params)));
 });
 
 // 创建或更新周报
@@ -3857,6 +4028,7 @@ app.post('/api/weekly-reports', (req, res) => {
   // 检查是否已存在
   const existing = db.prepare('SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?').get(user_id, week_start);
 
+  const enc = encryptRow('weekly_reports', { completed, next_week_plan, risks });
   if (existing) {
     // 更新
     db.prepare(`
@@ -3867,14 +4039,14 @@ app.post('/api/weekly-reports', (req, res) => {
         risks = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(week_end, completed, next_week_plan, risks, existing.id);
+    `).run(week_end, enc.completed, enc.next_week_plan, enc.risks, existing.id);
     res.json({ id: existing.id, updated: true });
   } else {
     // 新建
     const result = db.prepare(`
       INSERT INTO weekly_reports (user_id, week_start, week_end, completed, next_week_plan, risks)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(user_id, week_start, week_end, completed, next_week_plan, risks);
+    `).run(user_id, week_start, week_end, enc.completed, enc.next_week_plan, enc.risks);
     res.json({ id: result.lastInsertRowid, created: true });
   }
 });
@@ -3978,13 +4150,13 @@ app.get('/api/leads', (req, res) => {
   if (source_type) { q += ' AND l.source_type = ?'; params.push(source_type); }
 
   q += ' ORDER BY l.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  res.json(decryptRows('leads', db.prepare(q).all(...params)));
 });
 
 // 获取可关联的线索列表（用于研发任务来源选择）
 app.get('/api/leads/simple', (req, res) => {
   const leads = db.prepare('SELECT id, title, status, follow_result FROM leads WHERE status != ? ORDER BY created_at DESC LIMIT 100').all('closed');
-  res.json(leads);
+  res.json(decryptRows('leads', leads));
 });
 
 // 获取单个线索详情（含关联的策略和研发任务）
@@ -4021,7 +4193,7 @@ app.get('/api/leads/:id', (req, res) => {
     ORDER BY dt.created_at DESC
   `).all(id);
 
-  res.json({ ...lead, strategies, devTasks });
+  res.json({ ...decryptRow('leads', lead), strategies, devTasks });
 });
 
 // 创建线索
@@ -4031,10 +4203,11 @@ app.post('/api/leads', (req, res) => {
 
   if (!title) return res.status(400).json({ error: '线索标题必填' });
 
+  const enc = encryptRow('leads', { title, source, contact_person, contact_company, contact_info, description, follow_result });
   const result = db.prepare(`
     INSERT INTO leads (title, source, source_type, contact_person, contact_company, contact_info, description, follow_result, assignee_id, priority, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, follow_result || null, assignee_id, priority, userId);
+  `).run(enc.title, enc.source, source_type, enc.contact_person, enc.contact_company, enc.contact_info, enc.description, enc.follow_result || null, assignee_id, priority, userId);
 
   // 如果指定了负责人，发送通知
   if (assignee_id && assignee_id !== userId) {
@@ -4055,6 +4228,7 @@ app.put('/api/leads/:id', (req, res) => {
   const { id } = req.params;
   const { title, source, source_type, contact_person, contact_company, contact_info, description, follow_result, status, assignee_id, priority } = req.body;
 
+  const enc = encryptRow('leads', { title, source, contact_person, contact_company, contact_info, description, follow_result });
   db.prepare(`
     UPDATE leads SET
       title = COALESCE(?, title),
@@ -4070,7 +4244,7 @@ app.put('/api/leads/:id', (req, res) => {
       priority = COALESCE(?, priority),
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, source, source_type, contact_person, contact_company, contact_info, description, follow_result, status, assignee_id, priority, id);
+  `).run(enc.title, enc.source, source_type, enc.contact_person, enc.contact_company, enc.contact_info, enc.description, enc.follow_result, status, assignee_id, priority, id);
 
   res.json({ success: true });
 });
@@ -4173,7 +4347,12 @@ app.get('/api/strategies', (req, res) => {
   if (access_method) { q += ' AND s.access_method = ?'; params.push(access_method); }
 
   q += ' ORDER BY s.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  // source_title 来自 leads.title（加密），单独解密
+  const rows = db.prepare(q).all(...params).map(r => ({
+    ...r,
+    source_title: decrypt(r.source_title),
+  }));
+  res.json(rows);
 });
 
 // 获取可关联的策略列表（用于研发任务来源选择）
@@ -4202,13 +4381,17 @@ app.get('/api/strategies/:id', (req, res) => {
   `).get(id);
 
   if (!strategy) return res.status(404).json({ error: '策略不存在' });
+  strategy.source_title = decrypt(strategy.source_title);
 
   const sourceInfo = strategy.source_type === 'lead' && strategy.source_id
-    ? db.prepare(`
-        SELECT id, title, status, assignee_id, priority, created_by, created_at, updated_at
-        FROM leads
-        WHERE id = ?
-      `).get(strategy.source_id)
+    ? (() => {
+        const l = db.prepare(`
+          SELECT id, title, status, assignee_id, priority, created_by, created_at, updated_at
+          FROM leads
+          WHERE id = ?
+        `).get(strategy.source_id);
+        return l ? decryptRow('leads', l) : null;
+      })()
     : null;
 
   // 获取关联的研发任务
@@ -4559,7 +4742,12 @@ app.get('/api/dev-tasks', (req, res) => {
   if (source_type) { q += ' AND dt.source_type = ?'; params.push(source_type); }
 
   q += ' ORDER BY dt.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  // related_lead_title / source_title 来自 leads.title（加密），单独解密
+  res.json(db.prepare(q).all(...params).map(r => ({
+    ...r,
+    related_lead_title: decrypt(r.related_lead_title),
+    source_title: decrypt(r.source_title),
+  })));
 });
 
 app.get('/api/dev-tasks/:id', (req, res) => {
@@ -4606,6 +4794,8 @@ app.get('/api/dev-tasks/:id', (req, res) => {
   `).get(id);
 
   if (!task) return res.status(404).json({ error: '需求不存在' });
+  task.related_lead_title = decrypt(task.related_lead_title);
+  task.source_title = decrypt(task.source_title);
 
   const sourceStrategy = task.source_type === 'strategy' && task.source_id
     ? db.prepare(`
@@ -4812,7 +5002,7 @@ app.get('/api/executive/talents', requireExecutive, (req, res) => {
   query += ' ORDER BY updated_at DESC';
 
   const talents = db.prepare(query).all(...params);
-  res.json(talents);
+  res.json(decryptRows('persons', talents));
 });
 
 // 获取竞争公司动态
@@ -4840,7 +5030,12 @@ app.get('/api/executive/competitor-dynamics', requireExecutive, (req, res) => {
   params.push(parseInt(limit));
 
   const dynamics = db.prepare(query).all(...params);
-  res.json(dynamics);
+  // cd.* 走 company_dynamics 字段表；company_name 来自 companies.name 需单独解密
+  const decrypted = decryptRows('company_dynamics', dynamics).map(r => ({
+    ...r,
+    company_name: decrypt(r.company_name),
+  }));
+  res.json(decrypted);
 });
 
 // 获取重点客户列表
@@ -4865,7 +5060,11 @@ app.get('/api/executive/key-customers', requireExecutive, (req, res) => {
     ORDER BY days_since_last_contact DESC
   `).all();
 
-  res.json(customers);
+  // last_interaction_result 来自 interactions.outcome（加密），需单独解密
+  res.json(decryptRows('persons', customers).map(r => ({
+    ...r,
+    last_interaction_result: decrypt(r.last_interaction_result),
+  })));
 });
 
 // 获取经营概览数据
@@ -4904,7 +5103,7 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
   `).get().count;
 
   // 高级人才最近动态（最近更新的5条）
-  const recentTalents = db.prepare(`
+  const recentTalents = decryptRows('persons', db.prepare(`
     SELECT id, name, current_company as company, current_position as position,
            potential_level as potential_rating, recruit_status, intent_level, updated_at
     FROM persons
@@ -4913,10 +5112,10 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
       AND weight IN ('high', 'vip')
     ORDER BY updated_at DESC
     LIMIT 5
-  `).all();
+  `).all());
 
   // 竞争公司最新动态（最近5条）
-  const recentDynamics = db.prepare(`
+  const recentDynamicsRaw = db.prepare(`
     SELECT
       cd.id, cd.title, cd.date, cd.type, cd.content, cd.impact,
       c.name as company_name
@@ -4927,9 +5126,13 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
     ORDER BY cd.date DESC
     LIMIT 5
   `).all();
+  const recentDynamics = decryptRows('company_dynamics', recentDynamicsRaw).map(r => ({
+    ...r,
+    company_name: decrypt(r.company_name),
+  }));
 
   // 重点客户预警（超过30天未联系）
-  const customersNeedFollowup = db.prepare(`
+  const customersNeedFollowup = decryptRows('persons', db.prepare(`
     SELECT
       p.id, p.name, p.company, p.position,
       i.date as last_contact_date,
@@ -4948,7 +5151,7 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
       AND (i.date IS NULL OR julianday('now') - julianday(i.date) > 30)
     ORDER BY days_since_last_contact DESC
     LIMIT 5
-  `).all();
+  `).all());
 
   const alerts = [];
   const staleCustomers = customersNeedFollowup.filter(c => c.days_since_last_contact == null || c.days_since_last_contact > 30);
@@ -4993,7 +5196,7 @@ app.get('/api/executive/reports', requireExecutive, (req, res) => {
   query += ' ORDER BY meeting_date DESC';
 
   const reports = db.prepare(query).all(...params);
-  res.json(reports);
+  res.json(decryptRows('executive_reports', reports));
 });
 
 // 获取单个经营周报
@@ -5005,7 +5208,7 @@ app.get('/api/executive/reports/:id', requireExecutive, (req, res) => {
     return res.status(404).json({ error: '报告不存在' });
   }
 
-  res.json(report);
+  res.json(decryptRow('executive_reports', report));
 });
 
 // 创建经营周报
@@ -5026,6 +5229,12 @@ app.post('/api/executive/reports', requireExecutive, (req, res) => {
   const executives = db.prepare("SELECT id FROM users WHERE executive_role IS NOT NULL").all();
   const attendees = JSON.stringify(executives.map(e => e.id));
 
+  const enc = encryptRow('executive_reports', {
+    weekly_results, key_judgment, decision_needed, next_week_actions,
+    key_issues, decisions,
+    strategic_direction, key_focus, monthly_summary,
+  });
+
   const result = db.prepare(`
     INSERT INTO executive_reports (
       report_type, meeting_date, year, month, week,
@@ -5036,9 +5245,9 @@ app.post('/api/executive/reports', requireExecutive, (req, res) => {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
   `).run(
     report_type, meeting_date, year, month, week,
-    weekly_results, key_judgment, decision_needed, next_week_actions,
-    key_issues, decisions,
-    strategic_direction, key_focus, monthly_summary,
+    enc.weekly_results, enc.key_judgment, enc.decision_needed, enc.next_week_actions,
+    enc.key_issues, enc.decisions,
+    enc.strategic_direction, enc.key_focus, enc.monthly_summary,
     attendees, userId
   );
 
@@ -5056,6 +5265,12 @@ app.put('/api/executive/reports/:id', requireExecutive, (req, res) => {
     strategic_direction, key_focus, monthly_summary
   } = req.body;
 
+  const enc = encryptRow('executive_reports', {
+    weekly_results, key_judgment, decision_needed, next_week_actions,
+    key_issues, decisions,
+    strategic_direction, key_focus, monthly_summary,
+  });
+
   db.prepare(`
     UPDATE executive_reports SET
       meeting_date = ?, year = ?, month = ?, week = ?,
@@ -5067,9 +5282,9 @@ app.put('/api/executive/reports/:id', requireExecutive, (req, res) => {
     WHERE id = ?
   `).run(
     meeting_date, year, month, week,
-    weekly_results, key_judgment, decision_needed, next_week_actions,
-    key_issues, decisions,
-    strategic_direction, key_focus, monthly_summary,
+    enc.weekly_results, enc.key_judgment, enc.decision_needed, enc.next_week_actions,
+    enc.key_issues, enc.decisions,
+    enc.strategic_direction, enc.key_focus, enc.monthly_summary,
     userId, id
   );
 
@@ -5211,6 +5426,12 @@ const bossWatcherRoutes = require('./boss-watcher/routes');
 app.use('/api/boss-watcher', auth, requireBoss, bossWatcherRoutes);
 const bossScheduler = require('./boss-watcher/scheduler');
 bossScheduler.start();
+
+// 发票邮箱模块（每个登录用户都可用，自管自的邮箱配置）
+const invoiceMailboxRoutes = require('./invoice-mailbox/routes');
+app.use('/api/invoice-mailbox', auth, invoiceMailboxRoutes);
+const invoiceMailboxScheduler = require('./invoice-mailbox/scheduler');
+invoiceMailboxScheduler.start();
 
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {

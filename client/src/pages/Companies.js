@@ -768,8 +768,13 @@ function CompetitorResearchTab({ companyId }) {
     usersApi.listSimple().then(setUsers).catch(() => {});
   }, [load]);
 
-  const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ date: dayjs().format('YYYY-MM-DD'), importance: 'normal' }); setModalOpen(true); };
-  const openEdit = (r) => { setEditing(r); form.setFieldsValue(r); setModalOpen(true); };
+  const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ date: dayjs().format('YYYY-MM-DD'), importance: 'normal', shared_with: [] }); setModalOpen(true); };
+  const openEdit = (r) => {
+    setEditing(r);
+    const sharedArr = r.shared_with ? String(r.shared_with).split(',').filter(Boolean).map(Number) : [];
+    form.setFieldsValue({ ...r, shared_with: sharedArr });
+    setModalOpen(true);
+  };
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -825,6 +830,8 @@ function CompetitorResearchTab({ companyId }) {
   const renderResearchCard = (record) => {
     const importance = importanceMap[record.importance] || importanceMap.normal;
     const hasOpportunity = record.opportunity_title && record.opportunity_title.trim() !== '';
+    const sharedIds = record.shared_with ? String(record.shared_with).split(',').filter(Boolean).map(Number) : [];
+    const sharedUsers = sharedIds.map(id => users.find(u => u.id === id)).filter(Boolean);
     return (
       <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
         <div style={{ width: '100%', padding: 14, border: '1px solid #f0f0f0', borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
@@ -862,6 +869,14 @@ function CompetitorResearchTab({ companyId }) {
               <Space wrap size={[6, 6]}>
                 <Tag color="blue" icon={<RiseOutlined />}>{record.opportunity_title}</Tag>
                 {record.opportunity_status && <Tag color={opportunityStatusMap[record.opportunity_status]?.color}>{opportunityStatusMap[record.opportunity_status]?.label || record.opportunity_status}</Tag>}
+              </Space>
+            )}
+            {sharedUsers.length > 0 && (
+              <Space wrap size={[4, 4]}>
+                <Text type="secondary" style={{ fontSize: 12 }}>共享：</Text>
+                {sharedUsers.map(u => (
+                  <Tag key={u.id}>{u.display_name || u.username}</Tag>
+                ))}
               </Space>
             )}
             <Space size="small" wrap>
@@ -991,6 +1006,23 @@ function CompetitorResearchTab({ companyId }) {
                 <Input placeholder="YYYY-MM-DD" />
               </Form.Item>
             </Col>
+            <Col span={24}>
+              <Form.Item label="共享人" name="shared_with" tooltip="被共享的用户可查看此记录">
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  placeholder="选择可查看此记录的用户"
+                  filterOption={(input, option) =>
+                    (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                  }
+                  options={users.map(u => ({
+                    value: u.id,
+                    label: u.display_name || u.username,
+                  }))}
+                />
+              </Form.Item>
+            </Col>
           </Row>
 
           <Divider style={{ margin: '8px 0' }} />
@@ -1057,6 +1089,8 @@ function CompetitorResearchTab({ companyId }) {
             : null;
           const assignee = users.find(u => u.id === r.opportunity_assignee);
           const creator = users.find(u => u.id === r.created_by);
+          const sharedIds = r.shared_with ? String(r.shared_with).split(',').filter(Boolean).map(Number) : [];
+          const sharedUsers = sharedIds.map(id => users.find(u => u.id === id)).filter(Boolean);
           return (
             <Descriptions size="small" column={isMobile ? 1 : 2} bordered labelStyle={{ width: 110 }}>
               <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
@@ -1096,6 +1130,13 @@ function CompetitorResearchTab({ companyId }) {
                 {creator ? (creator.display_name || creator.username) : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+              <Descriptions.Item label="共享人" span={2}>
+                {sharedUsers.length
+                  ? sharedUsers.map(u => (
+                      <Tag key={u.id}>{u.display_name || u.username}</Tag>
+                    ))
+                  : '-'}
+              </Descriptions.Item>
             </Descriptions>
           );
         })()}
