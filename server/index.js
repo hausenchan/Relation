@@ -110,8 +110,18 @@ app.use('/api', (req, res, next) => {
   return auth(req, res, next);
 });
 
+const CLIENT_BUILD_DIR = path.join(__dirname, '../client/build');
+
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, '../client/build')));
+  app.use(express.static(CLIENT_BUILD_DIR, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('index.html')) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
+    },
+  }));
 }
 app.use('/uploads', express.static(UPLOADS_DIR));
 
@@ -5206,7 +5216,10 @@ if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
     // 只有非 API 路由才返回 index.html
     if (!req.path.startsWith('/api') && !req.path.startsWith('/uploads')) {
-      res.sendFile(path.join(__dirname, '../client/build/index.html'));
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      res.sendFile(path.join(CLIENT_BUILD_DIR, 'index.html'));
     } else {
       next();
     }
