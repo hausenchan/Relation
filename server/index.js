@@ -1655,7 +1655,7 @@ app.put('/api/admin/menu-perms/:userId', auth, adminOnly, (req, res) => {
 
 // =========== 人脉 API ===========
 app.get('/api/persons', (req, res) => {
-  const { search, person_category, relation_type, potential_level, recruit_status, intent_level, city, weight } = req.query;
+  const { search, person_category, relation_type, potential_level, recruit_status, intent_level, city, weight, created_by } = req.query;
   const { id: me, role } = req.user;
   let query = `
     SELECT p.*,
@@ -1707,6 +1707,7 @@ app.get('/api/persons', (req, res) => {
     }
   }
   if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
+  if (created_by) { query += ' AND p.created_by = ?'; params.push(created_by); }
 
   query += ' ORDER BY p.updated_at DESC';
   res.json(db.prepare(query).all(...params));

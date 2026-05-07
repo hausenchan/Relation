@@ -439,6 +439,7 @@ export default function Persons() {
   const [filterIntentLevel, setFilterIntentLevel] = useState('');
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
+  const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -453,6 +454,7 @@ export default function Persons() {
   const [importRows, setImportRows] = useState([]);
   const [importLoading, setImportLoading] = useState(false);
   const [commercialUsers, setCommercialUsers] = useState([]);
+  const [creatorUsers, setCreatorUsers] = useState([]);
   const [form] = Form.useForm();
   const category = Form.useWatch('person_category', form);
   const relationTypes = Form.useWatch('relation_types', form) || [];
@@ -469,12 +471,21 @@ export default function Persons() {
     if (filterIntentLevel) params.intent_level = filterIntentLevel;
     if (filterCity) params.city = filterCity;
     if (filterWeight) params.weight = filterWeight;
+    if (filterCreatedBy) params.created_by = filterCreatedBy;
     const res = await personsApi.list(params);
     setData(res);
     setLoading(false);
-  }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight]);
+  }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight, filterCreatedBy]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    usersApi.listSimple({ include_readonly: true })
+      .then(setCreatorUsers)
+      .catch(() => {
+        setCreatorUsers(currentUser ? [currentUser] : []);
+      });
+  }, [currentUser]);
 
   const openDetail = async (record) => {
     setCurrent(record);
@@ -973,6 +984,7 @@ export default function Persons() {
     filterIntentLevel,
     filterCity,
     filterWeight,
+    filterCreatedBy,
   ].filter(Boolean).length;
   const resetFilters = () => {
     setSearch('');
@@ -983,6 +995,7 @@ export default function Persons() {
     setFilterIntentLevel('');
     setFilterCity('');
     setFilterWeight('');
+    setFilterCreatedBy(undefined);
   };
   const filterControls = (
     <>
@@ -1047,6 +1060,21 @@ export default function Persons() {
         >
           {Object.entries(weightMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
         </Select>
+        <Select
+          placeholder="创建人"
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          style={{ width: isMobile ? '100%' : 140 }}
+          value={filterCreatedBy}
+          onChange={setFilterCreatedBy}
+          options={creatorUsers.map(u => ({
+            value: u.id,
+            label: u.id === currentUser?.id
+              ? `${u.display_name || u.username || '我'}（我）`
+              : (u.display_name || u.username),
+          }))}
+        />
       </Space>
 
       {filterCategory === 'talent' && (
