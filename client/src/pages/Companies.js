@@ -1753,13 +1753,15 @@ export default function Companies() {
 
   const renderCompanyCard = (record) => (
     <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
-      <Card size="small" style={{ width: '100%' }}>
+      <Card
+        size="small"
+        style={{ width: '100%', cursor: 'pointer' }}
+        onClick={() => openDetail(record)}
+      >
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <Button type="link" onClick={() => openDetail(record)} style={{ padding: 0, height: 'auto', fontWeight: 600, textAlign: 'left' }}>
-                {record.name}
-              </Button>
+              <div style={{ fontWeight: 600, fontSize: 15, color: '#1677ff' }}>{record.name}</div>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
                 <Text type="secondary">行业：{record.industry || '-'}</Text>
                 <Text type="secondary">总部：{record.hq_city || '-'}</Text>
@@ -1781,7 +1783,7 @@ export default function Companies() {
               {record.tags.split(',').filter(Boolean).map(tag => <Tag key={`${record.id}-${tag}`}>{tag.trim()}</Tag>)}
             </Space>
           )}
-          <Space size="small" wrap>
+          <Space size="small" wrap onClick={(e) => e.stopPropagation()}>
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
             <Popconfirm title="确认删除？该公司所有人员、产品、动向将同步删除。" onConfirm={() => handleDelete(record.id)}>
               <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
