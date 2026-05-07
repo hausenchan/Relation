@@ -997,13 +997,23 @@ export default function Persons() {
     setFilterWeight('');
     setFilterCreatedBy(undefined);
   };
+  const filterGridStyle = {
+    display: 'grid',
+    gridTemplateColumns: isMobile
+      ? '1fr'
+      : 'minmax(260px, 1.5fr) minmax(120px, 0.7fr) minmax(140px, 0.8fr) minmax(180px, 1fr) minmax(140px, 0.8fr) minmax(100px, 0.6fr)',
+    gap: 12,
+    marginBottom: 12,
+    width: '100%',
+    alignItems: 'center',
+  };
   const filterControls = (
     <>
-      <Space style={{ marginBottom: 12, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
+      <div style={filterGridStyle}>
         <Input.Search
           placeholder="搜索姓名、公司、技能、标签"
           allowClear
-          style={{ width: isMobile ? '100%' : 280 }}
+          style={{ width: '100%' }}
           value={search}
           onSearch={setSearch}
           onChange={e => setSearch(e.target.value)}
@@ -1011,7 +1021,7 @@ export default function Persons() {
         <Select
           placeholder="圈子分类"
           allowClear
-          style={{ width: isMobile ? '100%' : 120 }}
+          style={{ width: '100%' }}
           value={filterCategory || undefined}
           onChange={v => {
             setFilterCategory(v || '');
@@ -1028,7 +1038,7 @@ export default function Persons() {
         <Select
           placeholder="关系类型"
           allowClear
-          style={{ width: isMobile ? '100%' : 140 }}
+          style={{ width: '100%' }}
           value={filterRelationType || undefined}
           onChange={v => setFilterRelationType(v || '')}
         >
@@ -1040,7 +1050,7 @@ export default function Persons() {
           mode="multiple"
           placeholder="城市"
           allowClear
-          style={{ width: isMobile ? '100%' : 200 }}
+          style={{ width: '100%' }}
           value={filterCity ? filterCity.split(',') : []}
           onChange={v => setFilterCity(v.join(','))}
           filterOption={(input, option) =>
@@ -1052,20 +1062,11 @@ export default function Persons() {
           {CHINA_CITIES.map(c => <Option key={c} value={c}>{c}</Option>)}
         </Select>
         <Select
-          placeholder="权重"
-          allowClear
-          style={{ width: isMobile ? '100%' : 100 }}
-          value={filterWeight || undefined}
-          onChange={v => setFilterWeight(v || '')}
-        >
-          {Object.entries(weightMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
-        </Select>
-        <Select
           placeholder="创建人"
           allowClear
           showSearch
           optionFilterProp="label"
-          style={{ width: isMobile ? '100%' : 140 }}
+          style={{ width: '100%' }}
           value={filterCreatedBy}
           onChange={setFilterCreatedBy}
           options={creatorUsers.map(u => ({
@@ -1075,7 +1076,16 @@ export default function Persons() {
               : (u.display_name || u.username),
           }))}
         />
-      </Space>
+        <Select
+          placeholder="权重"
+          allowClear
+          style={{ width: '100%' }}
+          value={filterWeight || undefined}
+          onChange={v => setFilterWeight(v || '')}
+        >
+          {Object.entries(weightMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
+        </Select>
+      </div>
 
       {filterCategory === 'talent' && (
         <Space style={{ marginBottom: 12, paddingLeft: 8, borderLeft: '3px solid #52c41a', width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
