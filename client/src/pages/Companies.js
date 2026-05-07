@@ -841,6 +841,31 @@ function CompetitorResearchTab({ companyId }) {
     { title: '下次行动', dataIndex: 'next_action', ellipsis: true },
     { title: '下次日期', dataIndex: 'next_action_date', width: 110 },
     {
+      title: '共享人',
+      dataIndex: 'shared_with',
+      width: 160,
+      render: (v) => {
+        const ids = v ? String(v).split(',').filter(Boolean).map(Number) : [];
+        if (ids.length === 0) return '-';
+        const named = ids.map(id => {
+          const u = users.find(x => x.id === id);
+          return u ? (u.display_name || u.username) : `#${id}`;
+        });
+        const visible = named.slice(0, 2);
+        const extra = named.slice(2);
+        return (
+          <Space size={4} wrap>
+            {visible.map((name, i) => <Tag key={i} style={{ margin: 0 }}>{name}</Tag>)}
+            {extra.length > 0 && (
+              <Tooltip title={extra.join('、')}>
+                <Tag style={{ margin: 0 }}>+{extra.length}</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    },
+    {
       title: '操作',
       width: 120,
       render: (_, record) => (
@@ -1595,6 +1620,7 @@ export default function Companies() {
   const [activeEntity, setActiveEntity] = useState('overview'); // 'overview' | entity.id
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [users, setUsers] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1606,6 +1632,10 @@ export default function Companies() {
   }, [search, filterCategory]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    usersApi.listSimple().then(setUsers).catch(() => {});
+  }, []);
 
   const loadEntities = useCallback(async (companyId) => {
     const res = await companyEntitiesApi.list({ company_id: companyId });
@@ -1663,6 +1693,31 @@ export default function Companies() {
       render: v => v ? v.split(',').map(t => <Tag key={t} style={{ marginBottom: 2 }}>{t.trim()}</Tag>) : '-',
     },
     { title: '更新时间', dataIndex: 'updated_at', render: v => v?.slice(0, 10) },
+    {
+      title: '共享人',
+      dataIndex: 'shared_with',
+      width: 160,
+      render: (v) => {
+        const ids = v ? String(v).split(',').filter(Boolean).map(Number) : [];
+        if (ids.length === 0) return '-';
+        const named = ids.map(id => {
+          const u = users.find(x => x.id === id);
+          return u ? (u.display_name || u.username) : `#${id}`;
+        });
+        const visible = named.slice(0, 2);
+        const extra = named.slice(2);
+        return (
+          <Space size={4} wrap>
+            {visible.map((name, i) => <Tag key={i} style={{ margin: 0 }}>{name}</Tag>)}
+            {extra.length > 0 && (
+              <Tooltip title={extra.join('、')}>
+                <Tag style={{ margin: 0 }}>+{extra.length}</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    },
     {
       title: '操作',
       render: (_, r) => (
