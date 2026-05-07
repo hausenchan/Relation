@@ -896,7 +896,10 @@ function CompetitorResearchTab({ companyId }) {
     const sharedUsers = sharedIds.map(id => users.find(u => u.id === id)).filter(Boolean);
     return (
       <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
-        <div style={{ width: '100%', padding: 14, border: '1px solid #f0f0f0', borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+        <div
+          style={{ width: '100%', padding: 14, border: '1px solid #f0f0f0', borderRadius: 12, background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', cursor: 'pointer' }}
+          onClick={() => setDetailRecord(record)}
+        >
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
@@ -941,7 +944,7 @@ function CompetitorResearchTab({ companyId }) {
                 ))}
               </Space>
             )}
-            <Space size="small" wrap>
+            <Space size="small" wrap onClick={(e) => e.stopPropagation()}>
               <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
               <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
                 <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
@@ -1254,7 +1257,8 @@ function DynamicsTab({ companyId }) {
       children: (
         <div
           style={{ marginBottom: 8, cursor: 'pointer' }}
-          onDoubleClick={() => setDetailRecord(d)}
+          onClick={isMobile ? () => setDetailRecord(d) : undefined}
+          onDoubleClick={isMobile ? undefined : () => setDetailRecord(d)}
         >
           <Space style={{ marginBottom: 4 }} wrap>
             <Text type="secondary" style={{ fontSize: 12 }}>{d.date}</Text>
@@ -1269,7 +1273,7 @@ function DynamicsTab({ companyId }) {
               <Text type="warning">影响分析：</Text>{d.impact}
             </div>
           )}
-          <Space style={{ marginTop: 6 }} size={4} onDoubleClick={(e) => e.stopPropagation()}>
+          <Space style={{ marginTop: 6 }} size={4} onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} />
             <Popconfirm title="确认删除？" onConfirm={() => handleDelete(d.id)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
