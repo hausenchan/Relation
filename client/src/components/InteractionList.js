@@ -35,7 +35,6 @@ export default function InteractionList({ data, onDelete }) {
               <Space size={4}>
                 <Text type="secondary">{item.date}</Text>
                 <Tag color={typeMap[item.type]?.color}>{typeMap[item.type]?.label || item.type}</Tag>
-                {item.amount > 0 && <Tag color="red">¥{item.amount}</Tag>}
               </Space>
             }
             description={

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Form, Input, Select, DatePicker, InputNumber, Button, Space, message, Card, Collapse, Tag, Row, Col } from 'antd';
+import { Form, Input, Select, DatePicker, Button, Space, message, Card, Collapse, Tag, Row, Col } from 'antd';
 import { PlusOutlined, RiseOutlined } from '@ant-design/icons';
 import { interactionsApi } from '../api';
 import dayjs from 'dayjs';
@@ -85,9 +85,6 @@ export default function InteractionForm({ personId, onSuccess }) {
             <Select style={{ width: 100 }}>
               {typeOptions.map(o => <Option key={o.value} value={o.value}>{o.label}</Option>)}
             </Select>
-          </Form.Item>
-          <Form.Item label="金额(元)" name="amount" style={{ marginBottom: 8 }}>
-            <InputNumber min={0} style={{ width: 110 }} />
           </Form.Item>
         </Space>
         <Form.Item label="描述" name="description" style={{ marginBottom: 8 }}>
