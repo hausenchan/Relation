@@ -5230,10 +5230,11 @@ app.get('/api/executive/reports/:id', requireExecutive, (req, res) => {
 app.post('/api/executive/reports', requireExecutive, (req, res) => {
   const { id: userId } = req.user;
   const {
-    report_type, meeting_date, year, month, week,
-    weekly_results, key_judgment, decision_needed, next_week_actions,
-    key_issues, decisions,
-    strategic_direction, key_focus, monthly_summary
+    report_type, meeting_date, year, month,
+    week = null,
+    weekly_results = null, key_judgment = null, decision_needed = null, next_week_actions = null,
+    key_issues = null, decisions = null,
+    strategic_direction = null, key_focus = null, monthly_summary = null
   } = req.body;
 
   if (!report_type || !meeting_date || !year || !month) {
@@ -5274,10 +5275,11 @@ app.put('/api/executive/reports/:id', requireExecutive, (req, res) => {
   const { id } = req.params;
   const { id: userId } = req.user;
   const {
-    meeting_date, year, month, week,
-    weekly_results, key_judgment, decision_needed, next_week_actions,
-    key_issues, decisions,
-    strategic_direction, key_focus, monthly_summary
+    meeting_date, year, month,
+    week = null,
+    weekly_results = null, key_judgment = null, decision_needed = null, next_week_actions = null,
+    key_issues = null, decisions = null,
+    strategic_direction = null, key_focus = null, monthly_summary = null
   } = req.body;
 
   const enc = encryptRow('executive_reports', {
