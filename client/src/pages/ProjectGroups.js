@@ -29,7 +29,7 @@ export default function ProjectGroups() {
   const load = async () => {
     setLoading(true);
     try {
-      const [groupList, userList] = await Promise.all([projectGroupsApi.list(), usersApi.listSimple()]);
+      const [groupList, userList] = await Promise.all([projectGroupsApi.list(), usersApi.listSimple({ include_readonly: 1 })]);
       setRows(groupList);
       setUsers(userList);
     } finally {
