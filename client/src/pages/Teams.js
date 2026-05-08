@@ -223,7 +223,7 @@ export default function Teams() {
               placeholder="请选择组长（可不设置）"
               optionFilterProp="label"
               options={users
-                .filter(u => ['leader', 'sales_director', 'member'].includes(u.role))
+                .filter(u => ['leader', 'sales_director', 'member', 'cmo'].includes(u.role))
                 .map(u => ({ value: u.id, label: u.display_name || u.username }))}
             />
           </Form.Item>
