@@ -3,6 +3,7 @@ import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer,
 import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
+import { RichTextEditor, RichTextView } from '../components/RichText';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -895,8 +896,8 @@ export default function Strategies() {
               <Option value="yyz_h5">YYZ-H5</Option>
             </Select>
           </Form.Item>
-          <Form.Item name="description" label="策略描述">
-            <TextArea rows={4} placeholder="请输入策略描述" />
+          <Form.Item name="description" label="策略描述" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="请输入策略描述..." minHeight={140} />
           </Form.Item>
           {editingStrategy && (
             <Form.Item name="status" label="状态">
@@ -946,7 +947,7 @@ export default function Strategies() {
                         </Tag>
                       </Descriptions.Item>
                       <Descriptions.Item label="策略描述">
-                        <div style={{ whiteSpace: 'pre-wrap' }}>{selectedStrategy.description || '-'}</div>
+                        <RichTextView value={selectedStrategy.description} />
                       </Descriptions.Item>
                       <Descriptions.Item label="创建时间">
                         {selectedStrategy.created_at?.replace('T', ' ').substring(0, 19)}

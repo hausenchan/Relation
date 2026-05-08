@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography, Descriptions } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined } from '@ant-design/icons';
+import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography, Descriptions, Upload } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined, UploadOutlined, EyeOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
+import AttachmentList from '../components/AttachmentList';
+import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
+import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 
 
@@ -66,6 +69,7 @@ export default function Interactions() {
   const [editing, setEditing] = useState(null);
   const [detailRecord, setDetailRecord] = useState(null);
   const [persons, setPersons] = useState([]);
+  const [fileList, setFileList] = useState([]);
   const [form] = Form.useForm();
   const interactionType = Form.useWatch('type', form);
 
@@ -98,6 +102,7 @@ export default function Interactions() {
     setEditing(null);
     form.resetFields();
     form.setFieldsValue({ date: dayjs() });
+    setFileList([]);
     setModalOpen(true);
   };
 
@@ -109,6 +114,7 @@ export default function Interactions() {
       next_action_date: record.next_action_date ? dayjs(record.next_action_date) : null,
       opportunity_assignee: record.opportunity_assignee || undefined,
     });
+    setFileList([]);
     setModalOpen(true);
   };
 
@@ -119,14 +125,25 @@ export default function Interactions() {
       date: values.date?.format('YYYY-MM-DD'),
       next_action_date: values.next_action_date?.format('YYYY-MM-DD'),
     };
+    let recordId;
     if (editing) {
       await interactionsApi.update(editing.id, payload);
+      recordId = editing.id;
       message.success('更新成功');
     } else {
-      await interactionsApi.create(payload);
+      const res = await interactionsApi.create(payload);
+      recordId = res.id;
       message.success('添加成功');
     }
+    if (fileList.length > 0) {
+      try {
+        await uploadAttachments('interaction', recordId, fileList);
+      } catch {
+        message.warning('附件上传失败，但记录已保存');
+      }
+    }
     setModalOpen(false);
+    setFileList([]);
     load();
   };
 
@@ -149,7 +166,7 @@ export default function Interactions() {
       dataIndex: 'type',
       render: v => <Tag color={typeMap[v]?.color}>{typeMap[v]?.label || v}</Tag>,
     },
-    { title: '描述', dataIndex: 'description', ellipsis: true },
+    { title: '描述', dataIndex: 'description', ellipsis: true, render: v => richTextToPlain(v) || '-' },
     {
       title: '重要程度',
       dataIndex: 'importance',
@@ -226,7 +243,7 @@ export default function Interactions() {
 
             {record.description && (
               <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                描述：{record.description}
+                描述：{richTextToPlain(record.description)}
               </Typography.Paragraph>
             )}
             {record.outcome && (
@@ -418,8 +435,8 @@ export default function Interactions() {
               </Form.Item>
             </Col>
             <Col span={24}>
-              <Form.Item label="描述" name="description">
-                <Input.TextArea rows={2} />
+              <Form.Item label="描述" name="description" valuePropName="value" trigger="onChange">
+                <RichTextEditor placeholder="互动描述..." minHeight={120} />
               </Form.Item>
             </Col>
             <Col span={24}>
@@ -481,6 +498,18 @@ export default function Interactions() {
               </Row>
             </Collapse.Panel>
           </Collapse>
+
+          <Form.Item label="附件">
+            <Upload
+              fileList={fileList}
+              onChange={({ fileList: newFileList }) => setFileList(newFileList)}
+              beforeUpload={validateAttachment}
+              maxCount={10}
+              accept={ATTACHMENT_ACCEPT}
+            >
+              <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大50MB）</Button>
+            </Upload>
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -505,54 +534,60 @@ export default function Interactions() {
           const assignee = users.find(u => u.id === r.opportunity_assignee);
           const creator = users.find(u => u.id === r.created_by);
           return (
-            <Descriptions
-              size="small"
-              column={isMobile ? 1 : 2}
-              bordered
-              labelStyle={{ width: 110 }}
-            >
-              <Descriptions.Item label="圈子">
-                {cat ? <Tag color={cat.color}>{cat.label}</Tag> : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="姓名">{r.person_name || '-'}</Descriptions.Item>
-              <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
-              <Descriptions.Item label="类型">
-                <Tag color={t.color}>{t.label}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="重要程度">
-                <Tag color={imp.color}>{imp.label}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="城市">{r.city || '-'}</Descriptions.Item>
-              <Descriptions.Item label="人脉权重">{r.weight || '-'}</Descriptions.Item>
-              <Descriptions.Item label="跟进日期">{r.next_action_date || '-'}</Descriptions.Item>
-              <Descriptions.Item label="描述" span={2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.description || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="结果" span={2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="下次跟进" span={2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="商机" span={2}>
-                {r.opportunity_title ? (
-                  <Space size={4} wrap>
-                    <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
-                    {oppStatus && <Tag color={oppStatus.color}>{oppStatus.label}</Tag>}
-                  </Space>
-                ) : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="商机跟进人">
-                {assignee ? (assignee.display_name || assignee.username) : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="商机说明" span={isMobile ? 1 : 1}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="创建人">
-                {creator ? (creator.display_name || creator.username) : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
-            </Descriptions>
+            <>
+              <Descriptions
+                size="small"
+                column={isMobile ? 1 : 2}
+                bordered
+                labelStyle={{ width: 110 }}
+              >
+                <Descriptions.Item label="圈子">
+                  {cat ? <Tag color={cat.color}>{cat.label}</Tag> : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="姓名">{r.person_name || '-'}</Descriptions.Item>
+                <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="类型">
+                  <Tag color={t.color}>{t.label}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="重要程度">
+                  <Tag color={imp.color}>{imp.label}</Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="城市">{r.city || '-'}</Descriptions.Item>
+                <Descriptions.Item label="人脉权重">{r.weight || '-'}</Descriptions.Item>
+                <Descriptions.Item label="跟进日期">{r.next_action_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="描述" span={2}>
+                  <RichTextView value={r.description} />
+                </Descriptions.Item>
+                <Descriptions.Item label="结果" span={2}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
+                </Descriptions.Item>
+                <Descriptions.Item label="下次跟进" span={2}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
+                </Descriptions.Item>
+                <Descriptions.Item label="商机" span={2}>
+                  {r.opportunity_title ? (
+                    <Space size={4} wrap>
+                      <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
+                      {oppStatus && <Tag color={oppStatus.color}>{oppStatus.label}</Tag>}
+                    </Space>
+                  ) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商机跟进人">
+                  {assignee ? (assignee.display_name || assignee.username) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商机说明" span={isMobile ? 1 : 1}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
+                </Descriptions.Item>
+                <Descriptions.Item label="创建人">
+                  {creator ? (creator.display_name || creator.username) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+              </Descriptions>
+
+              <div style={{ marginTop: 20 }}>
+                <AttachmentList sourceType="interaction" sourceId={r.id} />
+              </div>
+            </>
           );
         })()}
       </Modal>

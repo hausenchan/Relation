@@ -24,6 +24,7 @@ import dayjs from 'dayjs';
 import { goalsApi, usersApi, projectGroupsApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
+import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 
 const { TextArea } = Input;
 const { RangePicker } = DatePicker;
@@ -114,14 +115,6 @@ const detailTextStyle = {
   lineHeight: 1.75,
   color: '#1f1f1f',
 };
-
-function DetailTextBlock({ value, emptyText = '-' }) {
-  return (
-    <div style={{ ...detailTextStyle, color: value ? '#1f1f1f' : '#999' }}>
-      {value || emptyText}
-    </div>
-  );
-}
 
 function Goals() {
   const screens = useBreakpoint();
@@ -475,7 +468,7 @@ function Goals() {
       title: '目标描述',
       dataIndex: 'description',
       ellipsis: true,
-      render: (value) => value || '-',
+      render: (value) => richTextToPlain(value) || '-',
     },
     {
       title: '项目组',
@@ -521,7 +514,7 @@ function Goals() {
       title: '结果',
       dataIndex: 'result',
       ellipsis: true,
-      render: (value) => value || '-',
+      render: (value) => richTextToPlain(value) || '-',
     },
     {
       title: '操作',
@@ -589,7 +582,7 @@ function Goals() {
           type={record.description ? undefined : 'secondary'}
           ellipsis={{ rows: 2, expandable: false }}
         >
-          {record.description || '暂无目标描述'}
+          {richTextToPlain(record.description) || '暂无目标描述'}
         </Typography.Paragraph>
 
         <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
@@ -833,8 +826,8 @@ function Goals() {
             <Input />
           </Form.Item>
 
-          <Form.Item name="description" label="目标描述">
-            <TextArea rows={4} />
+          <Form.Item name="description" label="目标描述" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="请输入目标描述..." minHeight={140} />
           </Form.Item>
 
           <Form.Item name="owner_id" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
@@ -910,8 +903,8 @@ function Goals() {
             <Select options={statusOptions} />
           </Form.Item>
 
-          <Form.Item name="result" label="目标结果">
-            <TextArea rows={4} placeholder="填写目标完成得怎么样" />
+          <Form.Item name="result" label="目标结果" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="填写目标完成得怎么样..." minHeight={140} />
           </Form.Item>
         </Form>
       </Modal>
@@ -991,11 +984,11 @@ function Goals() {
             </Descriptions>
 
             <Card title="目标描述" size="small">
-              <DetailTextBlock value={detailRecord.description} />
+              <RichTextView value={detailRecord.description} />
             </Card>
 
             <Card title="目标结果" size="small">
-              <DetailTextBlock value={detailRecord.result} />
+              <RichTextView value={detailRecord.result} />
             </Card>
 
             <Card title={`下级目标（${detailRecord.children?.length || 0}）`} size="small">

@@ -3,6 +3,7 @@ import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer,
 import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined, ToolOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
+import { RichTextEditor, RichTextView } from '../components/RichText';
 
 const { Title, Text } = Typography;
 import dayjs from 'dayjs';
@@ -579,8 +580,8 @@ export default function DevTasks() {
           <Form.Item name="title" label="需求标题" rules={[{ required: true, message: '请输入需求标题' }]}>
             <Input placeholder="请输入需求标题" />
           </Form.Item>
-          <Form.Item name="description" label="任务描述">
-            <TextArea rows={4} placeholder="请输入任务描述" />
+          <Form.Item name="description" label="任务描述" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="请输入任务描述..." minHeight={140} />
           </Form.Item>
           <Form.Item name="source_type" label="来源类型">
             <Select placeholder="请选择来源类型" allowClear>
@@ -732,7 +733,7 @@ export default function DevTasks() {
               <Descriptions.Item label="截止日期">{selectedTask.due_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="完成日期">{selectedTask.completed_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="任务描述">
-                <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.description || '-'}</div>
+                <RichTextView value={selectedTask.description} />
               </Descriptions.Item>
               <Descriptions.Item label="完成备注">
                 <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.completion_note || '-'}</div>

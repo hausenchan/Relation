@@ -5,6 +5,7 @@ import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useAuth } from '../AuthContext';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
+import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 
 dayjs.extend(isoWeek);
 
@@ -226,6 +227,7 @@ export default function WeeklyReports() {
       key: 'completed',
       width: 200,
       ellipsis: true,
+      render: (val) => richTextToPlain(val) || '-',
     },
     {
       title: '下周计划',
@@ -233,6 +235,7 @@ export default function WeeklyReports() {
       key: 'next_week_plan',
       width: 200,
       ellipsis: true,
+      render: (val) => richTextToPlain(val) || '-',
     },
     {
       title: '风险',
@@ -240,7 +243,7 @@ export default function WeeklyReports() {
       key: 'risks',
       width: 150,
       ellipsis: true,
-      render: (val) => val || '-',
+      render: (val) => richTextToPlain(val) || '-',
     },
     {
       title: '操作',
@@ -302,14 +305,14 @@ export default function WeeklyReports() {
           </Typography.Text>
 
           <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-            本周完成：{record.completed || '-'}
+            本周完成：{richTextToPlain(record.completed) || '-'}
           </Typography.Paragraph>
           <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-            下周计划：{record.next_week_plan || '-'}
+            下周计划：{richTextToPlain(record.next_week_plan) || '-'}
           </Typography.Paragraph>
           {record.risks && (
             <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-              风险与问题：{record.risks}
+              风险与问题：{richTextToPlain(record.risks)}
             </Typography.Paragraph>
           )}
 
@@ -554,14 +557,14 @@ export default function WeeklyReports() {
           <Form.Item name="week_range" label="周期" rules={[{ required: true, message: '请选择周期' }]}>
             <RangePicker style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="completed" label="本周完成" rules={[{ required: true, message: '请填写本周完成内容' }]}>
-            <TextArea rows={4} placeholder="本周完成的主要工作..." />
+          <Form.Item name="completed" label="本周完成" rules={[{ required: true, message: '请填写本周完成内容' }]} valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="本周完成的主要工作..." minHeight={140} />
           </Form.Item>
-          <Form.Item name="next_week_plan" label="下周计划" rules={[{ required: true, message: '请填写下周计划' }]}>
-            <TextArea rows={4} placeholder="下周计划的主要工作..." />
+          <Form.Item name="next_week_plan" label="下周计划" rules={[{ required: true, message: '请填写下周计划' }]} valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="下周计划的主要工作..." minHeight={140} />
           </Form.Item>
-          <Form.Item name="risks" label="风险与问题">
-            <TextArea rows={3} placeholder="遇到的风险、问题或需要协调的事项..." />
+          <Form.Item name="risks" label="风险与问题" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="遇到的风险、问题或需要协调的事项..." minHeight={120} />
           </Form.Item>
         </Form>
       </Modal>
@@ -639,15 +642,15 @@ export default function WeeklyReports() {
             </div>
             <div style={{ marginBottom: 24 }}>
               <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>本周完成</div>
-              <div style={{ fontSize: 15, whiteSpace: 'pre-wrap' }}>{selectedReport.completed}</div>
+              <RichTextView value={selectedReport.completed} />
             </div>
             <div style={{ marginBottom: 24 }}>
               <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>下周计划</div>
-              <div style={{ fontSize: 15, whiteSpace: 'pre-wrap' }}>{selectedReport.next_week_plan}</div>
+              <RichTextView value={selectedReport.next_week_plan} />
             </div>
             <div style={{ marginBottom: 24 }}>
               <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>风险与问题</div>
-              <div style={{ fontSize: 15, whiteSpace: 'pre-wrap' }}>{selectedReport.risks || '-'}</div>
+              <RichTextView value={selectedReport.risks} />
             </div>
           </div>
         )}

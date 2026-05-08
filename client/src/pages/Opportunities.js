@@ -5,6 +5,7 @@ import {
 } from 'antd';
 import { RiseOutlined, EditOutlined, UserOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi } from '../api';
+import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -192,7 +193,7 @@ export default function Opportunities() {
 
             {record.opportunity_note && (
               <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                商机说明：{record.opportunity_note}
+                商机说明：{richTextToPlain(record.opportunity_note)}
               </Typography.Paragraph>
             )}
 
@@ -258,7 +259,7 @@ export default function Opportunities() {
               <div style={{ padding: '8px 16px', background: '#fafafa', borderRadius: 6 }}>
                 {r.description && <div><Text type="secondary">互动描述：</Text>{r.description}</div>}
                 {r.outcome && <div><Text type="secondary">互动结果：</Text>{r.outcome}</div>}
-                {r.opportunity_note && <div><Text type="secondary">商机说明：</Text>{r.opportunity_note}</div>}
+                {r.opportunity_note && <div><Text type="secondary">商机说明：</Text>{richTextToPlain(r.opportunity_note)}</div>}
               </div>
             ),
             rowExpandable: r => !!(r.description || r.outcome || r.opportunity_note),
@@ -297,8 +298,8 @@ export default function Opportunities() {
               options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
             />
           </Form.Item>
-          <Form.Item label="商机补充说明" name="opportunity_note">
-            <Input.TextArea rows={3} />
+          <Form.Item label="商机补充说明" name="opportunity_note" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="背景、需求或其他说明..." minHeight={120} />
           </Form.Item>
         </Form>
       </Modal>
@@ -331,7 +332,7 @@ export default function Opportunities() {
               </Tag>
             </Descriptions.Item>
             <Descriptions.Item label="指派给">{detailRecord.assignee_name || '-'}</Descriptions.Item>
-            <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
+            <Descriptions.Item label="商机说明"><RichTextView value={detailRecord.opportunity_note} /></Descriptions.Item>
             <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
             <Descriptions.Item label="互动描述"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div></Descriptions.Item>
             <Descriptions.Item label="互动结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.outcome || '-'}</div></Descriptions.Item>
