@@ -2,19 +2,21 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
   Typography, Drawer, Tabs, Popconfirm, message, Tooltip, Divider,
-  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber, Collapse, Grid, List
+  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber, Collapse, Grid, List, Upload
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, BankOutlined,
   UserOutlined, AppstoreOutlined, ThunderboltOutlined,
   UserAddOutlined, LinkOutlined, GlobalOutlined, TeamOutlined,
-  ApartmentOutlined, UnorderedListOutlined, RiseOutlined
+  ApartmentOutlined, UnorderedListOutlined, RiseOutlined, UploadOutlined
 } from '@ant-design/icons';
 import { Tree, TreeNode } from 'react-organizational-chart';
 import {
   companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi, usersApi
 } from '../api';
 import ResizableTable from '../components/ResizableTable';
+import AttachmentList from '../components/AttachmentList';
+import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 
@@ -778,6 +780,7 @@ function CompetitorResearchTab({ companyId }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [fileList, setFileList] = useState([]);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -795,20 +798,37 @@ function CompetitorResearchTab({ companyId }) {
     usersApi.listSimple().then(setUsers).catch(() => {});
   }, [load]);
 
-  const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ date: dayjs().format('YYYY-MM-DD'), importance: 'normal', shared_with: [] }); setModalOpen(true); };
+  const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ date: dayjs().format('YYYY-MM-DD'), importance: 'normal', shared_with: [] }); setFileList([]); setModalOpen(true); };
   const openEdit = (r) => {
     setEditing(r);
     const sharedArr = r.shared_with ? String(r.shared_with).split(',').filter(Boolean).map(Number) : [];
     form.setFieldsValue({ ...r, shared_with: sharedArr });
+    setFileList([]);
     setModalOpen(true);
   };
 
   const handleSave = async () => {
     const values = await form.validateFields();
     const payload = { ...values, company_id: companyId };
-    if (editing) { await competitorResearchApi.update(editing.id, payload); message.success('已更新'); }
-    else { await competitorResearchApi.create(payload); message.success('已记录'); }
+    let recordId;
+    if (editing) {
+      await competitorResearchApi.update(editing.id, payload);
+      recordId = editing.id;
+      message.success('已更新');
+    } else {
+      const res = await competitorResearchApi.create(payload);
+      recordId = res.id;
+      message.success('已记录');
+    }
+    if (fileList.length > 0) {
+      try {
+        await uploadAttachments('competitor_research', recordId, fileList);
+      } catch {
+        message.warning('附件上传失败，但记录已保存');
+      }
+    }
     setModalOpen(false);
+    setFileList([]);
     load();
   };
 
@@ -1132,6 +1152,18 @@ function CompetitorResearchTab({ companyId }) {
                 </Row>
             </Collapse.Panel>
           </Collapse>
+
+          <Form.Item label="附件">
+            <Upload
+              fileList={fileList}
+              onChange={({ fileList: newFileList }) => setFileList(newFileList)}
+              beforeUpload={validateAttachment}
+              maxCount={10}
+              accept={ATTACHMENT_ACCEPT}
+            >
+              <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
+            </Upload>
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -1157,52 +1189,58 @@ function CompetitorResearchTab({ companyId }) {
           const sharedIds = r.shared_with ? String(r.shared_with).split(',').filter(Boolean).map(Number) : [];
           const sharedUsers = sharedIds.map(id => users.find(u => u.id === id)).filter(Boolean);
           return (
-            <Descriptions size="small" column={isMobile ? 1 : 2} bordered labelStyle={{ width: 110 }}>
-              <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
-              <Descriptions.Item label="重要程度"><Tag color={imp.color}>{imp.label}</Tag></Descriptions.Item>
-              <Descriptions.Item label="标题" span={2}>{r.title || '-'}</Descriptions.Item>
-              <Descriptions.Item label="金额">{r.amount ? `¥${r.amount}` : '-'}</Descriptions.Item>
-              <Descriptions.Item label="信息来源">{r.source || '-'}</Descriptions.Item>
-              <Descriptions.Item label="详细内容" span={2}>
-                <RichTextView value={r.content} />
-              </Descriptions.Item>
-              <Descriptions.Item label="结果" span={2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="影响分析" span={2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.impact || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="下次行动" span={2}>
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="下次日期">{r.next_action_date || '-'}</Descriptions.Item>
-              <Descriptions.Item label="跟进结果">{r.follow_result || '-'}</Descriptions.Item>
-              <Descriptions.Item label="商机" span={2}>
-                {hasOpp ? (
-                  <Space size={4} wrap>
-                    <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
-                    {oppStatus && <Tag color={oppStatus.color}>{oppStatus.label}</Tag>}
-                  </Space>
-                ) : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="商机跟进人">
-                {assignee ? (assignee.display_name || assignee.username) : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="商机说明">
-                <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
-              </Descriptions.Item>
-              <Descriptions.Item label="创建人">
-                {creator ? (creator.display_name || creator.username) : '-'}
-              </Descriptions.Item>
-              <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
-              <Descriptions.Item label="共享人" span={2}>
-                {sharedUsers.length
-                  ? sharedUsers.map(u => (
-                      <Tag key={u.id}>{u.display_name || u.username}</Tag>
-                    ))
-                  : '-'}
-              </Descriptions.Item>
-            </Descriptions>
+            <>
+              <Descriptions size="small" column={isMobile ? 1 : 2} bordered labelStyle={{ width: 110 }}>
+                <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="重要程度"><Tag color={imp.color}>{imp.label}</Tag></Descriptions.Item>
+                <Descriptions.Item label="标题" span={2}>{r.title || '-'}</Descriptions.Item>
+                <Descriptions.Item label="金额">{r.amount ? `¥${r.amount}` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="信息来源">{r.source || '-'}</Descriptions.Item>
+                <Descriptions.Item label="详细内容" span={2}>
+                  <RichTextView value={r.content} />
+                </Descriptions.Item>
+                <Descriptions.Item label="结果" span={2}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
+                </Descriptions.Item>
+                <Descriptions.Item label="影响分析" span={2}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.impact || '-'}</div>
+                </Descriptions.Item>
+                <Descriptions.Item label="下次行动" span={2}>
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
+                </Descriptions.Item>
+                <Descriptions.Item label="下次日期">{r.next_action_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="跟进结果">{r.follow_result || '-'}</Descriptions.Item>
+                <Descriptions.Item label="商机" span={2}>
+                  {hasOpp ? (
+                    <Space size={4} wrap>
+                      <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
+                      {oppStatus && <Tag color={oppStatus.color}>{oppStatus.label}</Tag>}
+                    </Space>
+                  ) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商机跟进人">
+                  {assignee ? (assignee.display_name || assignee.username) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商机说明">
+                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
+                </Descriptions.Item>
+                <Descriptions.Item label="创建人">
+                  {creator ? (creator.display_name || creator.username) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+                <Descriptions.Item label="共享人" span={2}>
+                  {sharedUsers.length
+                    ? sharedUsers.map(u => (
+                        <Tag key={u.id}>{u.display_name || u.username}</Tag>
+                      ))
+                    : '-'}
+                </Descriptions.Item>
+              </Descriptions>
+
+              <div style={{ marginTop: 20 }}>
+                <AttachmentList sourceType="competitor_research" sourceId={r.id} />
+              </div>
+            </>
           );
         })()}
       </Modal>

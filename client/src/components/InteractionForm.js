@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Form, Input, Select, DatePicker, Button, Space, message, Card, Collapse, Tag, Row, Col } from 'antd';
-import { PlusOutlined, RiseOutlined } from '@ant-design/icons';
+import { Form, Input, Select, DatePicker, Button, Space, message, Card, Collapse, Tag, Row, Col, Upload } from 'antd';
+import { PlusOutlined, RiseOutlined, UploadOutlined } from '@ant-design/icons';
 import { interactionsApi } from '../api';
+import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 import dayjs from 'dayjs';
 
 const { Option } = Select;
@@ -29,6 +30,7 @@ export default function InteractionForm({ personId, onSuccess }) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState([]);
+  const [fileList, setFileList] = useState([]);
 
   useEffect(() => {
     if (open) fetchUsers();
@@ -49,14 +51,22 @@ export default function InteractionForm({ personId, onSuccess }) {
     const values = await form.validateFields();
     setLoading(true);
     try {
-      await interactionsApi.create({
+      const res = await interactionsApi.create({
         person_id: personId,
         ...values,
         date: values.date?.format('YYYY-MM-DD'),
         next_action_date: values.next_action_date?.format('YYYY-MM-DD'),
       });
+      if (fileList.length > 0) {
+        try {
+          await uploadAttachments('interaction', res.id, fileList);
+        } catch {
+          message.warning('附件上传失败，但记录已添加');
+        }
+      }
       message.success('记录已添加');
       form.resetFields();
+      setFileList([]);
       setOpen(false);
       onSuccess?.();
     } catch (err) {
@@ -144,9 +154,21 @@ export default function InteractionForm({ personId, onSuccess }) {
           </Collapse.Panel>
         </Collapse>
 
+        <Form.Item label="附件" style={{ marginBottom: 8 }}>
+          <Upload
+            fileList={fileList}
+            onChange={({ fileList: newFileList }) => setFileList(newFileList)}
+            beforeUpload={validateAttachment}
+            maxCount={10}
+            accept={ATTACHMENT_ACCEPT}
+          >
+            <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
+          </Upload>
+        </Form.Item>
+
         <Space>
           <Button type="primary" onClick={handleSave} loading={loading}>保存</Button>
-          <Button onClick={() => { setOpen(false); form.resetFields(); }}>取消</Button>
+          <Button onClick={() => { setOpen(false); form.resetFields(); setFileList([]); }}>取消</Button>
         </Space>
       </Form>
     </Card>
