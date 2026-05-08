@@ -893,6 +893,57 @@ if (userCols.length > 0) {
   db.prepare('UPDATE users SET need_weekly_report = 0 WHERE need_weekly_report IS NULL').run();
 }
 
+// 公司经营模块：经营周会 / 战略月会报表表
+db.exec(`
+  CREATE TABLE IF NOT EXISTS executive_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_type TEXT NOT NULL,
+    meeting_date TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    month INTEGER NOT NULL,
+    week INTEGER,
+    weekly_results TEXT,
+    key_judgment TEXT,
+    decision_needed TEXT,
+    next_week_actions TEXT,
+    key_issues TEXT,
+    decisions TEXT,
+    strategic_direction TEXT,
+    key_focus TEXT,
+    monthly_summary TEXT,
+    attendees TEXT,
+    last_edited_by INTEGER,
+    last_edited_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+const executiveReportCols = db.prepare("PRAGMA table_info(executive_reports)").all().map(c => c.name);
+if (executiveReportCols.length > 0) {
+  const addExecutiveReportColumn = (name, definition) => {
+    if (!executiveReportCols.includes(name)) {
+      db.exec(`ALTER TABLE executive_reports ADD COLUMN ${name} ${definition}`);
+    }
+  };
+
+  addExecutiveReportColumn('week', 'INTEGER');
+  addExecutiveReportColumn('weekly_results', 'TEXT');
+  addExecutiveReportColumn('key_judgment', 'TEXT');
+  addExecutiveReportColumn('decision_needed', 'TEXT');
+  addExecutiveReportColumn('next_week_actions', 'TEXT');
+  addExecutiveReportColumn('key_issues', 'TEXT');
+  addExecutiveReportColumn('decisions', 'TEXT');
+  addExecutiveReportColumn('strategic_direction', 'TEXT');
+  addExecutiveReportColumn('key_focus', 'TEXT');
+  addExecutiveReportColumn('monthly_summary', 'TEXT');
+  addExecutiveReportColumn('attendees', 'TEXT');
+  addExecutiveReportColumn('last_edited_by', 'INTEGER');
+  addExecutiveReportColumn('last_edited_at', 'DATETIME');
+  addExecutiveReportColumn('created_at', 'DATETIME');
+  addExecutiveReportColumn('updated_at', 'DATETIME');
+}
+
 try {
   db.exec(`
     INSERT OR IGNORE INTO user_teams (user_id, team_id)
@@ -5190,28 +5241,33 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
 
 // 获取经营周报列表
 app.get('/api/executive/reports', requireExecutive, (req, res) => {
-  const { report_type, year, month } = req.query;
+  try {
+    const { report_type, year, month } = req.query;
 
-  let query = 'SELECT * FROM executive_reports WHERE 1=1';
-  const params = [];
+    let query = 'SELECT * FROM executive_reports WHERE 1=1';
+    const params = [];
 
-  if (report_type) {
-    query += ' AND report_type = ?';
-    params.push(report_type);
+    if (report_type) {
+      query += ' AND report_type = ?';
+      params.push(report_type);
+    }
+    if (year) {
+      query += ' AND year = ?';
+      params.push(parseInt(year));
+    }
+    if (month) {
+      query += ' AND month = ?';
+      params.push(parseInt(month));
+    }
+
+    query += ' ORDER BY meeting_date DESC';
+
+    const reports = db.prepare(query).all(...params);
+    res.json(decryptRows('executive_reports', reports));
+  } catch (err) {
+    console.error('获取经营报表失败:', err);
+    res.status(500).json({ error: '获取经营报表失败，请检查报表表结构或服务端日志' });
   }
-  if (year) {
-    query += ' AND year = ?';
-    params.push(parseInt(year));
-  }
-  if (month) {
-    query += ' AND month = ?';
-    params.push(parseInt(month));
-  }
-
-  query += ' ORDER BY meeting_date DESC';
-
-  const reports = db.prepare(query).all(...params);
-  res.json(decryptRows('executive_reports', reports));
 });
 
 // 获取单个经营周报
