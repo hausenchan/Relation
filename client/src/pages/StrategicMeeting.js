@@ -9,6 +9,21 @@ import dayjs from 'dayjs';
 const { TextArea } = Input;
 const { Option } = Select;
 
+const getAuthConfig = (config = {}) => {
+  const token = localStorage.getItem('token');
+  return {
+    ...config,
+    headers: {
+      ...(config.headers || {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  };
+};
+
+const getErrorMessage = (error, fallback) => (
+  error?.response?.data?.error || error?.message || fallback
+);
+
 export default function StrategicMeeting() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -27,11 +42,13 @@ export default function StrategicMeeting() {
     setLoading(true);
     try {
       const res = await axios.get('/api/executive/reports', {
-        params: { report_type: 'strategic_monthly' }
+        params: { report_type: 'strategic_monthly' },
+        ...getAuthConfig(),
       });
       setData(res.data);
     } catch (err) {
       console.error('获取战略月会记录失败:', err);
+      message.error(getErrorMessage(err, '获取战略月会记录失败'));
     } finally {
       setLoading(false);
     }
@@ -63,11 +80,11 @@ export default function StrategicMeeting() {
       content: '确定要删除这条战略月会记录吗？',
       onOk: async () => {
         try {
-          await axios.delete(`/api/executive/reports/${id}`);
+          await axios.delete(`/api/executive/reports/${id}`, getAuthConfig());
           message.success('删除成功');
           fetchData();
         } catch (err) {
-          message.error('删除失败');
+          message.error(getErrorMessage(err, '删除失败'));
         }
       }
     });
@@ -80,14 +97,14 @@ export default function StrategicMeeting() {
         ...values,
         report_type: 'strategic_monthly',
         meeting_date: values.meeting_date ? values.meeting_date.format('YYYY-MM-DD') : null,
-        last_edited_by: user.username
+        last_edited_by: user?.username
       };
 
       if (editingRecord) {
-        await axios.put(`/api/executive/reports/${editingRecord.id}`, payload);
+        await axios.put(`/api/executive/reports/${editingRecord.id}`, payload, getAuthConfig());
         message.success('更新成功');
       } else {
-        await axios.post('/api/executive/reports', payload);
+        await axios.post('/api/executive/reports', payload, getAuthConfig());
         message.success('创建成功');
       }
 
@@ -95,7 +112,7 @@ export default function StrategicMeeting() {
       fetchData();
     } catch (err) {
       console.error('提交失败:', err);
-      message.error('提交失败');
+      message.error(getErrorMessage(err, '提交失败'));
     }
   };
 
