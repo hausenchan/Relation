@@ -4870,9 +4870,30 @@ app.post('/api/product-assets/import', (req, res) => {
   const launchStatusLabels = { '未上线': 'not_launched', '已上线': 'launched', '投放中': 'running', '暂停投放': 'paused', '已下线': 'offline' };
   const results = [];
   let successCount = 0;
+  const importHeaderMap = new Map([
+    ['group_name', 'group_name'], ['集团名字', 'group_name'], ['集团名称', 'group_name'],
+    ['company_entity', 'company_entity'], ['公司主体', 'company_entity'], ['主体', 'company_entity'],
+    ['app_name', 'app_name'], ['应用名称', 'app_name'], ['产品名称', 'app_name'],
+    ['appid', 'appid'], ['APPID', 'appid'], ['AppID', 'appid'],
+    ['budget_type', 'budget_type'], ['预算类型', 'budget_type'],
+    ['platform', 'platform'], ['平台', 'platform'],
+    ['app_identifier', 'app_identifier'], ['应用标识', 'app_identifier'],
+    ['launch_status', 'launch_status'], ['上线状态', 'launch_status'],
+    ['owner_name', 'owner_name'], ['运营负责人', 'owner_name'], ['负责人', 'owner_name'],
+    ['remark', 'remark'], ['备注', 'remark'],
+  ].map(([key, field]) => [normalizeAssetImportText(key), field]));
 
   const allSubjects = decryptRows('company_subjects', db.prepare('SELECT * FROM company_subjects').all());
   const users = db.prepare('SELECT id, username, display_name FROM users').all();
+
+  const normalizeImportRow = (row) => {
+    const normalized = {};
+    Object.entries(row || {}).forEach(([key, value]) => {
+      const field = importHeaderMap.get(normalizeAssetImportText(key));
+      if (field) normalized[field] = typeof value === 'string' ? value.trim() : value;
+    });
+    return { ...row, ...normalized };
+  };
 
   const findSubject = (groupName, companyEntity) => {
     const normalizedCompany = normalizeAssetImportText(companyEntity);
@@ -4896,7 +4917,8 @@ app.post('/api/product-assets/import', (req, res) => {
     return user?.id || null;
   };
 
-  rows.forEach((row, index) => {
+  rows.forEach((rawRow, index) => {
+    const row = normalizeImportRow(rawRow);
     const line = index + 2;
     const budgetType = budgetTypeLabels[row.budget_type] || row.budget_type;
     const platform = platformLabels[row.platform] || row.platform;

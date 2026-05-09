@@ -84,12 +84,33 @@ const csvHeaders = [
   ['remark', '备注'],
 ];
 
+function normalizeCsvHeader(value) {
+  return String(value || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/\s/g, '')
+    .replace(/[：:]/g, '')
+    .trim();
+}
+
+function detectCsvDelimiter(text) {
+  const firstContentLine = text
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .find(line => line.trim() && !line.trim().toLowerCase().startsWith('sep='));
+  if (!firstContentLine) return ',';
+  const delimiters = [',', '\t', ';'];
+  return delimiters
+    .map(delimiter => ({ delimiter, count: firstContentLine.split(delimiter).length }))
+    .sort((a, b) => b.count - a.count)[0].delimiter;
+}
+
 function parseCsv(text) {
   const rows = [];
   let current = '';
   let row = [];
   let quoted = false;
   const normalized = text.replace(/^\uFEFF/, '');
+  const delimiter = detectCsvDelimiter(normalized);
   for (let i = 0; i < normalized.length; i += 1) {
     const char = normalized[i];
     const next = normalized[i + 1];
@@ -98,7 +119,7 @@ function parseCsv(text) {
       i += 1;
     } else if (char === '"') {
       quoted = !quoted;
-    } else if (char === ',' && !quoted) {
+    } else if (char === delimiter && !quoted) {
       row.push(current.trim());
       current = '';
     } else if ((char === '\n' || char === '\r') && !quoted) {
@@ -113,17 +134,17 @@ function parseCsv(text) {
   }
   row.push(current.trim());
   if (row.some(v => v !== '')) rows.push(row);
-  if (rows.length < 2) return [];
-  const header = rows[0].map(key => key.replace(/^\uFEFF/, '').trim());
-  return rows.slice(1).map(values => {
+  const contentRows = rows.filter(r => !(r.length === 1 && String(r[0]).trim().toLowerCase().startsWith('sep=')));
+  if (contentRows.length < 2) return [];
+  const header = contentRows[0].map(normalizeCsvHeader);
+  return contentRows.slice(1).map(values => {
     const item = {};
     header.forEach((key, index) => {
-      const normalizedKey = key.replace(/\s/g, '');
-      const match = csvHeaders.find(([field, label]) => normalizedKey === field || normalizedKey === label);
+      const match = csvHeaders.find(([field, label]) => key === normalizeCsvHeader(field) || key === normalizeCsvHeader(label));
       if (match) item[match[0]] = values[index] || '';
     });
     return item;
-  });
+  }).filter(item => Object.values(item).some(value => String(value || '').trim()));
 }
 
 async function readCsvFile(file) {
