@@ -515,12 +515,6 @@ export default function ProductAssets() {
         open={detailOpen}
         onClose={() => setDetailOpen(false)}
         width={isMobile ? '100%' : 860}
-        extra={detailRecord && (
-          <Space>
-            <Button icon={<EditOutlined />} onClick={() => openEditAsset(detailRecord)}>编辑</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateReduction(detailRecord)}>新增核减</Button>
-          </Space>
-        )}
       >
         {detailRecord && !detailLoading && (
           <Space direction="vertical" size={20} style={{ width: '100%' }}>
