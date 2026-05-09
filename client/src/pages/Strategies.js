@@ -86,6 +86,7 @@ export default function Strategies() {
   const [activeTab, setActiveTab] = useState('all');
   const [logModalVisible, setLogModalVisible] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
+  const [logDetailRecord, setLogDetailRecord] = useState(null);
   const [reviewSaving, setReviewSaving] = useState(false);
 
   // 筛选
@@ -288,6 +289,10 @@ export default function Strategies() {
       execute_date: record.execute_date ? dayjs(record.execute_date) : null,
     });
     setLogModalVisible(true);
+  };
+
+  const openLogDetail = (record) => {
+    setLogDetailRecord(record);
   };
 
   const handleSaveLog = async () => {
@@ -653,7 +658,10 @@ export default function Strategies() {
 
   const renderExecutionLogCard = (record) => (
     <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
-      <div style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 10, background: '#fff' }}>
+      <div
+        onDoubleClick={() => openLogDetail(record)}
+        style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 10, background: '#fff', cursor: 'pointer' }}
+      >
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
             <div style={{ minWidth: 0, flex: 1 }}>
@@ -675,8 +683,8 @@ export default function Strategies() {
             </Typography.Paragraph>
           )}
           <Space size="small" wrap>
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditLog(record)}>编辑</Button>
-            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteLog(record.id)}>删除</Button>
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditLog(record); }}>编辑</Button>
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDeleteLog(record.id); }}>删除</Button>
           </Space>
         </Space>
       </div>
@@ -1046,13 +1054,17 @@ export default function Strategies() {
                               key: 'action',
                               width: 120,
                               render: (_, record) => (
-                                <Space size="small">
-                                  <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditLog(record)}>编辑</Button>
-                                  <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDeleteLog(record.id)}>删除</Button>
+                                <Space size="small" onDoubleClick={(event) => event.stopPropagation()}>
+                                  <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditLog(record); }}>编辑</Button>
+                                  <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDeleteLog(record.id); }}>删除</Button>
                                 </Space>
                               ),
                             },
                           ]}
+                          onRow={(record) => ({
+                            onDoubleClick: () => openLogDetail(record),
+                            style: { cursor: 'pointer' },
+                          })}
                         />
                       )}
                     </Space>
@@ -1101,6 +1113,55 @@ export default function Strategies() {
           </>
         )}
       </Drawer>
+
+      <Modal
+        title="执行记录详情"
+        open={!!logDetailRecord}
+        onCancel={() => setLogDetailRecord(null)}
+        footer={[
+          <Button key="close" onClick={() => setLogDetailRecord(null)}>关闭</Button>,
+          <Button
+            key="edit"
+            type="primary"
+            icon={<EditOutlined />}
+            onClick={() => {
+              const record = logDetailRecord;
+              setLogDetailRecord(null);
+              if (record) openEditLog(record);
+            }}
+          >
+            编辑
+          </Button>,
+        ]}
+        width={isMobile ? '100%' : 720}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+      >
+        {logDetailRecord && (
+          <Descriptions column={1} bordered size="small">
+            <Descriptions.Item label="执行日期">{logDetailRecord.execute_date || '-'}</Descriptions.Item>
+            <Descriptions.Item label="执行人">{logDetailRecord.executor_name || '-'}</Descriptions.Item>
+            <Descriptions.Item label="动作类型">
+              {actionTypeMap[logDetailRecord.action_type] || logDetailRecord.action_type || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="动作说明">
+              <div style={{ whiteSpace: 'pre-wrap' }}>{logDetailRecord.action_desc || '-'}</div>
+            </Descriptions.Item>
+            <Descriptions.Item label="当次观察结果">
+              <div style={{ whiteSpace: 'pre-wrap' }}>{logDetailRecord.observation || '-'}</div>
+            </Descriptions.Item>
+            <Descriptions.Item label="附件">{logDetailRecord.attachments || '-'}</Descriptions.Item>
+            <Descriptions.Item label="是否继续">
+              {logDetailRecord.continue_flag ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag>}
+            </Descriptions.Item>
+            <Descriptions.Item label="创建时间">
+              {logDetailRecord.created_at?.replace('T', ' ').substring(0, 19) || '-'}
+            </Descriptions.Item>
+            <Descriptions.Item label="更新时间">
+              {logDetailRecord.updated_at?.replace('T', ' ').substring(0, 19) || '-'}
+            </Descriptions.Item>
+          </Descriptions>
+        )}
+      </Modal>
 
       <Modal
         title={editingLog ? '编辑执行记录' : '新增执行记录'}
