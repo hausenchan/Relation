@@ -114,15 +114,28 @@ function parseCsv(text) {
   row.push(current.trim());
   if (row.some(v => v !== '')) rows.push(row);
   if (rows.length < 2) return [];
-  const header = rows[0];
+  const header = rows[0].map(key => key.replace(/^\uFEFF/, '').trim());
   return rows.slice(1).map(values => {
     const item = {};
     header.forEach((key, index) => {
-      const match = csvHeaders.find(([field, label]) => key === field || key === label);
+      const normalizedKey = key.replace(/\s/g, '');
+      const match = csvHeaders.find(([field, label]) => normalizedKey === field || normalizedKey === label);
       if (match) item[match[0]] = values[index] || '';
     });
     return item;
   });
+}
+
+async function readCsvFile(file) {
+  const buffer = await file.arrayBuffer();
+  const utf8Text = new TextDecoder('utf-8').decode(buffer);
+  const hasRecognizedHeader = csvHeaders.some(([field, label]) => utf8Text.includes(field) || utf8Text.includes(label));
+  if (hasRecognizedHeader && !utf8Text.includes('\uFFFD')) return utf8Text;
+  try {
+    return new TextDecoder('gb18030').decode(buffer);
+  } catch {
+    return utf8Text;
+  }
 }
 
 function csvEscape(value) {
@@ -342,7 +355,7 @@ export default function ProductAssets() {
 
   const importCsv = async (file) => {
     try {
-      const text = await file.text();
+      const text = await readCsvFile(file);
       const importRows = parseCsv(text);
       if (importRows.length === 0) {
         message.warning('CSV 中没有可导入的数据');

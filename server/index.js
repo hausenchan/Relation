@@ -4540,6 +4540,15 @@ function parseProductAssetPayload(body) {
   };
 }
 
+function normalizeAssetImportText(value) {
+  return String(value || '')
+    .normalize('NFKC')
+    .replace(/\s/g, '')
+    .replace(/[（]/g, '(')
+    .replace(/[）]/g, ')')
+    .trim();
+}
+
 app.get('/api/company-subjects', (req, res) => {
   const { group_name, company_entity, legal_person, email } = req.query;
   const rows = db.prepare(`
@@ -4866,12 +4875,18 @@ app.post('/api/product-assets/import', (req, res) => {
   const users = db.prepare('SELECT id, username, display_name FROM users').all();
 
   const findSubject = (groupName, companyEntity) => {
-    const companyMatches = allSubjects.filter(s => (s.company_entity || '').trim() === (companyEntity || '').trim());
-    if (companyMatches.length === 1) return companyMatches[0];
+    const normalizedCompany = normalizeAssetImportText(companyEntity);
+    const normalizedGroup = normalizeAssetImportText(groupName);
+    if (!normalizedCompany) return { subject: null, error: '公司主体必填' };
+
+    const companyMatches = allSubjects.filter(s => normalizeAssetImportText(s.company_entity) === normalizedCompany);
+    if (companyMatches.length === 1) return { subject: companyMatches[0], error: null };
     if (companyMatches.length > 1) {
-      return companyMatches.find(s => (s.group_name || '').trim() === (groupName || '').trim()) || null;
+      if (!normalizedGroup) return { subject: null, error: '公司主体重名，请填写集团名字辅助匹配' };
+      const subject = companyMatches.find(s => normalizeAssetImportText(s.group_name) === normalizedGroup);
+      return { subject: subject || null, error: subject ? null : '公司主体重名，集团名字未匹配' };
     }
-    return null;
+    return { subject: null, error: '公司主体未匹配' };
   };
 
   const findOwnerId = (ownerName) => {
@@ -4886,13 +4901,13 @@ app.post('/api/product-assets/import', (req, res) => {
     const budgetType = budgetTypeLabels[row.budget_type] || row.budget_type;
     const platform = platformLabels[row.platform] || row.platform;
     const launchStatus = launchStatusLabels[row.launch_status] || row.launch_status;
-    const subject = findSubject(row.group_name, row.company_entity);
+    const { subject, error: subjectError } = findSubject(row.group_name, row.company_entity);
     const errors = [];
     if (!row.app_name) errors.push('应用名称必填');
     if (!budgetType || !budgetTypes.has(budgetType)) errors.push('预算类型不合法');
     if (!launchStatus || !launchStatuses.has(launchStatus)) errors.push('上线状态不合法');
     if (!platforms.has(platform)) errors.push('平台不合法');
-    if (!subject) errors.push('公司主体未匹配');
+    if (!subject) errors.push(subjectError || '公司主体未匹配');
 
     if (errors.length > 0) {
       results.push({ line, success: false, error: errors.join('；') });
