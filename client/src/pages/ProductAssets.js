@@ -130,6 +130,10 @@ function csvEscape(value) {
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+function subjectLabel(subject) {
+  return [subject.group_name, subject.company_entity].filter(Boolean).join(' · ') || '-';
+}
+
 function statusTag(map, value) {
   const cfg = map[value] || { label: value || '-', color: 'default' };
   return <Tag color={cfg.color}>{cfg.label}</Tag>;
@@ -574,7 +578,7 @@ export default function ProductAssets() {
               style={{ width: isMobile ? '100%' : 220 }}
               value={filters.company_subject_id || undefined}
               onChange={v => setFilters({ ...filters, company_subject_id: v || '' })}
-              options={subjects.map(s => ({ value: s.id, label: `${s.group_name || '-'} · ${s.company_entity || '-'}` }))}
+              options={subjects.map(s => ({ value: s.id, label: subjectLabel(s) }))}
               optionFilterProp="label"
             />
             <Input placeholder="集团名字" allowClear style={{ width: isMobile ? '100%' : 140 }} value={filters.group_name} onChange={e => setFilters({ ...filters, group_name: e.target.value })} />
@@ -646,7 +650,7 @@ export default function ProductAssets() {
             <Select
               showSearch
               placeholder="请选择主体管理中的公司主体"
-              options={subjects.map(s => ({ value: s.id, label: `${s.group_name || '-'} · ${s.company_entity || '-'}` }))}
+              options={subjects.map(s => ({ value: s.id, label: subjectLabel(s) }))}
               optionFilterProp="label"
             />
           </Form.Item>

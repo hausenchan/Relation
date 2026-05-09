@@ -646,7 +646,7 @@ db.exec(`
 db.exec(`
   CREATE TABLE IF NOT EXISTS company_subjects (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_name TEXT NOT NULL,
+    group_name TEXT,
     company_entity TEXT NOT NULL,
     mini_program_count INTEGER DEFAULT 0,
     legal_person TEXT,
@@ -4589,8 +4589,8 @@ app.get('/api/company-subjects/:id', (req, res) => {
 
 app.post('/api/company-subjects', (req, res) => {
   const { group_name, company_entity, mini_program_count, legal_person, legal_person_phone, email, remark, status } = req.body;
-  if (!group_name || !company_entity) return res.status(400).json({ error: '集团名字和公司主体必填' });
-  const enc = encryptRow('company_subjects', { group_name, company_entity, legal_person, legal_person_phone, email, remark });
+  if (!company_entity) return res.status(400).json({ error: '公司主体必填' });
+  const enc = encryptRow('company_subjects', { group_name: group_name || '', company_entity, legal_person, legal_person_phone, email, remark });
   const result = db.prepare(`
     INSERT INTO company_subjects (
       group_name, company_entity, mini_program_count, legal_person, legal_person_phone,
@@ -4615,8 +4615,8 @@ app.put('/api/company-subjects/:id', (req, res) => {
   const existing = db.prepare('SELECT id FROM company_subjects WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '主体不存在' });
   const { group_name, company_entity, mini_program_count, legal_person, legal_person_phone, email, remark, status } = req.body;
-  if (!group_name || !company_entity) return res.status(400).json({ error: '集团名字和公司主体必填' });
-  const enc = encryptRow('company_subjects', { group_name, company_entity, legal_person, legal_person_phone, email, remark });
+  if (!company_entity) return res.status(400).json({ error: '公司主体必填' });
+  const enc = encryptRow('company_subjects', { group_name: group_name || '', company_entity, legal_person, legal_person_phone, email, remark });
   db.prepare(`
     UPDATE company_subjects SET
       group_name = ?, company_entity = ?, mini_program_count = ?, legal_person = ?,
@@ -4633,7 +4633,7 @@ app.put('/api/company-subjects/:id', (req, res) => {
     status || 'active',
     id
   );
-  const encAsset = encryptRow('product_assets', { group_name, company_entity });
+  const encAsset = encryptRow('product_assets', { group_name: group_name || '', company_entity });
   db.prepare(`
     UPDATE product_assets SET group_name = ?, company_entity = ?, updated_at = CURRENT_TIMESTAMP
     WHERE company_subject_id = ?

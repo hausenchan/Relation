@@ -286,8 +286,8 @@ export default function CompanySubjects() {
         <Form form={form} layout="vertical">
           <Row gutter={16}>
             <Col span={isMobile ? 24 : 12}>
-              <Form.Item name="group_name" label="集团名字" rules={[{ required: true, message: '请输入集团名字' }]}>
-                <Input placeholder="请输入集团名字" />
+              <Form.Item name="group_name" label="集团名字">
+                <Input placeholder="可选，主体所属集团或业务集团" />
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>
@@ -340,7 +340,7 @@ export default function CompanySubjects() {
               <Button icon={<EditOutlined />} onClick={() => openEdit(detailRecord)}>编辑主体</Button>
             </Space>
             <Descriptions column={1} bordered size="small" labelStyle={{ width: 120 }}>
-              <Descriptions.Item label="集团名字">{detailRecord.group_name}</Descriptions.Item>
+              <Descriptions.Item label="集团名字">{detailRecord.group_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="公司主体">{detailRecord.company_entity}</Descriptions.Item>
               <Descriptions.Item label="小程序个数">{detailRecord.mini_program_count ?? 0}</Descriptions.Item>
               <Descriptions.Item label="法人">{detailRecord.legal_person || '-'}</Descriptions.Item>
