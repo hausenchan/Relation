@@ -153,7 +153,9 @@ export default function CompanySubjects() {
 
   const goProducts = (record = detailRecord) => {
     if (!record?.id) return;
-    navigate(`/product-assets?company_subject_id=${record.id}`);
+    const params = new URLSearchParams({ company_subject_id: String(record.id) });
+    if (record.company_entity) params.set('company_entity_name', record.company_entity);
+    navigate(`/product-assets?${params.toString()}`);
   };
 
   const openDetailFromRowDoubleClick = (record, event) => {

@@ -204,6 +204,13 @@ export default function ProductAssets() {
   const [editingReduction, setEditingReduction] = useState(null);
   const [reductionForm] = Form.useForm();
 
+  useEffect(() => {
+    const subjectId = searchParams.get('company_subject_id') || '';
+    setFilters(prev => (
+      prev.company_subject_id === subjectId ? prev : { ...prev, company_subject_id: subjectId }
+    ));
+  }, [searchParams]);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -632,6 +639,7 @@ export default function ProductAssets() {
               value={filters.company_subject_id || undefined}
               onChange={v => setFilters({ ...filters, company_subject_id: v || '' })}
               options={subjects.map(s => ({ value: s.id, label: subjectLabel(s) }))}
+              labelRender={({ label, value }) => label || searchParams.get('company_entity_name') || value}
               optionFilterProp="label"
             />
             <Input placeholder="集团名字" allowClear style={{ width: isMobile ? '100%' : 140 }} value={filters.group_name} onChange={e => setFilters({ ...filters, group_name: e.target.value })} />
