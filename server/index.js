@@ -4549,6 +4549,10 @@ function normalizeAssetImportText(value) {
     .trim();
 }
 
+function normalizeSubjectMatchText(value) {
+  return normalizeAssetImportText(value);
+}
+
 app.get('/api/company-subjects', (req, res) => {
   const { group_name, company_entity, legal_person, email } = req.query;
   const rows = db.prepare(`
@@ -4718,7 +4722,6 @@ app.get('/api/product-assets', (req, res) => {
   if (platform) { q += ' AND pa.platform = ?'; params.push(platform); }
   if (launch_status) { q += ' AND pa.launch_status = ?'; params.push(launch_status); }
   if (owner_id) { q += ' AND pa.owner_id = ?'; params.push(owner_id); }
-  if (company_subject_id) { q += ' AND pa.company_subject_id = ?'; params.push(company_subject_id); }
   if (has_reduction === 'yes') q += ' AND EXISTS (SELECT 1 FROM product_asset_reductions r WHERE r.asset_id = pa.id)';
   if (has_reduction === 'no') q += ' AND NOT EXISTS (SELECT 1 FROM product_asset_reductions r WHERE r.asset_id = pa.id)';
   if (reduction_status) {
@@ -4732,6 +4735,15 @@ app.get('/api/product-assets', (req, res) => {
 
   q += ' ORDER BY pa.updated_at DESC, pa.id DESC';
   let rows = decryptRows('product_assets', db.prepare(q).all(...params));
+  if (company_subject_id) {
+    const subject = getCompanySubject(company_subject_id);
+    if (!subject) return res.json([]);
+    const subjectCompany = normalizeSubjectMatchText(subject.company_entity);
+    rows = rows.filter(r => (
+      String(r.company_subject_id || '') === String(company_subject_id)
+      || normalizeSubjectMatchText(r.company_entity) === subjectCompany
+    ));
+  }
   if (company_entity) {
     const keyword = String(company_entity).trim();
     rows = rows.filter(r => (r.company_entity || '').includes(keyword));
