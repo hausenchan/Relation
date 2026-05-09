@@ -348,6 +348,11 @@ export default function ProductAssets() {
     navigate(`/strategies?action=create&source_type=asset_reduction&source_id=${reduction.id}`);
   };
 
+  const openDetailFromRowDoubleClick = (record, event) => {
+    if (event.target.closest('button,a,input,textarea,.ant-select,.ant-picker,.ant-dropdown-trigger')) return;
+    openDetail(record);
+  };
+
   const downloadTemplate = () => {
     const sample = {
       group_name: '示例集团',
@@ -443,6 +448,12 @@ export default function ProductAssets() {
       title: '集团',
       dataIndex: 'group_name',
       width: 130,
+      render: v => v || '-',
+    },
+    {
+      title: '主体',
+      dataIndex: 'company_entity',
+      width: 180,
       render: v => v || '-',
     },
     {
@@ -653,6 +664,10 @@ export default function ProductAssets() {
             rowKey="id"
             loading={loading}
             scroll={{ x: 1200 }}
+            onRow={(record) => ({
+              onDoubleClick: (event) => openDetailFromRowDoubleClick(record, event),
+              style: { cursor: 'pointer' },
+            })}
             pagination={{ pageSize: 20, showTotal: total => `共 ${total} 条` }}
           />
         )}

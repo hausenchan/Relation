@@ -156,6 +156,11 @@ export default function CompanySubjects() {
     navigate(`/product-assets?company_subject_id=${record.id}`);
   };
 
+  const openDetailFromRowDoubleClick = (record, event) => {
+    if (event.target.closest('button,a,input,textarea,.ant-select,.ant-picker,.ant-dropdown-trigger')) return;
+    openDetail(record);
+  };
+
   const stats = {
     total: rows.length,
     active: rows.filter(r => (r.status || 'active') === 'active').length,
@@ -268,6 +273,10 @@ export default function CompanySubjects() {
             rowKey="id"
             loading={loading}
             scroll={{ x: 1350 }}
+            onRow={(record) => ({
+              onDoubleClick: (event) => openDetailFromRowDoubleClick(record, event),
+              style: { cursor: 'pointer' },
+            })}
             pagination={{ pageSize: 20, showTotal: total => `共 ${total} 条` }}
           />
         )}
