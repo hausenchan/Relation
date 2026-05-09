@@ -469,12 +469,6 @@ export default function ProductAssets() {
       render: v => v || '-',
     },
     {
-      title: '主体',
-      dataIndex: 'company_entity',
-      width: 180,
-      render: v => v || '-',
-    },
-    {
       title: '预算类型',
       dataIndex: 'budget_type',
       width: 100,
