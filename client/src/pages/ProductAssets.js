@@ -445,7 +445,7 @@ export default function ProductAssets() {
 
   const columns = [
     {
-      title: '产品资产',
+      title: '产品名称',
       key: 'asset',
       width: 280,
       render: (_, record) => (
