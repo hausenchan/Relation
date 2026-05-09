@@ -251,13 +251,13 @@ export default function WeeklyReports() {
       width: 150,
       fixed: 'right',
       render: (_, record) => (
-        <Space size="small">
-          <Button type="link" size="small" onClick={() => showDetail(record)}>详情</Button>
+        <Space size="small" onDoubleClick={(event) => event.stopPropagation()}>
+          <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); showDetail(record); }}>详情</Button>
           {(isAdmin(currentUser?.role) || record.user_id === currentUser?.id) && (
             <>
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); handleEdit(record); }}>编辑</Button>
               {isAdmin(currentUser?.role) && (
-                <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>删除</Button>
+                <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDelete(record.id); }}>删除</Button>
               )}
             </>
           )}
@@ -536,6 +536,10 @@ export default function WeeklyReports() {
           scroll={{ x: scrollX }}
           tableLayout="fixed"
           pagination={{ pageSize: 20 }}
+          onRow={(record) => ({
+            onDoubleClick: () => showDetail(record),
+            style: { cursor: 'pointer' },
+          })}
         />
       )}
 
