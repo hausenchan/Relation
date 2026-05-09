@@ -220,6 +220,18 @@ export const budgetsApi = {
   delete: (id) => api.delete(`/budgets/${id}`).then(r => r.data),
 };
 
+export const productAssetsApi = {
+  list: (params) => api.get('/product-assets', { params }).then(r => r.data),
+  get: (id) => api.get(`/product-assets/${id}`).then(r => r.data),
+  create: (data) => api.post('/product-assets', data).then(r => r.data),
+  update: (id, data) => api.put(`/product-assets/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/product-assets/${id}`).then(r => r.data),
+  createReduction: (assetId, data) => api.post(`/product-assets/${assetId}/reductions`, data).then(r => r.data),
+  updateReduction: (id, data) => api.put(`/product-asset-reductions/${id}`, data).then(r => r.data),
+  deleteReduction: (id) => api.delete(`/product-asset-reductions/${id}`).then(r => r.data),
+  reductionsSimple: () => api.get('/product-asset-reductions/simple').then(r => r.data),
+};
+
 export const goalsApi = {
   list: (params) => api.get('/goals', { params }).then(r => r.data),
   get: (id) => api.get(`/goals/${id}`).then(r => r.data),

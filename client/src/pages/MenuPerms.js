@@ -29,6 +29,13 @@ const MENU_TREE = [
     ],
   },
   {
+    title: '资产管理',
+    key: 'asset-mgmt',
+    children: [
+      { title: '产品资产', key: '/product-assets' },
+    ],
+  },
+  {
     title: '商务协作',
     key: 'biz-coop',
     children: [

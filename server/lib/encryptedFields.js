@@ -65,6 +65,16 @@ module.exports = {
     indexed: [],
   },
 
+  product_assets: {
+    fields: ['app_name', 'company_entity', 'app_identifier', 'remark'],
+    indexed: [],
+  },
+
+  product_asset_reductions: {
+    fields: ['upstream', 'reason_analysis', 'impact_scope'],
+    indexed: [],
+  },
+
   tasks: {
     fields: ['title', 'description', 'result'],
     indexed: [],

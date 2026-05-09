@@ -8,7 +8,8 @@ import {
   ApartmentOutlined, LockOutlined, ThunderboltOutlined, MenuOutlined,
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined, RadarChartOutlined
+  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined, RadarChartOutlined,
+  AppstoreOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -94,6 +95,7 @@ import WeeklyReports from './pages/WeeklyReports';
 import Leads from './pages/Leads';
 import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
+import ProductAssets from './pages/ProductAssets';
 import ExecutiveDashboard from './pages/ExecutiveDashboard';
 import ExecutiveTalents from './pages/ExecutiveTalents';
 import ExecutiveDynamics from './pages/ExecutiveDynamics';
@@ -240,7 +242,7 @@ function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'biz-coop', 'team-mgmt', 'executive', 'system']);
+  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'executive', 'system']);
 
   useEffect(() => {
     if (!user) return;
@@ -317,6 +319,7 @@ function AppLayout() {
     '/leads': '商机',
     '/strategies': '策略',
     '/dev-tasks': '需求',
+    '/product-assets': '产品资产',
     '/persons': '人脉管理',
     '/interactions': '互动记录',
     '/reminders': '提醒事项',
@@ -358,6 +361,13 @@ function AppLayout() {
     { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
     { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
   ];
+
+  // ── 资产管理 ────────────────────────────────────────────────
+  const assetMgmtChildren = [
+    canAccessMenu('/product-assets') && {
+      key: '/product-assets', icon: <AppstoreOutlined />, label: <Link to="/product-assets">产品资产</Link>,
+    },
+  ].filter(Boolean);
 
   // ── 商务协作 ────────────────────────────────────────────────
   const bizCoopChildren = [
@@ -460,6 +470,11 @@ function AppLayout() {
     {
       key: 'biz-flow', icon: <BranchesOutlined />, label: '业务流转',
       children: bizFlowChildren,
+    },
+    // 资产管理
+    assetMgmtChildren.length > 0 && {
+      key: 'asset-mgmt', icon: <AppstoreOutlined />, label: '资产管理',
+      children: assetMgmtChildren,
     },
     // 商务协作
     bizCoopChildren.length > 0 && {
@@ -782,6 +797,7 @@ function AppLayout() {
             <Route path="/leads" element={<PrivateRoute><Leads /></PrivateRoute>} />
             <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
+            <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
             <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />

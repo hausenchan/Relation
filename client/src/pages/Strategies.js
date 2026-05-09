@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined } from '@ant-design/icons';
+import { useLocation } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 import { RichTextEditor, RichTextView } from '../components/RichText';
+import { productAssetsApi } from '../api';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -57,6 +59,11 @@ const effectJudgementMap = {
   invalid: { label: '无效', color: 'red' },
 };
 
+const sourceTypeMap = {
+  lead: '来源线索',
+  asset_reduction: '核减记录',
+};
+
 const actionTypeMap = {
   budget_adjust: '调整预算',
   creative_adjust: '调整创意',
@@ -71,10 +78,12 @@ const actionTypeMap = {
 export default function Strategies() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
+  const location = useLocation();
   const { user } = useAuth();
   const [strategies, setStrategies] = useState([]);
   const [users, setUsers] = useState([]);
   const [leads, setLeads] = useState([]);
+  const [reductions, setReductions] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
@@ -88,6 +97,8 @@ export default function Strategies() {
   const [editingLog, setEditingLog] = useState(null);
   const [logDetailRecord, setLogDetailRecord] = useState(null);
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [handledPrefillKey, setHandledPrefillKey] = useState('');
+  const selectedSourceType = Form.useWatch('source_type', form);
 
   // 筛选
   const [filters, setFilters] = useState({
@@ -104,7 +115,33 @@ export default function Strategies() {
     fetchStrategies();
     fetchUsers();
     fetchLeads();
+    fetchReductions();
   }, [filters]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const action = params.get('action');
+    const sourceType = params.get('source_type');
+    const sourceId = params.get('source_id');
+    const strategyId = params.get('id');
+
+    if (strategyId && filters.id !== strategyId) {
+      setFilters(prev => ({ ...prev, id: strategyId }));
+    }
+
+    const prefillKey = `${action || ''}-${sourceType || ''}-${sourceId || ''}`;
+    if (action === 'create' && sourceType && sourceId && handledPrefillKey !== prefillKey) {
+      setEditingStrategy(null);
+      form.resetFields();
+      form.setFieldsValue({
+        source_type: sourceType,
+        source_id: String(sourceId),
+        status: 'not_started',
+      });
+      setModalVisible(true);
+      setHandledPrefillKey(prefillKey);
+    }
+  }, [location.search, handledPrefillKey, form, filters.id]);
 
   const getErrorMessage = async (res, fallback) => {
     try {
@@ -174,15 +211,29 @@ export default function Strategies() {
     }
   };
 
+  const fetchReductions = async () => {
+    try {
+      const data = await productAssetsApi.reductionsSimple();
+      setReductions(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setReductions([]);
+      console.error(err);
+    }
+  };
+
   const handleAdd = () => {
     setEditingStrategy(null);
     form.resetFields();
+    form.setFieldsValue({ source_type: null, source_id: null });
     setModalVisible(true);
   };
 
   const handleEdit = (record) => {
     setEditingStrategy(record);
-    form.setFieldsValue(record);
+    form.setFieldsValue({
+      ...record,
+      source_id: record.source_id ? String(record.source_id) : null,
+    });
     setModalVisible(true);
   };
 
@@ -222,8 +273,8 @@ export default function Strategies() {
         },
         body: JSON.stringify({
           ...values,
-          source_type: values.source_id ? 'lead' : null,
-          source_id: values.source_id ? Number(values.source_id) : null,
+          source_type: values.source_type && values.source_id ? values.source_type : null,
+          source_id: values.source_type && values.source_id ? Number(values.source_id) : null,
         }),
       });
       if (!res.ok) {
@@ -451,18 +502,17 @@ export default function Strategies() {
       render: (text) => text || '-',
     },
     {
-      title: '来源线索',
-      dataIndex: 'source_lead_id',
-      key: 'source_lead_id',
+      title: '来源对象',
+      key: 'source',
       width: 170,
       render: (_, record) => {
-        if (!record.source_lead_id) return '-';
+        if (!record.source_type || !record.source_id) return '-';
         const shortTitle = record.source_title?.length > 6
           ? `${record.source_title.slice(0, 6)}...`
           : record.source_title;
         return (
           <Space direction="vertical" size={0}>
-            <Text strong>{record.source_lead_id}</Text>
+            <Text strong>{sourceTypeMap[record.source_type] || record.source_type}：{record.source_id}</Text>
             {shortTitle && <Text type="secondary" style={{ fontSize: 12 }}>{shortTitle}</Text>}
           </Space>
         );
@@ -605,9 +655,9 @@ export default function Strategies() {
             </Space>
           )}
 
-          {record.source_lead_id && (
+          {record.source_type && record.source_id && (
             <Typography.Text type="secondary">
-              来源线索：{record.source_lead_id}{record.source_title ? ` · ${record.source_title}` : ''}
+              {sourceTypeMap[record.source_type] || '来源'}：{record.source_id}{record.source_title ? ` · ${record.source_title}` : ''}
             </Typography.Text>
           )}
 
@@ -864,17 +914,34 @@ export default function Strategies() {
               }))}
             />
           </Form.Item>
-          <Form.Item name="source_id" label="来源线索ID">
-            <AutoComplete
-              allowClear
-              options={leads.map(lead => ({
-                value: String(lead.id),
-                label: `${lead.id} · ${lead.title}`,
-              }))}
-              placeholder="可输入线索ID，也可下拉选择"
-              filterOption={(inputValue, option) => (option?.label ?? '').toLowerCase().includes(inputValue.toLowerCase())}
-            />
-          </Form.Item>
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 10}>
+              <Form.Item name="source_type" label="来源类型">
+                <Select
+                  allowClear
+                  placeholder="可不关联来源"
+                  onChange={() => form.setFieldsValue({ source_id: null })}
+                >
+                  <Option value="lead">来源线索</Option>
+                  <Option value="asset_reduction">核减记录</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 14}>
+              <Form.Item name="source_id" label={selectedSourceType === 'asset_reduction' ? '核减记录ID' : '来源线索ID'}>
+                <AutoComplete
+                  allowClear
+                  disabled={!selectedSourceType}
+                  options={(selectedSourceType === 'asset_reduction' ? reductions : leads).map(item => ({
+                    value: String(item.id),
+                    label: `${item.id} · ${item.title}`,
+                  }))}
+                  placeholder={selectedSourceType ? '可输入ID，也可下拉选择' : '请先选择来源类型'}
+                  filterOption={(inputValue, option) => (option?.label ?? '').toLowerCase().includes(inputValue.toLowerCase())}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
           <Form.Item name="role_type" label="岗位类型">
             <Select placeholder="请选择岗位类型" allowClear>
               <Option value="budget_delivery">预算交付岗</Option>
@@ -971,16 +1038,29 @@ export default function Strategies() {
                   label: <span><NodeIndexOutlined /> 关联追溯</span>,
                   children: (
                     <Space direction="vertical" style={{ width: '100%' }} size={16}>
-                      <Card size="small" title="来源线索">
+                      <Card size="small" title={selectedStrategy.source_type === 'asset_reduction' ? '来源核减记录' : '来源线索'}>
                         {selectedStrategy.source_info ? (
                           <Descriptions column={1} size="small" bordered>
-                            <Descriptions.Item label="线索ID">{selectedStrategy.source_info.id}</Descriptions.Item>
-                            <Descriptions.Item label="线索标题">{selectedStrategy.source_info.title}</Descriptions.Item>
-                            <Descriptions.Item label="线索状态">{selectedStrategy.source_info.status || '-'}</Descriptions.Item>
-                            <Descriptions.Item label="优先级">{selectedStrategy.source_info.priority || '-'}</Descriptions.Item>
+                            {selectedStrategy.source_type === 'asset_reduction' ? (
+                              <>
+                                <Descriptions.Item label="核减ID">{selectedStrategy.source_info.id}</Descriptions.Item>
+                                <Descriptions.Item label="产品资产">{selectedStrategy.source_info.app_name || '-'}</Descriptions.Item>
+                                <Descriptions.Item label="预算类型">{selectedStrategy.source_info.budget_type || '-'}</Descriptions.Item>
+                                <Descriptions.Item label="核减日期">{selectedStrategy.source_info.reduction_date || '-'}</Descriptions.Item>
+                                <Descriptions.Item label="核减原因">{selectedStrategy.source_info.reason_type || '-'}</Descriptions.Item>
+                                <Descriptions.Item label="核减状态">{selectedStrategy.source_info.status || '-'}</Descriptions.Item>
+                              </>
+                            ) : (
+                              <>
+                                <Descriptions.Item label="线索ID">{selectedStrategy.source_info.id}</Descriptions.Item>
+                                <Descriptions.Item label="线索标题">{selectedStrategy.source_info.title}</Descriptions.Item>
+                                <Descriptions.Item label="线索状态">{selectedStrategy.source_info.status || '-'}</Descriptions.Item>
+                                <Descriptions.Item label="优先级">{selectedStrategy.source_info.priority || '-'}</Descriptions.Item>
+                              </>
+                            )}
                           </Descriptions>
                         ) : (
-                          <Text type="secondary">暂无来源线索</Text>
+                          <Text type="secondary">暂无来源对象</Text>
                         )}
                       </Card>
 

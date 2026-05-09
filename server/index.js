@@ -642,6 +642,52 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_strategies_source ON strategies(source_type, source_id);
 `);
 
+// =========== 资产管理表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_name TEXT NOT NULL,
+    budget_type TEXT NOT NULL,
+    company_entity TEXT NOT NULL,
+    platform TEXT,
+    app_identifier TEXT,
+    launch_status TEXT NOT NULL DEFAULT 'not_launched',
+    owner_id INTEGER,
+    remark TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_product_assets_budget_type ON product_assets(budget_type);
+  CREATE INDEX IF NOT EXISTS idx_product_assets_launch_status ON product_assets(launch_status);
+  CREATE INDEX IF NOT EXISTS idx_product_assets_owner_id ON product_assets(owner_id);
+
+  CREATE TABLE IF NOT EXISTS product_asset_reductions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    reduction_date TEXT NOT NULL,
+    upstream TEXT,
+    before_budget REAL,
+    after_budget REAL,
+    reduction_amount REAL,
+    reduction_ratio REAL,
+    reason_type TEXT NOT NULL,
+    reason_analysis TEXT,
+    impact_scope TEXT,
+    status TEXT NOT NULL DEFAULT 'pending_analysis',
+    owner_id INTEGER,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_asset_id ON product_asset_reductions(asset_id);
+  CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_status ON product_asset_reductions(status);
+  CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_reason_type ON product_asset_reductions(reason_type);
+  CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_owner_id ON product_asset_reductions(owner_id);
+`);
+
 // =========== 跨团队访问权限表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS cross_team_access (
@@ -4322,6 +4368,323 @@ app.delete('/api/leads/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// =========== 产品资产 API ===========
+function applyProductAssetVisibility(q, params, userId, role) {
+  if (role === 'member') {
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'product_assets').map(r => r.target_team_id);
+
+    if (crossTeams.length > 0) {
+      const crossMembers = getUsersByTeamIds(crossTeams);
+      q += ' AND (pa.owner_id = ? OR pa.created_by = ?';
+      params.push(userId, userId);
+      if (crossMembers.length > 0) {
+        q += ' OR pa.owner_id IN (' + crossMembers.map(() => '?').join(',') + ') OR pa.created_by IN (' + crossMembers.map(() => '?').join(',') + ')';
+        params.push(...crossMembers, ...crossMembers);
+      }
+      q += ')';
+    } else {
+      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
+      params.push(userId, userId);
+    }
+  } else if (role === 'leader') {
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'product_assets').map(r => r.target_team_id);
+    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
+
+    if (allTeamIds.length) {
+      const members = getUsersByTeamIds(allTeamIds);
+      if (members.length > 0) {
+        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
+        params.push(...members, ...members);
+      } else {
+        q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
+        params.push(userId, userId);
+      }
+    } else {
+      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
+      params.push(userId, userId);
+    }
+  } else if (role === 'sales_director') {
+    const managedTeamIds = getManagedTeamIds(userId, role);
+    if (managedTeamIds?.length) {
+      const members = getUsersByTeamIds(managedTeamIds);
+      if (members.length > 0) {
+        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
+        params.push(...members, ...members);
+      }
+    }
+  }
+
+  return q;
+}
+
+function getReductionSourceInfo(reductionId) {
+  const row = db.prepare(`
+    SELECT r.id, r.asset_id, r.reduction_date, r.reason_type, r.status,
+      pa.app_name, pa.budget_type, pa.company_entity
+    FROM product_asset_reductions r
+    LEFT JOIN product_assets pa ON r.asset_id = pa.id
+    WHERE r.id = ?
+  `).get(reductionId);
+  if (!row) return null;
+  const decrypted = {
+    ...row,
+    app_name: decrypt(row.app_name),
+    company_entity: decrypt(row.company_entity),
+  };
+  decrypted.title = `${decrypted.app_name || '产品资产'} · ${decrypted.reduction_date || '核减记录'}`;
+  return decrypted;
+}
+
+app.get('/api/product-assets', (req, res) => {
+  const { budget_type, platform, launch_status, owner_id, has_reduction, reduction_status, company_entity } = req.query;
+  const { id: userId, role } = req.user;
+
+  let q = `
+    SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name,
+      (SELECT COUNT(*) FROM product_asset_reductions r WHERE r.asset_id = pa.id) as reduction_count,
+      (SELECT r.reduction_date FROM product_asset_reductions r WHERE r.asset_id = pa.id ORDER BY r.reduction_date DESC, r.id DESC LIMIT 1) as latest_reduction_date,
+      (SELECT r.status FROM product_asset_reductions r WHERE r.asset_id = pa.id ORDER BY r.reduction_date DESC, r.id DESC LIMIT 1) as latest_reduction_status
+    FROM product_assets pa
+    LEFT JOIN users u ON pa.owner_id = u.id
+    LEFT JOIN users c ON pa.created_by = c.id
+    WHERE 1=1
+  `;
+  const params = [];
+  q = applyProductAssetVisibility(q, params, userId, role);
+
+  if (budget_type) { q += ' AND pa.budget_type = ?'; params.push(budget_type); }
+  if (platform) { q += ' AND pa.platform = ?'; params.push(platform); }
+  if (launch_status) { q += ' AND pa.launch_status = ?'; params.push(launch_status); }
+  if (owner_id) { q += ' AND pa.owner_id = ?'; params.push(owner_id); }
+  if (has_reduction === 'yes') q += ' AND EXISTS (SELECT 1 FROM product_asset_reductions r WHERE r.asset_id = pa.id)';
+  if (has_reduction === 'no') q += ' AND NOT EXISTS (SELECT 1 FROM product_asset_reductions r WHERE r.asset_id = pa.id)';
+  if (reduction_status) {
+    q += ` AND (
+      SELECT r.status FROM product_asset_reductions r
+      WHERE r.asset_id = pa.id
+      ORDER BY r.reduction_date DESC, r.id DESC LIMIT 1
+    ) = ?`;
+    params.push(reduction_status);
+  }
+
+  q += ' ORDER BY pa.updated_at DESC, pa.id DESC';
+  let rows = decryptRows('product_assets', db.prepare(q).all(...params));
+  if (company_entity) {
+    const keyword = String(company_entity).trim();
+    rows = rows.filter(r => (r.company_entity || '').includes(keyword));
+  }
+  res.json(rows);
+});
+
+app.get('/api/product-assets/:id', (req, res) => {
+  const { id } = req.params;
+  const asset = db.prepare(`
+    SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name
+    FROM product_assets pa
+    LEFT JOIN users u ON pa.owner_id = u.id
+    LEFT JOIN users c ON pa.created_by = c.id
+    WHERE pa.id = ?
+  `).get(id);
+  if (!asset) return res.status(404).json({ error: '产品资产不存在' });
+
+  const reductions = db.prepare(`
+    SELECT r.*, u.display_name as owner_name, c.display_name as created_by_name,
+      (SELECT COUNT(*) FROM strategies s WHERE s.source_type = 'asset_reduction' AND s.source_id = r.id) as strategy_count
+    FROM product_asset_reductions r
+    LEFT JOIN users u ON r.owner_id = u.id
+    LEFT JOIN users c ON r.created_by = c.id
+    WHERE r.asset_id = ?
+    ORDER BY r.reduction_date DESC, r.id DESC
+  `).all(id);
+
+  const decodedReductions = decryptRows('product_asset_reductions', reductions).map(r => ({
+    ...r,
+    strategies: db.prepare(`
+      SELECT s.id, s.title, s.dimension, s.status, s.owner_id, u.display_name as owner_name,
+        (SELECT result_summary FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as latest_result_summary,
+        (SELECT effect_judgement FROM strategy_reviews sr WHERE sr.strategy_id = s.id) as effect_judgement
+      FROM strategies s
+      LEFT JOIN users u ON s.owner_id = u.id
+      WHERE s.source_type = 'asset_reduction' AND s.source_id = ?
+      ORDER BY s.created_at DESC
+    `).all(r.id),
+  }));
+
+  res.json({ ...decryptRow('product_assets', asset), reductions: decodedReductions });
+});
+
+app.post('/api/product-assets', (req, res) => {
+  const { app_name, budget_type, company_entity, platform, app_identifier, launch_status, owner_id, remark } = req.body;
+  const { id: userId } = req.user;
+  if (!app_name || !budget_type || !company_entity) {
+    return res.status(400).json({ error: '应用名称、预算类型、公司主体必填' });
+  }
+
+  const enc = encryptRow('product_assets', { app_name, company_entity, app_identifier, remark });
+  const result = db.prepare(`
+    INSERT INTO product_assets (app_name, budget_type, company_entity, platform, app_identifier, launch_status, owner_id, remark, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    enc.app_name,
+    budget_type,
+    enc.company_entity,
+    platform || null,
+    enc.app_identifier || null,
+    launch_status || 'not_launched',
+    owner_id || null,
+    enc.remark || null,
+    userId
+  );
+
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/product-assets/:id', (req, res) => {
+  const { id } = req.params;
+  const { app_name, budget_type, company_entity, platform, app_identifier, launch_status, owner_id, remark } = req.body;
+  const existing = db.prepare('SELECT id FROM product_assets WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: '产品资产不存在' });
+
+  const enc = encryptRow('product_assets', { app_name, company_entity, app_identifier, remark });
+  db.prepare(`
+    UPDATE product_assets SET
+      app_name = COALESCE(?, app_name),
+      budget_type = COALESCE(?, budget_type),
+      company_entity = COALESCE(?, company_entity),
+      platform = ?,
+      app_identifier = ?,
+      launch_status = COALESCE(?, launch_status),
+      owner_id = ?,
+      remark = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    enc.app_name || null,
+    budget_type || null,
+    enc.company_entity || null,
+    platform || null,
+    enc.app_identifier || null,
+    launch_status || null,
+    owner_id || null,
+    enc.remark || null,
+    id
+  );
+
+  res.json({ success: true });
+});
+
+app.delete('/api/product-assets/:id', (req, res) => {
+  const { id } = req.params;
+  db.prepare('DELETE FROM product_asset_reductions WHERE asset_id = ?').run(id);
+  db.prepare('DELETE FROM product_assets WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+app.post('/api/product-assets/:assetId/reductions', (req, res) => {
+  const { assetId } = req.params;
+  const {
+    reduction_date, upstream, before_budget, after_budget, reduction_amount,
+    reduction_ratio, reason_type, reason_analysis, impact_scope, status, owner_id,
+  } = req.body;
+  const { id: userId } = req.user;
+  const asset = db.prepare('SELECT id FROM product_assets WHERE id = ?').get(assetId);
+  if (!asset) return res.status(404).json({ error: '产品资产不存在' });
+  if (!reduction_date || !reason_type) return res.status(400).json({ error: '核减日期和原因分类必填' });
+
+  const enc = encryptRow('product_asset_reductions', { upstream, reason_analysis, impact_scope });
+  const result = db.prepare(`
+    INSERT INTO product_asset_reductions (
+      asset_id, reduction_date, upstream, before_budget, after_budget, reduction_amount,
+      reduction_ratio, reason_type, reason_analysis, impact_scope, status, owner_id, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    assetId,
+    reduction_date,
+    enc.upstream || null,
+    before_budget ?? null,
+    after_budget ?? null,
+    reduction_amount ?? null,
+    reduction_ratio ?? null,
+    reason_type,
+    enc.reason_analysis || null,
+    enc.impact_scope || null,
+    status || 'pending_analysis',
+    owner_id || null,
+    userId
+  );
+  db.prepare('UPDATE product_assets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(assetId);
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/product-asset-reductions/:id', (req, res) => {
+  const { id } = req.params;
+  const {
+    reduction_date, upstream, before_budget, after_budget, reduction_amount,
+    reduction_ratio, reason_type, reason_analysis, impact_scope, status, owner_id,
+  } = req.body;
+  const existing = db.prepare('SELECT asset_id FROM product_asset_reductions WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: '核减记录不存在' });
+
+  const enc = encryptRow('product_asset_reductions', { upstream, reason_analysis, impact_scope });
+  db.prepare(`
+    UPDATE product_asset_reductions SET
+      reduction_date = COALESCE(?, reduction_date),
+      upstream = ?,
+      before_budget = ?,
+      after_budget = ?,
+      reduction_amount = ?,
+      reduction_ratio = ?,
+      reason_type = COALESCE(?, reason_type),
+      reason_analysis = ?,
+      impact_scope = ?,
+      status = COALESCE(?, status),
+      owner_id = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    reduction_date || null,
+    enc.upstream || null,
+    before_budget ?? null,
+    after_budget ?? null,
+    reduction_amount ?? null,
+    reduction_ratio ?? null,
+    reason_type || null,
+    enc.reason_analysis || null,
+    enc.impact_scope || null,
+    status || null,
+    owner_id || null,
+    id
+  );
+  db.prepare('UPDATE product_assets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(existing.asset_id);
+  res.json({ success: true });
+});
+
+app.delete('/api/product-asset-reductions/:id', (req, res) => {
+  const { id } = req.params;
+  const existing = db.prepare('SELECT asset_id FROM product_asset_reductions WHERE id = ?').get(id);
+  db.prepare('DELETE FROM product_asset_reductions WHERE id = ?').run(id);
+  if (existing) db.prepare('UPDATE product_assets SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(existing.asset_id);
+  res.json({ success: true });
+});
+
+app.get('/api/product-asset-reductions/simple', (req, res) => {
+  const rows = db.prepare(`
+    SELECT r.id, r.reduction_date, r.reason_type, r.status, pa.app_name, pa.budget_type
+    FROM product_asset_reductions r
+    LEFT JOIN product_assets pa ON r.asset_id = pa.id
+    ORDER BY r.reduction_date DESC, r.id DESC
+    LIMIT 100
+  `).all().map(r => ({
+    ...r,
+    app_name: decrypt(r.app_name),
+    title: `${decrypt(r.app_name) || '产品资产'} · ${r.reduction_date || '核减记录'}`,
+  }));
+  res.json(rows);
+});
+
 // =========== 策略管理 API ===========
 // 获取策略列表
 app.get('/api/strategies', (req, res) => {
@@ -4335,6 +4698,10 @@ app.get('/api/strategies', (req, res) => {
         WHEN s.source_type = 'lead' THEN s.source_id
         ELSE NULL
       END as source_lead_id,
+      CASE
+        WHEN s.source_type = 'asset_reduction' THEN s.source_id
+        ELSE NULL
+      END as source_reduction_id,
       CASE
         WHEN s.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = s.source_id)
         ELSE NULL
@@ -4413,10 +4780,14 @@ app.get('/api/strategies', (req, res) => {
   if (access_method) { q += ' AND s.access_method = ?'; params.push(access_method); }
 
   q += ' ORDER BY s.created_at DESC';
-  // source_title 来自 leads.title（加密），单独解密
+  // source_title 来自 leads.title（加密）或核减记录摘要，单独处理
   const rows = db.prepare(q).all(...params).map(r => ({
     ...r,
-    source_title: decrypt(r.source_title),
+    source_title: r.source_type === 'lead'
+      ? decrypt(r.source_title)
+      : r.source_type === 'asset_reduction'
+        ? getReductionSourceInfo(r.source_id)?.title
+        : null,
   }));
   res.json(rows);
 });
@@ -4438,6 +4809,10 @@ app.get('/api/strategies/:id', (req, res) => {
         ELSE NULL
       END as source_lead_id,
       CASE
+        WHEN s.source_type = 'asset_reduction' THEN s.source_id
+        ELSE NULL
+      END as source_reduction_id,
+      CASE
         WHEN s.source_type = 'lead' THEN (SELECT title FROM leads WHERE id = s.source_id)
         ELSE NULL
       END as source_title
@@ -4447,18 +4822,26 @@ app.get('/api/strategies/:id', (req, res) => {
   `).get(id);
 
   if (!strategy) return res.status(404).json({ error: '策略不存在' });
-  strategy.source_title = decrypt(strategy.source_title);
+  strategy.source_title = strategy.source_type === 'lead'
+    ? decrypt(strategy.source_title)
+    : strategy.source_type === 'asset_reduction'
+      ? getReductionSourceInfo(strategy.source_id)?.title
+      : null;
 
-  const sourceInfo = strategy.source_type === 'lead' && strategy.source_id
-    ? (() => {
+  const sourceInfo = (() => {
+    if (strategy.source_type === 'lead' && strategy.source_id) {
         const l = db.prepare(`
           SELECT id, title, status, assignee_id, priority, created_by, created_at, updated_at
           FROM leads
           WHERE id = ?
         `).get(strategy.source_id);
         return l ? decryptRow('leads', l) : null;
-      })()
-    : null;
+    }
+    if (strategy.source_type === 'asset_reduction' && strategy.source_id) {
+      return getReductionSourceInfo(strategy.source_id);
+    }
+    return null;
+  })();
 
   // 获取关联的研发任务
   const devTasks = db.prepare(`
@@ -4686,8 +5069,8 @@ app.put('/api/strategies/:id', (req, res) => {
       description = COALESCE(?, description),
       owner_id = COALESCE(?, owner_id),
       status = COALESCE(?, status),
-      source_type = COALESCE(?, source_type),
-      source_id = COALESCE(?, source_id),
+      source_type = ?,
+      source_id = ?,
       media = ?,
       access_method = ?,
       updated_at = CURRENT_TIMESTAMP
@@ -5460,7 +5843,7 @@ app.post('/api/cross-team-access', (req, res) => {
     return res.status(400).json({ error: '用户、团队、模块必填' });
   }
 
-  const validModules = ['strategies', 'dev_tasks', 'leads', 'goals', 'weekly_reports'];
+  const validModules = ['strategies', 'dev_tasks', 'leads', 'product_assets', 'goals', 'weekly_reports'];
   if (!validModules.includes(module)) {
     return res.status(400).json({ error: '无效的模块名称' });
   }
