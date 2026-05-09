@@ -672,6 +672,7 @@ db.exec(`
     after_budget REAL,
     reduction_amount REAL,
     reduction_ratio REAL,
+    punishment_object TEXT,
     reason_type TEXT NOT NULL,
     reason_analysis TEXT,
     impact_scope TEXT,
@@ -687,6 +688,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_reason_type ON product_asset_reductions(reason_type);
   CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_owner_id ON product_asset_reductions(owner_id);
 `);
+
+const productAssetReductionCols = db.prepare("PRAGMA table_info(product_asset_reductions)").all().map(c => c.name);
+if (productAssetReductionCols.length > 0 && !productAssetReductionCols.includes('punishment_object')) {
+  db.exec("ALTER TABLE product_asset_reductions ADD COLUMN punishment_object TEXT");
+}
 
 // =========== 跨团队访问权限表 ===========
 db.exec(`
@@ -4587,7 +4593,7 @@ app.post('/api/product-assets/:assetId/reductions', (req, res) => {
   const { assetId } = req.params;
   const {
     reduction_date, upstream, before_budget, after_budget, reduction_amount,
-    reduction_ratio, reason_type, reason_analysis, impact_scope, status, owner_id,
+    reduction_ratio, punishment_object, reason_type, reason_analysis, impact_scope, status, owner_id,
   } = req.body;
   const { id: userId } = req.user;
   const asset = db.prepare('SELECT id FROM product_assets WHERE id = ?').get(assetId);
@@ -4598,8 +4604,8 @@ app.post('/api/product-assets/:assetId/reductions', (req, res) => {
   const result = db.prepare(`
     INSERT INTO product_asset_reductions (
       asset_id, reduction_date, upstream, before_budget, after_budget, reduction_amount,
-      reduction_ratio, reason_type, reason_analysis, impact_scope, status, owner_id, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      reduction_ratio, punishment_object, reason_type, reason_analysis, impact_scope, status, owner_id, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     assetId,
     reduction_date,
@@ -4608,6 +4614,7 @@ app.post('/api/product-assets/:assetId/reductions', (req, res) => {
     after_budget ?? null,
     reduction_amount ?? null,
     reduction_ratio ?? null,
+    punishment_object || null,
     reason_type,
     enc.reason_analysis || null,
     enc.impact_scope || null,
@@ -4623,7 +4630,7 @@ app.put('/api/product-asset-reductions/:id', (req, res) => {
   const { id } = req.params;
   const {
     reduction_date, upstream, before_budget, after_budget, reduction_amount,
-    reduction_ratio, reason_type, reason_analysis, impact_scope, status, owner_id,
+    reduction_ratio, punishment_object, reason_type, reason_analysis, impact_scope, status, owner_id,
   } = req.body;
   const existing = db.prepare('SELECT asset_id FROM product_asset_reductions WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '核减记录不存在' });
@@ -4637,6 +4644,7 @@ app.put('/api/product-asset-reductions/:id', (req, res) => {
       after_budget = ?,
       reduction_amount = ?,
       reduction_ratio = ?,
+      punishment_object = ?,
       reason_type = COALESCE(?, reason_type),
       reason_analysis = ?,
       impact_scope = ?,
@@ -4651,6 +4659,7 @@ app.put('/api/product-asset-reductions/:id', (req, res) => {
     after_budget ?? null,
     reduction_amount ?? null,
     reduction_ratio ?? null,
+    punishment_object || null,
     reason_type || null,
     enc.reason_analysis || null,
     enc.impact_scope || null,

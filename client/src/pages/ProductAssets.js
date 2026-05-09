@@ -65,6 +65,12 @@ const reductionStatusMap = {
   closed: { label: '已关闭', color: 'default' },
 };
 
+const punishmentObjectMap = {
+  entity: '主体',
+  app: '应用',
+  ad_slot: '广告位',
+};
+
 function statusTag(map, value) {
   const cfg = map[value] || { label: value || '-', color: 'default' };
   return <Tag color={cfg.color}>{cfg.label}</Tag>;
@@ -360,6 +366,7 @@ export default function ProductAssets() {
 
   const reductionColumns = [
     { title: '核减日期', dataIndex: 'reduction_date', width: 110 },
+    { title: '处罚对象', dataIndex: 'punishment_object', width: 100, render: v => punishmentObjectMap[v] || v || '-' },
     { title: '原因', dataIndex: 'reason_type', width: 140, render: v => reductionReasonMap[v] || v || '-' },
     { title: '状态', dataIndex: 'status', width: 110, render: v => statusTag(reductionStatusMap, v) },
     { title: '核减金额', dataIndex: 'reduction_amount', width: 100, render: v => v ?? '-' },
@@ -548,6 +555,7 @@ export default function ProductAssets() {
                             {statusTag(reductionStatusMap, record.status)}
                           </Space>
                           <Text>原因：{reductionReasonMap[record.reason_type] || record.reason_type}</Text>
+                          <Text>处罚对象：{punishmentObjectMap[record.punishment_object] || record.punishment_object || '-'}</Text>
                           <Text type="secondary">关联策略：{record.strategy_count || 0}</Text>
                           <Space wrap>
                             <Button type="link" size="small" icon={<BranchesOutlined />} onClick={() => createLinkedStrategy(record)}>新增关联策略</Button>
@@ -569,6 +577,7 @@ export default function ProductAssets() {
                       <Space direction="vertical" style={{ width: '100%' }}>
                         <Descriptions column={1} size="small" bordered>
                           <Descriptions.Item label="上游">{record.upstream || '-'}</Descriptions.Item>
+                          <Descriptions.Item label="处罚对象">{punishmentObjectMap[record.punishment_object] || record.punishment_object || '-'}</Descriptions.Item>
                           <Descriptions.Item label="核减前预算">{record.before_budget ?? '-'}</Descriptions.Item>
                           <Descriptions.Item label="核减后预算">{record.after_budget ?? '-'}</Descriptions.Item>
                           <Descriptions.Item label="核减比例">{record.reduction_ratio ?? '-'}</Descriptions.Item>
@@ -641,9 +650,20 @@ export default function ProductAssets() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="upstream" label="核减方 / 上游">
-            <Input placeholder="平台、渠道、客户等" />
-          </Form.Item>
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="punishment_object" label="处罚对象">
+                <Select allowClear placeholder="请选择处罚对象">
+                  {Object.entries(punishmentObjectMap).map(([k, v]) => <Option key={k} value={k}>{v}</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="upstream" label="核减方 / 上游">
+                <Input placeholder="平台、渠道、客户等" />
+              </Form.Item>
+            </Col>
+          </Row>
           <Row gutter={16}>
             <Col span={isMobile ? 24 : 12}>
               <Form.Item name="before_budget" label="核减前预算">
