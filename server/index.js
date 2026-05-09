@@ -4377,16 +4377,18 @@ app.delete('/api/leads/:id', (req, res) => {
 // =========== 产品资产 API ===========
 function applyProductAssetVisibility(q, params, userId, role) {
   if (role === 'member') {
+    const teamIds = getUserTeamIds(userId);
     const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
       .all(userId, 'product_assets').map(r => r.target_team_id);
+    const allTeamIds = [...new Set([...teamIds, ...crossTeams])];
 
-    if (crossTeams.length > 0) {
-      const crossMembers = getUsersByTeamIds(crossTeams);
+    if (allTeamIds.length > 0) {
+      const visibleMembers = getUsersByTeamIds(allTeamIds);
       q += ' AND (pa.owner_id = ? OR pa.created_by = ?';
       params.push(userId, userId);
-      if (crossMembers.length > 0) {
-        q += ' OR pa.owner_id IN (' + crossMembers.map(() => '?').join(',') + ') OR pa.created_by IN (' + crossMembers.map(() => '?').join(',') + ')';
-        params.push(...crossMembers, ...crossMembers);
+      if (visibleMembers.length > 0) {
+        q += ' OR pa.owner_id IN (' + visibleMembers.map(() => '?').join(',') + ') OR pa.created_by IN (' + visibleMembers.map(() => '?').join(',') + ')';
+        params.push(...visibleMembers, ...visibleMembers);
       }
       q += ')';
     } else {
