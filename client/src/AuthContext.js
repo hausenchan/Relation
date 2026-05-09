@@ -4,7 +4,7 @@ import { authApi } from './api';
 const AuthContext = createContext(null);
 const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2小时
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
-const isAdmin = (role) => ADMIN_ROLES.has(role);
+const isAdmin = (user) => ADMIN_ROLES.has(user?.role || user) || ADMIN_ROLES.has(user?.executive_role);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
@@ -61,7 +61,7 @@ export function AuthProvider({ children }) {
   // 检查模块访问权限
   const canAccessModule = (module) => {
     if (!user) return false;
-    if (['admin', 'member', 'readonly', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user.role)) return true;
+    if (isAdmin(user) || ['member', 'readonly', 'leader', 'sales_director'].includes(user.role)) return true;
     if (user.role === 'guest') {
       const perm = user.modulePerms?.find(p => p.module === module);
       return perm?.can_read === 1;
@@ -72,13 +72,13 @@ export function AuthProvider({ children }) {
   // 检查菜单可见权限（admin 始终全部可见，其他用户依据 menuPerms 配置）
   const canAccessMenu = (menuKey) => {
     if (!user) return false;
-    if (isAdmin(user.role)) return true;
+    if (isAdmin(user)) return true;
     return Array.isArray(user.menuPerms) && user.menuPerms.includes(menuKey);
   };
 
   const canWrite = (module) => {
     if (!user) return false;
-    if (['admin', 'member', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user.role)) return true;
+    if (isAdmin(user) || ['member', 'leader', 'sales_director'].includes(user.role)) return true;
     if (user.role === 'readonly') return false;
     if (user.role === 'guest') {
       const perm = user.modulePerms?.find(p => p.module === module);
@@ -88,10 +88,10 @@ export function AuthProvider({ children }) {
   };
 
   // 是否可以审批
-  const canApprove = () => ['admin', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user?.role);
+  const canApprove = () => isAdmin(user) || ['leader', 'sales_director'].includes(user?.role);
 
   // 是否可以指派人脉
-  const canAssign = () => ['admin', 'leader', 'sales_director', 'ceo', 'coo', 'cto', 'cmo'].includes(user?.role);
+  const canAssign = () => isAdmin(user) || ['leader', 'sales_director'].includes(user?.role);
 
   // 是否为高管
   const isExecutive = () => {
