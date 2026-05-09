@@ -580,8 +580,8 @@ export default function DevTasks() {
           <Form.Item name="title" label="需求标题" rules={[{ required: true, message: '请输入需求标题' }]}>
             <Input placeholder="请输入需求标题" />
           </Form.Item>
-          <Form.Item name="description" label="任务描述" valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="请输入任务描述..." minHeight={140} />
+          <Form.Item name="description" label="需求描述" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="请输入需求描述..." minHeight={140} />
           </Form.Item>
           <Form.Item name="source_type" label="来源类型">
             <Select placeholder="请选择来源类型" allowClear>
@@ -732,7 +732,7 @@ export default function DevTasks() {
               <Descriptions.Item label="开始日期">{selectedTask.start_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="截止日期">{selectedTask.due_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="完成日期">{selectedTask.completed_date || '-'}</Descriptions.Item>
-              <Descriptions.Item label="任务描述">
+              <Descriptions.Item label="需求描述">
                 <RichTextView value={selectedTask.description} />
               </Descriptions.Item>
               <Descriptions.Item label="完成备注">
