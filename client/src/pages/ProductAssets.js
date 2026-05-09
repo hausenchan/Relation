@@ -383,11 +383,19 @@ export default function ProductAssets() {
         return Upload.LIST_IGNORE;
       }
       const result = await productAssetsApi.import(importRows);
-      if (result.failCount > 0) {
-        Modal.warning({
-          title: `导入完成：成功 ${result.successCount} 条，失败 ${result.failCount} 条`,
+      const updatedNames = result.updatedNames || [];
+      if (result.failCount > 0 || updatedNames.length > 0) {
+        const ModalComponent = result.failCount > 0 ? Modal.warning : Modal.info;
+        ModalComponent({
+          title: `导入完成：新增 ${result.createdCount || 0} 条，覆盖 ${result.updatedCount || 0} 条，失败 ${result.failCount || 0} 条`,
           content: (
             <div style={{ maxHeight: 260, overflow: 'auto' }}>
+              {updatedNames.length > 0 && (
+                <div style={{ marginBottom: result.failCount > 0 ? 12 : 0 }}>
+                  <Text strong>覆盖更新的产品资产：</Text>
+                  <div>{updatedNames.join('、')}</div>
+                </div>
+              )}
               {(result.results || []).filter(r => !r.success).map(r => (
                 <div key={r.line}>第 {r.line} 行：{r.error}</div>
               ))}
@@ -395,7 +403,7 @@ export default function ProductAssets() {
           ),
         });
       } else {
-        message.success(`成功导入 ${result.successCount} 条产品资产`);
+        message.success(`成功新增 ${result.createdCount || result.successCount || 0} 条产品资产`);
       }
       load();
     } catch (err) {

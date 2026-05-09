@@ -4870,6 +4870,9 @@ app.post('/api/product-assets/import', (req, res) => {
   const launchStatusLabels = { '未上线': 'not_launched', '已上线': 'launched', '投放中': 'running', '暂停投放': 'paused', '已下线': 'offline' };
   const results = [];
   let successCount = 0;
+  let createdCount = 0;
+  let updatedCount = 0;
+  const updatedNames = [];
   const importHeaderMap = new Map([
     ['group_name', 'group_name'], ['集团名字', 'group_name'], ['集团名称', 'group_name'],
     ['company_entity', 'company_entity'], ['公司主体', 'company_entity'], ['主体', 'company_entity'],
@@ -4884,6 +4887,11 @@ app.post('/api/product-assets/import', (req, res) => {
   ].map(([key, field]) => [normalizeAssetImportText(key), field]));
 
   const allSubjects = decryptRows('company_subjects', db.prepare('SELECT * FROM company_subjects').all());
+  const existingAssets = decryptRows('product_assets', db.prepare(`
+    SELECT id, app_name
+    FROM product_assets
+    ORDER BY updated_at DESC, id DESC
+  `).all());
   const users = db.prepare('SELECT id, username, display_name FROM users').all();
 
   const normalizeImportRow = (row) => {
@@ -4917,6 +4925,12 @@ app.post('/api/product-assets/import', (req, res) => {
     return user?.id || null;
   };
 
+  const findExistingAsset = (appName) => {
+    const normalizedAppName = normalizeAssetImportText(appName);
+    if (!normalizedAppName) return null;
+    return existingAssets.find(asset => normalizeAssetImportText(asset.app_name) === normalizedAppName) || null;
+  };
+
   rows.forEach((rawRow, index) => {
     const row = normalizeImportRow(rawRow);
     const line = index + 2;
@@ -4945,30 +4959,67 @@ app.post('/api/product-assets/import', (req, res) => {
       app_identifier: row.app_identifier,
       remark: row.remark,
     });
-    const result = db.prepare(`
-      INSERT INTO product_assets (
-        group_name, company_subject_id, app_name, appid, budget_type, company_entity,
-        platform, app_identifier, launch_status, owner_id, remark, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      enc.group_name,
-      subject.id,
-      enc.app_name,
-      enc.appid || null,
-      budgetType,
-      enc.company_entity,
-      platform || null,
-      enc.app_identifier || null,
-      launchStatus,
-      ownerId,
-      enc.remark || null,
-      userId
-    );
+    const existingAsset = findExistingAsset(row.app_name);
+    if (existingAsset) {
+      db.prepare(`
+        UPDATE product_assets SET
+          group_name = ?, company_subject_id = ?, app_name = ?, appid = ?, budget_type = ?,
+          company_entity = ?, platform = ?, app_identifier = ?, launch_status = ?,
+          owner_id = ?, remark = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        enc.group_name,
+        subject.id,
+        enc.app_name,
+        enc.appid || null,
+        budgetType,
+        enc.company_entity,
+        platform || null,
+        enc.app_identifier || null,
+        launchStatus,
+        ownerId,
+        enc.remark || null,
+        existingAsset.id
+      );
+      updatedCount += 1;
+      updatedNames.push(row.app_name);
+      results.push({ line, success: true, action: 'updated', id: existingAsset.id, app_name: row.app_name });
+    } else {
+      const result = db.prepare(`
+        INSERT INTO product_assets (
+          group_name, company_subject_id, app_name, appid, budget_type, company_entity,
+          platform, app_identifier, launch_status, owner_id, remark, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        enc.group_name,
+        subject.id,
+        enc.app_name,
+        enc.appid || null,
+        budgetType,
+        enc.company_entity,
+        platform || null,
+        enc.app_identifier || null,
+        launchStatus,
+        ownerId,
+        enc.remark || null,
+        userId
+      );
+      createdCount += 1;
+      existingAssets.unshift({ id: result.lastInsertRowid, app_name: row.app_name });
+      results.push({ line, success: true, action: 'created', id: result.lastInsertRowid, app_name: row.app_name });
+    }
     successCount += 1;
-    results.push({ line, success: true, id: result.lastInsertRowid });
   });
 
-  res.json({ total: rows.length, successCount, failCount: rows.length - successCount, results });
+  res.json({
+    total: rows.length,
+    successCount,
+    createdCount,
+    updatedCount,
+    updatedNames,
+    failCount: rows.length - successCount,
+    results,
+  });
 });
 
 app.delete('/api/product-assets/:id', (req, res) => {
