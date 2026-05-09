@@ -37,11 +37,22 @@ const platformMap = {
 
 const launchStatusMap = {
   not_launched: { label: '未上线', color: 'default' },
-  launched: { label: '已上线', color: 'blue' },
+  launched: { label: '已上线可用', color: 'blue' },
+  launched_available: { label: '已上线可用', color: 'blue' },
+  launched_unavailable: { label: '已上线不可用', color: 'red' },
   running: { label: '投放中', color: 'green' },
   paused: { label: '暂停投放', color: 'orange' },
   offline: { label: '已下线', color: 'red' },
 };
+
+const launchStatusOptions = [
+  ['not_launched', launchStatusMap.not_launched],
+  ['launched_available', launchStatusMap.launched_available],
+  ['launched_unavailable', launchStatusMap.launched_unavailable],
+  ['running', launchStatusMap.running],
+  ['paused', launchStatusMap.paused],
+  ['offline', launchStatusMap.offline],
+];
 
 const reductionReasonMap = {
   data_quality: '数据质量问题',
@@ -426,7 +437,7 @@ export default function ProductAssets() {
 
   const stats = {
     total: rows.length,
-    launched: rows.filter(r => ['launched', 'running'].includes(r.launch_status)).length,
+    launched: rows.filter(r => ['launched', 'launched_available', 'launched_unavailable', 'running'].includes(r.launch_status)).length,
     running: rows.filter(r => r.launch_status === 'running').length,
     reduced: rows.filter(r => Number(r.reduction_count) > 0).length,
     processing: rows.filter(r => ['pending_analysis', 'analyzed', 'processing', 'observing'].includes(r.latest_reduction_status)).length,
@@ -612,7 +623,7 @@ export default function ProductAssets() {
               {Object.entries(platformMap).map(([k, v]) => <Option key={k} value={k}>{v}</Option>)}
             </Select>
             <Select placeholder="上线状态" allowClear style={{ width: isMobile ? '100%' : 130 }} value={filters.launch_status || undefined} onChange={v => setFilters({ ...filters, launch_status: v || '' })}>
-              {Object.entries(launchStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+              {launchStatusOptions.map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
             </Select>
             <Select placeholder="是否核减" allowClear style={{ width: isMobile ? '100%' : 120 }} value={filters.has_reduction || undefined} onChange={v => setFilters({ ...filters, has_reduction: v || '' })}>
               <Option value="yes">已核减</Option>
@@ -706,7 +717,7 @@ export default function ProductAssets() {
             <Col span={isMobile ? 24 : 12}>
               <Form.Item name="launch_status" label="上线状态" rules={[{ required: true, message: '请选择上线状态' }]}>
                 <Select placeholder="请选择上线状态">
-                  {Object.entries(launchStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                  {launchStatusOptions.map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
                 </Select>
               </Form.Item>
             </Col>

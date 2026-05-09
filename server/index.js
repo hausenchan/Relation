@@ -4876,10 +4876,18 @@ app.post('/api/product-assets/import', (req, res) => {
   const { id: userId } = req.user;
   const budgetTypes = new Set(['zhixiao', 'douxiao', 'weixiao', 'kuaiyingyong', 'h5', 'other']);
   const platforms = new Set(['android', 'ios', 'h5', 'mini_program', 'quick_app', 'other', '', null, undefined]);
-  const launchStatuses = new Set(['not_launched', 'launched', 'running', 'paused', 'offline']);
+  const launchStatuses = new Set(['not_launched', 'launched', 'launched_available', 'launched_unavailable', 'running', 'paused', 'offline']);
   const budgetTypeLabels = { '支小': 'zhixiao', '抖小': 'douxiao', '微小': 'weixiao', '快应用': 'kuaiyingyong', H5: 'h5', '其他': 'other' };
   const platformLabels = { Android: 'android', iOS: 'ios', IOS: 'ios', H5: 'h5', '小程序': 'mini_program', '快应用': 'quick_app', '其他': 'other' };
-  const launchStatusLabels = { '未上线': 'not_launched', '已上线': 'launched', '投放中': 'running', '暂停投放': 'paused', '已下线': 'offline' };
+  const launchStatusLabels = {
+    '未上线': 'not_launched',
+    '已上线': 'launched_available',
+    '已上线可用': 'launched_available',
+    '已上线不可用': 'launched_unavailable',
+    '投放中': 'running',
+    '暂停投放': 'paused',
+    '已下线': 'offline',
+  };
   const results = [];
   let successCount = 0;
   let createdCount = 0;
