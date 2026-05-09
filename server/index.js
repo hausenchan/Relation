@@ -644,9 +644,39 @@ db.exec(`
 
 // =========== 资产管理表 ===========
 db.exec(`
+  CREATE TABLE IF NOT EXISTS company_subjects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_name TEXT NOT NULL,
+    company_entity TEXT NOT NULL,
+    mini_program_count INTEGER DEFAULT 0,
+    legal_person TEXT,
+    legal_person_phone TEXT,
+    email TEXT,
+    remark TEXT,
+    status TEXT DEFAULT 'active',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS company_subject_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    subject_id INTEGER NOT NULL,
+    attachment_type TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_size INTEGER,
+    mime_type TEXT,
+    uploaded_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS product_assets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_name TEXT,
+    company_subject_id INTEGER,
     app_name TEXT NOT NULL,
+    appid TEXT,
     budget_type TEXT NOT NULL,
     company_entity TEXT NOT NULL,
     platform TEXT,
@@ -688,6 +718,26 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_reason_type ON product_asset_reductions(reason_type);
   CREATE INDEX IF NOT EXISTS idx_product_asset_reductions_owner_id ON product_asset_reductions(owner_id);
 `);
+
+const companySubjectCols = db.prepare("PRAGMA table_info(company_subjects)").all().map(c => c.name);
+if (companySubjectCols.length > 0) {
+  if (!companySubjectCols.includes('mini_program_count')) db.exec("ALTER TABLE company_subjects ADD COLUMN mini_program_count INTEGER DEFAULT 0");
+  if (!companySubjectCols.includes('legal_person')) db.exec("ALTER TABLE company_subjects ADD COLUMN legal_person TEXT");
+  if (!companySubjectCols.includes('legal_person_phone')) db.exec("ALTER TABLE company_subjects ADD COLUMN legal_person_phone TEXT");
+  if (!companySubjectCols.includes('email')) db.exec("ALTER TABLE company_subjects ADD COLUMN email TEXT");
+  if (!companySubjectCols.includes('remark')) db.exec("ALTER TABLE company_subjects ADD COLUMN remark TEXT");
+  if (!companySubjectCols.includes('status')) db.exec("ALTER TABLE company_subjects ADD COLUMN status TEXT DEFAULT 'active'");
+  if (!companySubjectCols.includes('created_by')) db.exec("ALTER TABLE company_subjects ADD COLUMN created_by INTEGER");
+  if (!companySubjectCols.includes('created_at')) db.exec("ALTER TABLE company_subjects ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP");
+  if (!companySubjectCols.includes('updated_at')) db.exec("ALTER TABLE company_subjects ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP");
+}
+
+const productAssetCols = db.prepare("PRAGMA table_info(product_assets)").all().map(c => c.name);
+if (productAssetCols.length > 0) {
+  if (!productAssetCols.includes('group_name')) db.exec("ALTER TABLE product_assets ADD COLUMN group_name TEXT");
+  if (!productAssetCols.includes('company_subject_id')) db.exec("ALTER TABLE product_assets ADD COLUMN company_subject_id INTEGER");
+  if (!productAssetCols.includes('appid')) db.exec("ALTER TABLE product_assets ADD COLUMN appid TEXT");
+}
 
 const productAssetReductionCols = db.prepare("PRAGMA table_info(product_asset_reductions)").all().map(c => c.name);
 if (productAssetReductionCols.length > 0 && !productAssetReductionCols.includes('punishment_object')) {
@@ -4446,8 +4496,200 @@ function getReductionSourceInfo(reductionId) {
   return decrypted;
 }
 
+const SUBJECT_ATTACHMENT_TYPES = new Set([
+  'legal_person_id_card_front',
+  'legal_person_id_card_back',
+  'business_license',
+  'icp_license',
+  'network_culture_license',
+  'radio_tv_program_license',
+  'other',
+]);
+
+function getCompanySubject(subjectId) {
+  if (!subjectId) return null;
+  const subject = db.prepare('SELECT * FROM company_subjects WHERE id = ?').get(subjectId);
+  return subject ? decryptRow('company_subjects', subject) : null;
+}
+
+function resolveCompanySubject(companySubjectId) {
+  const subject = getCompanySubject(companySubjectId);
+  if (!subject) return null;
+  return {
+    id: subject.id,
+    group_name: subject.group_name,
+    company_entity: subject.company_entity,
+  };
+}
+
+function parseProductAssetPayload(body) {
+  const subject = resolveCompanySubject(body.company_subject_id);
+  if (!subject) return { error: '请选择有效的公司主体' };
+  return {
+    app_name: body.app_name,
+    budget_type: body.budget_type,
+    company_subject_id: subject.id,
+    group_name: subject.group_name,
+    company_entity: subject.company_entity,
+    appid: body.appid,
+    platform: body.platform,
+    app_identifier: body.app_identifier,
+    launch_status: body.launch_status || 'not_launched',
+    owner_id: body.owner_id || null,
+    remark: body.remark,
+  };
+}
+
+app.get('/api/company-subjects', (req, res) => {
+  const { group_name, company_entity, legal_person, email } = req.query;
+  const rows = db.prepare(`
+    SELECT cs.*, c.display_name as created_by_name,
+      (SELECT COUNT(*) FROM product_assets pa WHERE pa.company_subject_id = cs.id) as product_count,
+      (SELECT COUNT(*) FROM company_subject_attachments a WHERE a.subject_id = cs.id) as attachment_count
+    FROM company_subjects cs
+    LEFT JOIN users c ON cs.created_by = c.id
+    ORDER BY cs.updated_at DESC, cs.id DESC
+  `).all();
+  let data = decryptRows('company_subjects', rows);
+  if (group_name) data = data.filter(r => (r.group_name || '').includes(String(group_name).trim()));
+  if (company_entity) data = data.filter(r => (r.company_entity || '').includes(String(company_entity).trim()));
+  if (legal_person) data = data.filter(r => (r.legal_person || '').includes(String(legal_person).trim()));
+  if (email) data = data.filter(r => (r.email || '').includes(String(email).trim()));
+  res.json(data);
+});
+
+app.get('/api/company-subjects/simple', (req, res) => {
+  const rows = db.prepare(`
+    SELECT id, group_name, company_entity, mini_program_count, status
+    FROM company_subjects
+    WHERE COALESCE(status, 'active') = 'active'
+    ORDER BY updated_at DESC, id DESC
+  `).all();
+  res.json(decryptRows('company_subjects', rows));
+});
+
+app.get('/api/company-subjects/:id', (req, res) => {
+  const row = db.prepare(`
+    SELECT cs.*, c.display_name as created_by_name,
+      (SELECT COUNT(*) FROM product_assets pa WHERE pa.company_subject_id = cs.id) as product_count
+    FROM company_subjects cs
+    LEFT JOIN users c ON cs.created_by = c.id
+    WHERE cs.id = ?
+  `).get(req.params.id);
+  if (!row) return res.status(404).json({ error: '主体不存在' });
+  const attachments = db.prepare(`
+    SELECT a.*, u.display_name as uploaded_by_name
+    FROM company_subject_attachments a
+    LEFT JOIN users u ON a.uploaded_by = u.id
+    WHERE a.subject_id = ?
+    ORDER BY a.created_at DESC, a.id DESC
+  `).all(req.params.id);
+  res.json({ ...decryptRow('company_subjects', row), attachments });
+});
+
+app.post('/api/company-subjects', (req, res) => {
+  const { group_name, company_entity, mini_program_count, legal_person, legal_person_phone, email, remark, status } = req.body;
+  if (!group_name || !company_entity) return res.status(400).json({ error: '集团名字和公司主体必填' });
+  const enc = encryptRow('company_subjects', { group_name, company_entity, legal_person, legal_person_phone, email, remark });
+  const result = db.prepare(`
+    INSERT INTO company_subjects (
+      group_name, company_entity, mini_program_count, legal_person, legal_person_phone,
+      email, remark, status, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    enc.group_name,
+    enc.company_entity,
+    mini_program_count ?? 0,
+    enc.legal_person || null,
+    enc.legal_person_phone || null,
+    enc.email || null,
+    enc.remark || null,
+    status || 'active',
+    req.user.id
+  );
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/company-subjects/:id', (req, res) => {
+  const { id } = req.params;
+  const existing = db.prepare('SELECT id FROM company_subjects WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: '主体不存在' });
+  const { group_name, company_entity, mini_program_count, legal_person, legal_person_phone, email, remark, status } = req.body;
+  if (!group_name || !company_entity) return res.status(400).json({ error: '集团名字和公司主体必填' });
+  const enc = encryptRow('company_subjects', { group_name, company_entity, legal_person, legal_person_phone, email, remark });
+  db.prepare(`
+    UPDATE company_subjects SET
+      group_name = ?, company_entity = ?, mini_program_count = ?, legal_person = ?,
+      legal_person_phone = ?, email = ?, remark = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    enc.group_name,
+    enc.company_entity,
+    mini_program_count ?? 0,
+    enc.legal_person || null,
+    enc.legal_person_phone || null,
+    enc.email || null,
+    enc.remark || null,
+    status || 'active',
+    id
+  );
+  const encAsset = encryptRow('product_assets', { group_name, company_entity });
+  db.prepare(`
+    UPDATE product_assets SET group_name = ?, company_entity = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE company_subject_id = ?
+  `).run(encAsset.group_name, encAsset.company_entity, id);
+  res.json({ success: true });
+});
+
+app.delete('/api/company-subjects/:id', (req, res) => {
+  const linked = db.prepare('SELECT COUNT(*) as count FROM product_assets WHERE company_subject_id = ?').get(req.params.id).count;
+  if (linked > 0) return res.status(400).json({ error: '该主体已关联产品资产，不能删除' });
+  const attachments = db.prepare('SELECT file_path FROM company_subject_attachments WHERE subject_id = ?').all(req.params.id);
+  attachments.forEach(att => {
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.file_path)); } catch {}
+  });
+  db.prepare('DELETE FROM company_subject_attachments WHERE subject_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM company_subjects WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+app.post('/api/company-subjects/:id/attachments', (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || '附件上传失败' });
+    const subject = db.prepare('SELECT id FROM company_subjects WHERE id = ?').get(req.params.id);
+    if (!subject) return res.status(404).json({ error: '主体不存在' });
+    const { attachment_type = 'other' } = req.body;
+    if (!SUBJECT_ATTACHMENT_TYPES.has(attachment_type)) {
+      return res.status(400).json({ error: '附件类型不合法' });
+    }
+    if (!req.file) return res.status(400).json({ error: '未收到文件' });
+    const result = db.prepare(`
+      INSERT INTO company_subject_attachments (
+        subject_id, attachment_type, file_name, file_path, file_size, mime_type, uploaded_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.params.id,
+      attachment_type,
+      req.file.originalname,
+      req.file.filename,
+      req.file.size,
+      req.file.mimetype,
+      req.user.id
+    );
+    res.json({ id: result.lastInsertRowid });
+  });
+});
+
+app.delete('/api/company-subject-attachments/:id', (req, res) => {
+  const att = db.prepare('SELECT * FROM company_subject_attachments WHERE id = ?').get(req.params.id);
+  if (!att) return res.status(404).json({ error: '附件不存在' });
+  try { fs.unlinkSync(path.join(UPLOADS_DIR, att.file_path)); } catch {}
+  db.prepare('DELETE FROM company_subject_attachments WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
 app.get('/api/product-assets', (req, res) => {
-  const { budget_type, platform, launch_status, owner_id, has_reduction, reduction_status, company_entity } = req.query;
+  const { budget_type, platform, launch_status, owner_id, has_reduction, reduction_status, company_entity, company_subject_id, group_name, appid } = req.query;
   const { id: userId, role } = req.user;
 
   let q = `
@@ -4467,6 +4709,7 @@ app.get('/api/product-assets', (req, res) => {
   if (platform) { q += ' AND pa.platform = ?'; params.push(platform); }
   if (launch_status) { q += ' AND pa.launch_status = ?'; params.push(launch_status); }
   if (owner_id) { q += ' AND pa.owner_id = ?'; params.push(owner_id); }
+  if (company_subject_id) { q += ' AND pa.company_subject_id = ?'; params.push(company_subject_id); }
   if (has_reduction === 'yes') q += ' AND EXISTS (SELECT 1 FROM product_asset_reductions r WHERE r.asset_id = pa.id)';
   if (has_reduction === 'no') q += ' AND NOT EXISTS (SELECT 1 FROM product_asset_reductions r WHERE r.asset_id = pa.id)';
   if (reduction_status) {
@@ -4483,6 +4726,14 @@ app.get('/api/product-assets', (req, res) => {
   if (company_entity) {
     const keyword = String(company_entity).trim();
     rows = rows.filter(r => (r.company_entity || '').includes(keyword));
+  }
+  if (group_name) {
+    const keyword = String(group_name).trim();
+    rows = rows.filter(r => (r.group_name || '').includes(keyword));
+  }
+  if (appid) {
+    const keyword = String(appid).trim();
+    rows = rows.filter(r => (r.appid || '').includes(keyword));
   }
   res.json(rows);
 });
@@ -4525,18 +4776,25 @@ app.get('/api/product-assets/:id', (req, res) => {
 });
 
 app.post('/api/product-assets', (req, res) => {
-  const { app_name, budget_type, company_entity, platform, app_identifier, launch_status, owner_id, remark } = req.body;
   const { id: userId } = req.user;
+  const payload = parseProductAssetPayload(req.body);
+  if (payload.error) return res.status(400).json({ error: payload.error });
+  const { app_name, budget_type, company_entity, company_subject_id, group_name, appid, platform, app_identifier, launch_status, owner_id, remark } = payload;
   if (!app_name || !budget_type || !company_entity) {
     return res.status(400).json({ error: '应用名称、预算类型、公司主体必填' });
   }
 
-  const enc = encryptRow('product_assets', { app_name, company_entity, app_identifier, remark });
+  const enc = encryptRow('product_assets', { group_name, app_name, company_entity, appid, app_identifier, remark });
   const result = db.prepare(`
-    INSERT INTO product_assets (app_name, budget_type, company_entity, platform, app_identifier, launch_status, owner_id, remark, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO product_assets (
+      group_name, company_subject_id, app_name, appid, budget_type, company_entity,
+      platform, app_identifier, launch_status, owner_id, remark, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    enc.group_name,
+    company_subject_id,
     enc.app_name,
+    enc.appid || null,
     budget_type,
     enc.company_entity,
     platform || null,
@@ -4552,14 +4810,19 @@ app.post('/api/product-assets', (req, res) => {
 
 app.put('/api/product-assets/:id', (req, res) => {
   const { id } = req.params;
-  const { app_name, budget_type, company_entity, platform, app_identifier, launch_status, owner_id, remark } = req.body;
   const existing = db.prepare('SELECT id FROM product_assets WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '产品资产不存在' });
+  const payload = parseProductAssetPayload(req.body);
+  if (payload.error) return res.status(400).json({ error: payload.error });
+  const { app_name, budget_type, company_entity, company_subject_id, group_name, appid, platform, app_identifier, launch_status, owner_id, remark } = payload;
 
-  const enc = encryptRow('product_assets', { app_name, company_entity, app_identifier, remark });
+  const enc = encryptRow('product_assets', { group_name, app_name, company_entity, appid, app_identifier, remark });
   db.prepare(`
     UPDATE product_assets SET
+      group_name = COALESCE(?, group_name),
+      company_subject_id = COALESCE(?, company_subject_id),
       app_name = COALESCE(?, app_name),
+      appid = ?,
       budget_type = COALESCE(?, budget_type),
       company_entity = COALESCE(?, company_entity),
       platform = ?,
@@ -4570,7 +4833,10 @@ app.put('/api/product-assets/:id', (req, res) => {
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
+    enc.group_name || null,
+    company_subject_id || null,
     enc.app_name || null,
+    enc.appid || null,
     budget_type || null,
     enc.company_entity || null,
     platform || null,
@@ -4582,6 +4848,90 @@ app.put('/api/product-assets/:id', (req, res) => {
   );
 
   res.json({ success: true });
+});
+
+app.post('/api/product-assets/import', (req, res) => {
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  const { id: userId } = req.user;
+  const budgetTypes = new Set(['zhixiao', 'douxiao', 'weixiao', 'kuaiyingyong', 'h5', 'other']);
+  const platforms = new Set(['android', 'ios', 'h5', 'mini_program', 'quick_app', 'other', '', null, undefined]);
+  const launchStatuses = new Set(['not_launched', 'launched', 'running', 'paused', 'offline']);
+  const budgetTypeLabels = { '支小': 'zhixiao', '抖小': 'douxiao', '微小': 'weixiao', '快应用': 'kuaiyingyong', H5: 'h5', '其他': 'other' };
+  const platformLabels = { Android: 'android', iOS: 'ios', IOS: 'ios', H5: 'h5', '小程序': 'mini_program', '快应用': 'quick_app', '其他': 'other' };
+  const launchStatusLabels = { '未上线': 'not_launched', '已上线': 'launched', '投放中': 'running', '暂停投放': 'paused', '已下线': 'offline' };
+  const results = [];
+  let successCount = 0;
+
+  const allSubjects = decryptRows('company_subjects', db.prepare('SELECT * FROM company_subjects').all());
+  const users = db.prepare('SELECT id, username, display_name FROM users').all();
+
+  const findSubject = (groupName, companyEntity) => {
+    const companyMatches = allSubjects.filter(s => (s.company_entity || '').trim() === (companyEntity || '').trim());
+    if (companyMatches.length === 1) return companyMatches[0];
+    if (companyMatches.length > 1) {
+      return companyMatches.find(s => (s.group_name || '').trim() === (groupName || '').trim()) || null;
+    }
+    return null;
+  };
+
+  const findOwnerId = (ownerName) => {
+    if (!ownerName) return null;
+    const keyword = String(ownerName).trim();
+    const user = users.find(u => u.username === keyword || u.display_name === keyword);
+    return user?.id || null;
+  };
+
+  rows.forEach((row, index) => {
+    const line = index + 2;
+    const budgetType = budgetTypeLabels[row.budget_type] || row.budget_type;
+    const platform = platformLabels[row.platform] || row.platform;
+    const launchStatus = launchStatusLabels[row.launch_status] || row.launch_status;
+    const subject = findSubject(row.group_name, row.company_entity);
+    const errors = [];
+    if (!row.app_name) errors.push('应用名称必填');
+    if (!budgetType || !budgetTypes.has(budgetType)) errors.push('预算类型不合法');
+    if (!launchStatus || !launchStatuses.has(launchStatus)) errors.push('上线状态不合法');
+    if (!platforms.has(platform)) errors.push('平台不合法');
+    if (!subject) errors.push('公司主体未匹配');
+
+    if (errors.length > 0) {
+      results.push({ line, success: false, error: errors.join('；') });
+      return;
+    }
+
+    const ownerId = findOwnerId(row.owner_name);
+    const enc = encryptRow('product_assets', {
+      group_name: subject.group_name,
+      app_name: row.app_name,
+      company_entity: subject.company_entity,
+      appid: row.appid,
+      app_identifier: row.app_identifier,
+      remark: row.remark,
+    });
+    const result = db.prepare(`
+      INSERT INTO product_assets (
+        group_name, company_subject_id, app_name, appid, budget_type, company_entity,
+        platform, app_identifier, launch_status, owner_id, remark, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      enc.group_name,
+      subject.id,
+      enc.app_name,
+      enc.appid || null,
+      budgetType,
+      enc.company_entity,
+      platform || null,
+      enc.app_identifier || null,
+      launchStatus,
+      ownerId,
+      enc.remark || null,
+      userId
+    );
+    successCount += 1;
+    results.push({ line, success: true, id: result.lastInsertRowid });
+  });
+
+  res.json({ total: rows.length, successCount, failCount: rows.length - successCount, results });
 });
 
 app.delete('/api/product-assets/:id', (req, res) => {

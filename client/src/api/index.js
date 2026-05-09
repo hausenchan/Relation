@@ -226,10 +226,22 @@ export const productAssetsApi = {
   create: (data) => api.post('/product-assets', data).then(r => r.data),
   update: (id, data) => api.put(`/product-assets/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/product-assets/${id}`).then(r => r.data),
+  import: (rows) => api.post('/product-assets/import', { rows }).then(r => r.data),
   createReduction: (assetId, data) => api.post(`/product-assets/${assetId}/reductions`, data).then(r => r.data),
   updateReduction: (id, data) => api.put(`/product-asset-reductions/${id}`, data).then(r => r.data),
   deleteReduction: (id) => api.delete(`/product-asset-reductions/${id}`).then(r => r.data),
   reductionsSimple: () => api.get('/product-asset-reductions/simple').then(r => r.data),
+};
+
+export const companySubjectsApi = {
+  list: (params) => api.get('/company-subjects', { params }).then(r => r.data),
+  simple: () => api.get('/company-subjects/simple').then(r => r.data),
+  get: (id) => api.get(`/company-subjects/${id}`).then(r => r.data),
+  create: (data) => api.post('/company-subjects', data).then(r => r.data),
+  update: (id, data) => api.put(`/company-subjects/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/company-subjects/${id}`).then(r => r.data),
+  uploadAttachment: (id, formData) => api.post(`/company-subjects/${id}/attachments`, formData).then(r => r.data),
+  deleteAttachment: (id) => api.delete(`/company-subject-attachments/${id}`).then(r => r.data),
 };
 
 export const goalsApi = {

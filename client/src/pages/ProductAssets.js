@@ -1,15 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Avatar, Button, Card, Col, Descriptions, Drawer, Form, Grid, Input, InputNumber,
-  List, message, Modal, Row, Select, Space, Table, Tag, Typography, DatePicker
+  List, message, Modal, Row, Select, Space, Table, Tag, Typography, DatePicker, Upload
 } from 'antd';
 import {
   AppstoreOutlined, BankOutlined, EditOutlined, PlusOutlined, DeleteOutlined,
-  BranchesOutlined, WarningOutlined
+  BranchesOutlined, WarningOutlined, DownloadOutlined, UploadOutlined
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { productAssetsApi, usersApi } from '../api';
+import { companySubjectsApi, productAssetsApi, usersApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
 
 const { Text } = Typography;
@@ -71,6 +71,65 @@ const punishmentObjectMap = {
   ad_slot: '广告位',
 };
 
+const csvHeaders = [
+  ['group_name', '集团名字'],
+  ['company_entity', '公司主体'],
+  ['app_name', '应用名称'],
+  ['appid', 'APPID'],
+  ['budget_type', '预算类型'],
+  ['platform', '平台'],
+  ['app_identifier', '应用标识'],
+  ['launch_status', '上线状态'],
+  ['owner_name', '运营负责人'],
+  ['remark', '备注'],
+];
+
+function parseCsv(text) {
+  const rows = [];
+  let current = '';
+  let row = [];
+  let quoted = false;
+  const normalized = text.replace(/^\uFEFF/, '');
+  for (let i = 0; i < normalized.length; i += 1) {
+    const char = normalized[i];
+    const next = normalized[i + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '"';
+      i += 1;
+    } else if (char === '"') {
+      quoted = !quoted;
+    } else if (char === ',' && !quoted) {
+      row.push(current.trim());
+      current = '';
+    } else if ((char === '\n' || char === '\r') && !quoted) {
+      if (char === '\r' && next === '\n') i += 1;
+      row.push(current.trim());
+      if (row.some(v => v !== '')) rows.push(row);
+      row = [];
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  row.push(current.trim());
+  if (row.some(v => v !== '')) rows.push(row);
+  if (rows.length < 2) return [];
+  const header = rows[0];
+  return rows.slice(1).map(values => {
+    const item = {};
+    header.forEach((key, index) => {
+      const match = csvHeaders.find(([field, label]) => key === field || key === label);
+      if (match) item[match[0]] = values[index] || '';
+    });
+    return item;
+  });
+}
+
+function csvEscape(value) {
+  const text = String(value ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
 function statusTag(map, value) {
   const cfg = map[value] || { label: value || '-', color: 'default' };
   return <Tag color={cfg.color}>{cfg.label}</Tag>;
@@ -80,8 +139,10 @@ export default function ProductAssets() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [rows, setRows] = useState([]);
   const [users, setUsers] = useState([]);
+  const [subjects, setSubjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState({
     budget_type: '',
@@ -90,7 +151,10 @@ export default function ProductAssets() {
     has_reduction: '',
     reduction_status: '',
     owner_id: '',
+    group_name: '',
     company_entity: '',
+    company_subject_id: searchParams.get('company_subject_id') || '',
+    appid: '',
   });
   const [assetModalOpen, setAssetModalOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState(null);
@@ -119,6 +183,7 @@ export default function ProductAssets() {
 
   useEffect(() => {
     usersApi.listSimple().then(setUsers).catch(() => {});
+    companySubjectsApi.simple().then(setSubjects).catch(() => {});
   }, []);
 
   const openCreateAsset = () => {
@@ -130,7 +195,7 @@ export default function ProductAssets() {
 
   const openEditAsset = (record) => {
     setEditingAsset(record);
-    assetForm.setFieldsValue(record);
+    assetForm.setFieldsValue({ ...record, company_subject_id: record.company_subject_id || undefined });
     setAssetModalOpen(true);
   };
 
@@ -245,6 +310,62 @@ export default function ProductAssets() {
     navigate(`/strategies?action=create&source_type=asset_reduction&source_id=${reduction.id}`);
   };
 
+  const downloadTemplate = () => {
+    const sample = {
+      group_name: '示例集团',
+      company_entity: '示例公司主体',
+      app_name: '示例应用',
+      appid: 'wx123456',
+      budget_type: '支小',
+      platform: '小程序',
+      app_identifier: 'com.example.app',
+      launch_status: '投放中',
+      owner_name: '',
+      remark: '',
+    };
+    const csv = [
+      csvHeaders.map(([, label]) => csvEscape(label)).join(','),
+      csvHeaders.map(([field]) => csvEscape(sample[field])).join(','),
+    ].join('\n');
+    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = '产品资产导入模板.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const importCsv = async (file) => {
+    try {
+      const text = await file.text();
+      const importRows = parseCsv(text);
+      if (importRows.length === 0) {
+        message.warning('CSV 中没有可导入的数据');
+        return Upload.LIST_IGNORE;
+      }
+      const result = await productAssetsApi.import(importRows);
+      if (result.failCount > 0) {
+        Modal.warning({
+          title: `导入完成：成功 ${result.successCount} 条，失败 ${result.failCount} 条`,
+          content: (
+            <div style={{ maxHeight: 260, overflow: 'auto' }}>
+              {(result.results || []).filter(r => !r.success).map(r => (
+                <div key={r.line}>第 {r.line} 行：{r.error}</div>
+              ))}
+            </div>
+          ),
+        });
+      } else {
+        message.success(`成功导入 ${result.successCount} 条产品资产`);
+      }
+      load();
+    } catch (err) {
+      message.error(err.response?.data?.error || '导入失败');
+    }
+    return Upload.LIST_IGNORE;
+  };
+
   const stats = {
     total: rows.length,
     launched: rows.filter(r => ['launched', 'running'].includes(r.launch_status)).length,
@@ -266,11 +387,17 @@ export default function ProductAssets() {
               {record.app_name}
             </Button>
             <div style={{ fontSize: 12, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {record.company_entity}
+              {record.group_name ? `${record.group_name} · ` : ''}{record.company_entity}
             </div>
           </div>
         </Space>
       ),
+    },
+    {
+      title: '集团',
+      dataIndex: 'group_name',
+      width: 130,
+      render: v => v || '-',
     },
     {
       title: '预算类型',
@@ -283,6 +410,12 @@ export default function ProductAssets() {
       dataIndex: 'platform',
       width: 100,
       render: v => platformMap[v] || '-',
+    },
+    {
+      title: 'APPID',
+      dataIndex: 'appid',
+      width: 140,
+      render: v => v || '-',
     },
     {
       title: '上线状态',
@@ -434,9 +567,27 @@ export default function ProductAssets() {
               options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
               optionFilterProp="label"
             />
+            <Select
+              placeholder="关联主体"
+              allowClear
+              showSearch
+              style={{ width: isMobile ? '100%' : 220 }}
+              value={filters.company_subject_id || undefined}
+              onChange={v => setFilters({ ...filters, company_subject_id: v || '' })}
+              options={subjects.map(s => ({ value: s.id, label: `${s.group_name || '-'} · ${s.company_entity || '-'}` }))}
+              optionFilterProp="label"
+            />
+            <Input placeholder="集团名字" allowClear style={{ width: isMobile ? '100%' : 140 }} value={filters.group_name} onChange={e => setFilters({ ...filters, group_name: e.target.value })} />
             <Input placeholder="公司主体" allowClear style={{ width: isMobile ? '100%' : 160 }} value={filters.company_entity} onChange={e => setFilters({ ...filters, company_entity: e.target.value })} />
+            <Input placeholder="APPID" allowClear style={{ width: isMobile ? '100%' : 140 }} value={filters.appid} onChange={e => setFilters({ ...filters, appid: e.target.value })} />
           </Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateAsset} style={{ width: isMobile ? '100%' : undefined }}>新增产品资产</Button>
+          <Space wrap style={{ width: isMobile ? '100%' : undefined }}>
+            <Button icon={<DownloadOutlined />} onClick={downloadTemplate} style={{ width: isMobile ? '100%' : undefined }}>下载模板</Button>
+            <Upload accept=".csv" showUploadList={false} beforeUpload={importCsv}>
+              <Button icon={<UploadOutlined />} style={{ width: isMobile ? '100%' : undefined }}>CSV 导入</Button>
+            </Upload>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateAsset} style={{ width: isMobile ? '100%' : undefined }}>新增产品资产</Button>
+          </Space>
         </div>
 
         {isMobile ? (
@@ -491,8 +642,13 @@ export default function ProductAssets() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item name="company_entity" label="公司主体" rules={[{ required: true, message: '请输入公司主体' }]}>
-            <Input placeholder="请输入公司主体" />
+          <Form.Item name="company_subject_id" label="公司主体" rules={[{ required: true, message: '请选择公司主体' }]}>
+            <Select
+              showSearch
+              placeholder="请选择主体管理中的公司主体"
+              options={subjects.map(s => ({ value: s.id, label: `${s.group_name || '-'} · ${s.company_entity || '-'}` }))}
+              optionFilterProp="label"
+            />
           </Form.Item>
           <Row gutter={16}>
             <Col span={isMobile ? 24 : 12}>
@@ -503,8 +659,15 @@ export default function ProductAssets() {
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="appid" label="APPID">
+                <Input placeholder="小程序或应用 APPID" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item name="app_identifier" label="应用标识">
-                <Input placeholder="包名、AppID、小程序ID等" />
+                <Input placeholder="包名、小程序 ID 等" />
               </Form.Item>
             </Col>
           </Row>
@@ -527,10 +690,12 @@ export default function ProductAssets() {
           <Space direction="vertical" size={20} style={{ width: '100%' }}>
             <Descriptions column={1} bordered size="small" labelStyle={{ width: 100 }}>
               <Descriptions.Item label="应用名称">{detailRecord.app_name}</Descriptions.Item>
+              <Descriptions.Item label="集团名字">{detailRecord.group_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="预算类型">{statusTag(budgetTypeMap, detailRecord.budget_type)}</Descriptions.Item>
               <Descriptions.Item label="公司主体">{detailRecord.company_entity}</Descriptions.Item>
               <Descriptions.Item label="平台">{platformMap[detailRecord.platform] || '-'}</Descriptions.Item>
               <Descriptions.Item label="上线状态">{statusTag(launchStatusMap, detailRecord.launch_status)}</Descriptions.Item>
+              <Descriptions.Item label="APPID">{detailRecord.appid || '-'}</Descriptions.Item>
               <Descriptions.Item label="应用标识">{detailRecord.app_identifier || '-'}</Descriptions.Item>
               <Descriptions.Item label="运营负责人">{detailRecord.owner_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="备注"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.remark || '-'}</div></Descriptions.Item>

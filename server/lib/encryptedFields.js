@@ -66,7 +66,12 @@ module.exports = {
   },
 
   product_assets: {
-    fields: ['app_name', 'company_entity', 'app_identifier', 'remark'],
+    fields: ['group_name', 'app_name', 'company_entity', 'appid', 'app_identifier', 'remark'],
+    indexed: [],
+  },
+
+  company_subjects: {
+    fields: ['group_name', 'company_entity', 'legal_person', 'legal_person_phone', 'email', 'remark'],
     indexed: [],
   },
 

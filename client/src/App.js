@@ -96,6 +96,7 @@ import Leads from './pages/Leads';
 import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
 import ProductAssets from './pages/ProductAssets';
+import CompanySubjects from './pages/CompanySubjects';
 import ExecutiveDashboard from './pages/ExecutiveDashboard';
 import ExecutiveTalents from './pages/ExecutiveTalents';
 import ExecutiveDynamics from './pages/ExecutiveDynamics';
@@ -319,6 +320,7 @@ function AppLayout() {
     '/leads': '商机',
     '/strategies': '策略',
     '/dev-tasks': '需求',
+    '/company-subjects': '主体管理',
     '/product-assets': '产品资产',
     '/persons': '人脉管理',
     '/interactions': '互动记录',
@@ -364,6 +366,9 @@ function AppLayout() {
 
   // ── 资产管理 ────────────────────────────────────────────────
   const assetMgmtChildren = [
+    canAccessMenu('/company-subjects') && {
+      key: '/company-subjects', icon: <BankOutlined />, label: <Link to="/company-subjects">主体管理</Link>,
+    },
     canAccessMenu('/product-assets') && {
       key: '/product-assets', icon: <AppstoreOutlined />, label: <Link to="/product-assets">产品资产</Link>,
     },
@@ -797,6 +802,7 @@ function AppLayout() {
             <Route path="/leads" element={<PrivateRoute><Leads /></PrivateRoute>} />
             <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
+            <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />
             <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />

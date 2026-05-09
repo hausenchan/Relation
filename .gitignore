@@ -28,6 +28,10 @@ npm-debug.log*
 .env
 .env.local
 
+# 加密密钥（绝不入库！丢失等于数据永久无法解密，需离线备份）
+.secrets/
+*.key
+
 # Claude Code 本地配置
 .claude/
 secrets/

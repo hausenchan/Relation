@@ -32,6 +32,7 @@ const MENU_TREE = [
     title: '资产管理',
     key: 'asset-mgmt',
     children: [
+      { title: '主体管理', key: '/company-subjects' },
       { title: '产品资产', key: '/product-assets' },
     ],
   },
