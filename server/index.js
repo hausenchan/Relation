@@ -60,6 +60,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
+const hasTaskFullVisibility = (role, executiveRole) => isAdmin(role) || ADMIN_ROLES.has(executiveRole);
 
 // 腾讯地图 Key（地理编码用）
 const TMAP_KEY = 'BFBBZ-CNXC4-XEWUR-KQN7R-QOUGJ-Q4B66';
@@ -1394,6 +1395,46 @@ function syncTaskSharedUsers(taskId, sharedUserIds = []) {
   return uniqueIds;
 }
 
+function getTaskVisibleScope(userId, role, executiveRole = null) {
+  if (hasTaskFullVisibility(role, executiveRole)) return { all: true, teamIds: null, userIds: null };
+
+  const teamIds = getManagedTeamIds(userId, role) || [];
+  const teamUserIds = teamIds.length ? getUsersByTeamIds(teamIds) : [];
+  const userIds = [...new Set([userId, ...teamUserIds])];
+  return { all: false, teamIds, userIds };
+}
+
+function buildTaskVisibilityFilter(userId, role, executiveRole = null) {
+  const scope = getTaskVisibleScope(userId, role, executiveRole);
+  if (scope.all) return { sql: '', params: [] };
+
+  const conditions = [
+    't.assigned_to = ?',
+    't.created_by = ?',
+    `EXISTS (
+      SELECT 1
+      FROM task_shared_users tsu
+      WHERE tsu.task_id = t.id AND tsu.user_id = ?
+    )`,
+  ];
+  const params = [userId, userId, userId];
+
+  if (scope.teamIds.length > 0) {
+    conditions.push(`t.team_id IN (${scope.teamIds.map(() => '?').join(',')})`);
+    params.push(...scope.teamIds);
+  }
+
+  if (scope.userIds.length > 0) {
+    conditions.push(`t.assigned_to IN (${scope.userIds.map(() => '?').join(',')})`);
+    params.push(...scope.userIds);
+  }
+
+  return {
+    sql: ` AND (${conditions.join(' OR ')})`,
+    params,
+  };
+}
+
 function validateGoalScopeFields({ scope_type, project_group_id, department, team_id }) {
   if (!scope_type) {
     return '归属颗粒度必填';
@@ -2496,7 +2537,7 @@ app.put('/api/opportunities/:id', (req, res) => {
 // =========== 待跟进任务 API ===========
 app.get('/api/follow-up-tasks', (req, res) => {
   const { status, all } = req.query;
-  const { id: me, role } = req.user;
+  const { id: me, role, executive_role } = req.user;
   let query = `
     SELECT f.*,
       p.name as person_name, p.company, p.city, p.current_company, p.person_category,
@@ -2513,7 +2554,7 @@ app.get('/api/follow-up-tasks', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
-  if (all === '1' && isAdmin(role)) {
+  if (all === '1' && hasTaskFullVisibility(role, executive_role)) {
     // 管理员和高管查看全量跟进任务。
   } else if (all === '1' && ['leader', 'sales_director'].includes(role)) {
     const visibleUserIds = getVisibleUserIds(me, role) || [];
@@ -2624,7 +2665,7 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
 // 获取可见任务（按角色过滤）
 app.get('/api/tasks', (req, res) => {
   const { date, assigned_to, team_id, status, parent_id, mine } = req.query;
-  const { id: me, role } = req.user;
+  const { id: me, role, executive_role } = req.user;
 
   let q = `
     SELECT t.*,
@@ -2657,46 +2698,9 @@ app.get('/api/tasks', (req, res) => {
   `;
   const params = [me];
 
-  // 角色数据过滤
-  if (role === 'member') {
-    q += ` AND (
-      t.assigned_to = ?
-      OR t.created_by = ?
-      OR EXISTS (
-        SELECT 1
-        FROM task_shared_users tsu
-        WHERE tsu.task_id = t.id AND tsu.user_id = ?
-      )
-    )`;
-    params.push(me, me, me);
-  } else if (role === 'leader') {
-    const ids = getVisibleUserIds(me, role) || [me];
-    q += ` AND (
-      t.assigned_to IN (${ids.map(() => '?').join(',')})
-      OR t.created_by IN (${ids.map(() => '?').join(',')})
-      OR EXISTS (
-        SELECT 1
-        FROM task_shared_users tsu
-        WHERE tsu.task_id = t.id AND tsu.user_id = ?
-      )
-    )`;
-    params.push(...ids, ...ids, me);
-  } else if (role === 'sales_director') {
-    const ids = getVisibleUserIds(me, role);
-    if (ids?.length) {
-      q += ` AND (
-        t.assigned_to IN (${ids.map(() => '?').join(',')})
-        OR t.created_by IN (${ids.map(() => '?').join(',')})
-        OR EXISTS (
-          SELECT 1
-          FROM task_shared_users tsu
-          WHERE tsu.task_id = t.id AND tsu.user_id = ?
-        )
-      )`;
-      params.push(...ids, ...ids, me);
-    }
-  }
-  // admin: 不过滤
+  const visibility = buildTaskVisibilityFilter(me, role, executive_role);
+  q += visibility.sql;
+  params.push(...visibility.params);
 
   if (mine === '1') { q += ' AND t.assigned_to = ?'; params.push(me); }
   if (date) { q += ' AND t.date = ?'; params.push(date); }
@@ -2725,11 +2729,11 @@ app.get('/api/tasks/count', (req, res) => {
   res.json({ count: cnt });
 });
 
-// 看板数据（按成员分组，供leader/sales_director使用）
+// 看板数据（按成员分组，按老板/小组/共享权限过滤）
 app.get('/api/tasks/board', (req, res) => {
-  const { id: me, role } = req.user;
-  const managedTeamIds = getManagedTeamIds(me, role);
-  if (!['leader', 'sales_director', 'admin'].includes(role) && !managedTeamIds?.length) {
+  const { id: me, role, executive_role } = req.user;
+  const taskScope = getTaskVisibleScope(me, role, executive_role);
+  if (!taskScope.all && !['leader', 'sales_director'].includes(role) && !taskScope.teamIds?.length) {
     return res.status(403).json({ error: '无权访问看板' });
   }
   const { date } = req.query;
@@ -2737,12 +2741,10 @@ app.get('/api/tasks/board', (req, res) => {
 
   // 获取可见成员
   let visibleIds;
-  if (isAdmin(role)) {
+  if (taskScope.all) {
     visibleIds = db.prepare('SELECT id FROM users WHERE role != ?').all('readonly').map(u => u.id);
-  } else if (role === 'leader' || role === 'sales_director') {
-    visibleIds = getVisibleUserIds(me, role) || [me];
   } else {
-    visibleIds = getVisibleUserIds(me, role) || [me];
+    visibleIds = taskScope.userIds || [me];
   }
   if (!visibleIds.includes(me)) visibleIds = [me, ...visibleIds];
 

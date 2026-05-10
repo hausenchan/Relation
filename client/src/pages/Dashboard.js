@@ -213,8 +213,9 @@ export default function Dashboard() {
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
-  const canManageTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || isExecutive() || (user?.managed_team_ids?.length > 0);
-  const canViewTeamTasks = canManageTeamTasks || teamTasks.length > 0;
+  const canManageTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || isExecutive();
+  const canViewTeamScope = canManageTeamTasks || (user?.team_ids?.length > 0) || (user?.managed_team_ids?.length > 0);
+  const canViewTeamTasks = canViewTeamScope || teamTasks.length > 0;
   const hideRelationshipPanels = stats?.showRelationshipPanels === false || ['operation', 'rd'].includes(user?.department);
 
   useEffect(() => {
@@ -329,7 +330,6 @@ export default function Dashboard() {
 
   const buildTeamTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
-      .filter(t => canManageTeamTasks || Number(t.shared_to_me) === 1)
       .map(t => ({
         ...t,
         task_source: 'normal',
