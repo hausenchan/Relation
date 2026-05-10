@@ -2643,7 +2643,7 @@ app.get('/api/tasks', (req, res) => {
         WHERE tsu.task_id = t.id
       ) as shared_to_ids,
       (
-        SELECT GROUP_CONCAT(u.display_name, '、')
+        SELECT GROUP_CONCAT(COALESCE(u.display_name, u.username), '、')
         FROM task_shared_users tsu
         LEFT JOIN users u ON tsu.user_id = u.id
         WHERE tsu.task_id = t.id

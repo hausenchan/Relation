@@ -45,6 +45,7 @@ const taskTableDefaultWidths = {
     title: 360,
     task_source_label: 100,
     assigned_to_name: 100,
+    shared_to_names: 140,
     plan_date: 110,
     start_date: 110,
     complete_date: 110,
@@ -57,6 +58,7 @@ const taskTableDefaultWidths = {
     task_source_label: 100,
     priority: 80,
     created_by_name: 100,
+    shared_to_names: 140,
     plan_date: 110,
     start_date: 110,
     complete_date: 110,
@@ -69,6 +71,7 @@ const taskTableDefaultWidths = {
     task_source_label: 100,
     assigned_by_name: 110,
     assigned_to_name: 110,
+    shared_to_names: 140,
     plan_date: 110,
     start_date: 110,
     complete_date: 110,
@@ -82,6 +85,7 @@ const taskTableDefaultWidths = {
     priority: 80,
     assigner_name: 110,
     follower_name: 110,
+    shared_to_names: 140,
     plan_date: 110,
     start_date: 110,
     complete_date: 110,
@@ -92,6 +96,7 @@ const taskTableDefaultWidths = {
 
 const taskTableMinWidths = {
   title: 180,
+  shared_to_names: 100,
   display_result: 140,
   action: 90,
 };
@@ -557,6 +562,21 @@ export default function Dashboard() {
     return isWithinRange(t.plan_date, teamTaskDateRange);
   });
 
+  const renderSharedToNames = (value) => (
+    value
+      ? <Tooltip title={value}>{value}</Tooltip>
+      : <Text type="secondary">-</Text>
+  );
+
+  const sharedTaskColumn = {
+    title: '共享人',
+    dataIndex: 'shared_to_names',
+    key: 'shared_to_names',
+    width: 140,
+    ellipsis: true,
+    render: renderSharedToNames,
+  };
+
   const executionTaskColumns = [
     {
       title: '任务',
@@ -594,6 +614,7 @@ export default function Dashboard() {
           : <Text>{name || '-'}</Text>
       ),
     },
+    sharedTaskColumn,
     {
       title: '计划日期',
       dataIndex: 'plan_date',
@@ -698,6 +719,7 @@ export default function Dashboard() {
       width: 100,
       render: (name) => <Tag icon={<UserOutlined />}>{name}</Tag>,
     },
+    sharedTaskColumn,
     {
       title: '计划日期',
       dataIndex: 'plan_date',
@@ -788,6 +810,7 @@ export default function Dashboard() {
       width: 110,
       render: (value) => value || <Text type="secondary">-</Text>,
     },
+    sharedTaskColumn,
     {
       title: '计划日期',
       dataIndex: 'plan_date',
@@ -876,6 +899,7 @@ export default function Dashboard() {
       width: 110,
       render: (value) => value || <Text type="secondary">-</Text>,
     },
+    sharedTaskColumn,
     {
       title: '计划日期',
       dataIndex: 'plan_date',
