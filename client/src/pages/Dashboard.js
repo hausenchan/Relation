@@ -208,7 +208,8 @@ export default function Dashboard() {
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
-  const canViewTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || isExecutive() || (user?.managed_team_ids?.length > 0);
+  const canManageTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || isExecutive() || (user?.managed_team_ids?.length > 0);
+  const canViewTeamTasks = canManageTeamTasks || teamTasks.length > 0;
   const hideRelationshipPanels = stats?.showRelationshipPanels === false || ['operation', 'rd'].includes(user?.department);
 
   useEffect(() => {
@@ -220,18 +221,16 @@ export default function Dashboard() {
     const timer = setInterval(async () => {
       try {
         const allTasks = await tasksApi.list({ parent_id: 'null' });
-        const allFollowUpData = await followUpTasksApi.list(canViewTeamTasks ? { all: '1' } : {});
+        const allFollowUpData = await followUpTasksApi.list(canManageTeamTasks ? { all: '1' } : {});
         const watchedFollowUpData = await followUpTasksApi.watch();
         setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
         setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
         setWatchedTasks(buildWatchedTasks(watchedFollowUpData));
-        if (canViewTeamTasks) {
-          setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
-        }
+        setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
       } catch {}
     }, 30000);
     return () => clearInterval(timer);
-  }, [canViewTeamTasks]);
+  }, [canManageTeamTasks]);
 
   useEffect(() => {
     if (canAssignOthers) {
@@ -325,10 +324,11 @@ export default function Dashboard() {
 
   const buildTeamTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
+      .filter(t => canManageTeamTasks || Number(t.shared_to_me) === 1)
       .map(t => ({
         ...t,
         task_source: 'normal',
-        task_source_label: '日常指派',
+        task_source_label: Number(t.shared_to_me) === 1 && !canManageTeamTasks ? '共享任务' : '日常指派',
         plan_date: t.date,
         start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
         complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
@@ -340,7 +340,7 @@ export default function Dashboard() {
         follower_name: t.assigned_to_name,
       }));
 
-    const followUpItems = allFollowUpData
+    const followUpItems = canManageTeamTasks ? allFollowUpData
       .map(t => ({
         ...t,
         id: `follow_up_${t.id}`,
@@ -355,7 +355,7 @@ export default function Dashboard() {
         display_result: t.done_note || '',
         assigner_name: t.assigned_by_name,
         follower_name: t.assigned_to_name,
-      }));
+      })) : [];
 
     return [...normalTasks, ...followUpItems].sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
   };
@@ -398,16 +398,12 @@ export default function Dashboard() {
       setReminders(remindersData);
 
       const allTasks = await tasksApi.list({ parent_id: 'null' });
-      const allFollowUpData = await followUpTasksApi.list(canViewTeamTasks ? { all: '1' } : {});
+      const allFollowUpData = await followUpTasksApi.list(canManageTeamTasks ? { all: '1' } : {});
       const watchedFollowUpData = await followUpTasksApi.watch();
       setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
       setWatchedTasks(buildWatchedTasks(watchedFollowUpData));
-      if (canViewTeamTasks) {
-        setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
-      } else {
-        setTeamTasks([]);
-      }
+      setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
 
     } catch (err) {
       console.error('加载数据失败:', err);
@@ -425,6 +421,7 @@ export default function Dashboard() {
       date: dayjs(),
       priority: 'medium',
       assigned_to: user?.id,
+      shared_to: [],
       result: '',
     });
     setModalOpen(true);
@@ -435,6 +432,9 @@ export default function Dashboard() {
     form.setFieldsValue({
       ...record,
       date: record.date ? dayjs(record.date) : null,
+      shared_to: record.shared_to_ids
+        ? String(record.shared_to_ids).split(',').map(Number).filter(Boolean)
+        : [],
     });
     setModalOpen(true);
   };
@@ -510,6 +510,11 @@ export default function Dashboard() {
     }
   };
 
+  const canEditTaskRecord = (record) => (
+    record?.task_source === 'normal'
+    && (record.created_by === user?.id || record.assigned_to === user?.id || ['admin', 'sales_director'].includes(user?.role))
+  );
+
   const handleUpdateStatus = async (id, status) => {
     try {
       await tasksApi.update(id, { status });
@@ -569,7 +574,7 @@ export default function Dashboard() {
       dataIndex: 'task_source_label',
       key: 'task_source_label',
       width: 100,
-      render: (value, record) => <Tag color={record.task_source === 'opportunity' ? 'purple' : 'blue'}>{value}</Tag>,
+      render: (value, record) => <Tag color={record.task_source === 'opportunity' ? 'purple' : Number(record.shared_to_me) === 1 ? 'cyan' : 'blue'}>{value}</Tag>,
     },
     {
       title: '优先级',
@@ -911,7 +916,7 @@ export default function Dashboard() {
 
   const renderTaskCard = (record, section) => {
     const showViewButton = record.task_source === 'opportunity' || section === 'watched' || section === 'team';
-    const canEdit = record.task_source === 'normal' && section !== 'team' && section !== 'watched';
+    const canEdit = section !== 'team' && section !== 'watched' && canEditTaskRecord(record);
     const canDelete = record.task_source === 'normal' && section === 'execution';
     const canStart = record.task_source === 'normal' && section === 'execution' && record.status === 'pending';
     const canDone = record.task_source === 'normal' && section === 'execution' && record.status === 'in_progress';
@@ -954,6 +959,7 @@ export default function Dashboard() {
 
             <Space wrap size={[6, 6]}>
               {record.priority && <Tag color={priorityMap[record.priority]?.color}>{priorityMap[record.priority]?.label}</Tag>}
+              {Number(record.shared_to_me) === 1 && <Tag color="cyan">共享给我</Tag>}
               {record.plan_date && <Tag>计划 {dayjs(record.plan_date).format('MM-DD')}</Tag>}
               {record.start_date && <Tag color="processing">开始 {dayjs(record.start_date).format('MM-DD')}</Tag>}
               {record.complete_date && <Tag color="success">完成 {dayjs(record.complete_date).format('MM-DD')}</Tag>}
@@ -964,6 +970,7 @@ export default function Dashboard() {
               {record.assigned_to_name && <Typography.Text type="secondary">执行人：{record.assigned_to_name}</Typography.Text>}
               {record.assigner_name && <Typography.Text type="secondary">指派人：{record.assigner_name}</Typography.Text>}
               {record.follower_name && <Typography.Text type="secondary">跟进人：{record.follower_name}</Typography.Text>}
+              {record.shared_to_names && <Typography.Text type="secondary">共享给：{record.shared_to_names}</Typography.Text>}
             </div>
 
             {record.display_result && (
@@ -994,7 +1001,12 @@ export default function Dashboard() {
                 </Popconfirm>
               )}
               {showViewButton && (
-                <Button type={isMobile ? 'default' : 'link'} size="small" style={{ width: isMobile ? '100%' : undefined }} onClick={() => navigate('/follow-up-tasks')}>
+                <Button
+                  type={isMobile ? 'default' : 'link'}
+                  size="small"
+                  style={{ width: isMobile ? '100%' : undefined }}
+                  onClick={() => (record.task_source === 'opportunity' ? navigate('/follow-up-tasks') : openTaskDetail(record))}
+                >
                   查看
                 </Button>
               )}
@@ -1463,6 +1475,16 @@ export default function Dashboard() {
               />
             </Form.Item>
           )}
+          <Form.Item label="共享给" name="shared_to">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              placeholder="选择可在团队任务中查看此任务的成员"
+              optionFilterProp="label"
+              options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
+            />
+          </Form.Item>
         </Form>
       </Modal>
 
@@ -1473,7 +1495,7 @@ export default function Dashboard() {
         width={isMobile ? '100%' : 520}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
         extra={
-          detailRecord?.task_source === 'normal' && (
+          canEditTaskRecord(detailRecord) && (
             <Button
               icon={<EditOutlined />}
               onClick={() => {
@@ -1512,6 +1534,11 @@ export default function Dashboard() {
               <Descriptions.Item label="执行人">
                 {detailRecord.assigned_to_name || detailRecord.follower_name || '-'}
               </Descriptions.Item>
+              {detailRecord.shared_to_names && (
+                <Descriptions.Item label="共享给">
+                  {detailRecord.shared_to_names}
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="任务描述">
                 <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || detailRecord.opportunity_note || '-'}</div>
               </Descriptions.Item>

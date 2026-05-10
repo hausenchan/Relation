@@ -571,6 +571,17 @@ db.exec(`
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS task_shared_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(task_id, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_task_shared_task ON task_shared_users(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_shared_user ON task_shared_users(user_id);
 `);
 
 // tasks 表动态补全 result 字段
@@ -1369,6 +1380,16 @@ function syncLeadWatchers(sourceType, sourceId, watcherIds = []) {
   if (uniqueIds.length > 0) {
     const insert = db.prepare('INSERT OR IGNORE INTO lead_watchers (source_type, source_id, user_id) VALUES (?, ?, ?)');
     uniqueIds.forEach(userId => insert.run(sourceType, sourceId, userId));
+  }
+  return uniqueIds;
+}
+
+function syncTaskSharedUsers(taskId, sharedUserIds = []) {
+  const uniqueIds = [...new Set((sharedUserIds || []).map(id => Number(id)).filter(Boolean))];
+  db.prepare('DELETE FROM task_shared_users WHERE task_id = ?').run(taskId);
+  if (uniqueIds.length > 0) {
+    const insert = db.prepare('INSERT OR IGNORE INTO task_shared_users (task_id, user_id) VALUES (?, ?)');
+    uniqueIds.forEach(userId => insert.run(taskId, userId));
   }
   return uniqueIds;
 }
@@ -2610,7 +2631,23 @@ app.get('/api/tasks', (req, res) => {
       uc.display_name as created_by_name,
       ua.display_name as assigned_to_name,
       tm.name as team_name,
-      p.title as parent_title
+      p.title as parent_title,
+      EXISTS (
+        SELECT 1
+        FROM task_shared_users tsu
+        WHERE tsu.task_id = t.id AND tsu.user_id = ?
+      ) as shared_to_me,
+      (
+        SELECT GROUP_CONCAT(tsu.user_id, ',')
+        FROM task_shared_users tsu
+        WHERE tsu.task_id = t.id
+      ) as shared_to_ids,
+      (
+        SELECT GROUP_CONCAT(u.display_name, '、')
+        FROM task_shared_users tsu
+        LEFT JOIN users u ON tsu.user_id = u.id
+        WHERE tsu.task_id = t.id
+      ) as shared_to_names
     FROM tasks t
     LEFT JOIN users uc ON t.created_by = uc.id
     LEFT JOIN users ua ON t.assigned_to = ua.id
@@ -2618,21 +2655,45 @@ app.get('/api/tasks', (req, res) => {
     LEFT JOIN tasks p ON t.parent_id = p.id
     WHERE 1=1
   `;
-  const params = [];
+  const params = [me];
 
   // 角色数据过滤
   if (role === 'member') {
-    q += ' AND (t.assigned_to = ? OR t.created_by = ?)';
-    params.push(me, me);
+    q += ` AND (
+      t.assigned_to = ?
+      OR t.created_by = ?
+      OR EXISTS (
+        SELECT 1
+        FROM task_shared_users tsu
+        WHERE tsu.task_id = t.id AND tsu.user_id = ?
+      )
+    )`;
+    params.push(me, me, me);
   } else if (role === 'leader') {
     const ids = getVisibleUserIds(me, role) || [me];
-    q += ` AND (t.assigned_to IN (${ids.map(() => '?').join(',')}) OR t.created_by IN (${ids.map(() => '?').join(',')}))`;
-    params.push(...ids, ...ids);
+    q += ` AND (
+      t.assigned_to IN (${ids.map(() => '?').join(',')})
+      OR t.created_by IN (${ids.map(() => '?').join(',')})
+      OR EXISTS (
+        SELECT 1
+        FROM task_shared_users tsu
+        WHERE tsu.task_id = t.id AND tsu.user_id = ?
+      )
+    )`;
+    params.push(...ids, ...ids, me);
   } else if (role === 'sales_director') {
     const ids = getVisibleUserIds(me, role);
     if (ids?.length) {
-      q += ` AND (t.assigned_to IN (${ids.map(() => '?').join(',')}) OR t.created_by IN (${ids.map(() => '?').join(',')}))`;
-      params.push(...ids, ...ids);
+      q += ` AND (
+        t.assigned_to IN (${ids.map(() => '?').join(',')})
+        OR t.created_by IN (${ids.map(() => '?').join(',')})
+        OR EXISTS (
+          SELECT 1
+          FROM task_shared_users tsu
+          WHERE tsu.task_id = t.id AND tsu.user_id = ?
+        )
+      )`;
+      params.push(...ids, ...ids, me);
     }
   }
   // admin: 不过滤
@@ -2718,7 +2779,7 @@ app.get('/api/tasks/board', (req, res) => {
 
 // 创建任务
 app.post('/api/tasks', (req, res) => {
-  const { title, description, date, priority, assigned_to, team_id, parent_id, result } = req.body;
+  const { title, description, date, priority, assigned_to, team_id, parent_id, result, shared_to } = req.body;
   const { id: me } = req.user;
   if (!title || !date || !assigned_to) return res.status(400).json({ error: '标题、日期、被指派人必填' });
 
@@ -2753,12 +2814,16 @@ app.post('/api/tasks', (req, res) => {
     enc.result || null
   );
 
+  if (Array.isArray(shared_to)) {
+    syncTaskSharedUsers(r.lastInsertRowid, shared_to);
+  }
+
   res.json({ id: r.lastInsertRowid });
 });
 
 // 更新任务
 app.put('/api/tasks/:id', (req, res) => {
-  const { title, description, status, priority, date, result } = req.body;
+  const { title, description, status, priority, date, result, shared_to } = req.body;
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
 
@@ -2791,6 +2856,9 @@ app.put('/api/tasks/:id', (req, res) => {
     merged.result,
     req.params.id
   );
+  if (Array.isArray(shared_to) && (task.created_by === me || isAdmin(role) || role === 'sales_director')) {
+    syncTaskSharedUsers(req.params.id, shared_to);
+  }
   res.json({ success: true });
 });
 
@@ -2802,7 +2870,9 @@ app.delete('/api/tasks/:id', (req, res) => {
   if (task.created_by !== me && !isAdmin(role)) return res.status(403).json({ error: '无权删除' });
   if (task.status !== 'pending' && !isAdmin(role)) return res.status(400).json({ error: '只能删除待处理的任务' });
   // 同时删除子任务
+  db.prepare('DELETE FROM task_shared_users WHERE task_id IN (SELECT id FROM tasks WHERE parent_id = ?)').run(req.params.id);
   db.prepare('DELETE FROM tasks WHERE parent_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM task_shared_users WHERE task_id = ?').run(req.params.id);
   db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
