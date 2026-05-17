@@ -241,7 +241,7 @@ export default function Opportunities() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: false }}
           locale={{ emptyText: '暂无商机记录' }}
           renderItem={renderOpportunityCard}
         />
@@ -252,7 +252,7 @@ export default function Opportunities() {
           rowKey="id"
           loading={loading}
           size="small"
-          pagination={{ pageSize: 20 }}
+          pagination={{ defaultPageSize: 20 }}
           locale={{ emptyText: '暂无商机记录' }}
           expandable={{
             expandedRowRender: r => (

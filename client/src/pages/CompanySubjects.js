@@ -266,7 +266,7 @@ export default function CompanySubjects() {
         </div>
 
         {isMobile ? (
-          <List dataSource={rows} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} locale={{ emptyText: '暂无主体' }} renderItem={renderCard} />
+          <List dataSource={rows} rowKey="id" loading={loading} pagination={{ defaultPageSize: 20, showSizeChanger: false }} locale={{ emptyText: '暂无主体' }} renderItem={renderCard} />
         ) : (
           <ResizableTable
             storageKey="company-subjects-table-columns"
@@ -279,7 +279,7 @@ export default function CompanySubjects() {
               onDoubleClick: (event) => openDetailFromRowDoubleClick(record, event),
               style: { cursor: 'pointer' },
             })}
-            pagination={{ pageSize: 20, showTotal: total => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: total => `共 ${total} 条` }}
           />
         )}
       </Card>

@@ -285,7 +285,7 @@ export default function Budgets() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: false }}
           locale={{ emptyText: '暂无预算记录' }}
           renderItem={renderBudgetCard}
         />
@@ -296,7 +296,7 @@ export default function Budgets() {
           rowKey="id"
           loading={loading}
           scroll={{ x: 1600 }}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
         />
       )}
 

@@ -673,7 +673,7 @@ function Goals() {
             loading={loading}
             dataSource={goals}
             locale={{ emptyText: '暂无目标数据' }}
-            pagination={{ pageSize: 10, showSizeChanger: false, simple: isMobile }}
+            pagination={{ defaultPageSize: 10, showSizeChanger: false, simple: isMobile }}
             renderItem={(record) => (
               <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
                 {renderGoalCard(record)}
@@ -687,7 +687,7 @@ function Goals() {
             columns={resizableColumns}
             dataSource={goals}
             components={resizableTableComponents}
-            pagination={{ pageSize: 10, showSizeChanger: true }}
+            pagination={{ defaultPageSize: 10, showSizeChanger: true }}
             scroll={{ x: scrollX }}
             tableLayout="fixed"
             onRow={(record) => ({

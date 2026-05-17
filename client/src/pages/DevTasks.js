@@ -549,7 +549,7 @@ export default function DevTasks() {
             dataSource={tasks}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: false }}
             locale={{ emptyText: '暂无需求记录' }}
             renderItem={renderTaskCard}
           />
@@ -561,7 +561,7 @@ export default function DevTasks() {
             rowKey="id"
             loading={loading}
             scroll={{ x: 1680 }}
-            pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
           />
         )}
       </Card>

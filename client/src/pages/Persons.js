@@ -712,7 +712,7 @@ export default function Persons() {
 
   const downloadTemplate = () => {
     const header = CSV_COLUMNS.map(c => c.labels[0]).join(',');
-    const example = '张三,business,client_potential,13800138000,zhang3,zhang3@example.com,北京,示例公司,销售总监,互联网,1990-01-01,,重点客户,行业资源丰富,寻求融资对接,首次见面于行业峰会';
+    const example = '张三,business,client_potential,13800138000,zhang3,zhang3@example.com,北京,示例公司,销售总监,互联网,1990-01-01,,重点客户,行业资源丰富,寻求融资对接,首次见面于行业峰会,medium';
     const content = '\uFEFF' + header + '\n' + example; // BOM 让 Excel 正确识别 UTF-8
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -1179,7 +1179,7 @@ export default function Persons() {
           loading={loading}
           dataSource={data}
           locale={{ emptyText: '暂无人脉数据' }}
-          pagination={{ pageSize: 15, showSizeChanger: false, simple: isMobile }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false, simple: isMobile }}
           renderItem={renderPersonCard}
         />
       ) : (
@@ -1191,7 +1191,7 @@ export default function Persons() {
           loading={loading}
           size="small"
           scroll={{ x: 1000 }}
-          pagination={{ pageSize: 15 }}
+          pagination={{ defaultPageSize: 15 }}
           onRow={(record) => ({
             onDoubleClick: () => (canEditPerson(record) ? openEdit(record) : openDetail(record)),
             style: { cursor: 'pointer' }
@@ -1564,6 +1564,7 @@ export default function Persons() {
                 <li><b>姓名</b>建议只填姓名，最长 {PERSON_NAME_MAX_LENGTH} 个字符</li>
                 <li><b>圈子分类</b>填英文值：business / talent / startup / social</li>
                 <li><b>关系类型</b>填英文值（多个用逗号分隔）：client_potential / client_active / talent_external / talent_internal / partner / investor / family / friend / other</li>
+                <li><b>权重</b>填英文值：high / medium / low，留空默认 medium</li>
               </ul>
             }
           />
@@ -1600,6 +1601,7 @@ export default function Persons() {
                             {(row.company || '未填写公司')} · {(row.position || '未填写职位')}
                           </Typography.Text>
                           {row.phone && <Typography.Text type="secondary">手机：{row.phone}</Typography.Text>}
+                          {row.weight && <Typography.Text type="secondary">权重：{row.weight}</Typography.Text>}
                         </Space>
                       </div>
                     </List.Item>
@@ -1619,6 +1621,7 @@ export default function Persons() {
                     { title: '手机', dataIndex: 'phone', width: 120 },
                     { title: '公司', dataIndex: 'company', ellipsis: true },
                     { title: '职位', dataIndex: 'position', ellipsis: true },
+                    { title: '权重', dataIndex: 'weight', width: 80 },
                   ]}
                 />
               )}

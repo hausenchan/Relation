@@ -186,14 +186,14 @@ export default function ExecutiveDynamics() {
           </Space>
         )}
         {isMobile ? (
-          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderDynamicCard} />
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ defaultPageSize: 20, showSizeChanger: false }} renderItem={renderDynamicCard} />
         ) : (
           <Table
             dataSource={data}
             columns={columns}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
           />
         )}
       </Card>

@@ -129,12 +129,12 @@ export default function GiftsPage() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: false }}
           locale={{ emptyText: '暂无礼品数据' }}
           renderItem={renderGiftCard}
         />
       ) : (
-        <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={{ pageSize: 20 }} />
+        <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small" pagination={{ defaultPageSize: 20 }} />
       )}
 
       <Modal

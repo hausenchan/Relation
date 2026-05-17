@@ -864,7 +864,7 @@ export default function Strategies() {
             dataSource={getFilteredData()}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: false }}
             locale={{ emptyText: '暂无策略记录' }}
             renderItem={renderStrategyCard}
           />
@@ -876,7 +876,7 @@ export default function Strategies() {
             rowKey="id"
             loading={loading}
             scroll={{ x: 1920 }}
-            pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
           />
         )}
       </Card>

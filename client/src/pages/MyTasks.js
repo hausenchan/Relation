@@ -340,7 +340,7 @@ export default function MyTasks() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 30, showSizeChanger: false, simple: isMobile }}
+          pagination={{ defaultPageSize: 30, showSizeChanger: false, simple: isMobile }}
           locale={{ emptyText: '暂无任务数据' }}
           renderItem={renderTaskCard}
         />
@@ -351,7 +351,7 @@ export default function MyTasks() {
           rowKey="id"
           loading={loading}
           size="small"
-          pagination={{ pageSize: 30 }}
+          pagination={{ defaultPageSize: 30 }}
           rowClassName={r => r.status === 'done' ? 'task-done-row' : ''}
         />
       )}

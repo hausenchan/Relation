@@ -648,7 +648,7 @@ export default function Leads() {
             dataSource={data}
             rowKey={(record) => `${record.source_type}-${record.source_id}`}
             loading={loading}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: false }}
             locale={{ emptyText: '暂无商机记录' }}
             renderItem={renderLeadCard}
           />
@@ -662,7 +662,7 @@ export default function Leads() {
             size="middle"
             scroll={{ x: 1150 }}
             tableLayout="fixed"
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             locale={{ emptyText: '暂无商机记录' }}
             onRow={(record) => ({
               onClick: () => openDetail(record),

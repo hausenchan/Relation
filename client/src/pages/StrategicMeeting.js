@@ -218,7 +218,7 @@ export default function StrategicMeeting() {
           </Space>
         )}
         {isMobile ? (
-          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderMeetingCard} />
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ defaultPageSize: 20, showSizeChanger: false }} renderItem={renderMeetingCard} />
         ) : (
           <ResizableTable
             storageKey="strategic-meeting-table-columns"
@@ -226,7 +226,7 @@ export default function StrategicMeeting() {
             columns={columns}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
           />
         )}
       </Card>

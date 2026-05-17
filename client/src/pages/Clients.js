@@ -220,7 +220,7 @@ export default function Clients() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
           locale={{ emptyText: '暂无客户' }}
           renderItem={renderClientCard}
         />
@@ -232,7 +232,7 @@ export default function Clients() {
           loading={loading}
           size="small"
           scroll={{ x: 800 }}
-          pagination={{ pageSize: 15 }}
+          pagination={{ defaultPageSize: 15 }}
         />
       )}
 

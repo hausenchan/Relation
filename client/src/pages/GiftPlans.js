@@ -214,12 +214,12 @@ export default function GiftPlansPage() {
           dataSource={plans}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
           locale={{ emptyText: '暂无送礼计划' }}
           renderItem={renderPlanCard}
         />
       ) : (
-        <Table columns={planColumns} dataSource={plans} rowKey="id" loading={loading} size="small" pagination={{ pageSize: 15 }} />
+        <Table columns={planColumns} dataSource={plans} rowKey="id" loading={loading} size="small" pagination={{ defaultPageSize: 15 }} />
       )}
 
       {/* 计划编辑 Modal */}

@@ -477,7 +477,7 @@ export default function RecruitRadar() {
                 rowKey={(g) => g.geek_id || `_${g.latest.id}`}
                 loading={loading}
                 onRow={(g) => ({ onClick: () => openDetail(g.latest), style: { cursor: 'pointer' } })}
-                pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 人` }}
+                pagination={{ defaultPageSize: 50, showTotal: (t) => `共 ${t} 人` }}
                 scroll={isMobile ? { x: 800 } : undefined}
               />
             ) : isMobile ? (
@@ -495,7 +495,7 @@ export default function RecruitRadar() {
                 rowKey="id"
                 loading={loading}
                 onRow={(record) => ({ onClick: () => openDetail(record), style: { cursor: 'pointer' } })}
-                pagination={{ current: page, total, pageSize: 50, onChange: setPage, showTotal: (t) => `共 ${t} 条` }}
+                pagination={{ current: page, total, pageSize: 50, onChange: setPage, showSizeChanger: false, showTotal: (t) => `共 ${t} 条` }}
               />
             )}
           </Card>

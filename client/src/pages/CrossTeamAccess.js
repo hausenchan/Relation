@@ -227,7 +227,7 @@ export default function CrossTeamAccess() {
             dataSource={data}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: false }}
             locale={{ emptyText: '暂无权限记录' }}
             renderItem={renderAccessCard}
           />
@@ -237,7 +237,7 @@ export default function CrossTeamAccess() {
             dataSource={data}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20 }}
+            pagination={{ defaultPageSize: 20 }}
           />
         )}
       </Card>

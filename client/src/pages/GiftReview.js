@@ -145,13 +145,13 @@ function ReviewTab() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
           locale={{ emptyText: '暂无申请数据' }}
           renderItem={renderRequestCard}
         />
       ) : (
         <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small"
-          pagination={{ pageSize: 15 }} scroll={{ x: 1000 }} />
+          pagination={{ defaultPageSize: 15 }} scroll={{ x: 1000 }} />
       )}
 
       <Modal
@@ -295,13 +295,13 @@ function RecordsTab() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
           locale={{ emptyText: '暂无送礼记录' }}
           renderItem={renderRecordCard}
         />
       ) : (
         <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small"
-          pagination={{ pageSize: 15 }} scroll={{ x: 1100 }} />
+          pagination={{ defaultPageSize: 15 }} scroll={{ x: 1100 }} />
       )}
 
       <Modal title="更新送礼状态 & 回填反馈" open={editModal}

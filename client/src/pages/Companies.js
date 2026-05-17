@@ -1008,7 +1008,7 @@ function CompetitorResearchTab({ companyId }) {
           dataSource={data}
           rowKey="id"
           locale={{ emptyText: '暂无研究记录' }}
-          pagination={{ pageSize: 10, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 10, showSizeChanger: false }}
           renderItem={renderResearchCard}
         />
       ) : (
@@ -1018,7 +1018,7 @@ function CompetitorResearchTab({ companyId }) {
           columns={columns}
           rowKey="id"
           size="small"
-          pagination={{ pageSize: 10, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 10, showSizeChanger: false }}
           scroll={{ x: 860 }}
           onRow={(record) => ({
             onDoubleClick: () => setDetailRecord(record),
@@ -1866,7 +1866,7 @@ export default function Companies() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
           locale={{ emptyText: '暂无公司数据' }}
           renderItem={renderCompanyCard}
         />
@@ -1879,7 +1879,7 @@ export default function Companies() {
           loading={loading}
           size="small"
           scroll={{ x: 1000 }}
-          pagination={{ pageSize: 15 }}
+          pagination={{ defaultPageSize: 15 }}
           onRow={record => ({
             onDoubleClick: () => openDetail(record),
             style: { cursor: 'pointer' },

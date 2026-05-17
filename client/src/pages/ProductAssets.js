@@ -665,7 +665,7 @@ export default function ProductAssets() {
             dataSource={rows}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showSizeChanger: false }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: false }}
             locale={{ emptyText: '暂无产品资产' }}
             renderItem={renderAssetCard}
           />
@@ -681,7 +681,7 @@ export default function ProductAssets() {
               onDoubleClick: (event) => openDetailFromRowDoubleClick(record, event),
               style: { cursor: 'pointer' },
             })}
-            pagination={{ pageSize: 20, showTotal: total => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: total => `共 ${total} 条` }}
           />
         )}
       </Card>

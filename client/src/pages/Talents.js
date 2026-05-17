@@ -241,7 +241,7 @@ export default function Talents() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
           locale={{ emptyText: '暂无人才' }}
           renderItem={renderTalentCard}
         />
@@ -253,7 +253,7 @@ export default function Talents() {
           loading={loading}
           size="small"
           scroll={{ x: 900 }}
-          pagination={{ pageSize: 15 }}
+          pagination={{ defaultPageSize: 15 }}
         />
       )}
 

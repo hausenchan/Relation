@@ -199,7 +199,7 @@ export default function ExecutiveTalents() {
           </Space>
         )}
         {isMobile ? (
-          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderTalentCard} />
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ defaultPageSize: 20, showSizeChanger: false }} renderItem={renderTalentCard} />
         ) : (
           <Table
             dataSource={data}
@@ -209,7 +209,7 @@ export default function ExecutiveTalents() {
             components={resizableTableComponents}
             scroll={{ x: scrollX }}
             tableLayout="fixed"
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
           />
         )}
       </Card>

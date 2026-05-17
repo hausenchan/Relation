@@ -523,7 +523,7 @@ export default function WeeklyReports() {
           loading={loading}
           dataSource={reports}
           locale={{ emptyText: '暂无周报数据' }}
-          pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
           renderItem={renderReportCard}
         />
       ) : (
@@ -535,7 +535,7 @@ export default function WeeklyReports() {
           components={resizableTableComponents}
           scroll={{ x: scrollX }}
           tableLayout="fixed"
-          pagination={{ pageSize: 20 }}
+          pagination={{ defaultPageSize: 20 }}
           onRow={(record) => ({
             onDoubleClick: () => showDetail(record),
             style: { cursor: 'pointer' },

@@ -604,7 +604,7 @@ export default function Trips() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 15, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
           locale={{ emptyText: '暂无出差申请' }}
           renderItem={renderTripCard}
         />
@@ -615,7 +615,7 @@ export default function Trips() {
           rowKey="id"
           loading={loading}
           size="small"
-          pagination={{ pageSize: 15 }}
+          pagination={{ defaultPageSize: 15 }}
           onRow={r => ({ onDoubleClick: () => openDetail(r), style: { cursor: 'pointer' } })}
         />
       )}

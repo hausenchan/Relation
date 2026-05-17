@@ -137,7 +137,7 @@ export default function ExecutiveCustomers() {
         }
       >
         {isMobile ? (
-          <List dataSource={data} rowKey="id" loading={loading} pagination={{ pageSize: 20, showSizeChanger: false }} renderItem={renderCustomerCard} />
+          <List dataSource={data} rowKey="id" loading={loading} pagination={{ defaultPageSize: 20, showSizeChanger: false }} renderItem={renderCustomerCard} />
         ) : (
           <Table
             dataSource={data}
@@ -147,7 +147,7 @@ export default function ExecutiveCustomers() {
             components={resizableTableComponents}
             scroll={{ x: scrollX }}
             tableLayout="fixed"
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
           />
         )}
       </Card>

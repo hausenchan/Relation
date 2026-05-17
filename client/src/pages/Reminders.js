@@ -214,7 +214,7 @@ export default function Reminders() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
           locale={{ emptyText: '暂无提醒' }}
           renderItem={renderReminderCard}
         />
@@ -226,7 +226,7 @@ export default function Reminders() {
           loading={loading}
           size="small"
           rowClassName={r => r.done ? 'done-row' : ''}
-          pagination={{ pageSize: 20 }}
+          pagination={{ defaultPageSize: 20 }}
         />
       )}
 

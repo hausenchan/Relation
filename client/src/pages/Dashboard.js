@@ -1092,7 +1092,7 @@ export default function Dashboard() {
               dataSource={filteredAssignedTasks}
               rowKey="id"
               loading={loading}
-              pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
+              pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
               locale={{ emptyText: '暂无任务数据' }}
               renderItem={(record) => renderTaskCard(record, 'assigned')}
             />
@@ -1106,7 +1106,7 @@ export default function Dashboard() {
               loading={loading}
               scroll={{ x: getTaskTableScrollX('assigned') }}
               tableLayout="fixed"
-              pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+              pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
               size="small"
             />
           )}
@@ -1164,7 +1164,7 @@ export default function Dashboard() {
               dataSource={filteredExecutionTasks}
               rowKey="id"
               loading={loading}
-              pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
+              pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
               locale={{ emptyText: '暂无任务数据' }}
               renderItem={(record) => renderTaskCard(record, 'execution')}
             />
@@ -1178,7 +1178,7 @@ export default function Dashboard() {
               loading={loading}
               scroll={{ x: getTaskTableScrollX('execution') }}
               tableLayout="fixed"
-              pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+              pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
               size="small"
             />
           )}
@@ -1235,7 +1235,7 @@ export default function Dashboard() {
             dataSource={filteredWatchedTasks}
             rowKey="id"
             loading={loading}
-            pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
+            pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
             locale={{ emptyText: '暂无任务数据' }}
             renderItem={(record) => renderTaskCard(record, 'watched')}
           />
@@ -1249,7 +1249,7 @@ export default function Dashboard() {
             loading={loading}
             scroll={{ x: getTaskTableScrollX('watched') }}
             tableLayout="fixed"
-            pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+            pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             size="small"
           />
         )}
@@ -1324,7 +1324,7 @@ export default function Dashboard() {
               dataSource={filteredTeamTasks}
               rowKey="id"
               loading={loading}
-              pagination={{ pageSize: 20, showSizeChanger: false, simple: isMobile }}
+              pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
               locale={{ emptyText: '暂无任务数据' }}
               renderItem={(record) => renderTaskCard(record, 'team')}
             />
@@ -1338,7 +1338,7 @@ export default function Dashboard() {
               loading={loading}
               scroll={{ x: getTaskTableScrollX('team') }}
               tableLayout="fixed"
-              pagination={{ pageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+              pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
               size="small"
             />
           )}

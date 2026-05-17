@@ -356,7 +356,7 @@ export default function Interactions() {
           dataSource={data}
           rowKey="id"
           loading={loading}
-          pagination={{ pageSize: 20, showSizeChanger: false }}
+          pagination={{ defaultPageSize: 20, showSizeChanger: false }}
           locale={{ emptyText: '暂无互动记录' }}
           renderItem={renderInteractionCard}
         />
@@ -369,7 +369,7 @@ export default function Interactions() {
           loading={loading}
           size="small"
           scroll={{ x: 900 }}
-          pagination={{ pageSize: 20 }}
+          pagination={{ defaultPageSize: 20 }}
           onRow={(record) => ({
             onDoubleClick: () => setDetailRecord(record),
             style: { cursor: 'pointer' },
