@@ -48,6 +48,12 @@ const weightMap = {
 const WARN_DAYS = 30;
 const ZOOM_THRESHOLD = 10; // 缩放>=10切换为个人标点
 
+function normalizeCoordinate(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
 // 注入呼吸动画样式（仅一次）
 if (typeof document !== 'undefined' && !document.getElementById('person-marker-style')) {
   const style = document.createElement('style');
@@ -243,8 +249,8 @@ export default function PersonsMap() {
     return Object.entries(cityGroups)
       .map(([city, persons]) => {
         const precisePersons = persons
-          .map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }))
-          .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+          .map(p => ({ lat: normalizeCoordinate(p.lat), lng: normalizeCoordinate(p.lng) }))
+          .filter(p => p.lat !== null && p.lng !== null);
         let lat;
         let lng;
         if (precisePersons.length > 0) {
@@ -264,9 +270,10 @@ export default function PersonsMap() {
   // 个人标点数据
   const personPoints = useMemo(() => {
     return data.map(p => {
-      let lat = p.lat, lng = p.lng;
+      let lat = normalizeCoordinate(p.lat);
+      let lng = normalizeCoordinate(p.lng);
       let approximate = false;
-      if (lat == null || lng == null) {
+      if (lat === null || lng === null) {
         const fallback = jitteredCityCoord(p.id, p.city);
         if (!fallback) return null;
         lat = fallback.lat;
@@ -362,7 +369,7 @@ export default function PersonsMap() {
           initialFitDoneRef.current = true;
           if (cityPoints.length === 1) {
             map.setCenter(new TMap.LatLng(cityPoints[0].lat, cityPoints[0].lng));
-            map.setZoom(10);
+            map.setZoom(ZOOM_THRESHOLD - 1);
           } else {
             const bounds = new TMap.LatLngBounds();
             cityPoints.forEach(pt => bounds.extend(new TMap.LatLng(pt.lat, pt.lng)));
