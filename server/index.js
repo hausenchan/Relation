@@ -2228,12 +2228,14 @@ async function refreshPersonMapCoordinates(rows) {
 
 // 人脉地图数据（精简字段 + 上次联系时间）
 app.get('/api/persons/map', async (req, res) => {
-  const { city, person_category, relationship_level, weight } = req.query;
+  const { search, city, person_category, relationship_level, weight, created_by } = req.query;
   const { id: me, role } = req.user;
   let query = `SELECT p.id, p.name, p.company, p.city, p.address, p.lat, p.lng, p.geocode_address, p.person_category, p.relationship_level, p.weight, p.phone,
+    p.created_by, COALESCE(u.display_name, u.username) as created_by_name,
     (SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id) as last_interaction_date,
     CAST(julianday('now') - julianday((SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id)) AS INTEGER) as days_since_contact
     FROM persons p
+    LEFT JOIN users u ON p.created_by = u.id
     WHERE ((p.city IS NOT NULL AND p.city != '') OR (p.address IS NOT NULL AND p.address != ''))`;
   const params = [];
 
@@ -2257,11 +2259,16 @@ app.get('/api/persons/map', async (req, res) => {
   if (person_category) { query += ' AND p.person_category = ?'; params.push(person_category); }
   if (relationship_level) { query += ' AND p.relationship_level = ?'; params.push(relationship_level); }
   if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
+  if (created_by) { query += ' AND p.created_by = ?'; params.push(created_by); }
 
   query += ' ORDER BY p.city, p.name';
   try {
     const rows = decryptRows('persons', db.prepare(query).all(...params));
-    res.json(await refreshPersonMapCoordinates(rows));
+    const keyword = String(search || '').trim().toLowerCase();
+    const filteredRows = keyword
+      ? rows.filter(row => String(row.name || '').toLowerCase().includes(keyword))
+      : rows;
+    res.json(await refreshPersonMapCoordinates(filteredRows));
   } catch (err) {
     console.error('persons map failed:', err);
     res.status(500).json({ error: '地图数据加载失败' });

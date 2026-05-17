@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Select, Space, Tag, List, Typography, Spin, Badge, Empty } from 'antd';
+import { Input, Select, Space, Tag, List, Typography, Spin, Badge, Empty } from 'antd';
 import { EnvironmentOutlined, WarningOutlined } from '@ant-design/icons';
-import { personsApi } from '../api';
+import { personsApi, usersApi } from '../api';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -146,9 +146,19 @@ function loadTMapSDK() {
 }
 
 export default function PersonsMap() {
+  const currentUser = useMemo(() => {
+    try {
+      return JSON.parse(localStorage.getItem('user') || 'null');
+    } catch {
+      return null;
+    }
+  }, []);
+  const [filterName, setFilterName] = useState('');
   const [filterCity, setFilterCity] = useState([]);
   const [filterCategory, setFilterCategory] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
+  const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
+  const [creatorUsers, setCreatorUsers] = useState([]);
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [mapReady, setMapReady] = useState(false);
@@ -213,13 +223,23 @@ export default function PersonsMap() {
     };
   }, []);
 
+  useEffect(() => {
+    usersApi.listSimple({ include_readonly: true })
+      .then(setCreatorUsers)
+      .catch(() => {
+        setCreatorUsers(currentUser ? [currentUser] : []);
+      });
+  }, [currentUser]);
+
   // 加载数据
   const loadData = useCallback(async () => {
     setLoading(true);
     const params = {};
+    if (filterName.trim()) params.search = filterName.trim();
     if (filterCity.length > 0) params.city = filterCity.join(',');
     if (filterCategory) params.person_category = filterCategory;
     if (filterWeight) params.weight = filterWeight;
+    if (filterCreatedBy) params.created_by = filterCreatedBy;
     try {
       const res = await personsApi.mapData(params);
       setData(Array.isArray(res) ? res : []);
@@ -227,7 +247,7 @@ export default function PersonsMap() {
       setData([]);
     }
     setLoading(false);
-  }, [filterCity, filterCategory, filterWeight]);
+  }, [filterName, filterCity, filterCategory, filterWeight, filterCreatedBy]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -283,6 +303,7 @@ export default function PersonsMap() {
       return {
         id: p.id, name: p.name, company: p.company,
         address: p.address, city: p.city, phone: p.phone,
+        created_by_name: p.created_by_name,
         lat, lng, approximate,
         days_since_contact: p.days_since_contact,
         weight: p.weight,
@@ -411,6 +432,7 @@ export default function PersonsMap() {
                 <div style="font-weight:700;font-size:15px;color:#333;margin-bottom:6px;">${p.name}</div>
                 ${p.company ? `<div style="font-size:13px;color:#666;margin-bottom:4px;">${p.company}</div>` : ''}
                 ${p.address || p.city ? `<div style="font-size:12px;color:#999;margin-bottom:4px;">${p.city || ''}${p.address ? ' ' + p.address : ''}</div>` : ''}
+                ${p.created_by_name ? `<div style="font-size:12px;color:#999;margin-bottom:4px;">创建人：${p.created_by_name}</div>` : ''}
                 <div style="font-size:12px;color:${warn ? '#ff4d4f' : '#999'};margin-bottom:2px;">上次联系：${daysText}</div>
                 ${p.phone ? `<div style="font-size:12px;color:#999;">电话：${p.phone}</div>` : ''}
               </div>
@@ -465,6 +487,13 @@ export default function PersonsMap() {
       {/* 左侧：筛选 + 列表 */}
       <div style={{ width: 300, flexShrink: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <Space direction="vertical" style={{ width: '100%', marginBottom: 12 }} size={8}>
+          <Input.Search
+            placeholder="搜索姓名"
+            allowClear
+            value={filterName}
+            onSearch={setFilterName}
+            onChange={e => setFilterName(e.target.value)}
+          />
           <Select
             mode="multiple"
             placeholder="选择城市"
@@ -479,6 +508,21 @@ export default function PersonsMap() {
           >
             {CITY_NAMES.map(c => <Option key={c} value={c}>{c}</Option>)}
           </Select>
+          <Select
+            placeholder="创建人"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            style={{ width: '100%' }}
+            value={filterCreatedBy}
+            onChange={setFilterCreatedBy}
+            options={creatorUsers.map(u => ({
+              value: u.id,
+              label: u.id === currentUser?.id
+                ? `${u.display_name || u.username || '我'}（我）`
+                : (u.display_name || u.username || `用户${u.id}`),
+            }))}
+          />
           <Space>
             <Select
               placeholder="圈子"
@@ -529,6 +573,7 @@ export default function PersonsMap() {
                             <div style={{ fontSize: 13 }}>
                               <Text strong>{p.name}</Text>
                               {p.company && <Text type="secondary" style={{ fontSize: 12 }}> · {p.company}</Text>}
+                              {p.created_by_name && <Text type="secondary" style={{ fontSize: 12 }}> · {p.created_by_name}</Text>}
                             </div>
                             <div style={{ fontSize: 11 }}>
                               {warn ? (
