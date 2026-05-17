@@ -54,6 +54,105 @@ function normalizeCoordinate(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+function normalizeGeoText(value) {
+  return String(value || '').trim().replace(/\s+/g, '');
+}
+
+function firstCityFromValue(city) {
+  return String(city || '').split(',')[0].trim();
+}
+
+function addressIncludesCity(address, city) {
+  const normalizedAddress = normalizeGeoText(address);
+  const normalizedCity = normalizeGeoText(city);
+  if (!normalizedAddress || !normalizedCity) return false;
+  const cityWithoutSuffix = normalizedCity.replace(/市$/, '');
+  return normalizedAddress.includes(normalizedCity) ||
+    (cityWithoutSuffix && normalizedAddress.includes(cityWithoutSuffix));
+}
+
+function buildGeocodeQuery(city, address) {
+  const firstCity = firstCityFromValue(city);
+  const cleanAddress = String(address || '').trim();
+  if (cleanAddress) {
+    return firstCity && !addressIncludesCity(cleanAddress, firstCity)
+      ? `${firstCity}${cleanAddress}`
+      : cleanAddress;
+  }
+  return firstCity;
+}
+
+function buildGeocodeKey(city, address) {
+  return normalizeGeoText(buildGeocodeQuery(city, address));
+}
+
+const BEIJING_DISTRICTS = [
+  '东城区', '西城区', '朝阳区', '丰台区', '石景山区', '海淀区', '门头沟区', '房山区',
+  '通州区', '顺义区', '昌平区', '大兴区', '怀柔区', '平谷区', '密云区', '延庆区',
+];
+
+function extractExpectedDistrict(city, address) {
+  const text = normalizeGeoText(`${city || ''}${address || ''}`);
+  const beijingDistrict = BEIJING_DISTRICTS.find(district => text.includes(district));
+  if (beijingDistrict) return beijingDistrict;
+  const matches = text.match(/[\u4e00-\u9fa5]{2,12}(?:区|县|旗)/g) || [];
+  if (matches.length === 0) return '';
+  const district = matches[matches.length - 1];
+  const cityIndex = district.lastIndexOf('市');
+  return cityIndex >= 0 ? district.slice(cityIndex + 1) : district;
+}
+
+function isNearCityCenter(person) {
+  const firstCity = firstCityFromValue(person.city);
+  const cityCoord = CITY_COORDS[firstCity];
+  const lat = normalizeCoordinate(person.lat);
+  const lng = normalizeCoordinate(person.lng);
+  if (!cityCoord || lat === null || lng === null) return false;
+  const [cityLng, cityLat] = cityCoord;
+  return Math.abs(lat - cityLat) <= 0.03 && Math.abs(lng - cityLng) <= 0.03;
+}
+
+function needsClientGeocode(person) {
+  if (!normalizeGeoText(person.address)) return false;
+  const lat = normalizeCoordinate(person.lat);
+  const lng = normalizeCoordinate(person.lng);
+  const geocodeKey = buildGeocodeKey(person.city, person.address);
+  if (!geocodeKey) return false;
+  return lat === null || lng === null || person.geocode_address !== geocodeKey || isNearCityCenter(person);
+}
+
+function buildClientGeocodeCandidates(city, address) {
+  const firstCity = firstCityFromValue(city);
+  const cleanAddress = String(address || '').trim();
+  const fullAddress = buildGeocodeQuery(city, address);
+  const candidates = [];
+  const seen = new Set();
+  const add = (candidate) => {
+    if (!candidate.address) return;
+    const key = `${candidate.region || ''}|${candidate.address}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  if (cleanAddress && firstCity) add({ address: cleanAddress, region: firstCity, region_fix: true });
+  if (fullAddress) add({ address: fullAddress, region: firstCity || undefined, region_fix: Boolean(firstCity) });
+  if (fullAddress) add({ address: fullAddress });
+  return candidates;
+}
+
+function extractGeocodeLocation(result) {
+  const location = result?.result?.location || result?.data?.[0]?.location || result?.location;
+  const lat = normalizeCoordinate(location?.lat);
+  const lng = normalizeCoordinate(location?.lng);
+  if (lat === null || lng === null) return null;
+  const district = result?.result?.address_components?.district ||
+    result?.data?.[0]?.ad_info?.district ||
+    result?.data?.[0]?.address_components?.district ||
+    '';
+  return { lat, lng, district };
+}
+
 // 注入呼吸动画样式（仅一次）
 if (typeof document !== 'undefined' && !document.getElementById('person-marker-style')) {
   const style = document.createElement('style');
@@ -133,9 +232,9 @@ function jitteredCityCoord(personId, city) {
 // 动态加载腾讯地图 SDK
 function loadTMapSDK() {
   return new Promise((resolve, reject) => {
-    if (window.TMap) { resolve(window.TMap); return; }
+    if (window.TMap?.service) { resolve(window.TMap); return; }
     const script = document.createElement('script');
-    script.src = `https://map.qq.com/api/gljs?v=1.exp&key=${TMAP_KEY}`;
+    script.src = `https://map.qq.com/api/gljs?v=1.exp&libraries=service&key=${TMAP_KEY}`;
     script.onload = () => {
       if (window.TMap) resolve(window.TMap);
       else reject(new Error('TMap SDK failed to load'));
@@ -160,6 +259,7 @@ export default function PersonsMap() {
   const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
   const [creatorUsers, setCreatorUsers] = useState([]);
   const [data, setData] = useState([]);
+  const [clientGeocodes, setClientGeocodes] = useState({});
   const [loading, setLoading] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(5);
@@ -194,6 +294,7 @@ export default function PersonsMap() {
         try {
           infoWindowRef.current = new TMap.InfoWindow({
             map,
+            position: new TMap.LatLng(35.5, 104.0),
             offset: { x: 0, y: -20 },
           });
           infoWindowRef.current.close();
@@ -251,10 +352,69 @@ export default function PersonsMap() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  useEffect(() => {
+    if (!mapReady || !window.TMap?.service?.Geocoder) return;
+    const pending = data.filter(p => {
+      const geocodeKey = buildGeocodeKey(p.city, p.address);
+      const cached = clientGeocodes[p.id];
+      return needsClientGeocode(p) && (!cached || cached.geocode_address !== geocodeKey);
+    }).slice(0, 30);
+    if (pending.length === 0) return;
+
+    let cancelled = false;
+    const geocoder = new window.TMap.service.Geocoder();
+
+    const geocodePerson = async (person) => {
+      const expectedDistrict = extractExpectedDistrict(person.city, person.address);
+      for (const candidate of buildClientGeocodeCandidates(person.city, person.address)) {
+        try {
+          const result = await geocoder.getLocation(candidate);
+          const location = extractGeocodeLocation(result);
+          if (!location) continue;
+          if (expectedDistrict && location.district && location.district !== expectedDistrict) continue;
+          return {
+            lat: location.lat,
+            lng: location.lng,
+            geocode_address: buildGeocodeKey(person.city, person.address),
+          };
+        } catch {
+          // Try the next candidate; Tencent may reject one form but accept another.
+        }
+      }
+      return { failed: true, geocode_address: buildGeocodeKey(person.city, person.address) };
+    };
+
+    (async () => {
+      const updates = {};
+      for (const person of pending) {
+        if (cancelled) return;
+        updates[person.id] = await geocodePerson(person);
+      }
+      if (!cancelled && Object.keys(updates).length > 0) {
+        setClientGeocodes(prev => ({ ...prev, ...updates }));
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [data, mapReady, clientGeocodes]);
+
+  const resolvedData = useMemo(() => data.map(person => {
+    const geocode = clientGeocodes[person.id];
+    if (!geocode || geocode.failed || geocode.geocode_address !== buildGeocodeKey(person.city, person.address)) return person;
+    return {
+      ...person,
+      lat: geocode.lat,
+      lng: geocode.lng,
+      geocode_address: geocode.geocode_address || person.geocode_address,
+    };
+  }), [data, clientGeocodes]);
+
   // 按城市分组（用于聚合模式和左侧列表）
   const cityGroups = useMemo(() => {
     const groups = {};
-    data.forEach(p => {
+    resolvedData.forEach(p => {
       const cities = (p.city || '').split(',').map(s => s.trim()).filter(Boolean);
       cities.forEach(c => {
         if (!groups[c]) groups[c] = [];
@@ -262,7 +422,7 @@ export default function PersonsMap() {
       });
     });
     return groups;
-  }, [data]);
+  }, [resolvedData]);
 
   // 城市聚合标点数据
   const cityPoints = useMemo(() => {
@@ -289,11 +449,12 @@ export default function PersonsMap() {
 
   // 个人标点数据
   const personPoints = useMemo(() => {
-    return data.map(p => {
+    return resolvedData.map(p => {
       let lat = normalizeCoordinate(p.lat);
       let lng = normalizeCoordinate(p.lng);
       let approximate = false;
       if (lat === null || lng === null) {
+        if (normalizeGeoText(p.address)) return null;
         const fallback = jitteredCityCoord(p.id, p.city);
         if (!fallback) return null;
         lat = fallback.lat;
@@ -310,7 +471,7 @@ export default function PersonsMap() {
         hasWarning: p.days_since_contact === null || p.days_since_contact >= WARN_DAYS,
       };
     }).filter(Boolean);
-  }, [data]);
+  }, [resolvedData]);
 
   const isDetailMode = zoomLevel >= ZOOM_THRESHOLD;
 
@@ -319,6 +480,16 @@ export default function PersonsMap() {
     if (!mapReady || !mapInstanceRef.current || !window.TMap || destroyedRef.current) return;
     const TMap = window.TMap;
     const map = mapInstanceRef.current;
+    const toLatLng = (lat, lng) => {
+      const normalizedLat = normalizeCoordinate(lat);
+      const normalizedLng = normalizeCoordinate(lng);
+      if (normalizedLat === null || normalizedLng === null) return null;
+      try {
+        return new TMap.LatLng(normalizedLat, normalizedLng);
+      } catch {
+        return null;
+      }
+    };
 
     // 清除旧标点
     markersRef.current.forEach(m => { try { m.setMap(null); } catch {} });
@@ -329,11 +500,17 @@ export default function PersonsMap() {
         // ========= 城市聚合模式 =========
         if (cityPoints.length === 0) return;
 
-        const geometries = cityPoints.map((pt, idx) => ({
-          id: `city_${idx}`,
-          position: new TMap.LatLng(pt.lat, pt.lng),
-          properties: pt,
-        }));
+        const geometries = cityPoints.map((pt, idx) => {
+          const position = toLatLng(pt.lat, pt.lng);
+          if (!position) return null;
+          return {
+            id: `city_${idx}`,
+            position,
+            properties: pt,
+            styleId: `city_${idx}`,
+          };
+        }).filter(Boolean);
+        if (geometries.length === 0) return;
 
         const cityMarkers = new TMap.MultiMarker({
           map,
@@ -353,7 +530,7 @@ export default function PersonsMap() {
             });
             return acc;
           }, {}),
-          geometries: geometries.map((g, idx) => ({ ...g, styleId: `city_${idx}` })),
+          geometries,
         });
 
         if (infoWindowRef.current) {
@@ -377,7 +554,7 @@ export default function PersonsMap() {
             `;
             try {
               infoWindowRef.current.open();
-              infoWindowRef.current.setPosition(e.geometry.position);
+              if (e.geometry.position) infoWindowRef.current.setPosition(e.geometry.position);
               infoWindowRef.current.setContent(content);
             } catch {}
           });
@@ -389,11 +566,17 @@ export default function PersonsMap() {
         if (!initialFitDoneRef.current) {
           initialFitDoneRef.current = true;
           if (cityPoints.length === 1) {
-            map.setCenter(new TMap.LatLng(cityPoints[0].lat, cityPoints[0].lng));
-            map.setZoom(ZOOM_THRESHOLD - 1);
+            const position = toLatLng(cityPoints[0].lat, cityPoints[0].lng);
+            if (position) {
+              map.setCenter(position);
+              map.setZoom(ZOOM_THRESHOLD - 1);
+            }
           } else {
             const bounds = new TMap.LatLngBounds();
-            cityPoints.forEach(pt => bounds.extend(new TMap.LatLng(pt.lat, pt.lng)));
+            cityPoints.forEach(pt => {
+              const position = toLatLng(pt.lat, pt.lng);
+              if (position) bounds.extend(position);
+            });
             map.fitBounds(bounds, { padding: 60 });
           }
         }
@@ -438,8 +621,10 @@ export default function PersonsMap() {
               </div>
             `;
             try {
+              const position = toLatLng(p.lat, p.lng);
+              if (!position) return;
               infoWindowRef.current.open();
-              infoWindowRef.current.setPosition(new TMap.LatLng(p.lat, p.lng));
+              infoWindowRef.current.setPosition(position);
               infoWindowRef.current.setContent(content);
             } catch {}
           });
@@ -452,7 +637,9 @@ export default function PersonsMap() {
         function updatePositions() {
           els.forEach(({ el, lat, lng }) => {
             try {
-              const pixel = map.projectToContainer(new TMap.LatLng(lat, lng));
+              const position = toLatLng(lat, lng);
+              if (!position) return;
+              const pixel = map.projectToContainer(position);
               el.style.left = pixel.getX() + 'px';
               el.style.top = pixel.getY() + 'px';
             } catch {}
