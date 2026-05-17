@@ -477,9 +477,11 @@ export default function Persons() {
   const relationTypes = Form.useWatch('relation_types', form) || [];
   const visibilityScope = Form.useWatch('visibility_scope', form) || COMPANY_PERSON_SCOPE;
   const batchFields = Form.useWatch('fields', batchForm) || [];
+  const batchVisibilityScope = Form.useWatch('visibility_scope', batchForm) || COMPANY_PERSON_SCOPE;
   const isExternalTalent = category === 'talent' && !relationTypes.includes('talent_internal');
   const isInternalTalent = category === 'talent' && relationTypes.includes('talent_internal');
   const isPrivateScope = visibilityScope === PRIVATE_PERSON_SCOPE;
+  const isBatchPrivateScope = batchFields.includes('visibility_scope') && batchVisibilityScope === PRIVATE_PERSON_SCOPE;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -637,6 +639,7 @@ export default function Persons() {
       weight: 'medium',
       tags_mode: 'append',
       shared_to_mode: 'append',
+      visibility_scope: COMPANY_PERSON_SCOPE,
     });
     loadCommercialUsers();
     setBatchModalOpen(true);
@@ -664,8 +667,19 @@ export default function Persons() {
     if (fields.includes('potential_level')) patch.potential_level = values.potential_level || '';
     if (fields.includes('recruit_status')) patch.recruit_status = values.recruit_status;
     if (fields.includes('intent_level')) patch.intent_level = values.intent_level;
+    if (fields.includes('visibility_scope')) {
+      if (!canUsePrivatePersons) {
+        message.warning('当前账号不能批量修改可见范围');
+        return;
+      }
+      patch.visibility_scope = values.visibility_scope || COMPANY_PERSON_SCOPE;
+    }
     if (fields.includes('shared_to')) {
       const userIds = values.shared_to || [];
+      if (patch.visibility_scope === PRIVATE_PERSON_SCOPE) {
+        message.warning('个人私密人脉不支持设置共享人');
+        return;
+      }
       if (values.shared_to_mode !== 'replace' && userIds.length === 0) {
         message.warning('请选择要处理的共享人');
         return;
@@ -1554,7 +1568,10 @@ export default function Persons() {
                 <Row gutter={[8, 8]}>
                   <Col span={isMobile ? 24 : 8}><Checkbox value="weight">权重</Checkbox></Col>
                   <Col span={isMobile ? 24 : 8}><Checkbox value="tags">标签</Checkbox></Col>
-                  <Col span={isMobile ? 24 : 8}><Checkbox value="shared_to">共享人</Checkbox></Col>
+                  <Col span={isMobile ? 24 : 8}><Checkbox value="shared_to" disabled={isBatchPrivateScope}>共享人</Checkbox></Col>
+                  {canUsePrivatePersons && (
+                    <Col span={isMobile ? 24 : 8}><Checkbox value="visibility_scope">可见范围</Checkbox></Col>
+                  )}
                   <Col span={isMobile ? 24 : 8}><Checkbox value="potential_level">潜力评级</Checkbox></Col>
                   <Col span={isMobile ? 24 : 8}><Checkbox value="recruit_status">转化阶段</Checkbox></Col>
                   <Col span={isMobile ? 24 : 8}><Checkbox value="intent_level">意向程度</Checkbox></Col>
@@ -1615,6 +1632,36 @@ export default function Persons() {
                   </Form.Item>
                 </Col>
               </Row>
+            )}
+
+            {batchFields.includes('visibility_scope') && (
+              <>
+                <Form.Item label="可见范围" name="visibility_scope" rules={[{ required: true, message: '请选择可见范围' }]}>
+                  <Segmented
+                    block
+                    options={[
+                      { label: <Space size={4}><GlobalOutlined />公司共享</Space>, value: COMPANY_PERSON_SCOPE },
+                      { label: <Space size={4}><LockOutlined />个人私密</Space>, value: PRIVATE_PERSON_SCOPE },
+                    ]}
+                    onChange={(value) => {
+                      if (value === PRIVATE_PERSON_SCOPE) {
+                        batchForm.setFieldsValue({
+                          fields: (batchForm.getFieldValue('fields') || []).filter(field => field !== 'shared_to'),
+                          shared_to: [],
+                        });
+                      }
+                    }}
+                  />
+                </Form.Item>
+                {batchVisibilityScope === PRIVATE_PERSON_SCOPE && (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 12 }}
+                    message="个人私密仅本人可见，会清空共享人；只能将自己创建的人脉转为私密"
+                  />
+                )}
+              </>
             )}
 
             {batchFields.includes('potential_level') && (

@@ -2403,7 +2403,18 @@ app.put('/api/persons/batch', canWrite, (req, res) => {
     }
   }
 
-  if (scalarFields.length === 0 && !hasTagsPatch && !hasSharedPatch) {
+  const hasVisibilityPatch = Object.prototype.hasOwnProperty.call(patch, 'visibility_scope');
+  if (hasVisibilityPatch && ![COMPANY_PERSON_SCOPE, PRIVATE_PERSON_SCOPE].includes(patch.visibility_scope)) {
+    return res.status(400).json({ error: '可见范围不合法' });
+  }
+  const visibilityScopePatch = hasVisibilityPatch
+    ? (patch.visibility_scope === PRIVATE_PERSON_SCOPE ? PRIVATE_PERSON_SCOPE : COMPANY_PERSON_SCOPE)
+    : null;
+  if (hasSharedPatch && visibilityScopePatch === PRIVATE_PERSON_SCOPE) {
+    return res.status(400).json({ error: '个人私密人脉不支持设置共享人' });
+  }
+
+  if (scalarFields.length === 0 && !hasTagsPatch && !hasSharedPatch && !hasVisibilityPatch) {
     return res.status(400).json({ error: '请至少选择一个批量修改项' });
   }
 
@@ -2423,7 +2434,8 @@ app.put('/api/persons/batch', canWrite, (req, res) => {
   const updateCommonScalar = makeScalarUpdate(commonScalarFields);
   const updateTalentScalar = makeScalarUpdate(talentScalarFields);
   const updateTags = hasTagsPatch ? db.prepare('UPDATE persons SET tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?') : null;
-  const deleteSharedAll = hasSharedPatch ? db.prepare('DELETE FROM person_shared_users WHERE person_id = ?') : null;
+  const updateVisibility = hasVisibilityPatch ? db.prepare('UPDATE persons SET visibility_scope = ?, private_owner_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?') : null;
+  const deleteSharedAll = (hasSharedPatch || hasVisibilityPatch) ? db.prepare('DELETE FROM person_shared_users WHERE person_id = ?') : null;
   const deleteSharedOne = hasSharedPatch ? db.prepare('DELETE FROM person_shared_users WHERE person_id = ? AND user_id = ?') : null;
   const insertShared = hasSharedPatch ? db.prepare('INSERT OR IGNORE INTO person_shared_users (person_id, user_id) VALUES (?, ?)') : null;
 
@@ -2448,12 +2460,13 @@ app.put('/api/persons/batch', canWrite, (req, res) => {
           return;
         }
       }
-      if (hasSharedPatch && isPrivatePerson(person)) {
+      if (hasSharedPatch && isPrivatePerson(person) && visibilityScopePatch !== COMPANY_PERSON_SCOPE) {
         errors.push({ id, reason: '个人私密人脉不能共享' });
         return;
       }
 
       let touched = false;
+      let finalVisibility = getVisibilityFromPerson(person);
       const relationTypes = String(person.relation_types || '').split(',').map(v => v.trim()).filter(Boolean);
       const isExternalTalentPerson = person.person_category === 'talent' && relationTypes.includes('talent_external');
       if (updateCommonScalar) {
@@ -2471,8 +2484,24 @@ app.put('/api/persons/batch', canWrite, (req, res) => {
         updateTags.run(enc.tags, id);
         touched = true;
       }
+      if (updateVisibility) {
+        const visibility = resolvePersonVisibilityPayload(req.user, visibilityScopePatch, person);
+        if (visibility.error) {
+          errors.push({ id, reason: visibility.error });
+          return;
+        }
+        updateVisibility.run(visibility.visibility_scope, visibility.private_owner_id, id);
+        finalVisibility = visibility;
+        if (visibility.visibility_scope === PRIVATE_PERSON_SCOPE) {
+          deleteSharedAll.run(id);
+        }
+        touched = true;
+      }
       if (hasSharedPatch) {
-        if (sharedPatch.mode === 'replace') {
+        if (finalVisibility.visibility_scope === PRIVATE_PERSON_SCOPE) {
+          errors.push({ id, reason: '个人私密人脉不能共享' });
+          return;
+        } else if (sharedPatch.mode === 'replace') {
           deleteSharedAll.run(id);
           sharedPatch.user_ids.forEach(uid => insertShared.run(id, uid));
         } else if (sharedPatch.mode === 'append') {
