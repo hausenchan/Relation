@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography, Descriptions, Upload } from 'antd';
 import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined, UploadOutlined, EyeOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
+import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 import AttachmentList from '../components/AttachmentList';
 import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
@@ -12,6 +13,12 @@ import dayjs from 'dayjs';
 const { Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
+const PRIVATE_PERSON_SCOPE = 'executive_private';
+const COMPANY_PERSON_SCOPE = 'company';
+const EXECUTIVE_ROLES = ['ceo', 'coo', 'cto', 'cmo'];
+
+const isExecutiveUser = (user) =>
+  EXECUTIVE_ROLES.includes(user?.role) || EXECUTIVE_ROLES.includes(user?.executive_role);
 
 const typeMap = {
   visit: { label: '拜访', color: 'blue' },
@@ -45,17 +52,22 @@ const opportunityStatusMap = {
 };
 
 export default function Interactions() {
+  const { user } = useAuth();
   const screens = useBreakpoint();
   const isMobile = !screens.md;
+  const canFilterVisibility = isExecutiveUser(user);
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterType, setFilterType] = useState('');
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [filterImportance, setFilterImportance] = useState('');
+  const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
+  const [filterVisibility, setFilterVisibility] = useState('');
   const [dateRange, setDateRange] = useState(null); // { start, end, label }
   const [customPickerOpen, setCustomPickerOpen] = useState(false);
   const [users, setUsers] = useState([]);
+  const [creatorUsers, setCreatorUsers] = useState([]);
 
   // 快捷日期选项
   const DATE_SHORTCUTS = [
@@ -80,18 +92,23 @@ export default function Interactions() {
     if (filterCity) params.city = filterCity;
     if (filterWeight) params.weight = filterWeight;
     if (filterImportance) params.importance = filterImportance;
+    if (filterCreatedBy) params.created_by = filterCreatedBy;
+    if (canFilterVisibility && filterVisibility) params.visibility_scope = filterVisibility;
     if (dateRange) { params.date_start = dateRange.start; params.date_end = dateRange.end; }
     const res = await interactionsApi.list(params);
     setData(res);
     setLoading(false);
-  }, [filterType, filterCity, filterWeight, filterImportance, dateRange]);
+  }, [filterType, filterCity, filterWeight, filterImportance, filterCreatedBy, filterVisibility, canFilterVisibility, dateRange]);
 
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
     personsApi.list({}).then(setPersons);
     usersApi.listSimple().then(setUsers).catch(() => {});
-  }, []);
+    usersApi.listSimple({ include_readonly: true })
+      .then(setCreatorUsers)
+      .catch(() => setCreatorUsers(user ? [user] : []));
+  }, [user]);
 
   const handleDelete = async (id) => {
     await interactionsApi.delete(id);
@@ -300,6 +317,33 @@ export default function Interactions() {
         <Select placeholder="信息重要程度" allowClear style={{ width: isMobile ? '100%' : 130 }} value={filterImportance || undefined} onChange={v => setFilterImportance(v || '')}>
           {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
         </Select>
+        <Select
+          placeholder="创建人"
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          style={{ width: isMobile ? '100%' : 140 }}
+          value={filterCreatedBy}
+          onChange={setFilterCreatedBy}
+          options={creatorUsers.map(u => ({
+            value: u.id,
+            label: u.id === user?.id
+              ? `${u.display_name || u.username || '我'}（我）`
+              : (u.display_name || u.username),
+          }))}
+        />
+        {canFilterVisibility && (
+          <Select
+            placeholder="可见范围"
+            allowClear
+            style={{ width: isMobile ? '100%' : 120 }}
+            value={filterVisibility || undefined}
+            onChange={v => setFilterVisibility(v || '')}
+          >
+            <Option value={COMPANY_PERSON_SCOPE}>公司共享</Option>
+            <Option value={PRIVATE_PERSON_SCOPE}>个人私密</Option>
+          </Select>
+        )}
 
         {/* 日期范围选择器 */}
         <Dropdown
@@ -532,7 +576,7 @@ export default function Interactions() {
             ? (opportunityStatusMap[r.opportunity_status] || { label: r.opportunity_status, color: 'default' })
             : null;
           const assignee = users.find(u => u.id === r.opportunity_assignee);
-          const creator = users.find(u => u.id === r.created_by);
+          const creator = creatorUsers.find(u => u.id === r.created_by) || users.find(u => u.id === r.created_by);
           return (
             <>
               <Descriptions

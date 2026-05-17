@@ -2943,7 +2943,7 @@ app.post('/api/persons/import', canWrite, (req, res) => {
 
 // =========== 互动记录 API ===========
 app.get('/api/interactions', (req, res) => {
-  const { person_id, type, city, weight, importance, date_start, date_end } = req.query;
+  const { person_id, type, city, weight, importance, date_start, date_end, created_by, visibility_scope } = req.query;
   const { id: me, role } = req.user;
   let query = `
     SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company, p.city, p.weight
@@ -2969,6 +2969,14 @@ app.get('/api/interactions', (req, res) => {
   if (city) { query += ' AND p.city LIKE ?'; params.push(`%${city}%`); }
   if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
   if (importance) { query += ' AND i.importance = ?'; params.push(importance); }
+  if (created_by) { query += ' AND i.created_by = ?'; params.push(created_by); }
+  if (visibility_scope === PRIVATE_PERSON_SCOPE) {
+    query += ' AND COALESCE(p.visibility_scope, i.visibility_scope, ?) = ? AND COALESCE(p.private_owner_id, i.private_owner_id) = ?';
+    params.push(COMPANY_PERSON_SCOPE, PRIVATE_PERSON_SCOPE, me);
+  } else if (visibility_scope === COMPANY_PERSON_SCOPE) {
+    query += ' AND COALESCE(p.visibility_scope, i.visibility_scope, ?) != ?';
+    params.push(COMPANY_PERSON_SCOPE, PRIVATE_PERSON_SCOPE);
+  }
   if (date_start) { query += ' AND i.date >= ?'; params.push(date_start); }
   if (date_end) { query += ' AND i.date <= ?'; params.push(date_end); }
   query += ' ORDER BY i.date DESC';
