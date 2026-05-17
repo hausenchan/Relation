@@ -1410,6 +1410,10 @@ export default function Persons() {
         ? `新增 ${importSummary.new || 0} / 更新 ${importUpdateableCount}`
         : `新增 ${importSummary.new || 0} / 跳过重名 ${importExistingCount}`)
     : `确认导入 ${importRows.length} 条`;
+  const personPagination = {
+    defaultPageSize: 15,
+    showTotal: total => `共 ${total} 条记录`,
+  };
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
@@ -1449,7 +1453,7 @@ export default function Persons() {
           loading={loading}
           dataSource={data}
           locale={{ emptyText: '暂无人脉数据' }}
-          pagination={{ defaultPageSize: 15, showSizeChanger: false, simple: isMobile }}
+          pagination={{ ...personPagination, showSizeChanger: false, simple: isMobile }}
           renderItem={renderPersonCard}
         />
       ) : (
@@ -1462,7 +1466,7 @@ export default function Persons() {
           loading={loading}
           size="small"
           scroll={{ x: 1000 }}
-          pagination={{ defaultPageSize: 15 }}
+          pagination={personPagination}
           onRow={(record) => ({
             onDoubleClick: () => (canEditPerson(record) ? openEdit(record) : openDetail(record)),
             style: { cursor: 'pointer' }
