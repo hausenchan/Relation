@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Avatar, Button, Card, Col, Descriptions, Drawer, Form, Grid, Input, InputNumber,
-  List, message, Modal, Row, Select, Space, Table, Tag, Typography, DatePicker, Upload
+  List, message, Modal, Radio, Row, Select, Space, Table, Tag, Typography, DatePicker, Upload
 } from 'antd';
 import {
   AppstoreOutlined, BankOutlined, EditOutlined, PlusOutlined, DeleteOutlined,
@@ -182,6 +183,31 @@ function subjectLabel(subject) {
 function statusTag(map, value) {
   const cfg = map[value] || { label: value || '-', color: 'default' };
   return <Tag color={cfg.color}>{cfg.label}</Tag>;
+}
+
+const assetImportStatusMap = {
+  updateable: { label: '可更新', color: 'orange' },
+  same: { label: '无差异', color: 'default' },
+  ambiguous: { label: '多条同名', color: 'red' },
+  file_duplicate: { label: '文件内重复', color: 'purple' },
+  invalid: { label: '无效', color: 'red' },
+};
+
+function displayAssetImportBudget(value) {
+  return budgetTypeMap[value]?.label || value || '-';
+}
+
+function displayAssetImportLaunchStatus(value) {
+  return launchStatusMap[value]?.label || value || '-';
+}
+
+function assetImportSummaryText(item) {
+  if (!item) return '-';
+  return [
+    item.company_entity || '未填主体',
+    displayAssetImportBudget(item.budget_type),
+    displayAssetImportLaunchStatus(item.launch_status),
+  ].join(' / ');
 }
 
 export default function ProductAssets() {
@@ -397,6 +423,126 @@ export default function ProductAssets() {
     URL.revokeObjectURL(url);
   };
 
+  const showImportResult = (result) => {
+    const updatedNames = result.updatedNames || [];
+    const skipParts = [];
+    if (result.skippedExistingCount) skipParts.push(`保留已有 ${result.skippedExistingCount} 条`);
+    if (result.skippedNoChangeCount) skipParts.push(`无差异 ${result.skippedNoChangeCount} 条`);
+    if (result.skippedFileDuplicateCount) skipParts.push(`文件内重复 ${result.skippedFileDuplicateCount} 条`);
+    if (result.skippedAmbiguousCount) skipParts.push(`多条同名 ${result.skippedAmbiguousCount} 条`);
+
+    if (result.failCount > 0 || updatedNames.length > 0 || skipParts.length > 0) {
+      const ModalComponent = result.failCount > 0 ? Modal.warning : Modal.info;
+      ModalComponent({
+        title: `导入完成：新增 ${result.createdCount || 0} 条，更新 ${result.updatedCount || 0} 条，失败 ${result.failCount || 0} 条`,
+        content: (
+          <div style={{ maxHeight: 280, overflow: 'auto' }}>
+            {updatedNames.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <Text strong>更新的产品资产：</Text>
+                <div>{updatedNames.join('、')}</div>
+              </div>
+            )}
+            {skipParts.length > 0 && (
+              <div style={{ marginBottom: result.failCount > 0 ? 12 : 0 }}>
+                <Text strong>跳过记录：</Text>
+                <div>{skipParts.join('，')}</div>
+              </div>
+            )}
+            {(result.results || []).filter(r => !r.success).map(r => (
+              <div key={r.line}>第 {r.line} 行：{r.error}</div>
+            ))}
+          </div>
+        ),
+      });
+    } else {
+      message.success(`成功新增 ${result.createdCount || result.successCount || 0} 条产品资产`);
+    }
+  };
+
+  const performImport = async (importRows, duplicateMode) => {
+    const result = await productAssetsApi.import({ rows: importRows, duplicate_mode: duplicateMode });
+    showImportResult(result);
+    load();
+  };
+
+  const openImportConfirm = (importRows, preview) => {
+    const summary = preview.summary || {};
+    const existingCount = summary.existing || 0;
+    const duplicateRows = (preview.items || []).filter(item =>
+      ['updateable', 'same', 'ambiguous', 'file_duplicate', 'invalid'].includes(item.status)
+    );
+    let duplicateMode = 'skip';
+
+    Modal.confirm({
+      title: '产品资产导入预览',
+      width: isMobile ? '100%' : 820,
+      okText: '确认导入',
+      cancelText: '取消',
+      content: (
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Alert
+            type={existingCount > 0 ? 'warning' : 'success'}
+            showIcon
+            message={`已解析 ${summary.total || importRows.length} 条：新增 ${summary.new || 0} 条，系统已有 ${existingCount} 条`}
+            description={`可更新 ${summary.updateable || 0} 条，无差异 ${summary.no_change || 0} 条，多条同名 ${summary.ambiguous || 0} 条，文件内重复 ${summary.file_duplicate || 0} 条，无效 ${summary.invalid || 0} 条。`}
+          />
+          {existingCount > 0 && (
+            <>
+              <div style={{ fontWeight: 600 }}>已有资产处理方式</div>
+              <Radio.Group defaultValue="skip" onChange={e => { duplicateMode = e.target.value; }}>
+                <Space direction="vertical">
+                  <Radio value="skip">保留系统原记录，跳过已有应用名称</Radio>
+                  <Radio value="update">用导入内容更新已有记录</Radio>
+                </Space>
+              </Radio.Group>
+              <Alert
+                type="info"
+                showIcon
+                message="选择更新时，仅更新导入文件中非空且与系统不同的字段，不会清空原字段"
+              />
+            </>
+          )}
+          {duplicateRows.length > 0 && (
+            <Table
+              size="small"
+              pagination={false}
+              dataSource={duplicateRows.slice(0, 8).map(row => ({ ...row, _key: row.line }))}
+              rowKey="_key"
+              scroll={{ x: 780 }}
+              columns={[
+                { title: '行号', dataIndex: 'line', width: 64 },
+                { title: '应用名称', dataIndex: 'app_name', width: 120 },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 90,
+                  render: status => {
+                    const meta = assetImportStatusMap[status] || { label: status, color: 'default' };
+                    return <Tag color={meta.color}>{meta.label}</Tag>;
+                  },
+                },
+                { title: '系统记录', dataIndex: 'existing', render: assetImportSummaryText },
+                { title: '导入内容', dataIndex: 'incoming', render: assetImportSummaryText },
+                {
+                  title: '差异字段',
+                  dataIndex: 'diff_labels',
+                  render: labels => labels?.length
+                    ? labels.map(label => <Tag key={label} color="orange">{label}</Tag>)
+                    : <Text type="secondary">-</Text>,
+                },
+              ]}
+            />
+          )}
+          {duplicateRows.length > 8 && (
+            <div style={{ color: '#888', fontSize: 12 }}>...还有 {duplicateRows.length - 8} 条已有/异常记录</div>
+          )}
+        </Space>
+      ),
+      onOk: () => performImport(importRows, duplicateMode),
+    });
+  };
+
   const importCsv = async (file) => {
     try {
       const text = await readCsvFile(file);
@@ -405,30 +551,13 @@ export default function ProductAssets() {
         message.warning('CSV 中没有可导入的数据');
         return Upload.LIST_IGNORE;
       }
-      const result = await productAssetsApi.import(importRows);
-      const updatedNames = result.updatedNames || [];
-      if (result.failCount > 0 || updatedNames.length > 0) {
-        const ModalComponent = result.failCount > 0 ? Modal.warning : Modal.info;
-        ModalComponent({
-          title: `导入完成：新增 ${result.createdCount || 0} 条，覆盖 ${result.updatedCount || 0} 条，失败 ${result.failCount || 0} 条`,
-          content: (
-            <div style={{ maxHeight: 260, overflow: 'auto' }}>
-              {updatedNames.length > 0 && (
-                <div style={{ marginBottom: result.failCount > 0 ? 12 : 0 }}>
-                  <Text strong>覆盖更新的产品资产：</Text>
-                  <div>{updatedNames.join('、')}</div>
-                </div>
-              )}
-              {(result.results || []).filter(r => !r.success).map(r => (
-                <div key={r.line}>第 {r.line} 行：{r.error}</div>
-              ))}
-            </div>
-          ),
-        });
+      const preview = await productAssetsApi.importPreview(importRows);
+      const summary = preview.summary || {};
+      if ((summary.existing || 0) > 0 || (summary.ambiguous || 0) > 0 || (summary.file_duplicate || 0) > 0 || (summary.invalid || 0) > 0) {
+        openImportConfirm(importRows, preview);
       } else {
-        message.success(`成功新增 ${result.createdCount || result.successCount || 0} 条产品资产`);
+        await performImport(importRows, 'skip');
       }
-      load();
     } catch (err) {
       message.error(err.response?.data?.error || '导入失败');
     }

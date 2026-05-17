@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col, Grid, List,
   Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Tooltip, Divider,
-  Upload, Alert, Segmented, Checkbox
+  Upload, Alert, Segmented, Checkbox, Radio
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
@@ -463,6 +463,9 @@ export default function Persons() {
   const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [importRows, setImportRows] = useState([]);
   const [importLoading, setImportLoading] = useState(false);
+  const [importPreview, setImportPreview] = useState(null);
+  const [importPreviewLoading, setImportPreviewLoading] = useState(false);
+  const [importDuplicateMode, setImportDuplicateMode] = useState('skip');
   const [commercialUsers, setCommercialUsers] = useState([]);
   const [creatorUsers, setCreatorUsers] = useState([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
@@ -796,6 +799,14 @@ export default function Persons() {
   const displayImportRelationTypes = (value) =>
     parseRelationTypes(value).map(type => relationTypeMap[type]?.label || type).join('、') || '-';
   const displayImportWeight = (value) => weightMap[value]?.label || value || '-';
+  const importStatusMap = {
+    updateable: { label: '可更新', color: 'orange' },
+    same: { label: '无差异', color: 'default' },
+    ambiguous: { label: '多条同名', color: 'red' },
+    no_permission: { label: '无权限', color: 'red' },
+    file_duplicate: { label: '文件内重复', color: 'purple' },
+    invalid: { label: '无效', color: 'red' },
+  };
 
   const parseCsv = (text) => {
     const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
@@ -832,6 +843,26 @@ export default function Persons() {
     return rows;
   };
 
+  const resetImportState = () => {
+    setImportRows([]);
+    setImportPreview(null);
+    setImportPreviewLoading(false);
+    setImportDuplicateMode('skip');
+  };
+
+  const loadImportPreview = async (rows) => {
+    setImportPreviewLoading(true);
+    try {
+      const preview = await personsApi.importPreview(rows);
+      setImportPreview(preview);
+    } catch (err) {
+      setImportPreview(null);
+      message.error(err.response?.data?.error || '导入预检失败，请重试');
+    } finally {
+      setImportPreviewLoading(false);
+    }
+  };
+
   const handleCsvFile = (file) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -842,6 +873,9 @@ export default function Persons() {
           return;
         }
         setImportRows(rows);
+        setImportPreview(null);
+        setImportDuplicateMode('skip');
+        loadImportPreview(rows);
       } catch {
         message.error('文件解析失败');
       }
@@ -852,18 +886,28 @@ export default function Persons() {
 
   const handleImport = async () => {
     if (importRows.length === 0) return;
+    if (importPreviewLoading) {
+      message.warning('正在检查重名，请稍候');
+      return;
+    }
     setImportLoading(true);
     try {
-      const result = await personsApi.import(importRows);
+      const result = await personsApi.import({ rows: importRows, duplicate_mode: importDuplicateMode });
       const skipParts = [];
+      if (result.updated) skipParts.push(`更新 ${result.updated} 条`);
+      if (result.skipped_existing) skipParts.push(`重名保留 ${result.skipped_existing} 条`);
+      if (result.skipped_no_change) skipParts.push(`无差异 ${result.skipped_no_change} 条`);
+      if (result.skipped_file_duplicate) skipParts.push(`文件内重复 ${result.skipped_file_duplicate} 条`);
+      if (result.skipped_ambiguous) skipParts.push(`系统多条同名 ${result.skipped_ambiguous} 条`);
+      if (result.skipped_no_permission) skipParts.push(`无权限 ${result.skipped_no_permission} 条`);
       if (result.skip_empty_name) skipParts.push(`${result.skip_empty_name} 条缺少姓名`);
       if (result.skip_name_too_long) skipParts.push(`${result.skip_name_too_long} 条姓名超过 ${PERSON_NAME_MAX_LENGTH} 字`);
-      message.success(`导入成功 ${result.ok} 条${skipParts.length ? `，跳过 ${skipParts.join('，')}` : ''}`);
+      message.success(`导入完成：新增 ${result.created ?? result.ok ?? 0} 条${skipParts.length ? `，${skipParts.join('，')}` : ''}`);
       setImportOpen(false);
-      setImportRows([]);
+      resetImportState();
       load();
-    } catch {
-      message.error('导入失败，请重试');
+    } catch (err) {
+      message.error(err.response?.data?.error || '导入失败，请重试');
     } finally {
       setImportLoading(false);
     }
@@ -1345,12 +1389,23 @@ export default function Persons() {
       )}
     </>
   );
+  const importSummary = importPreview?.summary;
+  const importExistingCount = importSummary?.existing || 0;
+  const importUpdateableCount = importSummary?.updateable || 0;
+  const importDuplicateRows = (importPreview?.items || []).filter(item =>
+    ['updateable', 'same', 'ambiguous', 'no_permission', 'file_duplicate', 'invalid'].includes(item.status)
+  );
+  const importOkText = importSummary
+    ? (importDuplicateMode === 'update'
+        ? `新增 ${importSummary.new || 0} / 更新 ${importUpdateableCount}`
+        : `新增 ${importSummary.new || 0} / 跳过重名 ${importExistingCount}`)
+    : `确认导入 ${importRows.length} 条`;
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
         <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
-          <Button icon={<UploadOutlined />} onClick={() => { setImportRows([]); setImportOpen(true); }} style={{ width: isMobile ? '100%' : undefined }}>导入</Button>
+          <Button icon={<UploadOutlined />} onClick={() => { resetImportState(); setImportOpen(true); }} style={{ width: isMobile ? '100%' : undefined }}>导入</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加人脉</Button>
           <Button
             icon={<EditOutlined />}
@@ -1870,10 +1925,10 @@ export default function Persons() {
       <Modal
         title="从 CSV/Excel 导入人脉"
         open={importOpen}
-        onCancel={() => { setImportOpen(false); setImportRows([]); }}
+        onCancel={() => { setImportOpen(false); resetImportState(); }}
         onOk={handleImport}
-        okText={`确认导入 ${importRows.length} 条`}
-        okButtonProps={{ disabled: importRows.length === 0, loading: importLoading }}
+        okText={importOkText}
+        okButtonProps={{ disabled: importRows.length === 0 || importPreviewLoading, loading: importLoading }}
         cancelText="取消"
         width={isMobile ? '100%' : 760}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
@@ -1906,6 +1961,84 @@ export default function Persons() {
               <Button icon={<UploadOutlined />} type="primary" ghost style={{ width: isMobile ? '100%' : undefined }}>选择 CSV 文件</Button>
             </Upload>
           </Space>
+
+          {importPreviewLoading && (
+            <Alert type="info" showIcon message="正在检查重名和差异字段..." />
+          )}
+
+          {importSummary && (
+            <Alert
+              type={importExistingCount > 0 ? 'warning' : 'success'}
+              showIcon
+              message={`已解析 ${importSummary.total} 条：新增 ${importSummary.new || 0} 条，系统重名 ${importExistingCount} 条`}
+              description={`可更新 ${importSummary.updateable || 0} 条，无差异 ${importSummary.no_change || 0} 条，多条同名 ${importSummary.ambiguous || 0} 条，文件内重复 ${importSummary.file_duplicate || 0} 条，无效 ${importSummary.invalid || 0} 条。`}
+            />
+          )}
+
+          {importExistingCount > 0 && (
+            <Space direction="vertical" style={{ width: '100%' }} size={10}>
+              <div style={{ fontWeight: 600 }}>重名处理方式</div>
+              <Radio.Group value={importDuplicateMode} onChange={e => setImportDuplicateMode(e.target.value)}>
+                <Space direction="vertical">
+                  <Radio value="skip">保留系统原记录，跳过重名数据</Radio>
+                  <Radio value="update">用导入内容更新已有记录</Radio>
+                </Space>
+              </Radio.Group>
+              <Alert
+                type="info"
+                showIcon
+                message={importDuplicateMode === 'update'
+                  ? '仅更新导入文件中非空且与系统不同的字段，空字段不会清空原值'
+                  : '重名数据不会写入系统，已有互动记录、提醒和共享关系保持不变'}
+              />
+              {importDuplicateRows.length > 0 && (
+                <Table
+                  size="small"
+                  pagination={false}
+                  dataSource={importDuplicateRows.slice(0, 8).map(row => ({ ...row, _key: row.line }))}
+                  rowKey="_key"
+                  scroll={{ x: 760 }}
+                  columns={[
+                    { title: '行号', dataIndex: 'line', width: 64 },
+                    { title: '姓名', dataIndex: 'name', width: 100 },
+                    {
+                      title: '状态',
+                      dataIndex: 'status',
+                      width: 90,
+                      render: status => {
+                        const meta = importStatusMap[status] || { label: status, color: 'default' };
+                        return <Tag color={meta.color}>{meta.label}</Tag>;
+                      },
+                    },
+                    {
+                      title: '系统记录',
+                      dataIndex: 'existing',
+                      render: existing => existing
+                        ? `${existing.company || '未填公司'} / ${existing.position || '未填职位'} / ${displayImportWeight(existing.weight)}`
+                        : '-',
+                    },
+                    {
+                      title: '导入内容',
+                      dataIndex: 'incoming',
+                      render: incoming => incoming
+                        ? `${incoming.company || '未填公司'} / ${incoming.position || '未填职位'} / ${displayImportWeight(incoming.weight)}`
+                        : '-',
+                    },
+                    {
+                      title: '差异字段',
+                      dataIndex: 'diff_labels',
+                      render: labels => labels?.length
+                        ? labels.map(label => <Tag key={label} color="orange">{label}</Tag>)
+                        : <Text type="secondary">-</Text>,
+                    },
+                  ]}
+                />
+              )}
+              {importDuplicateRows.length > 8 && (
+                <div style={{ color: '#888', fontSize: 12 }}>...还有 {importDuplicateRows.length - 8} 条重名/异常记录</div>
+              )}
+            </Space>
+          )}
 
           {importRows.length > 0 && (
             <>

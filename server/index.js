@@ -2473,12 +2473,289 @@ app.put('/api/persons/:id/assign', auth, (req, res) => {
   res.json({ success: true });
 });
 
-// 批量导入
-app.post('/api/persons/import', (req, res) => {
-  const rows = req.body;
+const PERSON_IMPORT_FIELD_LABELS = {
+  person_category: '圈子分类',
+  relation_types: '关系类型',
+  city: '城市',
+  company: '公司',
+  position: '职位',
+  industry: '行业',
+  phone: '手机',
+  email: '邮箱',
+  wechat: '微信',
+  birthday: '生日',
+  address: '地址',
+  tags: '标签',
+  notes: '备注',
+  resources: '拥有资源',
+  demands: '诉求',
+  relationship_level: '关系等级',
+  client_status: '客户状态',
+  talent_type: '人才类型',
+  current_company: '现任公司',
+  current_position: '现任职位',
+  target_position: '目标职位',
+  skills: '技能标签',
+  experience_years: '工作年限',
+  education: '最高学历',
+  recruit_status: '转化阶段',
+  intent_level: '意向程度',
+  potential_level: '潜力评级',
+  expected_salary: '期望薪资',
+  source: '来源渠道',
+  weight: '权重',
+};
+
+const PERSON_IMPORT_UPDATE_FIELDS = Object.keys(PERSON_IMPORT_FIELD_LABELS);
+
+function getPersonImportRows(body) {
+  if (Array.isArray(body)) return body;
+  if (Array.isArray(body?.rows)) return body.rows;
+  return null;
+}
+
+function normalizeImportCompareValue(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function getProvidedImportValue(row, key) {
+  if (!Object.prototype.hasOwnProperty.call(row, key)) return undefined;
+  const value = normalizeImportCompareValue(row[key]);
+  return value ? value : undefined;
+}
+
+function summarizePersonImportRow(row = {}) {
+  return {
+    company: row.company || row.current_company || '',
+    position: row.position || row.current_position || '',
+    city: row.city || '',
+    weight: row.weight || '',
+  };
+}
+
+function canUpdateImportedPerson(user, person) {
+  if (!canAccessPerson(user, person)) return false;
+  if (['readonly', 'guest'].includes(user.role)) return false;
+  if (user.role === 'member') {
+    return Number(person.created_by) === Number(user.id) || Number(person.assigned_to) === Number(user.id);
+  }
+  return true;
+}
+
+function getVisiblePersonsForImport(user) {
+  let query = `
+    SELECT p.id, p.created_by, p.assigned_to, p.visibility_scope, p.private_owner_id,
+      p.name, p.person_category, p.relation_types, p.city, p.company, p.position, p.industry,
+      p.phone, p.email, p.wechat, p.birthday, p.address, p.tags, p.notes, p.resources, p.demands,
+      p.relationship_level, p.client_status, p.talent_type, p.current_company, p.current_position,
+      p.target_position, p.skills, p.experience_years, p.education, p.recruit_status, p.intent_level,
+      p.potential_level, p.expected_salary, p.source, p.weight
+    FROM persons p
+    WHERE 1=1
+  `;
+  const params = [];
+  const privacy = buildPersonPrivacyFilter(user.id, 'p');
+  query += privacy.sql;
+  params.push(...privacy.params);
+  const filter = buildUserFilter(user.id, user.role, 'p');
+  if (filter.sql) {
+    query += filter.sql;
+    params.push(...filter.params);
+  }
+  return decryptRows('persons', db.prepare(query).all(...params));
+}
+
+function collectPersonImportPatch(row, existing) {
+  const patch = {};
+  const diffFields = [];
+  PERSON_IMPORT_UPDATE_FIELDS.forEach(key => {
+    const next = getProvidedImportValue(row, key);
+    if (next === undefined) return;
+    const current = normalizeImportCompareValue(existing?.[key]);
+    if (current !== normalizeImportCompareValue(next)) {
+      patch[key] = next;
+      diffFields.push(key);
+    }
+  });
+  return { patch, diffFields };
+}
+
+function buildPersonImportPlan(rows, user) {
+  const visiblePersons = getVisiblePersonsForImport(user);
+  const byName = new Map();
+  visiblePersons.forEach(person => {
+    const key = normalizePersonName(person.name).toLowerCase();
+    if (!key) return;
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push(person);
+  });
+
+  const seenImportNames = new Set();
+  const summary = {
+    total: rows.length,
+    new: 0,
+    existing: 0,
+    updateable: 0,
+    no_change: 0,
+    ambiguous: 0,
+    no_permission: 0,
+    file_duplicate: 0,
+    invalid: 0,
+    skip_empty_name: 0,
+    skip_name_too_long: 0,
+  };
+
+  const items = rows.map((row, index) => {
+    const line = index + 2;
+    const normalizedName = normalizePersonName(row.name);
+    const item = { line, name: normalizedName || row.name || '', row };
+
+    if (!normalizedName) {
+      summary.invalid++;
+      summary.skip_empty_name++;
+      return { ...item, status: 'invalid', reason: '缺少姓名' };
+    }
+    if (normalizedName.length > PERSON_NAME_MAX_LENGTH) {
+      summary.invalid++;
+      summary.skip_name_too_long++;
+      return { ...item, status: 'invalid', reason: `姓名超过 ${PERSON_NAME_MAX_LENGTH} 字` };
+    }
+
+    const nameKey = normalizedName.toLowerCase();
+    if (seenImportNames.has(nameKey)) {
+      summary.file_duplicate++;
+      return { ...item, status: 'file_duplicate', reason: '导入文件内姓名重复' };
+    }
+    seenImportNames.add(nameKey);
+
+    const matches = byName.get(nameKey) || [];
+    if (matches.length === 0) {
+      summary.new++;
+      return { ...item, status: 'new' };
+    }
+
+    summary.existing++;
+    if (matches.length > 1) {
+      summary.ambiguous++;
+      return { ...item, status: 'ambiguous', reason: '系统内存在多条同名记录', existing_count: matches.length };
+    }
+
+    const existing = matches[0];
+    const { patch, diffFields } = collectPersonImportPatch(row, existing);
+    const canUpdate = canUpdateImportedPerson(user, existing);
+    if (!canUpdate) {
+      summary.no_permission++;
+      return {
+        ...item,
+        status: 'no_permission',
+        reason: '无权更新此记录',
+        existing,
+        existing_id: existing.id,
+        diff_fields: diffFields,
+        diff_labels: diffFields.map(field => PERSON_IMPORT_FIELD_LABELS[field] || field),
+      };
+    }
+    if (diffFields.length === 0) {
+      summary.no_change++;
+      return {
+        ...item,
+        status: 'same',
+        reason: '无差异',
+        existing,
+        existing_id: existing.id,
+        diff_fields: [],
+        diff_labels: [],
+      };
+    }
+    summary.updateable++;
+    return {
+      ...item,
+      status: 'updateable',
+      existing,
+      existing_id: existing.id,
+      patch,
+      diff_fields: diffFields,
+      diff_labels: diffFields.map(field => PERSON_IMPORT_FIELD_LABELS[field] || field),
+    };
+  });
+
+  return { summary, items };
+}
+
+function serializePersonImportItem(item) {
+  return {
+    line: item.line,
+    name: item.name,
+    status: item.status,
+    reason: item.reason,
+    existing_count: item.existing_count || (item.existing ? 1 : 0),
+    existing_id: item.existing_id,
+    existing: item.existing ? summarizePersonImportRow(item.existing) : null,
+    incoming: summarizePersonImportRow(item.row),
+    diff_fields: item.diff_fields || [],
+    diff_labels: item.diff_labels || [],
+  };
+}
+
+function insertImportedPerson(insert, row, userId) {
+  const normalizedName = normalizePersonName(row.name);
+  const enc = encryptRow('persons', {
+    name: normalizedName,
+    company: row.company, position: row.position,
+    phone: row.phone, email: row.email, wechat: row.wechat, address: row.address,
+    tags: row.tags, notes: row.notes, resources: row.resources, demands: row.demands,
+    current_company: row.current_company, current_position: row.current_position, target_position: row.target_position,
+    skills: row.skills, education: row.education, expected_salary: row.expected_salary, source: row.source,
+  });
+  insert.run(
+    enc.name, row.person_category || 'social', row.relation_types || '',
+    row.city, enc.company, enc.position, row.industry,
+    enc.phone, enc.email, enc.wechat, row.birthday, enc.address, enc.tags, enc.notes,
+    enc.resources, enc.demands,
+    row.relationship_level || 'normal', row.client_status || 'active',
+    row.talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
+    enc.skills, row.experience_years || null, enc.education,
+    row.recruit_status || 'potential', row.intent_level || 'low',
+    row.potential_level, enc.expected_salary, enc.source, row.weight || 'medium',
+    userId, COMPANY_PERSON_SCOPE, null
+  );
+}
+
+function updateImportedPerson(personId, patch) {
+  const fields = Object.keys(patch || {});
+  if (fields.length === 0) return false;
+  const encPatch = encryptRow('persons', patch);
+  db.prepare(`
+    UPDATE persons
+    SET ${fields.map(field => `${field} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(...fields.map(field => encPatch[field]), personId);
+  return true;
+}
+
+app.post('/api/persons/import/preview', canWrite, (req, res) => {
+  const rows = getPersonImportRows(req.body);
   if (!Array.isArray(rows) || rows.length === 0) {
     return res.status(400).json({ error: '数据为空' });
   }
+  const plan = buildPersonImportPlan(rows, req.user);
+  res.json({
+    summary: plan.summary,
+    items: plan.items
+      .filter(item => item.status !== 'new')
+      .map(serializePersonImportItem),
+  });
+});
+
+// 批量导入
+app.post('/api/persons/import', canWrite, (req, res) => {
+  const rows = getPersonImportRows(req.body);
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: '数据为空' });
+  }
+  const duplicateMode = req.body?.duplicate_mode === 'update' ? 'update' : 'skip';
+  const plan = buildPersonImportPlan(rows, req.user);
   const insert = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, city, company, position, industry,
       phone, email, wechat, birthday, address, tags, notes, resources, demands,
@@ -2488,37 +2765,55 @@ app.post('/api/persons/import', (req, res) => {
       potential_level, expected_salary, source, weight, created_by, visibility_scope, private_owner_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
-  const importMany = db.transaction((list) => {
-    let ok = 0, skip = 0, skipEmptyName = 0, skipNameTooLong = 0;
-    for (const r of list) {
-      const normalizedName = normalizePersonName(r.name);
-      if (!normalizedName) { skip++; skipEmptyName++; continue; }
-      if (normalizedName.length > PERSON_NAME_MAX_LENGTH) { skip++; skipNameTooLong++; continue; }
-      const enc = encryptRow('persons', {
-        name: normalizedName,
-        company: r.company, position: r.position,
-        phone: r.phone, email: r.email, wechat: r.wechat, address: r.address,
-        tags: r.tags, notes: r.notes, resources: r.resources, demands: r.demands,
-        current_company: r.current_company, current_position: r.current_position, target_position: r.target_position,
-        skills: r.skills, education: r.education, expected_salary: r.expected_salary, source: r.source,
-      });
-      insert.run(
-        enc.name, r.person_category || 'social', r.relation_types || '',
-        r.city, enc.company, enc.position, r.industry,
-        enc.phone, enc.email, enc.wechat, r.birthday, enc.address, enc.tags, enc.notes,
-        enc.resources, enc.demands,
-        r.relationship_level || 'normal', r.client_status || 'active',
-        r.talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
-        enc.skills, r.experience_years || null, enc.education,
-        r.recruit_status || 'potential', r.intent_level || 'low',
-        r.potential_level, enc.expected_salary, enc.source, r.weight || 'medium',
-        req.user.id, COMPANY_PERSON_SCOPE, null
-      );
-      ok++;
+
+  const result = {
+    created: 0,
+    updated: 0,
+    skipped_existing: 0,
+    skipped_no_change: 0,
+    skipped_file_duplicate: 0,
+    skipped_ambiguous: 0,
+    skipped_no_permission: 0,
+    skip_empty_name: plan.summary.skip_empty_name,
+    skip_name_too_long: plan.summary.skip_name_too_long,
+    errors: [],
+  };
+
+  const importMany = db.transaction(() => {
+    for (const item of plan.items) {
+      if (item.status === 'new') {
+        insertImportedPerson(insert, item.row, req.user.id);
+        result.created++;
+      } else if (item.status === 'updateable') {
+        if (duplicateMode === 'update') {
+          if (updateImportedPerson(item.existing_id, item.patch)) result.updated++;
+          else result.skipped_no_change++;
+        } else {
+          result.skipped_existing++;
+        }
+      } else if (item.status === 'same') {
+        result.skipped_no_change++;
+      } else if (item.status === 'file_duplicate') {
+        result.skipped_file_duplicate++;
+      } else if (item.status === 'ambiguous') {
+        result.skipped_ambiguous++;
+        result.errors.push({ line: item.line, name: item.name, reason: item.reason });
+      } else if (item.status === 'no_permission') {
+        if (duplicateMode === 'update') {
+          result.skipped_no_permission++;
+          result.errors.push({ line: item.line, name: item.name, reason: item.reason });
+        } else {
+          result.skipped_existing++;
+        }
+      }
     }
-    return { ok, skip, skip_empty_name: skipEmptyName, skip_name_too_long: skipNameTooLong };
   });
-  const result = importMany(rows);
+
+  importMany();
+  result.skip = result.skipped_existing + result.skipped_no_change + result.skipped_file_duplicate +
+    result.skipped_ambiguous + result.skipped_no_permission + result.skip_empty_name + result.skip_name_too_long;
+  result.skipped_total = result.skip;
+  result.ok = result.created + result.updated;
   res.json(result);
 });
 
@@ -5413,175 +5708,411 @@ app.put('/api/product-assets/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.post('/api/product-assets/import', (req, res) => {
-  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
-  const { id: userId } = req.user;
-  const budgetTypes = new Set(['zhixiao', 'douxiao', 'weixiao', 'kuaiyingyong', 'h5', 'other']);
-  const platforms = new Set(['android', 'ios', 'h5', 'mini_program', 'quick_app', 'other', '', null, undefined]);
-  const launchStatuses = new Set(['not_launched', 'launched', 'launched_available', 'launched_unavailable', 'running', 'paused', 'offline']);
-  const budgetTypeLabels = { '支小': 'zhixiao', '抖小': 'douxiao', '微小': 'weixiao', '快应用': 'kuaiyingyong', H5: 'h5', '其他': 'other' };
-  const platformLabels = { Android: 'android', iOS: 'ios', IOS: 'ios', H5: 'h5', '小程序': 'mini_program', '快应用': 'quick_app', '其他': 'other' };
-  const launchStatusLabels = {
-    '未上线': 'not_launched',
-    '已上线': 'launched_available',
-    '已上线可用': 'launched_available',
-    '已上线不可用': 'launched_unavailable',
-    '投放中': 'running',
-    '暂停投放': 'paused',
-    '已下线': 'offline',
+const PRODUCT_ASSET_IMPORT_FIELD_LABELS = {
+  group_name: '集团名字',
+  company_entity: '公司主体',
+  company_subject_id: '公司主体',
+  app_name: '应用名称',
+  appid: 'APPID',
+  budget_type: '预算类型',
+  platform: '平台',
+  app_identifier: '应用标识',
+  launch_status: '上线状态',
+  owner_id: '运营负责人',
+  remark: '备注',
+};
+
+const PRODUCT_ASSET_IMPORT_HEADER_MAP = new Map([
+  ['group_name', 'group_name'], ['集团名字', 'group_name'], ['集团名称', 'group_name'],
+  ['company_entity', 'company_entity'], ['公司主体', 'company_entity'], ['主体', 'company_entity'],
+  ['app_name', 'app_name'], ['应用名称', 'app_name'], ['产品名称', 'app_name'],
+  ['appid', 'appid'], ['APPID', 'appid'], ['AppID', 'appid'],
+  ['budget_type', 'budget_type'], ['预算类型', 'budget_type'],
+  ['platform', 'platform'], ['平台', 'platform'],
+  ['app_identifier', 'app_identifier'], ['应用标识', 'app_identifier'],
+  ['launch_status', 'launch_status'], ['上线状态', 'launch_status'],
+  ['owner_name', 'owner_name'], ['运营负责人', 'owner_name'], ['负责人', 'owner_name'],
+  ['remark', 'remark'], ['备注', 'remark'],
+].map(([key, field]) => [normalizeAssetImportText(key), field]));
+
+const PRODUCT_ASSET_BUDGET_TYPES = new Set(['zhixiao', 'douxiao', 'weixiao', 'kuaiyingyong', 'h5', 'other']);
+const PRODUCT_ASSET_PLATFORMS = new Set(['android', 'ios', 'h5', 'mini_program', 'quick_app', 'other', '', null, undefined]);
+const PRODUCT_ASSET_LAUNCH_STATUSES = new Set(['not_launched', 'launched', 'launched_available', 'launched_unavailable', 'running', 'paused', 'offline']);
+const PRODUCT_ASSET_BUDGET_LABELS = { '支小': 'zhixiao', '抖小': 'douxiao', '微小': 'weixiao', '快应用': 'kuaiyingyong', H5: 'h5', '其他': 'other' };
+const PRODUCT_ASSET_PLATFORM_LABELS = { Android: 'android', iOS: 'ios', IOS: 'ios', H5: 'h5', '小程序': 'mini_program', '快应用': 'quick_app', '其他': 'other' };
+const PRODUCT_ASSET_LAUNCH_STATUS_LABELS = {
+  '未上线': 'not_launched',
+  '已上线': 'launched_available',
+  '已上线可用': 'launched_available',
+  '已上线不可用': 'launched_unavailable',
+  '投放中': 'running',
+  '暂停投放': 'paused',
+  '已下线': 'offline',
+};
+
+function getProductAssetImportRows(body) {
+  if (Array.isArray(body)) return body;
+  if (Array.isArray(body?.rows)) return body.rows;
+  return null;
+}
+
+function normalizeProductAssetImportRow(row = {}) {
+  const normalized = {};
+  Object.entries(row || {}).forEach(([key, value]) => {
+    const field = PRODUCT_ASSET_IMPORT_HEADER_MAP.get(normalizeAssetImportText(key));
+    if (field) normalized[field] = typeof value === 'string' ? value.trim() : value;
+  });
+  return { ...row, ...normalized };
+}
+
+function normalizeProductAssetImportValue(value) {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+}
+
+function getProvidedProductAssetImportValue(row, key) {
+  if (!Object.prototype.hasOwnProperty.call(row, key)) return undefined;
+  const value = normalizeProductAssetImportValue(row[key]);
+  return value ? value : undefined;
+}
+
+function getProductAssetImportContext() {
+  return {
+    subjects: decryptRows('company_subjects', db.prepare('SELECT * FROM company_subjects').all()),
+    assets: decryptRows('product_assets', db.prepare(`
+      SELECT pa.*, u.display_name as owner_name
+      FROM product_assets pa
+      LEFT JOIN users u ON pa.owner_id = u.id
+      ORDER BY pa.updated_at DESC, pa.id DESC
+    `).all()),
+    users: db.prepare('SELECT id, username, display_name FROM users').all(),
   };
-  const results = [];
-  let successCount = 0;
-  let createdCount = 0;
-  let updatedCount = 0;
-  const updatedNames = [];
-  const importHeaderMap = new Map([
-    ['group_name', 'group_name'], ['集团名字', 'group_name'], ['集团名称', 'group_name'],
-    ['company_entity', 'company_entity'], ['公司主体', 'company_entity'], ['主体', 'company_entity'],
-    ['app_name', 'app_name'], ['应用名称', 'app_name'], ['产品名称', 'app_name'],
-    ['appid', 'appid'], ['APPID', 'appid'], ['AppID', 'appid'],
-    ['budget_type', 'budget_type'], ['预算类型', 'budget_type'],
-    ['platform', 'platform'], ['平台', 'platform'],
-    ['app_identifier', 'app_identifier'], ['应用标识', 'app_identifier'],
-    ['launch_status', 'launch_status'], ['上线状态', 'launch_status'],
-    ['owner_name', 'owner_name'], ['运营负责人', 'owner_name'], ['负责人', 'owner_name'],
-    ['remark', 'remark'], ['备注', 'remark'],
-  ].map(([key, field]) => [normalizeAssetImportText(key), field]));
+}
 
-  const allSubjects = decryptRows('company_subjects', db.prepare('SELECT * FROM company_subjects').all());
-  const existingAssets = decryptRows('product_assets', db.prepare(`
-    SELECT id, app_name
-    FROM product_assets
-    ORDER BY updated_at DESC, id DESC
-  `).all());
-  const users = db.prepare('SELECT id, username, display_name FROM users').all();
+function findProductAssetImportSubject(subjects, groupName, companyEntity, required = false) {
+  const normalizedCompany = normalizeAssetImportText(companyEntity);
+  const normalizedGroup = normalizeAssetImportText(groupName);
+  if (!normalizedCompany) {
+    return { subject: null, error: required ? '公司主体必填' : null };
+  }
 
-  const normalizeImportRow = (row) => {
-    const normalized = {};
-    Object.entries(row || {}).forEach(([key, value]) => {
-      const field = importHeaderMap.get(normalizeAssetImportText(key));
-      if (field) normalized[field] = typeof value === 'string' ? value.trim() : value;
-    });
-    return { ...row, ...normalized };
-  };
+  const companyMatches = subjects.filter(s => normalizeAssetImportText(s.company_entity) === normalizedCompany);
+  if (companyMatches.length === 1) return { subject: companyMatches[0], error: null };
+  if (companyMatches.length > 1) {
+    if (!normalizedGroup) return { subject: null, error: '公司主体重名，请填写集团名字辅助匹配' };
+    const subject = companyMatches.find(s => normalizeAssetImportText(s.group_name) === normalizedGroup);
+    return { subject: subject || null, error: subject ? null : '公司主体重名，集团名字未匹配' };
+  }
+  return { subject: null, error: '公司主体未匹配' };
+}
 
-  const findSubject = (groupName, companyEntity) => {
-    const normalizedCompany = normalizeAssetImportText(companyEntity);
-    const normalizedGroup = normalizeAssetImportText(groupName);
-    if (!normalizedCompany) return { subject: null, error: '公司主体必填' };
+function findProductAssetImportOwner(users, ownerName) {
+  const keyword = normalizeProductAssetImportValue(ownerName);
+  if (!keyword) return { ownerId: undefined, error: null };
+  const user = users.find(u => u.username === keyword || u.display_name === keyword);
+  return user ? { ownerId: user.id, error: null } : { ownerId: undefined, error: '运营负责人未匹配' };
+}
 
-    const companyMatches = allSubjects.filter(s => normalizeAssetImportText(s.company_entity) === normalizedCompany);
-    if (companyMatches.length === 1) return { subject: companyMatches[0], error: null };
-    if (companyMatches.length > 1) {
-      if (!normalizedGroup) return { subject: null, error: '公司主体重名，请填写集团名字辅助匹配' };
-      const subject = companyMatches.find(s => normalizeAssetImportText(s.group_name) === normalizedGroup);
-      return { subject: subject || null, error: subject ? null : '公司主体重名，集团名字未匹配' };
-    }
-    return { subject: null, error: '公司主体未匹配' };
-  };
+function getProductAssetImportMatches(assets, appName) {
+  const normalizedAppName = normalizeAssetImportText(appName);
+  if (!normalizedAppName) return [];
+  return assets.filter(asset => normalizeAssetImportText(asset.app_name) === normalizedAppName);
+}
 
-  const findOwnerId = (ownerName) => {
-    if (!ownerName) return null;
-    const keyword = String(ownerName).trim();
-    const user = users.find(u => u.username === keyword || u.display_name === keyword);
-    return user?.id || null;
-  };
+function normalizeProductAssetImportPayload(row, context, mode) {
+  const errors = [];
+  const next = {};
+  const appName = getProvidedProductAssetImportValue(row, 'app_name');
+  if (appName) next.app_name = appName;
 
-  const findExistingAsset = (appName) => {
-    const normalizedAppName = normalizeAssetImportText(appName);
-    if (!normalizedAppName) return null;
-    return existingAssets.find(asset => normalizeAssetImportText(asset.app_name) === normalizedAppName) || null;
-  };
+  const budgetTypeRaw = getProvidedProductAssetImportValue(row, 'budget_type');
+  if (budgetTypeRaw !== undefined) {
+    const budgetType = PRODUCT_ASSET_BUDGET_LABELS[budgetTypeRaw] || budgetTypeRaw;
+    if (!PRODUCT_ASSET_BUDGET_TYPES.has(budgetType)) errors.push('预算类型不合法');
+    else next.budget_type = budgetType;
+  } else if (mode === 'create') {
+    errors.push('预算类型必填');
+  }
 
-  rows.forEach((rawRow, index) => {
-    const row = normalizeImportRow(rawRow);
-    const line = index + 2;
-    const budgetType = budgetTypeLabels[row.budget_type] || row.budget_type;
-    const platform = platformLabels[row.platform] || row.platform;
-    const launchStatus = launchStatusLabels[row.launch_status] || row.launch_status;
-    const { subject, error: subjectError } = findSubject(row.group_name, row.company_entity);
-    const errors = [];
-    if (!row.app_name) errors.push('应用名称必填');
-    if (!budgetType || !budgetTypes.has(budgetType)) errors.push('预算类型不合法');
-    if (!launchStatus || !launchStatuses.has(launchStatus)) errors.push('上线状态不合法');
-    if (!platforms.has(platform)) errors.push('平台不合法');
-    if (!subject) errors.push(subjectError || '公司主体未匹配');
+  const platformRaw = getProvidedProductAssetImportValue(row, 'platform');
+  if (platformRaw !== undefined) {
+    const platform = PRODUCT_ASSET_PLATFORM_LABELS[platformRaw] || platformRaw;
+    if (!PRODUCT_ASSET_PLATFORMS.has(platform)) errors.push('平台不合法');
+    else next.platform = platform || null;
+  }
 
-    if (errors.length > 0) {
-      results.push({ line, success: false, error: errors.join('；') });
-      return;
-    }
+  const launchStatusRaw = getProvidedProductAssetImportValue(row, 'launch_status');
+  if (launchStatusRaw !== undefined) {
+    const launchStatus = PRODUCT_ASSET_LAUNCH_STATUS_LABELS[launchStatusRaw] || launchStatusRaw;
+    if (!PRODUCT_ASSET_LAUNCH_STATUSES.has(launchStatus)) errors.push('上线状态不合法');
+    else next.launch_status = launchStatus;
+  } else if (mode === 'create') {
+    next.launch_status = 'not_launched';
+  }
 
-    const ownerId = findOwnerId(row.owner_name);
-    const enc = encryptRow('product_assets', {
-      group_name: subject.group_name,
-      app_name: row.app_name,
-      company_entity: subject.company_entity,
-      appid: row.appid,
-      app_identifier: row.app_identifier,
-      remark: row.remark,
-    });
-    const existingAsset = findExistingAsset(row.app_name);
-    if (existingAsset) {
-      db.prepare(`
-        UPDATE product_assets SET
-          group_name = ?, company_subject_id = ?, app_name = ?, appid = ?, budget_type = ?,
-          company_entity = ?, platform = ?, app_identifier = ?, launch_status = ?,
-          owner_id = ?, remark = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
-        enc.group_name,
-        subject.id,
-        enc.app_name,
-        enc.appid || null,
-        budgetType,
-        enc.company_entity,
-        platform || null,
-        enc.app_identifier || null,
-        launchStatus,
-        ownerId,
-        enc.remark || null,
-        existingAsset.id
-      );
-      updatedCount += 1;
-      updatedNames.push(row.app_name);
-      results.push({ line, success: true, action: 'updated', id: existingAsset.id, app_name: row.app_name });
-    } else {
-      const result = db.prepare(`
-        INSERT INTO product_assets (
-          group_name, company_subject_id, app_name, appid, budget_type, company_entity,
-          platform, app_identifier, launch_status, owner_id, remark, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        enc.group_name,
-        subject.id,
-        enc.app_name,
-        enc.appid || null,
-        budgetType,
-        enc.company_entity,
-        platform || null,
-        enc.app_identifier || null,
-        launchStatus,
-        ownerId,
-        enc.remark || null,
-        userId
-      );
-      createdCount += 1;
-      existingAssets.unshift({ id: result.lastInsertRowid, app_name: row.app_name });
-      results.push({ line, success: true, action: 'created', id: result.lastInsertRowid, app_name: row.app_name });
-    }
-    successCount += 1;
+  ['appid', 'app_identifier', 'remark'].forEach(field => {
+    const value = getProvidedProductAssetImportValue(row, field);
+    if (value !== undefined) next[field] = value;
   });
 
-  res.json({
+  const subjectRequired = mode === 'create';
+  const hasSubjectInput = getProvidedProductAssetImportValue(row, 'company_entity') !== undefined;
+  if (subjectRequired || hasSubjectInput) {
+    const { subject, error } = findProductAssetImportSubject(context.subjects, row.group_name, row.company_entity, subjectRequired);
+    if (!subject) errors.push(error || '公司主体未匹配');
+    else {
+      next.company_subject_id = subject.id;
+      next.group_name = subject.group_name;
+      next.company_entity = subject.company_entity;
+    }
+  }
+
+  const ownerValue = getProvidedProductAssetImportValue(row, 'owner_name');
+  if (ownerValue !== undefined) {
+    const { ownerId, error } = findProductAssetImportOwner(context.users, ownerValue);
+    if (error) errors.push(error);
+    else next.owner_id = ownerId;
+  }
+
+  if (!appName) errors.push('应用名称必填');
+  return { values: next, errors };
+}
+
+function collectProductAssetImportPatch(values, existing) {
+  const patch = {};
+  const diffFields = [];
+  Object.entries(values).forEach(([field, value]) => {
+    const current = field === 'owner_id'
+      ? String(existing?.owner_id || '')
+      : normalizeProductAssetImportValue(existing?.[field]);
+    const next = field === 'owner_id'
+      ? String(value || '')
+      : normalizeProductAssetImportValue(value);
+    if (current !== next) {
+      patch[field] = value;
+      diffFields.push(field === 'company_subject_id' ? 'company_entity' : field);
+    }
+  });
+  return { patch, diffFields: [...new Set(diffFields)] };
+}
+
+function summarizeProductAssetImportRow(row = {}) {
+  return {
+    app_name: row.app_name || '',
+    company_entity: row.company_entity || '',
+    budget_type: row.budget_type || '',
+    launch_status: row.launch_status || '',
+    owner_name: row.owner_name || '',
+  };
+}
+
+function buildProductAssetImportPlan(rows, user) {
+  const context = getProductAssetImportContext();
+  const seenImportNames = new Set();
+  const summary = {
     total: rows.length,
-    successCount,
-    createdCount,
-    updatedCount,
-    updatedNames,
-    failCount: rows.length - successCount,
-    results,
+    new: 0,
+    existing: 0,
+    updateable: 0,
+    no_change: 0,
+    ambiguous: 0,
+    file_duplicate: 0,
+    invalid: 0,
+  };
+
+  const items = rows.map((rawRow, index) => {
+    const line = index + 2;
+    const row = normalizeProductAssetImportRow(rawRow);
+    const appName = normalizeProductAssetImportValue(row.app_name);
+    const item = { line, app_name: appName, row };
+
+    if (!appName) {
+      summary.invalid++;
+      return { ...item, status: 'invalid', reason: '应用名称必填' };
+    }
+
+    const appKey = normalizeAssetImportText(appName);
+    if (seenImportNames.has(appKey)) {
+      summary.file_duplicate++;
+      return { ...item, status: 'file_duplicate', reason: '导入文件内应用名称重复' };
+    }
+    seenImportNames.add(appKey);
+
+    const matches = getProductAssetImportMatches(context.assets, appName);
+    if (matches.length > 1) {
+      summary.existing++;
+      summary.ambiguous++;
+      return { ...item, status: 'ambiguous', reason: '系统内存在多条同名产品资产', existing_count: matches.length };
+    }
+
+    if (matches.length === 0) {
+      const normalized = normalizeProductAssetImportPayload(row, context, 'create');
+      if (normalized.errors.length) {
+        summary.invalid++;
+        return { ...item, status: 'invalid', reason: normalized.errors.join('；') };
+      }
+      summary.new++;
+      return { ...item, status: 'new', values: normalized.values };
+    }
+
+    const existing = matches[0];
+    summary.existing++;
+    const normalized = normalizeProductAssetImportPayload(row, context, 'update');
+    if (normalized.errors.length) {
+      summary.invalid++;
+      return { ...item, status: 'invalid', reason: normalized.errors.join('；'), existing, existing_id: existing.id };
+    }
+    const { patch, diffFields } = collectProductAssetImportPatch(normalized.values, existing);
+    if (diffFields.length === 0) {
+      summary.no_change++;
+      return { ...item, status: 'same', reason: '无差异', existing, existing_id: existing.id, diff_fields: [], diff_labels: [] };
+    }
+    summary.updateable++;
+    return {
+      ...item,
+      status: 'updateable',
+      existing,
+      existing_id: existing.id,
+      values: normalized.values,
+      patch,
+      diff_fields: diffFields,
+      diff_labels: diffFields.map(field => PRODUCT_ASSET_IMPORT_FIELD_LABELS[field] || field),
+    };
   });
+
+  return { summary, items };
+}
+
+function serializeProductAssetImportItem(item) {
+  return {
+    line: item.line,
+    app_name: item.app_name,
+    status: item.status,
+    reason: item.reason,
+    existing_count: item.existing_count || (item.existing ? 1 : 0),
+    existing_id: item.existing_id,
+    existing: item.existing ? summarizeProductAssetImportRow(item.existing) : null,
+    incoming: summarizeProductAssetImportRow({ ...item.row, ...(item.values || {}) }),
+    diff_fields: item.diff_fields || [],
+    diff_labels: item.diff_labels || [],
+  };
+}
+
+function insertImportedProductAsset(values, userId) {
+  const enc = encryptRow('product_assets', {
+    group_name: values.group_name,
+    app_name: values.app_name,
+    company_entity: values.company_entity,
+    appid: values.appid,
+    app_identifier: values.app_identifier,
+    remark: values.remark,
+  });
+  const result = db.prepare(`
+    INSERT INTO product_assets (
+      group_name, company_subject_id, app_name, appid, budget_type, company_entity,
+      platform, app_identifier, launch_status, owner_id, remark, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    enc.group_name,
+    values.company_subject_id,
+    enc.app_name,
+    enc.appid || null,
+    values.budget_type,
+    enc.company_entity,
+    values.platform || null,
+    enc.app_identifier || null,
+    values.launch_status || 'not_launched',
+    values.owner_id || null,
+    enc.remark || null,
+    userId
+  );
+  return result.lastInsertRowid;
+}
+
+function updateImportedProductAsset(assetId, patch) {
+  const fields = Object.keys(patch || {});
+  if (fields.length === 0) return false;
+  const encPatch = encryptRow('product_assets', patch);
+  db.prepare(`
+    UPDATE product_assets
+    SET ${fields.map(field => `${field} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(...fields.map(field => encPatch[field] ?? null), assetId);
+  return true;
+}
+
+app.post('/api/product-assets/import/preview', (req, res) => {
+  const rows = getProductAssetImportRows(req.body);
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: '数据为空' });
+  }
+  const plan = buildProductAssetImportPlan(rows, req.user);
+  res.json({
+    summary: plan.summary,
+    items: plan.items
+      .filter(item => item.status !== 'new')
+      .map(serializeProductAssetImportItem),
+  });
+});
+
+app.post('/api/product-assets/import', (req, res) => {
+  const rows = getProductAssetImportRows(req.body);
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return res.status(400).json({ error: '数据为空' });
+  }
+  const duplicateMode = req.body?.duplicate_mode === 'update' ? 'update' : 'skip';
+  const plan = buildProductAssetImportPlan(rows, req.user);
+  const result = {
+    total: rows.length,
+    successCount: 0,
+    createdCount: 0,
+    updatedCount: 0,
+    skippedExistingCount: 0,
+    skippedNoChangeCount: 0,
+    skippedFileDuplicateCount: 0,
+    skippedAmbiguousCount: 0,
+    updatedNames: [],
+    results: [],
+  };
+
+  const importMany = db.transaction(() => {
+    plan.items.forEach(item => {
+      if (item.status === 'new') {
+        const id = insertImportedProductAsset(item.values, req.user.id);
+        result.createdCount += 1;
+        result.successCount += 1;
+        result.results.push({ line: item.line, success: true, action: 'created', id, app_name: item.app_name });
+      } else if (item.status === 'updateable') {
+        if (duplicateMode === 'update') {
+          updateImportedProductAsset(item.existing_id, item.patch);
+          result.updatedCount += 1;
+          result.successCount += 1;
+          result.updatedNames.push(item.app_name);
+          result.results.push({ line: item.line, success: true, action: 'updated', id: item.existing_id, app_name: item.app_name, diff_fields: item.diff_fields, diff_labels: item.diff_labels });
+        } else {
+          result.skippedExistingCount += 1;
+          result.results.push({ line: item.line, success: true, action: 'skipped_existing', id: item.existing_id, app_name: item.app_name });
+        }
+      } else if (item.status === 'same') {
+        result.skippedNoChangeCount += 1;
+        result.results.push({ line: item.line, success: true, action: 'skipped_no_change', id: item.existing_id, app_name: item.app_name });
+      } else if (item.status === 'file_duplicate') {
+        result.skippedFileDuplicateCount += 1;
+        result.results.push({ line: item.line, success: true, action: 'skipped_file_duplicate', app_name: item.app_name, error: item.reason });
+      } else if (item.status === 'ambiguous') {
+        result.skippedAmbiguousCount += 1;
+        result.results.push({ line: item.line, success: false, action: 'skipped_ambiguous', app_name: item.app_name, error: item.reason });
+      } else {
+        result.results.push({ line: item.line, success: false, action: 'invalid', app_name: item.app_name, error: item.reason });
+      }
+    });
+  });
+
+  importMany();
+  result.failCount = result.results.filter(r => !r.success).length;
+  result.skippedCount = result.skippedExistingCount + result.skippedNoChangeCount +
+    result.skippedFileDuplicateCount + result.skippedAmbiguousCount;
+  res.json(result);
 });
 
 app.delete('/api/product-assets/:id', (req, res) => {
