@@ -95,10 +95,15 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const BEIJING_DISTRICTS = [
   '东城区', '西城区', '朝阳区', '丰台区', '石景山区', '海淀区', '门头沟区', '房山区',
   '通州区', '顺义区', '昌平区', '大兴区', '怀柔区', '平谷区', '密云区', '延庆区',
 ];
+const POI_SUFFIX_PATTERN = /(大厦|广场|中心|园区|写字楼|酒店|公寓|大楼|商厦|商城|科技园|产业园|创业园|办公楼|商务楼|大院)/;
 
 function extractExpectedDistrict(city, address) {
   const text = normalizeGeoText(`${city || ''}${address || ''}`);
@@ -141,19 +146,93 @@ function getLocationStatus(person, geocode) {
   return { label: '已定位', color: '#52c41a' };
 }
 
+function stripCityDistrictFromAddress(city, address) {
+  let text = normalizeGeoText(address);
+  const cityName = normalizeGeoText(firstCityFromValue(city));
+  const cityWithoutSuffix = cityName.replace(/市$/, '');
+  const variants = [
+    cityWithoutSuffix ? `${cityWithoutSuffix}市` : '',
+    cityName,
+    cityWithoutSuffix,
+    extractExpectedDistrict(city, address),
+  ]
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  variants.forEach(variant => {
+    text = text.replace(new RegExp(escapeRegExp(variant), 'g'), '');
+  });
+  return text;
+}
+
+function trimAfterPoiSuffix(value) {
+  const text = normalizeGeoText(value);
+  const match = text.match(POI_SUFFIX_PATTERN);
+  if (!match) return text;
+  return text.slice(0, match.index + match[0].length);
+}
+
+function stripStreetPrefixBeforePoi(value) {
+  const text = normalizeGeoText(value);
+  const poiIndex = text.search(POI_SUFFIX_PATTERN);
+  if (poiIndex < 0) return text;
+  const prefix = text.slice(0, poiIndex);
+  const cutIndex = Math.max(prefix.lastIndexOf('号'), prefix.lastIndexOf('弄'), prefix.lastIndexOf('巷'));
+  return cutIndex >= 0 ? text.slice(cutIndex + 1) : text;
+}
+
+function normalizePoiKeyword(value) {
+  let text = stripStreetPrefixBeforePoi(value);
+  text = trimAfterPoiSuffix(text);
+  return text
+    .replace(/^[\d\-~至到号楼层室]+/, '')
+    .replace(/[\d\-~至到]+(?:楼|层|室).*$/, '')
+    .trim();
+}
+
+function extractBuildingPoiName(city, address) {
+  const stripped = stripCityDistrictFromAddress(city, address);
+  const direct = normalizePoiKeyword(stripped);
+  if (POI_SUFFIX_PATTERN.test(direct) && direct.length >= 3) return direct;
+
+  const matches = stripped.match(/[\u4e00-\u9fa5A-Za-z0-9·（）()_-]{2,40}(?:大厦|广场|中心|园区|写字楼|酒店|公寓|大楼|商厦|商城|科技园|产业园|创业园|办公楼|商务楼|大院)/g) || [];
+  return matches
+    .map(normalizePoiKeyword)
+    .find(keyword => POI_SUFFIX_PATTERN.test(keyword) && keyword.length >= 3) || '';
+}
+
+function extractRoadKeyword(address) {
+  const match = normalizeGeoText(address).match(/[\u4e00-\u9fa5A-Za-z0-9]+(?:路|街|道|巷|弄)/);
+  return match?.[0] || '';
+}
+
+function addressLooksLikePoi(city, address) {
+  return Boolean(extractBuildingPoiName(city, address)) || POI_SUFFIX_PATTERN.test(normalizeGeoText(address));
+}
+
 function buildPoiKeywords(city, address) {
   const query = buildGeocodeQuery(city, address);
   const cleanAddress = String(address || '').trim();
-  const withoutCityDistrict = cleanAddress
-    .replace(firstCityFromValue(city), '')
-    .replace(extractExpectedDistrict(city, address), '')
-    .trim();
+  const firstCity = firstCityFromValue(city);
+  const district = extractExpectedDistrict(city, address);
+  const withoutCityDistrict = stripCityDistrictFromAddress(city, address);
+  const buildingName = extractBuildingPoiName(city, address);
+  const normalizedAddress = normalizePoiKeyword(withoutCityDistrict);
+  const roadKeyword = extractRoadKeyword(address);
   const segments = withoutCityDistrict
     .split(/[，,;；\s]+/)
     .map(v => v.trim())
     .filter(Boolean);
-  const buildingLike = segments.find(v => /大厦|广场|中心|园区|写字楼|酒店|公寓|楼|座/.test(v));
-  return [...new Set([buildingLike, withoutCityDistrict, cleanAddress, query].filter(Boolean))];
+  const buildingLike = segments.map(normalizePoiKeyword).find(v => POI_SUFFIX_PATTERN.test(v));
+  return [...new Set([
+    buildingName,
+    buildingName && district ? `${district}${buildingName}` : '',
+    buildingName && firstCity ? `${firstCity}${buildingName}` : '',
+    buildingName && roadKeyword ? `${roadKeyword}${buildingName}` : '',
+    buildingLike,
+    normalizedAddress,
+    cleanAddress,
+    query,
+  ].filter(Boolean))];
 }
 
 function extractSuggestionLocation(item) {
@@ -175,6 +254,75 @@ function suggestionMatchesExpectedDistrict(item, expectedDistrict) {
   if (!expectedDistrict) return true;
   const text = normalizeGeoText(`${item.title || ''}${item.address || ''}${item.district || ''}`);
   return text.includes(expectedDistrict);
+}
+
+function normalizeSuggestionItems(result) {
+  const data = result?.data || result?.result?.data || result?.result || [];
+  return (Array.isArray(data) ? data : [])
+    .map(extractSuggestionLocation)
+    .filter(Boolean);
+}
+
+function scoreSuggestionItem(item, context) {
+  const title = normalizeGeoText(item.title);
+  const text = normalizeGeoText(`${item.title || ''}${item.address || ''}${item.district || ''}${item.city || ''}`);
+  const keyword = normalizeGeoText(context.keyword);
+  const buildingName = normalizeGeoText(context.buildingName);
+  const roadKeyword = normalizeGeoText(context.roadKeyword);
+  const firstCity = normalizeGeoText(firstCityFromValue(context.city));
+  let score = 0;
+
+  if (buildingName && title.includes(buildingName)) score += 90;
+  else if (buildingName && text.includes(buildingName)) score += 55;
+  if (keyword && title.includes(keyword)) score += 35;
+  else if (keyword && text.includes(keyword)) score += 15;
+  if (context.expectedDistrict && suggestionMatchesExpectedDistrict(item, context.expectedDistrict)) score += 40;
+  else if (context.expectedDistrict) score -= 20;
+  if (roadKeyword && text.includes(roadKeyword)) score += 12;
+  if (firstCity && (normalizeGeoText(item.city).includes(firstCity) || text.includes(firstCity))) score += 8;
+  return score;
+}
+
+function selectBestSuggestion(items, context) {
+  if (items.length === 0) return null;
+  const ranked = items
+    .map(item => ({ item, score: scoreSuggestionItem(item, context) }))
+    .sort((a, b) => b.score - a.score);
+  const best = ranked[0];
+  return best?.score > 0 ? best.item : null;
+}
+
+function createSuggestionService(SuggestionCtor, region) {
+  const optionSets = [
+    { pageSize: 10, policy: 1, region, regionFix: Boolean(region) },
+    { pageSize: 10, region, regionFix: Boolean(region) },
+    { pageSize: 10 },
+  ];
+  for (const options of optionSets) {
+    try {
+      return new SuggestionCtor(options);
+    } catch {
+      // Try the next option shape; older SDK builds are picky about constructor params.
+    }
+  }
+  return null;
+}
+
+async function getPoiSuggestionResult(suggester, keyword, region) {
+  const payloads = [
+    { keyword, region, regionFix: Boolean(region), region_fix: Boolean(region), policy: 1 },
+    { keyword },
+  ];
+  for (const payload of payloads) {
+    try {
+      const result = await suggester.getSuggestions(payload);
+      const items = normalizeSuggestionItems(result);
+      if (items.length > 0) return items;
+    } catch {
+      // Retry with a simpler payload.
+    }
+  }
+  return [];
 }
 
 function buildClientGeocodeCandidates(city, address) {
@@ -455,12 +603,44 @@ export default function PersonsMap() {
 
     let cancelled = false;
     const geocoder = new window.TMap.service.Geocoder();
-    const suggester = window.TMap.service.Suggestion
-      ? new window.TMap.service.Suggestion({ pageSize: 10 })
-      : null;
+    const SuggestionCtor = window.TMap.service.Suggestion;
 
     const geocodePerson = async (person) => {
       const expectedDistrict = extractExpectedDistrict(person.city, person.address);
+      const tryPoiSuggestion = async () => {
+        if (!SuggestionCtor) return null;
+        const region = firstCityFromValue(person.city);
+        const suggester = createSuggestionService(SuggestionCtor, region);
+        if (!suggester) return null;
+        const contextBase = {
+          city: person.city,
+          expectedDistrict,
+          buildingName: extractBuildingPoiName(person.city, person.address),
+          roadKeyword: extractRoadKeyword(person.address),
+        };
+        for (const keyword of buildPoiKeywords(person.city, person.address)) {
+          const items = await getPoiSuggestionResult(suggester, keyword, region);
+          const best = selectBestSuggestion(items, { ...contextBase, keyword });
+          if (best) {
+            return {
+              lat: best.lat,
+              lng: best.lng,
+              geocode_address: buildGeocodeKey(person.city, person.address),
+              source: 'poi',
+              title: best.title,
+              address: best.address,
+              district: best.district,
+            };
+          }
+        }
+        return null;
+      };
+
+      if (addressLooksLikePoi(person.city, person.address)) {
+        const poiResult = await tryPoiSuggestion();
+        if (poiResult) return poiResult;
+      }
+
       for (const candidate of buildClientGeocodeCandidates(person.city, person.address)) {
         try {
           const result = await geocoder.getLocation(candidate);
@@ -479,36 +659,8 @@ export default function PersonsMap() {
           // Try the next candidate; Tencent may reject one form but accept another.
         }
       }
-      if (suggester) {
-        const region = firstCityFromValue(person.city);
-        for (const keyword of buildPoiKeywords(person.city, person.address)) {
-          try {
-            const result = await suggester.getSuggestions({
-              keyword,
-              region,
-              region_fix: Boolean(region),
-            });
-            const items = (result?.data || [])
-              .map(extractSuggestionLocation)
-              .filter(Boolean)
-              .filter(item => suggestionMatchesExpectedDistrict(item, expectedDistrict));
-            if (items.length > 0) {
-              const best = items[0];
-              return {
-                lat: best.lat,
-                lng: best.lng,
-                geocode_address: buildGeocodeKey(person.city, person.address),
-                source: 'poi',
-                title: best.title,
-                address: best.address,
-                district: best.district,
-              };
-            }
-          } catch {
-            // Keep trying lower-specificity keywords.
-          }
-        }
-      }
+      const poiResult = await tryPoiSuggestion();
+      if (poiResult) return poiResult;
       return { failed: true, geocode_address: buildGeocodeKey(person.city, person.address) };
     };
 
