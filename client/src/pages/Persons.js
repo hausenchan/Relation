@@ -2,12 +2,12 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col, Grid, List,
   Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Tooltip, Divider,
-  Upload, Alert
+  Upload, Alert, Segmented
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
-  PhoneOutlined, MailOutlined, WechatOutlined, EnvironmentOutlined, MessageOutlined,
-  UploadOutlined, DownloadOutlined, FilterOutlined
+  PhoneOutlined, MailOutlined, WechatOutlined, MessageOutlined,
+  UploadOutlined, DownloadOutlined, FilterOutlined, LockOutlined, GlobalOutlined
 } from '@ant-design/icons';
 import { personsApi, interactionsApi, remindersApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -23,6 +23,9 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { useBreakpoint } = Grid;
 const PERSON_NAME_MAX_LENGTH = 30;
+const PRIVATE_PERSON_SCOPE = 'executive_private';
+const COMPANY_PERSON_SCOPE = 'company';
+const EXECUTIVE_ROLES = ['ceo', 'coo', 'cto', 'cmo'];
 
 const CHINA_CITIES = [
   '北京','上海','广州','深圳','杭州','成都','重庆','武汉','南京','西安',
@@ -93,6 +96,11 @@ const weightMap = {
 
 const parseRelationTypes = (str) =>
   str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+const isExecutiveUser = (user) =>
+  EXECUTIVE_ROLES.includes(user?.role) || EXECUTIVE_ROLES.includes(user?.executive_role);
+
+const isPrivatePerson = (record) => record?.visibility_scope === PRIVATE_PERSON_SCOPE;
 
 function RelationTags({ value }) {
   const types = parseRelationTypes(value);
@@ -429,6 +437,7 @@ export default function Persons() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const { user: currentUser } = useAuth();
+  const canUsePrivatePersons = isExecutiveUser(currentUser);
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -440,6 +449,7 @@ export default function Persons() {
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
+  const [filterVisibility, setFilterVisibility] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -458,8 +468,10 @@ export default function Persons() {
   const [form] = Form.useForm();
   const category = Form.useWatch('person_category', form);
   const relationTypes = Form.useWatch('relation_types', form) || [];
+  const visibilityScope = Form.useWatch('visibility_scope', form) || COMPANY_PERSON_SCOPE;
   const isExternalTalent = category === 'talent' && !relationTypes.includes('talent_internal');
   const isInternalTalent = category === 'talent' && relationTypes.includes('talent_internal');
+  const isPrivateScope = visibilityScope === PRIVATE_PERSON_SCOPE;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -472,10 +484,11 @@ export default function Persons() {
     if (filterCity) params.city = filterCity;
     if (filterWeight) params.weight = filterWeight;
     if (filterCreatedBy) params.created_by = filterCreatedBy;
+    if (canUsePrivatePersons && filterVisibility) params.visibility_scope = filterVisibility;
     const res = await personsApi.list(params);
     setData(res);
     setLoading(false);
-  }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight, filterCreatedBy]);
+  }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight, filterCreatedBy, filterVisibility, canUsePrivatePersons]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -513,6 +526,7 @@ export default function Persons() {
       ...record,
       relation_types: parseRelationTypes(record.relation_types),
       city: record.city ? record.city.split(',').map(s => s.trim()).filter(Boolean) : [],
+      visibility_scope: record.visibility_scope || COMPANY_PERSON_SCOPE,
       shared_to: record.shared_to_ids
         ? record.shared_to_ids.split(',').map(Number).filter(Boolean)
         : [],
@@ -524,7 +538,13 @@ export default function Persons() {
   const openAdd = () => {
     setEditing(null);
     form.resetFields();
-    form.setFieldsValue({ person_category: 'social', relation_types: [], weight: 'medium' });
+    form.setFieldsValue({
+      person_category: 'social',
+      relation_types: [],
+      weight: 'medium',
+      visibility_scope: COMPANY_PERSON_SCOPE,
+      shared_to: [],
+    });
     loadCommercialUsers();
     setModalOpen(true);
   };
@@ -540,6 +560,8 @@ export default function Persons() {
       city: Array.isArray(values.city)
         ? values.city.join(',')
         : (values.city || ''),
+      visibility_scope: canUsePrivatePersons ? (values.visibility_scope || COMPANY_PERSON_SCOPE) : COMPANY_PERSON_SCOPE,
+      shared_to: values.visibility_scope === PRIVATE_PERSON_SCOPE ? [] : values.shared_to,
     };
     if (editing) {
       await personsApi.update(editing.id, payload);
@@ -730,6 +752,11 @@ export default function Persons() {
             >
               {v}
             </strong>
+            {isPrivatePerson(r) && (
+              <Tag color="red" icon={<LockOutlined />} style={{ marginTop: 4, marginInlineEnd: 0 }}>
+                私密
+              </Tag>
+            )}
           </Button>
         </Tooltip>
       ),
@@ -824,7 +851,9 @@ export default function Persons() {
     {
       title: '共享人',
       dataIndex: 'shared_to_names',
-      render: v => v ? v.split(',').map((name, i) => <Tag key={i} color="cyan">{name}</Tag>) : '-',
+      render: (v, r) => isPrivatePerson(r)
+        ? <Tag color="red" icon={<LockOutlined />}>仅本人</Tag>
+        : (v ? v.split(',').map((name, i) => <Tag key={i} color="cyan">{name}</Tag>) : '-'),
     },
     { title: '更新时间', dataIndex: 'updated_at', render: v => v?.slice(0, 10) },
     {
@@ -879,6 +908,7 @@ export default function Persons() {
                 <Space wrap size={[6, 6]}>
                   <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>
                   {record.weight && <Tag color={weightMap[record.weight]?.color}>{weightMap[record.weight]?.label}</Tag>}
+                  {isPrivatePerson(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
                 </Space>
               </div>
               <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
@@ -913,7 +943,11 @@ export default function Persons() {
               </Space>
             )}
 
-            {record.shared_to_names && (
+            {isPrivatePerson(record) ? (
+              <div>
+                <Tag color="red" icon={<LockOutlined />}>仅本人可见</Tag>
+              </div>
+            ) : record.shared_to_names && (
               <div>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>共享人：</Typography.Text>
                 <Space wrap size={[6, 6]}>
@@ -985,6 +1019,7 @@ export default function Persons() {
     filterCity,
     filterWeight,
     filterCreatedBy,
+    canUsePrivatePersons && filterVisibility,
   ].filter(Boolean).length;
   const resetFilters = () => {
     setSearch('');
@@ -996,12 +1031,13 @@ export default function Persons() {
     setFilterCity('');
     setFilterWeight('');
     setFilterCreatedBy(undefined);
+    setFilterVisibility('');
   };
   const filterGridStyle = {
     display: 'grid',
     gridTemplateColumns: isMobile
       ? '1fr'
-      : 'minmax(260px, 1.5fr) minmax(120px, 0.7fr) minmax(140px, 0.8fr) minmax(180px, 1fr) minmax(140px, 0.8fr) minmax(100px, 0.6fr)',
+      : `minmax(260px, 1.6fr) repeat(${canUsePrivatePersons ? 6 : 5}, minmax(120px, 1fr))`,
     gap: 12,
     marginBottom: 12,
     width: '100%',
@@ -1085,6 +1121,18 @@ export default function Persons() {
         >
           {Object.entries(weightMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
         </Select>
+        {canUsePrivatePersons && (
+          <Select
+            placeholder="可见范围"
+            allowClear
+            style={{ width: '100%' }}
+            value={filterVisibility || undefined}
+            onChange={v => setFilterVisibility(v || '')}
+          >
+            <Option value={COMPANY_PERSON_SCOPE}>公司共享</Option>
+            <Option value={PRIVATE_PERSON_SCOPE}>个人私密</Option>
+          </Select>
+        )}
       </div>
 
       {filterCategory === 'talent' && (
@@ -1241,17 +1289,50 @@ export default function Persons() {
           <Form.Item name="notes">
             <TextArea rows={3} placeholder="其他备注..." />
           </Form.Item>
-          <Form.Item label="共享人" name="shared_to">
-            <Select
-              mode="multiple"
-              allowClear
-              placeholder="可选择商务部门成员共享此人脉"
-              optionFilterProp="label"
-              options={commercialUsers.map(u => ({
-                value: u.id,
-                label: u.display_name || u.username,
-              }))}
-            />
+          {canUsePrivatePersons && (
+            <>
+              <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>可见范围</Divider>
+              <Form.Item label="可见范围" name="visibility_scope">
+                <Segmented
+                  block
+                  options={[
+                    { label: <Space size={4}><GlobalOutlined />公司共享</Space>, value: COMPANY_PERSON_SCOPE },
+                    { label: <Space size={4}><LockOutlined />个人私密</Space>, value: PRIVATE_PERSON_SCOPE },
+                  ]}
+                  onChange={(value) => {
+                    if (value === PRIVATE_PERSON_SCOPE) form.setFieldValue('shared_to', []);
+                  }}
+                />
+              </Form.Item>
+              {isPrivateScope && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="仅本人可见，不支持共享或指派"
+                />
+              )}
+            </>
+          )}
+          <Form.Item shouldUpdate={(prev, cur) => prev.visibility_scope !== cur.visibility_scope} noStyle>
+            {({ getFieldValue }) => {
+              const privateSelected = getFieldValue('visibility_scope') === PRIVATE_PERSON_SCOPE;
+              return (
+                <Form.Item label="共享人" name="shared_to">
+                  <Select
+                    mode="multiple"
+                    allowClear
+                    disabled={privateSelected}
+                    placeholder={privateSelected ? '私密人脉不共享' : '可选择商务部门成员共享此人脉'}
+                    optionFilterProp="label"
+                    options={commercialUsers.map(u => ({
+                      value: u.id,
+                      label: u.display_name || u.username,
+                    }))}
+                  />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
         </Form>
       </Modal>
@@ -1286,6 +1367,7 @@ export default function Persons() {
               {current?.name}
             </Text>
             {current && <Tag color={categoryMap[current.person_category]?.color}>{categoryMap[current.person_category]?.label}</Tag>}
+            {isPrivatePerson(current) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
           </Space>
         }
         open={drawerOpen}
@@ -1306,6 +1388,11 @@ export default function Persons() {
                   <Descriptions column={isMobile ? 1 : 2} size="small" bordered style={{ marginBottom: 16 }}>
                     <Descriptions.Item label="关系类型" span={2}>
                       <RelationTags value={current.relation_types} />
+                    </Descriptions.Item>
+                    <Descriptions.Item label="可见范围">
+                      {isPrivatePerson(current)
+                        ? <Tag color="red" icon={<LockOutlined />}>仅本人</Tag>
+                        : <Tag color="blue" icon={<GlobalOutlined />}>公司共享</Tag>}
                     </Descriptions.Item>
                     <Descriptions.Item label="城市">{current.city || '-'}</Descriptions.Item>
                     <Descriptions.Item label="生日">{current.birthday || '-'}</Descriptions.Item>

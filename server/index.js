@@ -58,9 +58,13 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
 
-const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const EXECUTIVE_ROLES = new Set(['ceo', 'coo', 'cto', 'cmo']);
+const ADMIN_ROLES = new Set(['admin', ...EXECUTIVE_ROLES]);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
 const hasTaskFullVisibility = (role, executiveRole) => isAdmin(role) || ADMIN_ROLES.has(executiveRole);
+const isExecutiveIdentity = (user) => EXECUTIVE_ROLES.has(user?.role) || EXECUTIVE_ROLES.has(user?.executive_role);
+const PRIVATE_PERSON_SCOPE = 'executive_private';
+const COMPANY_PERSON_SCOPE = 'company';
 
 // 腾讯地图 Key（地理编码用）
 const TMAP_KEY = 'BFBBZ-CNXC4-XEWUR-KQN7R-QOUGJ-Q4B66';
@@ -196,6 +200,8 @@ db.exec(`
     brain TEXT,
     mouth TEXT,
     hand TEXT,
+    visibility_scope TEXT DEFAULT 'company',
+    private_owner_id INTEGER DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -212,6 +218,8 @@ db.exec(`
     next_action TEXT,
     next_action_date TEXT,
     importance TEXT DEFAULT 'normal',
+    visibility_scope TEXT DEFAULT 'company',
+    private_owner_id INTEGER DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -386,6 +394,8 @@ if (existingCols.length > 0) {
     ["assigned_to",   "INTEGER DEFAULT NULL"],
     ["lat",           "REAL DEFAULT NULL"],
     ["lng",           "REAL DEFAULT NULL"],
+    ["visibility_scope", "TEXT DEFAULT 'company'"],
+    ["private_owner_id", "INTEGER DEFAULT NULL"],
   ];
   for (const [col, def] of personColsToAdd) {
     if (!existingCols.includes(col)) {
@@ -418,6 +428,8 @@ if (intCols.length > 0) {
   if (!intCols.includes('opportunity_note')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_note TEXT DEFAULT NULL");
   if (!intCols.includes('follow_result')) db.exec("ALTER TABLE interactions ADD COLUMN follow_result TEXT DEFAULT NULL");
   if (!intCols.includes('created_by')) db.exec("ALTER TABLE interactions ADD COLUMN created_by INTEGER DEFAULT NULL");
+  if (!intCols.includes('visibility_scope')) db.exec("ALTER TABLE interactions ADD COLUMN visibility_scope TEXT DEFAULT 'company'");
+  if (!intCols.includes('private_owner_id')) db.exec("ALTER TABLE interactions ADD COLUMN private_owner_id INTEGER DEFAULT NULL");
 }
 
 const crCols = db.prepare("PRAGMA table_info(competitor_research)").all().map(c => c.name);
@@ -443,6 +455,13 @@ try {
     UPDATE interactions SET created_by = (
       SELECT p.created_by FROM persons p WHERE p.id = interactions.person_id
     ) WHERE created_by IS NULL
+  `);
+  db.exec(`
+    UPDATE interactions SET
+      visibility_scope = COALESCE((SELECT p.visibility_scope FROM persons p WHERE p.id = interactions.person_id), 'company'),
+      private_owner_id = (SELECT p.private_owner_id FROM persons p WHERE p.id = interactions.person_id)
+    WHERE visibility_scope IS NULL
+       OR visibility_scope = 'company'
   `);
   // competitor_research: 优先通过 follow_up_tasks.assigned_by 回填
   db.exec(`
@@ -1189,6 +1208,9 @@ app.get('/api/gift_requests', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+  const privacy = buildPersonPrivacyFilter(req.user.id, 'p');
+  q += privacy.sql;
+  params.push(...privacy.params);
   // 按角色过滤可见申请
   const { id: me, role } = req.user;
   const visibleIds = getVisibleUserIds(me, role);
@@ -1199,11 +1221,19 @@ app.get('/api/gift_requests', (req, res) => {
   if (status) { q += ' AND gr.status = ?'; params.push(status); }
   if (plan_id) { q += ' AND gr.plan_id = ?'; params.push(plan_id); }
   q += ' ORDER BY gr.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  res.json(db.prepare(q).all(...params).map(r => ({
+    ...r,
+    person_name: decrypt(r.person_name),
+    company: decrypt(r.company),
+    gift_name: decrypt(r.gift_name),
+  })));
 });
 
 app.post('/api/gift_requests', canWrite, (req, res) => {
   const { plan_id, person_id, gift_id, quantity, notes } = req.body;
+  const person = getPersonAccessRecord(person_id);
+  if (!person) return res.status(404).json({ error: '未找到人脉' });
+  if (!canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到人脉' });
   // 检查库存
   const gift = db.prepare('SELECT * FROM gifts WHERE id = ?').get(gift_id);
   if (!gift) return res.status(400).json({ error: '礼品不存在' });
@@ -1228,6 +1258,8 @@ app.post('/api/gift_requests/:id/review', (req, res) => {
   const { action, review_note } = req.body; // action: approve | reject
   const request = db.prepare('SELECT * FROM gift_requests WHERE id = ?').get(req.params.id);
   if (!request) return res.status(404).json({ error: '未找到' });
+  const person = getPersonAccessRecord(request.person_id);
+  if (person && !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
   if (request.status !== 'pending') return res.status(400).json({ error: '该申请已处理' });
 
   if (action === 'approve') {
@@ -1265,6 +1297,9 @@ app.get('/api/gift_records', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+  const privacy = buildPersonPrivacyFilter(req.user.id, 'p');
+  q += privacy.sql;
+  params.push(...privacy.params);
   const visibleIds2 = getVisibleUserIds(req.user.id, req.user.role);
   if (visibleIds2 !== null) {
     q += ` AND gr.sender_id IN (${visibleIds2.map(() => '?').join(',')})`;
@@ -1272,13 +1307,22 @@ app.get('/api/gift_records', (req, res) => {
   }
   if (status) { q += ' AND gr.status = ?'; params.push(status); }
   q += ' ORDER BY gr.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  res.json(db.prepare(q).all(...params).map(r => ({
+    ...r,
+    person_name: decrypt(r.person_name),
+    company: decrypt(r.company),
+    phone: decrypt(r.phone),
+    wechat: decrypt(r.wechat),
+    gift_name: decrypt(r.gift_name),
+  })));
 });
 
 app.put('/api/gift_records/:id', (req, res) => {
   const { status, feedback, rating, send_date } = req.body;
   const record = db.prepare('SELECT * FROM gift_records WHERE id = ?').get(req.params.id);
   if (!record) return res.status(404).json({ error: '未找到' });
+  const person = getPersonAccessRecord(record.person_id);
+  if (person && !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
   if (record.sender_id !== req.user.id && !isAdmin(req.user.role) && req.user.role !== 'leader') {
     return res.status(403).json({ error: '无权操作' });
   }
@@ -1294,10 +1338,11 @@ app.put('/api/gift_records/:id', (req, res) => {
       const interactionDate = send_date || new Date().toISOString().slice(0, 10);
       const description = `送出礼品：${giftName} × ${record.quantity}${feedback ? `\n收礼反馈：${feedback}` : ''}`;
       const enc = encryptRow('interactions', { description });
+      const visibility = getVisibilityFromPerson(person || {});
       db.prepare(`
-        INSERT INTO interactions (person_id, type, date, description, importance, created_at)
-        VALUES (?, 'gift', ?, ?, 'normal', CURRENT_TIMESTAMP)
-      `).run(record.person_id, interactionDate, enc.description);
+        INSERT INTO interactions (person_id, type, date, description, importance, created_by, visibility_scope, private_owner_id, created_at)
+        VALUES (?, 'gift', ?, ?, 'normal', ?, ?, ?, CURRENT_TIMESTAMP)
+      `).run(record.person_id, interactionDate, enc.description, req.user.id, visibility.visibility_scope, visibility.private_owner_id);
     }
   });
 
@@ -1538,6 +1583,111 @@ function canManageGoalForOwner(actor, ownerId) {
   }
 
   return false;
+}
+
+function isPrivatePerson(row = {}) {
+  row = row || {};
+  return row.visibility_scope === PRIVATE_PERSON_SCOPE;
+}
+
+function canAccessPrivatePerson(user, row = {}) {
+  return isPrivatePerson(row)
+    ? isExecutiveIdentity(user) && Number(row.private_owner_id) === Number(user.id)
+    : true;
+}
+
+function buildPersonPrivacyFilter(userId, tableAlias = 'p') {
+  const col = tableAlias ? `${tableAlias}.` : '';
+  return {
+    sql: ` AND (COALESCE(${col}visibility_scope, ?) != ? OR ${col}private_owner_id = ?)`,
+    params: [COMPANY_PERSON_SCOPE, PRIVATE_PERSON_SCOPE, userId],
+  };
+}
+
+function resolvePersonVisibilityPayload(user, requestedScope, existingPerson = null) {
+  if ((requestedScope === undefined || requestedScope === null) && existingPerson) {
+    return {
+      visibility_scope: existingPerson.visibility_scope || COMPANY_PERSON_SCOPE,
+      private_owner_id: existingPerson.private_owner_id || null,
+    };
+  }
+
+  const scope = requestedScope === PRIVATE_PERSON_SCOPE ? PRIVATE_PERSON_SCOPE : COMPANY_PERSON_SCOPE;
+  if (scope !== PRIVATE_PERSON_SCOPE) {
+    return { visibility_scope: COMPANY_PERSON_SCOPE, private_owner_id: null };
+  }
+
+  if (!isExecutiveIdentity(user)) {
+    return { error: '仅 CEO/CTO/CMO/COO 可创建个人私密人脉' };
+  }
+
+  if (existingPerson && isPrivatePerson(existingPerson) && Number(existingPerson.private_owner_id) !== Number(user.id)) {
+    return { error: '无权修改此私密人脉' };
+  }
+
+  if (existingPerson && !isPrivatePerson(existingPerson) && Number(existingPerson.created_by) !== Number(user.id)) {
+    return { error: '只能将自己创建的人脉转为个人私密' };
+  }
+
+  return { visibility_scope: PRIVATE_PERSON_SCOPE, private_owner_id: user.id };
+}
+
+function getPersonAccessRecord(personId) {
+  return db.prepare(`
+    SELECT id, created_by, assigned_to, visibility_scope, private_owner_id
+    FROM persons
+    WHERE id = ?
+  `).get(personId);
+}
+
+function canAccessPerson(user, row = {}) {
+  if (!user || !row) return false;
+  if (isPrivatePerson(row)) return canAccessPrivatePerson(user, row);
+  if (isAdmin(user.role)) return true;
+
+  const ids = getVisibleUserIds(user.id, user.role);
+  if (ids === null) return true;
+  const visibleIds = ids.map(Number).filter(Boolean);
+  if (!visibleIds.length) return false;
+
+  const createdBy = Number(row.created_by);
+  const assignedTo = Number(row.assigned_to);
+  if (visibleIds.includes(createdBy) || visibleIds.includes(assignedTo)) return true;
+  if (!row.id) return false;
+
+  const placeholders = visibleIds.map(() => '?').join(',');
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM person_shared_users
+    WHERE person_id = ?
+      AND user_id IN (${placeholders})
+    LIMIT 1
+  `).get(row.id, ...visibleIds));
+}
+
+function getVisibilityFromPerson(row = {}) {
+  if (isPrivatePerson(row)) {
+    return {
+      visibility_scope: PRIVATE_PERSON_SCOPE,
+      private_owner_id: row.private_owner_id || null,
+    };
+  }
+  return { visibility_scope: COMPANY_PERSON_SCOPE, private_owner_id: null };
+}
+
+function validatePrivatePersonCollaboration(user, person, { opportunity_assignee, watcher_ids } = {}) {
+  if (!isPrivatePerson(person)) return null;
+  const ownerId = Number(person.private_owner_id);
+  if (opportunity_assignee && Number(opportunity_assignee) !== ownerId) {
+    return '个人私密人脉的商机只能指派给本人';
+  }
+  if (Array.isArray(watcher_ids) && watcher_ids.some(id => Number(id) !== ownerId)) {
+    return '个人私密人脉不能添加其他关注人';
+  }
+  if (!isExecutiveIdentity(user) || Number(user.id) !== ownerId) {
+    return '无权操作此私密人脉';
+  }
+  return null;
 }
 
 // 构建用户可见ID的 SQL 片段
@@ -1895,7 +2045,7 @@ app.put('/api/admin/menu-perms/:userId', auth, adminOnly, (req, res) => {
 
 // =========== 人脉 API ===========
 app.get('/api/persons', (req, res) => {
-  const { search, person_category, relation_type, potential_level, recruit_status, intent_level, city, weight, created_by } = req.query;
+  const { search, person_category, relation_type, potential_level, recruit_status, intent_level, city, weight, created_by, visibility_scope } = req.query;
   const { id: me, role } = req.user;
   let query = `
     SELECT p.*,
@@ -1918,6 +2068,10 @@ app.get('/api/persons', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+
+  const privacy = buildPersonPrivacyFilter(me, 'p');
+  query += privacy.sql;
+  params.push(...privacy.params);
 
   // 按角色过滤可见数据
   const filter = buildUserFilter(me, role, 'p');
@@ -1947,6 +2101,13 @@ app.get('/api/persons', (req, res) => {
   }
   if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
   if (created_by) { query += ' AND p.created_by = ?'; params.push(created_by); }
+  if (visibility_scope === PRIVATE_PERSON_SCOPE) {
+    query += ' AND p.visibility_scope = ? AND p.private_owner_id = ?';
+    params.push(PRIVATE_PERSON_SCOPE, me);
+  } else if (visibility_scope === COMPANY_PERSON_SCOPE) {
+    query += ' AND COALESCE(p.visibility_scope, ?) != ?';
+    params.push(COMPANY_PERSON_SCOPE, PRIVATE_PERSON_SCOPE);
+  }
 
   query += ' ORDER BY p.updated_at DESC';
   const rows = decryptRows('persons', db.prepare(query).all(...params));
@@ -1970,6 +2131,10 @@ app.get('/api/persons/map', (req, res) => {
     CAST(julianday('now') - julianday((SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id)) AS INTEGER) as days_since_contact
     FROM persons p WHERE p.city IS NOT NULL AND p.city != ''`;
   const params = [];
+
+  const privacy = buildPersonPrivacyFilter(me, 'p');
+  query += privacy.sql;
+  params.push(...privacy.params);
 
   const filter = buildUserFilter(me, role, 'p');
   if (filter.sql) { query += filter.sql; params.push(...filter.params); }
@@ -1996,6 +2161,7 @@ app.get('/api/persons/:id', (req, res, next) => {
   if (!/^\d+$/.test(req.params.id)) return next();
   const p = db.prepare('SELECT p.*, u1.display_name as created_by_name, u2.display_name as assigned_to_name FROM persons p LEFT JOIN users u1 ON p.created_by = u1.id LEFT JOIN users u2 ON p.assigned_to = u2.id WHERE p.id = ?').get(req.params.id);
   if (!p) return res.status(404).json({ error: '未找到' });
+  if (!canAccessPerson(req.user, p)) return res.status(404).json({ error: '未找到' });
   res.json(decryptRow('persons', p));
 });
 
@@ -2007,13 +2173,15 @@ app.post('/api/persons', canWrite, async (req, res) => {
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
-    shared_to
+    shared_to, visibility_scope
   } = req.body;
   const normalizedName = normalizePersonName(name);
   if (!normalizedName) return res.status(400).json({ error: '姓名必填' });
   if (normalizedName.length > PERSON_NAME_MAX_LENGTH) {
     return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
   }
+  const visibility = resolvePersonVisibilityPayload(req.user, visibility_scope);
+  if (visibility.error) return res.status(403).json({ error: visibility.error });
   const { lat, lng } = await geocodeAddress(city, address);
   const enc = encryptRow('persons', {
     name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
@@ -2027,8 +2195,9 @@ app.post('/api/persons', canWrite, async (req, res) => {
       relationship_level, client_status,
       talent_type, current_company, current_position, target_position,
       skills, experience_years, education, recruit_status, intent_level,
-      potential_level, expected_salary, source, heart, brain, mouth, hand, weight, lat, lng, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      potential_level, expected_salary, source, heart, brain, mouth, hand, weight, lat, lng, created_by,
+      visibility_scope, private_owner_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     enc.name, person_category || 'social', relation_types || '', city,
     enc.company, enc.position, industry, enc.phone, enc.email, enc.wechat, birthday, enc.address, enc.tags, enc.notes,
@@ -2036,10 +2205,11 @@ app.post('/api/persons', canWrite, async (req, res) => {
     talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status || 'potential', intent_level || 'low',
     potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium', lat, lng, req.user.id
+    , visibility.visibility_scope, visibility.private_owner_id
   );
 
   const personId = result.lastInsertRowid;
-  if (Array.isArray(shared_to) && shared_to.length > 0) {
+  if (visibility.visibility_scope !== PRIVATE_PERSON_SCOPE && Array.isArray(shared_to) && shared_to.length > 0) {
     const insertShared = db.prepare('INSERT OR IGNORE INTO person_shared_users (person_id, user_id) VALUES (?, ?)');
     shared_to.forEach(uid => insertShared.run(personId, uid));
   }
@@ -2047,11 +2217,13 @@ app.post('/api/persons', canWrite, async (req, res) => {
 });
 
 app.put('/api/persons/:id', canWrite, async (req, res) => {
+  const existingPerson = db.prepare('SELECT created_by, assigned_to, visibility_scope, private_owner_id FROM persons WHERE id = ?').get(req.params.id);
+  if (!existingPerson) return res.status(404).json({ error: '未找到' });
+  if (!canAccessPerson(req.user, { ...existingPerson, id: Number(req.params.id) })) return res.status(404).json({ error: '未找到' });
   // member / readonly 只能改自己录入的 或 被指派给自己的
   if (req.user.role === 'member' || req.user.role === 'readonly') {
-    const p = db.prepare('SELECT created_by, assigned_to FROM persons WHERE id = ?').get(req.params.id);
-    const isOwner = p?.created_by === req.user.id;
-    const isAssigned = p?.assigned_to === req.user.id;
+    const isOwner = existingPerson.created_by === req.user.id;
+    const isAssigned = existingPerson.assigned_to === req.user.id;
     if (!isOwner && !isAssigned) return res.status(403).json({ error: '无权修改此数据' });
   }
   const {
@@ -2061,13 +2233,15 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
-    shared_to
+    shared_to, visibility_scope
   } = req.body;
   const normalizedName = normalizePersonName(name);
   if (!normalizedName) return res.status(400).json({ error: '姓名必填' });
   if (normalizedName.length > PERSON_NAME_MAX_LENGTH) {
     return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
   }
+  const visibility = resolvePersonVisibilityPayload(req.user, visibility_scope, existingPerson);
+  if (visibility.error) return res.status(403).json({ error: visibility.error });
   const { lat, lng } = await geocodeAddress(city, address);
   const enc = encryptRow('persons', {
     name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
@@ -2082,7 +2256,7 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
       talent_type=?, current_company=?, current_position=?, target_position=?,
       skills=?, experience_years=?, education=?, recruit_status=?, intent_level=?,
       potential_level=?, expected_salary=?, source=?, heart=?, brain=?, mouth=?, hand=?, weight=?,
-      lat=?, lng=?, updated_at=CURRENT_TIMESTAMP
+      lat=?, lng=?, visibility_scope=?, private_owner_id=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
   `).run(
     enc.name, person_category, relation_types || '', city,
@@ -2091,12 +2265,12 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     talent_type, enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status, intent_level,
     potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium',
-    lat, lng, req.params.id
+    lat, lng, visibility.visibility_scope, visibility.private_owner_id, req.params.id
   );
 
   // 更新共享人
   db.prepare('DELETE FROM person_shared_users WHERE person_id = ?').run(req.params.id);
-  if (Array.isArray(shared_to) && shared_to.length > 0) {
+  if (visibility.visibility_scope !== PRIVATE_PERSON_SCOPE && Array.isArray(shared_to) && shared_to.length > 0) {
     const insertShared = db.prepare('INSERT OR IGNORE INTO person_shared_users (person_id, user_id) VALUES (?, ?)');
     shared_to.forEach(uid => insertShared.run(req.params.id, uid));
   }
@@ -2104,9 +2278,11 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
 });
 
 app.delete('/api/persons/:id', canWrite, (req, res) => {
+  const person = getPersonAccessRecord(req.params.id);
+  if (!person) return res.status(404).json({ error: '未找到' });
+  if (!canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
   if (req.user.role === 'member') {
-    const p = db.prepare('SELECT created_by FROM persons WHERE id = ?').get(req.params.id);
-    if (p && p.created_by && p.created_by !== req.user.id) return res.status(403).json({ error: '无权删除他人录入的数据' });
+    if (person.created_by && person.created_by !== req.user.id) return res.status(403).json({ error: '无权删除他人录入的数据' });
   }
   db.prepare('DELETE FROM person_shared_users WHERE person_id = ?').run(req.params.id);
   db.prepare('DELETE FROM persons WHERE id = ?').run(req.params.id);
@@ -2122,6 +2298,10 @@ app.put('/api/persons/:id/assign', auth, (req, res) => {
   if (!isAdmin(role) && role !== 'leader' && role !== 'sales_director') {
     return res.status(403).json({ error: '无指派权限' });
   }
+  const person = getPersonAccessRecord(req.params.id);
+  if (!person) return res.status(404).json({ error: '未找到' });
+  if (!canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
+  if (isPrivatePerson(person)) return res.status(400).json({ error: '个人私密人脉不能指派' });
   const { assigned_to } = req.body;
   db.prepare('UPDATE persons SET assigned_to = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(assigned_to || null, req.params.id);
   res.json({ success: true });
@@ -2139,8 +2319,8 @@ app.post('/api/persons/import', (req, res) => {
       relationship_level, client_status,
       talent_type, current_company, current_position, target_position,
       skills, experience_years, education, recruit_status, intent_level,
-      potential_level, expected_salary, source, weight)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      potential_level, expected_salary, source, weight, created_by, visibility_scope, private_owner_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
   const importMany = db.transaction((list) => {
     let ok = 0, skip = 0, skipEmptyName = 0, skipNameTooLong = 0;
@@ -2165,7 +2345,8 @@ app.post('/api/persons/import', (req, res) => {
         r.talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
         enc.skills, r.experience_years || null, enc.education,
         r.recruit_status || 'potential', r.intent_level || 'low',
-        r.potential_level, enc.expected_salary, enc.source, r.weight || 'medium'
+        r.potential_level, enc.expected_salary, enc.source, r.weight || 'medium',
+        req.user.id, COMPANY_PERSON_SCOPE, null
       );
       ok++;
     }
@@ -2186,6 +2367,10 @@ app.get('/api/interactions', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+
+  const privacy = buildPersonPrivacyFilter(me, 'p');
+  query += privacy.sql;
+  params.push(...privacy.params);
 
   // 按角色过滤：通过关联的 person 的 created_by / assigned_to 来控制可见范围
   const filter = buildUserFilter(me, role, 'p');
@@ -2217,16 +2402,23 @@ app.post('/api/interactions', (req, res) => {
   const { person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
     opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
   const createdBy = req.user?.id || null;
+  const person = getPersonAccessRecord(person_id);
+  if (!person) return res.status(404).json({ error: '未找到人脉' });
+  if (!canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到人脉' });
+  const collaborationError = validatePrivatePersonCollaboration(req.user, person, { opportunity_assignee, watcher_ids });
+  if (collaborationError) return res.status(403).json({ error: collaborationError });
+  const visibility = getVisibilityFromPerson(person);
   const enc = encryptRow('interactions', {
     description, outcome, follow_result, next_action,
     opportunity_title, opportunity_note, gift_name,
   });
   const result = db.prepare(`
     INSERT INTO interactions (person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
-      opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by, visibility_scope, private_owner_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(person_id, type, date, amount, enc.description, enc.outcome, enc.follow_result || null, enc.next_action, next_action_date, importance || 'normal', enc.gift_name || null,
-    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null, createdBy);
+    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null, createdBy,
+    visibility.visibility_scope, visibility.private_owner_id);
 
   const interactionId = result.lastInsertRowid;
 
@@ -2275,7 +2467,23 @@ app.post('/api/interactions', (req, res) => {
 app.put('/api/interactions/:id', (req, res) => {
   const { type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
     opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
-  const original = db.prepare('SELECT person_id FROM interactions WHERE id=?').get(req.params.id);
+  const original = db.prepare(`
+    SELECT i.person_id, p.id as person_record_id, p.created_by, p.assigned_to, p.visibility_scope, p.private_owner_id
+    FROM interactions i
+    LEFT JOIN persons p ON i.person_id = p.id
+    WHERE i.id=?
+  `).get(req.params.id);
+  if (!original) return res.status(404).json({ error: '未找到' });
+  const person = {
+    id: original.person_record_id,
+    created_by: original.created_by,
+    assigned_to: original.assigned_to,
+    visibility_scope: original.visibility_scope,
+    private_owner_id: original.private_owner_id,
+  };
+  if (!canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
+  const collaborationError = validatePrivatePersonCollaboration(req.user, person, { opportunity_assignee, watcher_ids });
+  if (collaborationError) return res.status(403).json({ error: collaborationError });
   const enc = encryptRow('interactions', {
     description, outcome, follow_result, next_action,
     opportunity_title, opportunity_note, gift_name,
@@ -2310,6 +2518,14 @@ app.put('/api/interactions/:id', (req, res) => {
 });
 
 app.delete('/api/interactions/:id', (req, res) => {
+  const original = db.prepare(`
+    SELECT p.id, p.created_by, p.assigned_to, p.visibility_scope, p.private_owner_id
+    FROM interactions i
+    LEFT JOIN persons p ON i.person_id = p.id
+    WHERE i.id = ?
+  `).get(req.params.id);
+  if (!original) return res.status(404).json({ error: '未找到' });
+  if (!canAccessPerson(req.user, original)) return res.status(404).json({ error: '未找到' });
   db.prepare('DELETE FROM interactions WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -2337,6 +2553,10 @@ app.get('/api/opportunities', auth, (req, res) => {
     WHERE i.opportunity_title IS NOT NULL AND i.opportunity_title != ''
   `;
   const params1 = [];
+
+  const opportunityPersonPrivacy = buildPersonPrivacyFilter(me, 'p');
+  query1 += opportunityPersonPrivacy.sql;
+  params1.push(...opportunityPersonPrivacy.params);
 
   // 按角色过滤
   const visibleIds = getVisibleUserIds(me, role);
@@ -2433,6 +2653,7 @@ app.put('/api/opportunities/:id', (req, res) => {
     info_source,
     impact,
     source_type,
+    watcher_ids,
   } = req.body;
 
   // 根据来源类型更新不同的表
@@ -2476,6 +2697,13 @@ app.put('/api/opportunities/:id', (req, res) => {
     // 默认处理 interactions
     const original = db.prepare('SELECT * FROM interactions WHERE id = ?').get(req.params.id);
     if (!original) return res.status(404).json({ error: '未找到' });
+    const person = getPersonAccessRecord(original.person_id);
+    if (person && !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
+    const collaborationError = validatePrivatePersonCollaboration(req.user, person, {
+      opportunity_assignee,
+      watcher_ids,
+    });
+    if (collaborationError) return res.status(403).json({ error: collaborationError });
 
     // original.* 的加密字段保持密文，new value 是明文；encryptRow 幂等（密文穿透）
     const merged = encryptRow('interactions', {
@@ -2554,6 +2782,9 @@ app.get('/api/follow-up-tasks', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+  const personPrivacy = buildPersonPrivacyFilter(me, 'p');
+  query += personPrivacy.sql;
+  params.push(...personPrivacy.params);
   if (all === '1' && hasTaskFullVisibility(role, executive_role)) {
     // 管理员和高管查看全量跟进任务。
   } else if (all === '1' && ['leader', 'sales_director'].includes(role)) {
@@ -2580,9 +2811,14 @@ app.get('/api/follow-up-tasks', (req, res) => {
 
 app.get('/api/follow-up-tasks/count', (req, res) => {
   const { id: me } = req.user;
+  const privacy = buildPersonPrivacyFilter(me, 'p');
   const cnt = db.prepare(`
-    SELECT COUNT(*) as cnt FROM follow_up_tasks WHERE assigned_to = ? AND status != 'done'
-  `).get(me).cnt;
+    SELECT COUNT(*) as cnt
+    FROM follow_up_tasks f
+    LEFT JOIN persons p ON f.person_id = p.id
+    WHERE f.assigned_to = ? AND f.status != 'done'
+    ${privacy.sql}
+  `).get(me, ...privacy.params).cnt;
   res.json({ count: cnt });
 });
 
@@ -2610,6 +2846,9 @@ app.get('/api/follow-up-tasks/watch', (req, res) => {
     WHERE lw.user_id = ? AND f.assigned_to != ?
   `;
   const params = [me, me];
+  const personPrivacy = buildPersonPrivacyFilter(me, 'p');
+  query += personPrivacy.sql;
+  params.push(...personPrivacy.params);
   if (status) {
     query += ' AND f.status = ?';
     params.push(status);
@@ -2629,15 +2868,18 @@ app.get('/api/follow-up-tasks/watch', (req, res) => {
 
 app.get('/api/follow-up-tasks/watch/count', (req, res) => {
   const { id: me } = req.user;
+  const privacy = buildPersonPrivacyFilter(me, 'p');
   const cnt = db.prepare(`
     SELECT COUNT(DISTINCT f.id) as cnt
     FROM follow_up_tasks f
+    LEFT JOIN persons p ON f.person_id = p.id
     LEFT JOIN lead_watchers lw ON (
       (lw.source_type = 'interaction' AND lw.source_id = f.interaction_id)
       OR (lw.source_type = 'competitor_research' AND lw.source_id = f.competitor_research_id)
     )
     WHERE lw.user_id = ? AND f.assigned_to != ? AND f.status != 'done'
-  `).get(me, me).cnt;
+    ${privacy.sql}
+  `).get(me, me, ...privacy.params).cnt;
   res.json({ count: cnt });
 });
 
@@ -2645,6 +2887,10 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
   const { status, done_note, due_date } = req.body;
   const task = db.prepare('SELECT * FROM follow_up_tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
+  if (task.person_id) {
+    const person = getPersonAccessRecord(task.person_id);
+    if (person && !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
+  }
   if (task.assigned_to !== req.user.id && !isAdmin(req.user.role)) {
     return res.status(403).json({ error: '无权操作' });
   }
@@ -3012,6 +3258,7 @@ app.delete('/api/budgets/:id', canWrite, (req, res) => {
 // =========== 提醒 API ===========
 app.get('/api/reminders', (req, res) => {
   const { done, person_id } = req.query;
+  const { id: me, role } = req.user;
   let query = `
     SELECT r.*, p.name as person_name, p.company as person_company, p.current_company
     FROM reminders r
@@ -3019,27 +3266,53 @@ app.get('/api/reminders', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
+  const privacy = buildPersonPrivacyFilter(me, 'p');
+  query += privacy.sql;
+  params.push(...privacy.params);
+  const filter = buildUserFilter(me, role, 'p');
+  if (filter.sql) {
+    query += filter.sql;
+    params.push(...filter.params);
+  }
   if (done !== undefined && done !== '') { query += ' AND r.done = ?'; params.push(parseInt(done)); }
   if (person_id) { query += ' AND r.person_id = ?'; params.push(person_id); }
   query += ' ORDER BY r.remind_date ASC';
-  res.json(db.prepare(query).all(...params));
+  const rows = decryptRows('reminders', db.prepare(query).all(...params)).map(r => ({
+    ...r,
+    person_name: decrypt(r.person_name),
+    person_company: decrypt(r.person_company),
+    current_company: decrypt(r.current_company),
+  }));
+  res.json(rows);
 });
 
 app.post('/api/reminders', (req, res) => {
   const { person_id, title, remind_date, actual_date, type, note } = req.body;
+  const person = getPersonAccessRecord(person_id);
+  if (!person) return res.status(404).json({ error: '未找到人脉' });
+  if (!canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到人脉' });
+  const enc = encryptRow('reminders', { title, note });
   const result = db.prepare(`
     INSERT INTO reminders (person_id, title, remind_date, actual_date, type, note)
     VALUES (?,?,?,?,?,?)
-  `).run(person_id, title, remind_date, actual_date, type || 'follow_up', note);
+  `).run(person_id, enc.title, remind_date, actual_date, type || 'follow_up', enc.note);
   res.json({ id: result.lastInsertRowid });
 });
 
 app.put('/api/reminders/:id/done', (req, res) => {
+  const reminder = db.prepare('SELECT person_id FROM reminders WHERE id=?').get(req.params.id);
+  if (!reminder) return res.status(404).json({ error: '未找到' });
+  const person = getPersonAccessRecord(reminder.person_id);
+  if (person && !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
   db.prepare('UPDATE reminders SET done=1 WHERE id=?').run(req.params.id);
   res.json({ success: true });
 });
 
 app.delete('/api/reminders/:id', (req, res) => {
+  const reminder = db.prepare('SELECT person_id FROM reminders WHERE id=?').get(req.params.id);
+  if (!reminder) return res.status(404).json({ error: '未找到' });
+  const person = getPersonAccessRecord(reminder.person_id);
+  if (person && !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
   db.prepare('DELETE FROM reminders WHERE id=?').run(req.params.id);
   res.json({ success: true });
 });
@@ -3049,12 +3322,18 @@ app.get('/api/stats', (req, res) => {
   const { id: me, role } = req.user;
   const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(me);
   const showRelationshipPanels = !['operation', 'rd'].includes(currentUser?.department);
+  const privacy = buildPersonPrivacyFilter(me, 'p');
   const filter = buildUserFilter(me, role, 'p');
-  const personCountSql = `SELECT COUNT(*) as cnt FROM persons p WHERE 1=1${filter.sql}`;
-  const personCount = db.prepare(personCountSql).get(...filter.params).cnt;
+  const personWhereSql = `${privacy.sql}${filter.sql}`;
+  const personWhereParams = [...privacy.params, ...filter.params];
+  const personCountSql = `SELECT COUNT(*) as cnt FROM persons p WHERE 1=1${personWhereSql}`;
+  const personCount = db.prepare(personCountSql).get(...personWhereParams).cnt;
   const categoryStats = db.prepare(`
-    SELECT person_category, COUNT(*) as cnt FROM persons GROUP BY person_category
-  `).all();
+    SELECT person_category, COUNT(*) as cnt
+    FROM persons p
+    WHERE 1=1${personWhereSql}
+    GROUP BY person_category
+  `).all(...personWhereParams);
   const userId = req.user?.id;
   const monthlyInteractions = db.prepare(
     "SELECT COUNT(*) as cnt FROM interactions WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now') AND created_by = ?"
@@ -3063,13 +3342,20 @@ app.get('/api/stats', (req, res) => {
     "SELECT COUNT(*) as cnt FROM competitor_research WHERE strftime('%Y-%m', date) = strftime('%Y-%m', 'now') AND created_by = ?"
   ).get(userId).cnt;
   const monthlyTotal = monthlyInteractions + monthlyResearch;
-  const pendingReminders = db.prepare("SELECT COUNT(*) as cnt FROM reminders WHERE done=0 AND remind_date <= date('now', '+7 days')").get().cnt;
+  const pendingReminders = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM reminders r
+    LEFT JOIN persons p ON r.person_id = p.id
+    WHERE r.done=0 AND r.remind_date <= date('now', '+7 days')
+    ${personWhereSql}
+  `).get(...personWhereParams).cnt;
   const recentInteractionsRaw = db.prepare(`
     SELECT i.*, p.name as person_name, p.person_category
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
+    WHERE 1=1${personWhereSql}
     ORDER BY i.date DESC LIMIT 5
-  `).all();
+  `).all(...personWhereParams);
   const recentInteractions = decryptRows('interactions', recentInteractionsRaw).map(r => ({
     ...r,
     person_name: decrypt(r.person_name),
@@ -3314,18 +3600,28 @@ app.delete('/api/companies/:id', (req, res) => {
 // 人员
 app.get('/api/company_personnel', (req, res) => {
   const { company_id, entity_id } = req.query;
+  const privacy = buildPersonPrivacyFilter(req.user.id, 'p');
   let q = `SELECT cp.*, p.name as linked_person_name FROM company_personnel cp
-    LEFT JOIN persons p ON cp.person_id = p.id WHERE 1=1`;
-  const params = [];
+    LEFT JOIN persons p ON cp.person_id = p.id ${privacy.sql.replace(/^ AND /, 'AND ')}
+    WHERE 1=1`;
+  const params = [...privacy.params];
   if (company_id) { q += ' AND cp.company_id = ?'; params.push(company_id); }
   if (entity_id === 'null') { q += ' AND cp.entity_id IS NULL'; }
   else if (entity_id) { q += ' AND cp.entity_id = ?'; params.push(entity_id); }
   q += ' ORDER BY cp.importance DESC, cp.level DESC, cp.name ASC';
-  res.json(db.prepare(q).all(...params));
+  res.json(db.prepare(q).all(...params).map(r => ({
+    ...r,
+    linked_person_name: decrypt(r.linked_person_name),
+  })));
 });
 
 app.post('/api/company_personnel', (req, res) => {
   const { company_id, name, title, department, level, status, join_date, leave_date, background, skills, importance, person_id, notes, manager_id, entity_id } = req.body;
+  if (person_id) {
+    const person = getPersonAccessRecord(person_id);
+    if (!person || !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到人脉' });
+    if (isPrivatePerson(person)) return res.status(400).json({ error: '个人私密人脉不能关联到公司人员' });
+  }
   const r = db.prepare(`
     INSERT INTO company_personnel (company_id, name, title, department, level, status, join_date, leave_date, background, skills, importance, person_id, notes, manager_id, entity_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -3335,6 +3631,11 @@ app.post('/api/company_personnel', (req, res) => {
 
 app.put('/api/company_personnel/:id', (req, res) => {
   const { name, title, department, level, status, join_date, leave_date, background, skills, importance, person_id, notes, manager_id, entity_id } = req.body;
+  if (person_id) {
+    const person = getPersonAccessRecord(person_id);
+    if (!person || !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到人脉' });
+    if (isPrivatePerson(person)) return res.status(400).json({ error: '个人私密人脉不能关联到公司人员' });
+  }
   db.prepare(`
     UPDATE company_personnel SET name=?, title=?, department=?, level=?, status=?, join_date=?, leave_date=?,
       background=?, skills=?, importance=?, person_id=?, notes=?, manager_id=?, entity_id=?, updated_at=CURRENT_TIMESTAMP
@@ -3361,9 +3662,10 @@ app.post('/api/company_personnel/:id/to_person', (req, res) => {
   });
   const r = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, company, position,
-      skills, notes, talent_type, current_company, current_position, recruit_status, intent_level)
-    VALUES (?, 'talent', 'talent_external', ?, ?, ?, ?, 'external', ?, ?, 'potential', 'low')
-  `).run(enc.name, enc.company, enc.position, enc.skills, enc.notes, enc.current_company, enc.current_position);
+      skills, notes, talent_type, current_company, current_position, recruit_status, intent_level,
+      created_by, visibility_scope, private_owner_id)
+    VALUES (?, 'talent', 'talent_external', ?, ?, ?, ?, 'external', ?, ?, 'potential', 'low', ?, 'company', NULL)
+  `).run(enc.name, enc.company, enc.position, enc.skills, enc.notes, enc.current_company, enc.current_position, req.user.id);
   // 回写 person_id
   db.prepare('UPDATE company_personnel SET person_id = ? WHERE id = ?').run(r.lastInsertRowid, cp.id);
   res.json({ id: r.lastInsertRowid });
@@ -3840,6 +4142,7 @@ app.post('/api/reports/:id/approve', (req, res) => {
 // =========== 出差统计 API ===========
 app.get('/api/trips/stats/summary', (req, res) => {
   const { year, month, group_id } = req.query;
+  const personPrivacy = buildPersonPrivacyFilter(req.user.id, 'p');
 
   let baseWhere = "WHERE t.status IN ('approved','completed')";
   const p = [];
@@ -3912,11 +4215,12 @@ app.get('/api/trips/stats/summary', (req, res) => {
       OR t.related_persons = CAST(p.id AS TEXT)
     ) AND t.status IN ('approved','completed')
     WHERE p.relationship_level IN ('vip','key')
+    ${personPrivacy.sql}
     GROUP BY p.id
     HAVING last_trip_date IS NULL OR days_since > 60
     ORDER BY days_since DESC
     LIMIT 20
-  `).all();
+  `).all(...personPrivacy.params);
   const alerts = alertsRaw.map(r => ({
     ...r,
     name: decrypt(r.name),
@@ -5967,6 +6271,7 @@ function requireExecutive(req, res, next) {
 // 获取高级人才列表
 app.get('/api/executive/talents', requireExecutive, (req, res) => {
   const { potential_rating, recruit_status, intent_level } = req.query;
+  const privacy = buildPersonPrivacyFilter(req.user.id, '');
 
   let query = `
     SELECT * FROM persons
@@ -5974,7 +6279,8 @@ app.get('/api/executive/talents', requireExecutive, (req, res) => {
       AND relation_types LIKE '%talent_external%'
       AND weight IN ('high', 'vip')
   `;
-  const params = [];
+  const params = [...privacy.params];
+  query += privacy.sql;
 
   if (potential_rating) {
     query += ' AND potential_level = ?';
@@ -6030,6 +6336,7 @@ app.get('/api/executive/competitor-dynamics', requireExecutive, (req, res) => {
 
 // 获取重点客户列表
 app.get('/api/executive/key-customers', requireExecutive, (req, res) => {
+  const privacy = buildPersonPrivacyFilter(req.user.id, 'p');
   const customers = db.prepare(`
     SELECT
       p.*,
@@ -6047,8 +6354,9 @@ app.get('/api/executive/key-customers', requireExecutive, (req, res) => {
     WHERE p.person_category = 'business'
       AND p.relation_types LIKE '%customer_active%'
       AND p.weight IN ('high', 'vip')
+      ${privacy.sql}
     ORDER BY days_since_last_contact DESC
-  `).all();
+  `).all(...privacy.params);
 
   // last_interaction_result 来自 interactions.outcome（加密），需单独解密
   res.json(decryptRows('persons', customers).map(r => ({
@@ -6059,13 +6367,16 @@ app.get('/api/executive/key-customers', requireExecutive, (req, res) => {
 
 // 获取经营概览数据
 app.get('/api/executive/overview', requireExecutive, (req, res) => {
+  const personPrivacy = buildPersonPrivacyFilter(req.user.id, '');
+  const aliasedPersonPrivacy = buildPersonPrivacyFilter(req.user.id, 'p');
   // 高级人才数量
   const talentCount = db.prepare(`
     SELECT COUNT(*) as count FROM persons
     WHERE person_category = 'talent'
       AND relation_types LIKE '%talent_external%'
       AND weight IN ('high', 'vip')
-  `).get().count;
+      ${personPrivacy.sql}
+  `).get(...personPrivacy.params).count;
 
   // 招募中人才数量
   const recruitingCount = db.prepare(`
@@ -6073,7 +6384,8 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
     WHERE person_category = 'talent'
       AND relation_types LIKE '%talent_external%'
       AND recruit_status IN ('contacted', 'negotiating', 'offered')
-  `).get().count;
+      ${personPrivacy.sql}
+  `).get(...personPrivacy.params).count;
 
   // 竞争动态数量（近30天）
   const dynamicsCount = db.prepare(`
@@ -6090,7 +6402,8 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
     WHERE person_category = 'business'
       AND relation_types LIKE '%customer_active%'
       AND weight IN ('high', 'vip')
-  `).get().count;
+      ${personPrivacy.sql}
+  `).get(...personPrivacy.params).count;
 
   // 高级人才最近动态（最近更新的5条）
   const recentTalents = decryptRows('persons', db.prepare(`
@@ -6100,9 +6413,10 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
     WHERE person_category = 'talent'
       AND relation_types LIKE '%talent_external%'
       AND weight IN ('high', 'vip')
+      ${personPrivacy.sql}
     ORDER BY updated_at DESC
     LIMIT 5
-  `).all());
+  `).all(...personPrivacy.params));
 
   // 竞争公司最新动态（最近5条）
   const recentDynamicsRaw = db.prepare(`
@@ -6139,9 +6453,10 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
       AND p.relation_types LIKE '%customer_active%'
       AND p.weight IN ('high', 'vip')
       AND (i.date IS NULL OR julianday('now') - julianday(i.date) > 30)
+      ${aliasedPersonPrivacy.sql}
     ORDER BY days_since_last_contact DESC
     LIMIT 5
-  `).all());
+  `).all(...aliasedPersonPrivacy.params));
 
   const alerts = [];
   const staleCustomers = customersNeedFollowup.filter(c => c.days_since_last_contact == null || c.days_since_last_contact > 30);
