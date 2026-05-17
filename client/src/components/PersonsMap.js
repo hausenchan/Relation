@@ -241,12 +241,24 @@ export default function PersonsMap() {
   // 城市聚合标点数据
   const cityPoints = useMemo(() => {
     return Object.entries(cityGroups)
-      .filter(([city]) => CITY_COORDS[city])
       .map(([city, persons]) => {
-        const [lng, lat] = CITY_COORDS[city];
+        const precisePersons = persons
+          .map(p => ({ lat: Number(p.lat), lng: Number(p.lng) }))
+          .filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+        let lat;
+        let lng;
+        if (precisePersons.length > 0) {
+          lat = precisePersons.reduce((sum, p) => sum + p.lat, 0) / precisePersons.length;
+          lng = precisePersons.reduce((sum, p) => sum + p.lng, 0) / precisePersons.length;
+        } else if (CITY_COORDS[city]) {
+          [lng, lat] = CITY_COORDS[city];
+        } else {
+          return null;
+        }
         const hasWarning = persons.some(p => p.days_since_contact === null || p.days_since_contact >= WARN_DAYS);
         return { city, persons, lat, lng, hasWarning, count: persons.length };
-      });
+      })
+      .filter(Boolean);
   }, [cityGroups]);
 
   // 个人标点数据

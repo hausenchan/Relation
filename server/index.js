@@ -69,20 +69,93 @@ const COMPANY_PERSON_SCOPE = 'company';
 // 腾讯地图 Key（地理编码用）
 const TMAP_KEY = 'BFBBZ-CNXC4-XEWUR-KQN7R-QOUGJ-Q4B66';
 
-// 地理编码：城市+地址 → 经纬度
+function normalizeGeoText(value) {
+  return String(value || '').trim().replace(/\s+/g, '');
+}
+
+function firstCityFromValue(city) {
+  return String(city || '').split(',')[0].trim();
+}
+
+function addressIncludesCity(address, city) {
+  const normalizedAddress = normalizeGeoText(address);
+  const normalizedCity = normalizeGeoText(city);
+  if (!normalizedAddress || !normalizedCity) return false;
+  const cityWithoutSuffix = normalizedCity.replace(/市$/, '');
+  return normalizedAddress.includes(normalizedCity) ||
+    (cityWithoutSuffix && normalizedAddress.includes(cityWithoutSuffix));
+}
+
+function buildGeocodeQuery(city, address) {
+  const firstCity = firstCityFromValue(city);
+  const cleanAddress = String(address || '').trim();
+  if (cleanAddress) {
+    return firstCity && !addressIncludesCity(cleanAddress, firstCity)
+      ? `${firstCity}${cleanAddress}`
+      : cleanAddress;
+  }
+  return firstCity;
+}
+
+function buildGeocodeKey(city, address) {
+  return normalizeGeoText(buildGeocodeQuery(city, address));
+}
+
+async function requestTencentGeocode(candidate) {
+  const params = new URLSearchParams({
+    address: candidate.address,
+    key: TMAP_KEY,
+    output: 'json',
+  });
+  if (candidate.region) {
+    params.set('region', candidate.region);
+    params.set('region_fix', '1');
+  }
+  const res = await fetch(`https://apis.map.qq.com/ws/geocoder/v1/?${params.toString()}`);
+  const data = await res.json();
+  if (data.status === 0 && data.result?.location) {
+    return {
+      lat: data.result.location.lat,
+      lng: data.result.location.lng,
+      level: data.result.level || '',
+      reliability: data.result.reliability,
+    };
+  }
+  return null;
+}
+
+function buildGeocodeCandidates(city, address) {
+  const firstCity = firstCityFromValue(city);
+  const cleanAddress = String(address || '').trim();
+  const fullAddress = buildGeocodeQuery(city, address);
+  const candidates = [];
+  const seen = new Set();
+  const add = (candidate) => {
+    if (!candidate.address) return;
+    const key = `${candidate.region || ''}|${candidate.address}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  if (cleanAddress && firstCity) add({ address: cleanAddress, region: firstCity });
+  add({ address: fullAddress, region: '' });
+  return candidates;
+}
+
+// 地理编码：优先用城市作为检索区域约束，再用完整地址兜底
 async function geocodeAddress(city, address) {
+  const geocodeKey = buildGeocodeKey(city, address);
+  if (!geocodeKey) return { lat: null, lng: null, geocode_address: null };
   try {
-    const firstCity = (city || '').split(',')[0].trim();
-    const fullAddress = (firstCity + (address || '')).trim();
-    if (!fullAddress) return { lat: null, lng: null };
-    const url = `https://apis.map.qq.com/ws/geocoder/v1/?address=${encodeURIComponent(fullAddress)}&key=${TMAP_KEY}`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (data.status === 0 && data.result?.location) {
-      return { lat: data.result.location.lat, lng: data.result.location.lng };
+    for (const candidate of buildGeocodeCandidates(city, address)) {
+      const result = await requestTencentGeocode(candidate);
+      if (result) {
+        return { ...result, geocode_address: geocodeKey };
+      }
     }
   } catch {}
-  return { lat: null, lng: null };
+  return { lat: null, lng: null, geocode_address: null };
 }
 
 app.use(cors());
@@ -394,6 +467,7 @@ if (existingCols.length > 0) {
     ["assigned_to",   "INTEGER DEFAULT NULL"],
     ["lat",           "REAL DEFAULT NULL"],
     ["lng",           "REAL DEFAULT NULL"],
+    ["geocode_address", "TEXT DEFAULT NULL"],
     ["visibility_scope", "TEXT DEFAULT 'company'"],
     ["private_owner_id", "INTEGER DEFAULT NULL"],
   ];
@@ -2122,14 +2196,45 @@ app.get('/api/persons', (req, res) => {
   res.json(rows);
 });
 
+const MAP_GEOCODE_REFRESH_LIMIT = 40;
+
+async function refreshPersonMapCoordinates(rows) {
+  const updateGeo = db.prepare('UPDATE persons SET lat = ?, lng = ?, geocode_address = ? WHERE id = ?');
+  let refreshed = 0;
+  for (const row of rows) {
+    const geocodeKey = buildGeocodeKey(row.city, row.address);
+    if (!geocodeKey) continue;
+
+    const hasDetailedAddress = Boolean(normalizeGeoText(row.address));
+    const hasCoords = row.lat !== null && row.lat !== undefined && row.lng !== null && row.lng !== undefined;
+    const needsRefresh = !hasCoords || row.geocode_address !== geocodeKey;
+    if (!needsRefresh) continue;
+
+    // 历史城市级坐标不用反复刷新；有街道地址时才强制校准到详细地址。
+    if (!hasDetailedAddress && hasCoords) continue;
+    if (refreshed >= MAP_GEOCODE_REFRESH_LIMIT) break;
+
+    const geo = await geocodeAddress(row.city, row.address);
+    if (!geo.geocode_address || geo.lat === null || geo.lng === null) continue;
+
+    row.lat = geo.lat;
+    row.lng = geo.lng;
+    row.geocode_address = geo.geocode_address;
+    updateGeo.run(geo.lat, geo.lng, geo.geocode_address, row.id);
+    refreshed++;
+  }
+  return rows;
+}
+
 // 人脉地图数据（精简字段 + 上次联系时间）
-app.get('/api/persons/map', (req, res) => {
+app.get('/api/persons/map', async (req, res) => {
   const { city, person_category, relationship_level, weight } = req.query;
   const { id: me, role } = req.user;
-  let query = `SELECT p.id, p.name, p.company, p.city, p.address, p.lat, p.lng, p.person_category, p.relationship_level, p.weight, p.phone,
+  let query = `SELECT p.id, p.name, p.company, p.city, p.address, p.lat, p.lng, p.geocode_address, p.person_category, p.relationship_level, p.weight, p.phone,
     (SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id) as last_interaction_date,
     CAST(julianday('now') - julianday((SELECT MAX(i.date) FROM interactions i WHERE i.person_id = p.id)) AS INTEGER) as days_since_contact
-    FROM persons p WHERE p.city IS NOT NULL AND p.city != ''`;
+    FROM persons p
+    WHERE ((p.city IS NOT NULL AND p.city != '') OR (p.address IS NOT NULL AND p.address != ''))`;
   const params = [];
 
   const privacy = buildPersonPrivacyFilter(me, 'p');
@@ -2154,7 +2259,13 @@ app.get('/api/persons/map', (req, res) => {
   if (weight) { query += ' AND p.weight = ?'; params.push(weight); }
 
   query += ' ORDER BY p.city, p.name';
-  res.json(decryptRows('persons', db.prepare(query).all(...params)));
+  try {
+    const rows = decryptRows('persons', db.prepare(query).all(...params));
+    res.json(await refreshPersonMapCoordinates(rows));
+  } catch (err) {
+    console.error('persons map failed:', err);
+    res.status(500).json({ error: '地图数据加载失败' });
+  }
 });
 
 app.get('/api/persons/:id', (req, res, next) => {
@@ -2182,7 +2293,7 @@ app.post('/api/persons', canWrite, async (req, res) => {
   }
   const visibility = resolvePersonVisibilityPayload(req.user, visibility_scope);
   if (visibility.error) return res.status(403).json({ error: visibility.error });
-  const { lat, lng } = await geocodeAddress(city, address);
+  const geo = await geocodeAddress(city, address);
   const enc = encryptRow('persons', {
     name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
     current_company, current_position, target_position,
@@ -2204,11 +2315,12 @@ app.post('/api/persons', canWrite, async (req, res) => {
     enc.resources, enc.demands, relationship_level || 'normal', client_status || 'active',
     talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status || 'potential', intent_level || 'low',
-    potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium', lat, lng, req.user.id
+    potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium', geo.lat, geo.lng, req.user.id
     , visibility.visibility_scope, visibility.private_owner_id
   );
 
   const personId = result.lastInsertRowid;
+  db.prepare('UPDATE persons SET geocode_address = ? WHERE id = ?').run(geo.geocode_address, personId);
   if (visibility.visibility_scope !== PRIVATE_PERSON_SCOPE && Array.isArray(shared_to) && shared_to.length > 0) {
     const insertShared = db.prepare('INSERT OR IGNORE INTO person_shared_users (person_id, user_id) VALUES (?, ?)');
     shared_to.forEach(uid => insertShared.run(personId, uid));
@@ -2383,7 +2495,7 @@ app.put('/api/persons/batch', canWrite, (req, res) => {
 });
 
 app.put('/api/persons/:id', canWrite, async (req, res) => {
-  const existingPerson = db.prepare('SELECT created_by, assigned_to, visibility_scope, private_owner_id FROM persons WHERE id = ?').get(req.params.id);
+  const existingPerson = db.prepare('SELECT created_by, assigned_to, visibility_scope, private_owner_id, city, address, lat, lng, geocode_address FROM persons WHERE id = ?').get(req.params.id);
   if (!existingPerson) return res.status(404).json({ error: '未找到' });
   if (!canAccessPerson(req.user, { ...existingPerson, id: Number(req.params.id) })) return res.status(404).json({ error: '未找到' });
   // member / readonly 只能改自己录入的 或 被指派给自己的
@@ -2408,7 +2520,18 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
   }
   const visibility = resolvePersonVisibilityPayload(req.user, visibility_scope, existingPerson);
   if (visibility.error) return res.status(403).json({ error: visibility.error });
-  const { lat, lng } = await geocodeAddress(city, address);
+  const existingPlain = decryptRow('persons', existingPerson);
+  const nextGeocodeKey = buildGeocodeKey(city, address);
+  const previousGeocodeKey = buildGeocodeKey(existingPlain.city, existingPlain.address);
+  const geocodeInputChanged = nextGeocodeKey !== previousGeocodeKey;
+  let geo = await geocodeAddress(city, address);
+  if (!geo.geocode_address && !geocodeInputChanged) {
+    geo = {
+      lat: existingPerson.lat,
+      lng: existingPerson.lng,
+      geocode_address: existingPerson.geocode_address || null,
+    };
+  }
   const enc = encryptRow('persons', {
     name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
     current_company, current_position, target_position,
@@ -2431,8 +2554,9 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     talent_type, enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status, intent_level,
     potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium',
-    lat, lng, visibility.visibility_scope, visibility.private_owner_id, req.params.id
+    geo.lat, geo.lng, visibility.visibility_scope, visibility.private_owner_id, req.params.id
   );
+  db.prepare('UPDATE persons SET geocode_address = ? WHERE id = ?').run(geo.geocode_address, req.params.id);
 
   // 更新共享人
   db.prepare('DELETE FROM person_shared_users WHERE person_id = ?').run(req.params.id);
