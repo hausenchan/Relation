@@ -58,6 +58,7 @@ export const personsApi = {
   get: (id) => api.get(`/persons/${id}`).then(r => r.data),
   create: (data) => api.post('/persons', data).then(r => r.data),
   update: (id, data) => api.put(`/persons/${id}`, data).then(r => r.data),
+  batchUpdate: (data) => api.put('/persons/batch', data).then(r => r.data),
   delete: (id) => api.delete(`/persons/${id}`).then(r => r.data),
   import: (rows) => api.post('/persons/import', rows).then(r => r.data),
   assign: (id, data) => api.put(`/persons/${id}/assign`, data).then(r => r.data),

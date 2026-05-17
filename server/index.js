@@ -2216,6 +2216,172 @@ app.post('/api/persons', canWrite, async (req, res) => {
   res.json({ id: personId });
 });
 
+app.put('/api/persons/batch', canWrite, (req, res) => {
+  const { ids, patch } = req.body || {};
+  const personIds = [...new Set((Array.isArray(ids) ? ids : [])
+    .map(id => Number(id))
+    .filter(id => Number.isInteger(id) && id > 0))];
+
+  if (personIds.length === 0) return res.status(400).json({ error: '请选择要批量编辑的人脉' });
+  if (personIds.length > 500) return res.status(400).json({ error: '单次最多批量编辑 500 条人脉' });
+  if (!patch || typeof patch !== 'object') return res.status(400).json({ error: '请提供要修改的字段' });
+
+  const scalarFields = [];
+  const allowedValues = {
+    weight: new Set(['high', 'medium', 'low']),
+    potential_level: new Set(['high', 'medium', 'low', '']),
+    recruit_status: new Set(['potential', 'contacted', 'interviewing', 'offered', 'joined', 'passed']),
+    intent_level: new Set(['high', 'medium', 'low', 'advisor', 'unknown']),
+  };
+  const talentBatchFields = new Set(['potential_level', 'recruit_status', 'intent_level']);
+
+  let scalarError = null;
+  ['weight', 'potential_level', 'recruit_status', 'intent_level'].forEach(field => {
+    if (!Object.prototype.hasOwnProperty.call(patch, field)) return;
+    const value = patch[field] === null || patch[field] === undefined ? '' : String(patch[field]);
+    if (!allowedValues[field].has(value)) {
+      scalarError = `字段 ${field} 的值不合法`;
+      return;
+    }
+    scalarFields.push({ field, value: value || null });
+  });
+  if (scalarError) return res.status(400).json({ error: scalarError });
+
+  const splitTags = (value) => String(value || '')
+    .split(/[,，]/)
+    .map(v => v.trim())
+    .filter(Boolean);
+  const mergeTags = (current, mode, values) => {
+    const currentTags = splitTags(current);
+    const selected = splitTags(values);
+    if (mode === 'replace') return selected.join(',');
+    if (mode === 'remove') {
+      const removeSet = new Set(selected);
+      return currentTags.filter(tag => !removeSet.has(tag)).join(',');
+    }
+    const next = [...currentTags];
+    selected.forEach(tag => {
+      if (!next.includes(tag)) next.push(tag);
+    });
+    return next.join(',');
+  };
+
+  const tagsPatch = patch.tags && typeof patch.tags === 'object' ? patch.tags : null;
+  const hasTagsPatch = Boolean(tagsPatch);
+  if (hasTagsPatch) {
+    if (!['append', 'remove', 'replace'].includes(tagsPatch.mode)) {
+      return res.status(400).json({ error: '标签操作方式不合法' });
+    }
+    if (tagsPatch.mode !== 'replace' && splitTags(tagsPatch.value).length === 0) {
+      return res.status(400).json({ error: '请填写要处理的标签' });
+    }
+  }
+
+  const sharedPatch = patch.shared_to && typeof patch.shared_to === 'object' ? patch.shared_to : null;
+  const hasSharedPatch = Boolean(sharedPatch);
+  if (hasSharedPatch) {
+    if (!['append', 'remove', 'replace'].includes(sharedPatch.mode)) {
+      return res.status(400).json({ error: '共享人操作方式不合法' });
+    }
+    sharedPatch.user_ids = [...new Set((Array.isArray(sharedPatch.user_ids) ? sharedPatch.user_ids : [])
+      .map(id => Number(id))
+      .filter(id => Number.isInteger(id) && id > 0))];
+    if (sharedPatch.mode !== 'replace' && sharedPatch.user_ids.length === 0) {
+      return res.status(400).json({ error: '请选择要处理的共享人' });
+    }
+  }
+
+  if (scalarFields.length === 0 && !hasTagsPatch && !hasSharedPatch) {
+    return res.status(400).json({ error: '请至少选择一个批量修改项' });
+  }
+
+  const placeholders = personIds.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT id, created_by, assigned_to, visibility_scope, private_owner_id, person_category, relation_types, tags
+    FROM persons
+    WHERE id IN (${placeholders})
+  `).all(...personIds);
+  const rowMap = new Map(rows.map(row => [Number(row.id), row]));
+
+  const commonScalarFields = scalarFields.filter(({ field }) => !talentBatchFields.has(field));
+  const talentScalarFields = scalarFields.filter(({ field }) => talentBatchFields.has(field));
+  const makeScalarUpdate = (fields) => fields.length
+    ? db.prepare(`UPDATE persons SET ${fields.map(({ field }) => `${field} = ?`).join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    : null;
+  const updateCommonScalar = makeScalarUpdate(commonScalarFields);
+  const updateTalentScalar = makeScalarUpdate(talentScalarFields);
+  const updateTags = hasTagsPatch ? db.prepare('UPDATE persons SET tags = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?') : null;
+  const deleteSharedAll = hasSharedPatch ? db.prepare('DELETE FROM person_shared_users WHERE person_id = ?') : null;
+  const deleteSharedOne = hasSharedPatch ? db.prepare('DELETE FROM person_shared_users WHERE person_id = ? AND user_id = ?') : null;
+  const insertShared = hasSharedPatch ? db.prepare('INSERT OR IGNORE INTO person_shared_users (person_id, user_id) VALUES (?, ?)') : null;
+
+  const errors = [];
+  let success = 0;
+  const applyBatch = db.transaction(() => {
+    personIds.forEach(id => {
+      const person = rowMap.get(id);
+      if (!person) {
+        errors.push({ id, reason: '未找到' });
+        return;
+      }
+      if (!canAccessPerson(req.user, person)) {
+        errors.push({ id, reason: '无权访问此数据' });
+        return;
+      }
+      if (req.user.role === 'member') {
+        const isOwner = Number(person.created_by) === Number(req.user.id);
+        const isAssigned = Number(person.assigned_to) === Number(req.user.id);
+        if (!isOwner && !isAssigned) {
+          errors.push({ id, reason: '无权修改此数据' });
+          return;
+        }
+      }
+      if (hasSharedPatch && isPrivatePerson(person)) {
+        errors.push({ id, reason: '个人私密人脉不能共享' });
+        return;
+      }
+
+      let touched = false;
+      const relationTypes = String(person.relation_types || '').split(',').map(v => v.trim()).filter(Boolean);
+      const isExternalTalentPerson = person.person_category === 'talent' && relationTypes.includes('talent_external');
+      if (updateCommonScalar) {
+        updateCommonScalar.run(...commonScalarFields.map(({ value }) => value), id);
+        touched = true;
+      }
+      if (updateTalentScalar && isExternalTalentPerson) {
+        updateTalentScalar.run(...talentScalarFields.map(({ value }) => value), id);
+        touched = true;
+      }
+      if (updateTags) {
+        const decrypted = decryptRow('persons', person);
+        const nextTags = mergeTags(decrypted.tags || '', tagsPatch.mode, tagsPatch.value || '');
+        const enc = encryptRow('persons', { tags: nextTags });
+        updateTags.run(enc.tags, id);
+        touched = true;
+      }
+      if (hasSharedPatch) {
+        if (sharedPatch.mode === 'replace') {
+          deleteSharedAll.run(id);
+          sharedPatch.user_ids.forEach(uid => insertShared.run(id, uid));
+        } else if (sharedPatch.mode === 'append') {
+          sharedPatch.user_ids.forEach(uid => insertShared.run(id, uid));
+        } else {
+          sharedPatch.user_ids.forEach(uid => deleteSharedOne.run(id, uid));
+        }
+        touched = true;
+      }
+      if (touched) {
+        success += 1;
+      } else {
+        errors.push({ id, reason: '仅外部人才支持该批量字段' });
+      }
+    });
+  });
+
+  applyBatch();
+  res.json({ success, failed: errors.length, errors });
+});
+
 app.put('/api/persons/:id', canWrite, async (req, res) => {
   const existingPerson = db.prepare('SELECT created_by, assigned_to, visibility_scope, private_owner_id FROM persons WHERE id = ?').get(req.params.id);
   if (!existingPerson) return res.status(404).json({ error: '未找到' });

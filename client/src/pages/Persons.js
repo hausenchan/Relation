@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col, Grid, List,
   Typography, Drawer, Descriptions, Tabs, Popconfirm, message, Tooltip, Divider,
-  Upload, Alert, Segmented
+  Upload, Alert, Segmented, Checkbox
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined,
@@ -465,10 +465,15 @@ export default function Persons() {
   const [importLoading, setImportLoading] = useState(false);
   const [commercialUsers, setCommercialUsers] = useState([]);
   const [creatorUsers, setCreatorUsers] = useState([]);
+  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [batchLoading, setBatchLoading] = useState(false);
   const [form] = Form.useForm();
+  const [batchForm] = Form.useForm();
   const category = Form.useWatch('person_category', form);
   const relationTypes = Form.useWatch('relation_types', form) || [];
   const visibilityScope = Form.useWatch('visibility_scope', form) || COMPANY_PERSON_SCOPE;
+  const batchFields = Form.useWatch('fields', batchForm) || [];
   const isExternalTalent = category === 'talent' && !relationTypes.includes('talent_internal');
   const isInternalTalent = category === 'talent' && relationTypes.includes('talent_internal');
   const isPrivateScope = visibilityScope === PRIVATE_PERSON_SCOPE;
@@ -487,6 +492,7 @@ export default function Persons() {
     if (canUsePrivatePersons && filterVisibility) params.visibility_scope = filterVisibility;
     const res = await personsApi.list(params);
     setData(res);
+    setSelectedRowKeys(prev => prev.filter(id => res.some(r => Number(r.id) === Number(id))));
     setLoading(false);
   }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight, filterCreatedBy, filterVisibility, canUsePrivatePersons]);
 
@@ -602,6 +608,91 @@ export default function Persons() {
     return true;
   };
 
+  const selectedRecords = data.filter(record => selectedRowKeys.some(id => Number(id) === Number(record.id)));
+  const editableSelectedRecords = selectedRecords.filter(canEditPerson);
+
+  const toggleMobileSelection = (record, checked) => {
+    if (!canEditPerson(record)) return;
+    setSelectedRowKeys(prev => {
+      const key = record.id;
+      if (checked) return prev.some(id => Number(id) === Number(key)) ? prev : [...prev, key];
+      return prev.filter(id => Number(id) !== Number(key));
+    });
+  };
+
+  const openBatchEdit = () => {
+    if (editableSelectedRecords.length === 0) {
+      message.warning('请先选择可编辑的人脉');
+      return;
+    }
+    if (editableSelectedRecords.length !== selectedRecords.length) {
+      setSelectedRowKeys(editableSelectedRecords.map(record => record.id));
+    }
+    batchForm.resetFields();
+    batchForm.setFieldsValue({
+      fields: ['weight'],
+      weight: 'medium',
+      tags_mode: 'append',
+      shared_to_mode: 'append',
+    });
+    loadCommercialUsers();
+    setBatchModalOpen(true);
+  };
+
+  const handleBatchSave = async () => {
+    const values = await batchForm.validateFields();
+    const fields = values.fields || [];
+    const ids = editableSelectedRecords.map(record => record.id);
+    if (ids.length === 0) {
+      message.warning('请先选择可编辑的人脉');
+      return;
+    }
+
+    const patch = {};
+    if (fields.includes('weight')) patch.weight = values.weight;
+    if (fields.includes('tags')) {
+      const tagValue = (values.tags || '').trim();
+      if (values.tags_mode !== 'replace' && !tagValue) {
+        message.warning('请填写要处理的标签');
+        return;
+      }
+      patch.tags = { mode: values.tags_mode, value: tagValue };
+    }
+    if (fields.includes('potential_level')) patch.potential_level = values.potential_level || '';
+    if (fields.includes('recruit_status')) patch.recruit_status = values.recruit_status;
+    if (fields.includes('intent_level')) patch.intent_level = values.intent_level;
+    if (fields.includes('shared_to')) {
+      const userIds = values.shared_to || [];
+      if (values.shared_to_mode !== 'replace' && userIds.length === 0) {
+        message.warning('请选择要处理的共享人');
+        return;
+      }
+      patch.shared_to = { mode: values.shared_to_mode, user_ids: userIds };
+    }
+
+    if (Object.keys(patch).length === 0) {
+      message.warning('请至少选择一个批量修改项');
+      return;
+    }
+
+    setBatchLoading(true);
+    try {
+      const result = await personsApi.batchUpdate({ ids, patch });
+      if (result.failed > 0) {
+        message.warning(`批量编辑完成：成功 ${result.success} 条，失败 ${result.failed} 条`);
+      } else {
+        message.success(`批量编辑成功 ${result.success} 条`);
+      }
+      setBatchModalOpen(false);
+      setSelectedRowKeys([]);
+      load();
+    } catch (err) {
+      message.error(err.response?.data?.error || '批量编辑失败，请重试');
+    } finally {
+      setBatchLoading(false);
+    }
+  };
+
   const openIntDrawer = async (record) => {
     setIntPerson(record);
     setIntDrawerOpen(true);
@@ -614,11 +705,15 @@ export default function Persons() {
     setIntPersonInteractions(res);
   };
 
-  // CSV 列头与字段的映射（支持中英文列名）
+  const categoryImportOptionsText = Object.values(categoryMap).map(v => v.label).join('、');
+  const relationTypeImportOptionsText = Object.values(relationTypeMap).map(v => v.label).join('、');
+  const weightImportOptionsText = Object.values(weightMap).map(v => v.label).join('、');
+
+  // CSV 列头与字段的映射（下载模板显示中文说明，同时兼容旧表头和历史英文列名）
   const CSV_COLUMNS = [
-    { key: 'name',              labels: ['姓名', 'name'] },
-    { key: 'person_category',   labels: ['圈子分类', 'person_category'] },
-    { key: 'relation_types',    labels: ['关系类型', 'relation_types'] },
+    { key: 'name',              labels: ['姓名', 'name'], templateLabel: `姓名（建议只填姓名，最长${PERSON_NAME_MAX_LENGTH}字）` },
+    { key: 'person_category',   labels: ['圈子分类', 'person_category'], templateLabel: `圈子分类（可填：${categoryImportOptionsText}）` },
+    { key: 'relation_types',    labels: ['关系类型', 'relation_types'], templateLabel: `关系类型（可填：${relationTypeImportOptionsText}；多个用中文逗号分隔）` },
     { key: 'phone',             labels: ['手机', 'phone'] },
     { key: 'wechat',            labels: ['微信', 'wechat'] },
     { key: 'email',             labels: ['邮箱', 'email'] },
@@ -632,8 +727,75 @@ export default function Persons() {
     { key: 'resources',         labels: ['拥有资源', 'resources'] },
     { key: 'demands',           labels: ['诉求', 'demands'] },
     { key: 'notes',             labels: ['备注', 'notes'] },
-    { key: 'weight',            labels: ['权重', 'weight'] },
+    { key: 'weight',            labels: ['权重', 'weight'], templateLabel: `权重（可填：${weightImportOptionsText}；留空默认中）` },
   ];
+
+  const categoryImportMap = {
+    商务圈: 'business', 商务: 'business', business: 'business',
+    人才圈: 'talent', 人才: 'talent', talent: 'talent',
+    创业圈: 'startup', 创业: 'startup', startup: 'startup',
+    社交圈: 'social', 社交: 'social', social: 'social',
+  };
+
+  const relationTypeImportMap = Object.fromEntries([
+    ...Object.entries(relationTypeMap).flatMap(([key, value]) => [[key, key], [value.label, key]]),
+    ['潜在客户', 'client_potential'],
+    ['合作客户', 'client_active'],
+    ['外部人才', 'talent_external'],
+    ['内部人才', 'talent_internal'],
+    ['创业伙伴', 'partner'],
+    ['投资人/顾问', 'investor'],
+    ['家人亲戚', 'family'],
+    ['朋友', 'friend'],
+    ['其他', 'other'],
+  ]);
+
+  const weightImportMap = {
+    高: 'high', 高权重: 'high', high: 'high',
+    中: 'medium', 中权重: 'medium', medium: 'medium',
+    低: 'low', 低权重: 'low', low: 'low',
+  };
+
+  const normalizeImportText = (value) => String(value || '').trim();
+  const normalizeImportHeader = (value) =>
+    normalizeImportText(value)
+      .replace(/^\uFEFF/, '')
+      .replace(/[（(].*$/, '')
+      .trim();
+  const findCsvColumnKey = (headerName) => {
+    const text = normalizeImportText(headerName).replace(/^\uFEFF/, '');
+    const shortText = normalizeImportHeader(text);
+    const col = CSV_COLUMNS.find(c =>
+      c.templateLabel === text ||
+      c.labels.some(label => label === text || label === shortText)
+    );
+    return col ? col.key : null;
+  };
+  const normalizeImportCategory = (value) => {
+    const text = normalizeImportText(value);
+    return categoryImportMap[text] || text;
+  };
+  const normalizeImportWeight = (value) => {
+    const text = normalizeImportText(value);
+    return weightImportMap[text] || text;
+  };
+  const normalizeImportRelationTypes = (value) => {
+    const parts = normalizeImportText(value)
+      .split(/[,，;；、]/)
+      .map(s => s.trim())
+      .filter(Boolean);
+    return parts.map(part => relationTypeImportMap[part] || part).join(',');
+  };
+  const normalizeImportRow = (row) => ({
+    ...row,
+    person_category: row.person_category ? normalizeImportCategory(row.person_category) : row.person_category,
+    relation_types: row.relation_types ? normalizeImportRelationTypes(row.relation_types) : row.relation_types,
+    weight: row.weight ? normalizeImportWeight(row.weight) : row.weight,
+  });
+  const displayImportCategory = (value) => categoryMap[value]?.label || value || '-';
+  const displayImportRelationTypes = (value) =>
+    parseRelationTypes(value).map(type => relationTypeMap[type]?.label || type).join('、') || '-';
+  const displayImportWeight = (value) => weightMap[value]?.label || value || '-';
 
   const parseCsv = (text) => {
     const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
@@ -658,17 +820,14 @@ export default function Persons() {
     };
     const headers = parseRow(lines[0]);
     // 建立 header → field key 映射
-    const colMap = headers.map(h => {
-      const col = CSV_COLUMNS.find(c => c.labels.some(l => l === h.trim()));
-      return col ? col.key : null;
-    });
+    const colMap = headers.map(findCsvColumnKey);
     const rows = [];
     for (let i = 1; i < lines.length; i++) {
       if (!lines[i].trim()) continue;
       const vals = parseRow(lines[i]);
       const obj = {};
       colMap.forEach((key, idx) => { if (key) obj[key] = vals[idx] || ''; });
-      if (obj.name) rows.push(obj);
+      if (obj.name) rows.push(normalizeImportRow(obj));
     }
     return rows;
   };
@@ -711,9 +870,25 @@ export default function Persons() {
   };
 
   const downloadTemplate = () => {
-    const header = CSV_COLUMNS.map(c => c.labels[0]).join(',');
-    const example = '张三,business,client_potential,13800138000,zhang3,zhang3@example.com,北京,示例公司,销售总监,互联网,1990-01-01,,重点客户,行业资源丰富,寻求融资对接,首次见面于行业峰会,medium';
-    const content = '\uFEFF' + header + '\n' + example; // BOM 让 Excel 正确识别 UTF-8
+    const header = CSV_COLUMNS.map(c => c.templateLabel || c.labels[0]);
+    const csvCell = (value) => {
+      const text = String(value ?? '');
+      return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    };
+    const toCsvRow = (row) => row.map(csvCell).join(',');
+    const examples = [
+      ['张三', '商务圈', '潜在客户', '13800138000', '张三微信', '', '北京', '星河科技', '销售总监', '互联网', '1990-01-01', '', '重点客户', '行业资源丰富', '寻求融资对接', '首次见面于行业峰会', '高'],
+      ['李四', '商务圈', '合作客户', '13800138001', '李四微信', '', '上海', '明舟传媒', '市场负责人', '广告营销', '', '', '长期维护', '渠道资源', '联合项目', '已建立合作', '中'],
+      ['王五', '人才圈', '外部人才', '13800138002', '王五微信', '', '深圳', '云启智能', '算法专家', '人工智能', '', '', '高潜人才', '技术能力强', '职业机会', '朋友推荐', '高'],
+      ['赵六', '人才圈', '内部人才', '13800138003', '赵六微信', '', '杭州', '本公司', '产品经理', '互联网', '', '', '核心员工', '产品经验', '成长通道', '内部盘点', '中'],
+      ['钱七', '创业圈', '创业伙伴', '13800138004', '钱七微信', '', '广州', '新芽项目', '联合创始人', '电商', '', '', '潜在伙伴', '项目资源', '寻找合作', '创业活动认识', '高'],
+      ['孙八', '创业圈', '投资人/顾问', '13800138005', '孙八微信', '', '北京', '远山资本', '合伙人', '投资', '', '', '顾问资源', '资本与行业判断', '项目储备', '路演认识', '高'],
+      ['周九', '社交圈', '家人亲戚', '13800138006', '周九微信', '', '成都', '', '', '', '', '', '亲友', '本地资源', '日常联系', '家庭关系', '中'],
+      ['吴十', '社交圈', '朋友', '13800138007', '吴十微信', '', '南京', '青禾文化', '运营负责人', '内容运营', '', '', '朋友', '社群资源', '信息交流', '朋友聚会认识', '低'],
+      ['郑十一', '社交圈', '其他', '13800138008', '郑十一微信', '', '武汉', '', '', '', '', '', '待分类', '暂未明确', '待补充', '临时记录', '低'],
+      ['冯十二', '商务圈', '潜在客户，合作客户', '13800138009', '冯十二微信', '', '苏州', '共创科技', '商务负责人', '企业服务', '', '', '多关系示例', '客户资源', '资源互换', '关系类型可填写多个中文值', '中'],
+    ];
+    const content = '\uFEFF' + [header, ...examples].map(toCsvRow).join('\n'); // BOM 让 Excel 正确识别 UTF-8
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -874,6 +1049,15 @@ export default function Persons() {
     },
   ];
 
+  const rowSelection = {
+    selectedRowKeys,
+    onChange: setSelectedRowKeys,
+    getCheckboxProps: record => ({
+      disabled: !canEditPerson(record),
+      title: canEditPerson(record) ? '选择' : '无编辑权限',
+    }),
+  };
+
   const currentRelTypes = parseRelationTypes(current?.relation_types);
   const currentIsExternal = current?.person_category === 'talent' && !currentRelTypes.includes('talent_internal');
   const currentIsInternal = current?.person_category === 'talent' && currentRelTypes.includes('talent_internal');
@@ -903,13 +1087,23 @@ export default function Persons() {
         >
           <Space direction="vertical" style={{ width: '100%' }} size={10}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6, overflowWrap: 'anywhere' }}>{record.name}</div>
-                <Space wrap size={[6, 6]}>
-                  <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>
-                  {record.weight && <Tag color={weightMap[record.weight]?.color}>{weightMap[record.weight]?.label}</Tag>}
-                  {isPrivatePerson(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
-                </Space>
+              <div style={{ display: 'flex', gap: 8, minWidth: 0, flex: 1, alignItems: 'flex-start' }}>
+                {canEditPerson(record) && (
+                  <Checkbox
+                    checked={selectedRowKeys.some(id => Number(id) === Number(record.id))}
+                    onClick={event => event.stopPropagation()}
+                    onChange={event => toggleMobileSelection(record, event.target.checked)}
+                    style={{ marginTop: 2 }}
+                  />
+                )}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6, overflowWrap: 'anywhere' }}>{record.name}</div>
+                  <Space wrap size={[6, 6]}>
+                    <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>
+                    {record.weight && <Tag color={weightMap[record.weight]?.color}>{weightMap[record.weight]?.label}</Tag>}
+                    {isPrivatePerson(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
+                  </Space>
+                </div>
               </div>
               <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
                 {record.updated_at?.slice(0, 10) || '-'}
@@ -1158,6 +1352,17 @@ export default function Persons() {
         <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
           <Button icon={<UploadOutlined />} onClick={() => { setImportRows([]); setImportOpen(true); }} style={{ width: isMobile ? '100%' : undefined }}>导入</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加人脉</Button>
+          <Button
+            icon={<EditOutlined />}
+            disabled={selectedRowKeys.length === 0}
+            onClick={openBatchEdit}
+            style={{ width: isMobile ? '100%' : undefined }}
+          >
+            批量编辑{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+          </Button>
+          {selectedRowKeys.length > 0 && (
+            <Button onClick={() => setSelectedRowKeys([])} style={{ width: isMobile ? '100%' : undefined }}>清空选择</Button>
+          )}
           {isMobile && (
             <Button icon={<FilterOutlined />} onClick={() => setFilterDrawerOpen(true)} style={{ width: '100%' }}>
               筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
@@ -1188,6 +1393,7 @@ export default function Persons() {
           columns={columns}
           dataSource={data}
           rowKey="id"
+          rowSelection={rowSelection}
           loading={loading}
           size="small"
           scroll={{ x: 1000 }}
@@ -1247,6 +1453,127 @@ export default function Persons() {
       >
         {filterControls}
       </Drawer>
+
+      <Modal
+        title="批量编辑人脉"
+        open={batchModalOpen}
+        onOk={handleBatchSave}
+        onCancel={() => setBatchModalOpen(false)}
+        confirmLoading={batchLoading}
+        okText="确认修改"
+        cancelText="取消"
+        width={isMobile ? '100%' : 620}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <Alert
+            type="info"
+            showIcon
+            message={`将修改 ${editableSelectedRecords.length} 条人脉`}
+            description={editableSelectedRecords.length > 0
+              ? `${editableSelectedRecords.slice(0, 5).map(record => record.name).join('、')}${editableSelectedRecords.length > 5 ? ` 等 ${editableSelectedRecords.length} 人` : ''}`
+              : '暂无可编辑的人脉'}
+          />
+          <Form form={batchForm} layout="vertical" size="small">
+            <Form.Item
+              label="修改内容"
+              name="fields"
+              rules={[{ required: true, message: '请选择要批量修改的内容' }]}
+            >
+              <Checkbox.Group style={{ width: '100%' }}>
+                <Row gutter={[8, 8]}>
+                  <Col span={isMobile ? 24 : 8}><Checkbox value="weight">权重</Checkbox></Col>
+                  <Col span={isMobile ? 24 : 8}><Checkbox value="tags">标签</Checkbox></Col>
+                  <Col span={isMobile ? 24 : 8}><Checkbox value="shared_to">共享人</Checkbox></Col>
+                  <Col span={isMobile ? 24 : 8}><Checkbox value="potential_level">潜力评级</Checkbox></Col>
+                  <Col span={isMobile ? 24 : 8}><Checkbox value="recruit_status">转化阶段</Checkbox></Col>
+                  <Col span={isMobile ? 24 : 8}><Checkbox value="intent_level">意向程度</Checkbox></Col>
+                </Row>
+              </Checkbox.Group>
+            </Form.Item>
+
+            {batchFields.includes('weight') && (
+              <Form.Item label="权重" name="weight" rules={[{ required: true, message: '请选择权重' }]}>
+                <Select>
+                  {Object.entries(weightMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                </Select>
+              </Form.Item>
+            )}
+
+            {batchFields.includes('tags') && (
+              <Row gutter={12}>
+                <Col span={isMobile ? 24 : 8}>
+                  <Form.Item label="标签操作" name="tags_mode" rules={[{ required: true, message: '请选择标签操作' }]}>
+                    <Select>
+                      <Option value="append">追加</Option>
+                      <Option value="remove">移除</Option>
+                      <Option value="replace">替换</Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={isMobile ? 24 : 16}>
+                  <Form.Item label="标签" name="tags">
+                    <Input placeholder="多个标签用逗号分隔" />
+                  </Form.Item>
+                </Col>
+              </Row>
+            )}
+
+            {batchFields.includes('shared_to') && (
+              <Row gutter={12}>
+                <Col span={isMobile ? 24 : 8}>
+                  <Form.Item label="共享人操作" name="shared_to_mode" rules={[{ required: true, message: '请选择共享人操作' }]}>
+                    <Select>
+                      <Option value="append">追加</Option>
+                      <Option value="remove">移除</Option>
+                      <Option value="replace">替换</Option>
+                    </Select>
+                  </Form.Item>
+                </Col>
+                <Col span={isMobile ? 24 : 16}>
+                  <Form.Item label="共享人" name="shared_to">
+                    <Select
+                      mode="multiple"
+                      allowClear
+                      placeholder="选择商务部门成员"
+                      optionFilterProp="label"
+                      options={commercialUsers.map(u => ({
+                        value: u.id,
+                        label: u.display_name || u.username,
+                      }))}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+            )}
+
+            {batchFields.includes('potential_level') && (
+              <Form.Item label="潜力评级" name="potential_level">
+                <Select allowClear placeholder="清空或选择潜力评级">
+                  {Object.entries(potentialLevelMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                </Select>
+              </Form.Item>
+            )}
+
+            {batchFields.includes('recruit_status') && (
+              <Form.Item label="转化阶段" name="recruit_status" rules={[{ required: true, message: '请选择转化阶段' }]}>
+                <Select>
+                  {Object.entries(recruitStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                </Select>
+              </Form.Item>
+            )}
+
+            {batchFields.includes('intent_level') && (
+              <Form.Item label="意向程度" name="intent_level" rules={[{ required: true, message: '请选择意向程度' }]}>
+                <Select>
+                  {Object.entries(intentMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                </Select>
+              </Form.Item>
+            )}
+          </Form>
+        </Space>
+      </Modal>
 
       {/* 新增/编辑弹窗 */}
       <Modal
@@ -1562,9 +1889,10 @@ export default function Persons() {
                 <li>请先下载模板，按格式填写后保存为 <b>CSV（UTF-8）</b> 格式</li>
                 <li>Excel 用户：填写完毕后 → 另存为 → CSV UTF-8（逗号分隔）</li>
                 <li><b>姓名</b>建议只填姓名，最长 {PERSON_NAME_MAX_LENGTH} 个字符</li>
-                <li><b>圈子分类</b>填英文值：business / talent / startup / social</li>
-                <li><b>关系类型</b>填英文值（多个用逗号分隔）：client_potential / client_active / talent_external / talent_internal / partner / investor / family / friend / other</li>
-                <li><b>权重</b>填英文值：high / medium / low，留空默认 medium</li>
+                <li><b>圈子分类</b>可填：{categoryImportOptionsText}</li>
+                <li><b>关系类型</b>可填：{relationTypeImportOptionsText}；多个用中文逗号隔开</li>
+                <li><b>权重</b>可填：{weightImportOptionsText}，留空默认中</li>
+                <li>模板表头已写明可填项，示例已覆盖上述圈子分类、关系类型和权重，可直接按中文填写</li>
               </ul>
             }
           />
@@ -1594,14 +1922,14 @@ export default function Persons() {
                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
                           <Text strong>{row.name || '未填写姓名'}</Text>
                           <Space wrap size={[6, 6]}>
-                            {row.person_category && <Tag>{row.person_category}</Tag>}
-                            {row.relation_types && <Tag color="blue">{row.relation_types}</Tag>}
+                            {row.person_category && <Tag>{displayImportCategory(row.person_category)}</Tag>}
+                            {row.relation_types && <Tag color="blue">{displayImportRelationTypes(row.relation_types)}</Tag>}
                           </Space>
                           <Typography.Text type="secondary">
                             {(row.company || '未填写公司')} · {(row.position || '未填写职位')}
                           </Typography.Text>
                           {row.phone && <Typography.Text type="secondary">手机：{row.phone}</Typography.Text>}
-                          {row.weight && <Typography.Text type="secondary">权重：{row.weight}</Typography.Text>}
+                          {row.weight && <Typography.Text type="secondary">权重：{displayImportWeight(row.weight)}</Typography.Text>}
                         </Space>
                       </div>
                     </List.Item>
@@ -1616,12 +1944,12 @@ export default function Persons() {
                   scroll={{ x: 600 }}
                   columns={[
                     { title: '姓名', dataIndex: 'name', width: 90 },
-                    { title: '圈子', dataIndex: 'person_category', width: 80 },
-                    { title: '关系类型', dataIndex: 'relation_types', ellipsis: true },
+                    { title: '圈子', dataIndex: 'person_category', width: 90, render: displayImportCategory },
+                    { title: '关系类型', dataIndex: 'relation_types', ellipsis: true, render: displayImportRelationTypes },
                     { title: '手机', dataIndex: 'phone', width: 120 },
                     { title: '公司', dataIndex: 'company', ellipsis: true },
                     { title: '职位', dataIndex: 'position', ellipsis: true },
-                    { title: '权重', dataIndex: 'weight', width: 80 },
+                    { title: '权重', dataIndex: 'weight', width: 70, render: displayImportWeight },
                   ]}
                 />
               )}
