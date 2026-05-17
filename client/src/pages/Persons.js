@@ -956,23 +956,31 @@ export default function Persons() {
           <Button
             type="link"
             onClick={() => openDetail(r)}
-            style={{ padding: 0, display: 'block', width: '100%', height: 'auto', textAlign: 'left' }}
+            style={{
+              padding: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              width: '100%',
+              height: 'auto',
+              textAlign: 'left',
+            }}
           >
             <strong
               style={{
-                display: '-webkit-box',
+                flex: 1,
+                minWidth: 0,
+                display: 'block',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
-                WebkitBoxOrient: 'vertical',
-                WebkitLineClamp: 2,
-                lineHeight: 1.4,
+                whiteSpace: 'nowrap',
                 wordBreak: 'break-all',
               }}
             >
               {v}
             </strong>
             {isPrivatePerson(r) && (
-              <Tag color="red" icon={<LockOutlined />} style={{ marginTop: 4, marginInlineEnd: 0 }}>
+              <Tag color="red" icon={<LockOutlined />} style={{ flex: 'none', marginInlineEnd: 0 }}>
                 私密
               </Tag>
             )}
@@ -1141,11 +1149,13 @@ export default function Persons() {
                   />
                 )}
                 <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 6, overflowWrap: 'anywhere' }}>{record.name}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 6, minWidth: 0 }}>
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 15, fontWeight: 600, color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{record.name}</div>
+                    {isPrivatePerson(record) && <Tag color="red" icon={<LockOutlined />} style={{ flex: 'none', marginInlineEnd: 0 }}>私密</Tag>}
+                  </div>
                   <Space wrap size={[6, 6]}>
                     <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>
                     {record.weight && <Tag color={weightMap[record.weight]?.color}>{weightMap[record.weight]?.label}</Tag>}
-                    {isPrivatePerson(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
                   </Space>
                 </div>
               </div>
