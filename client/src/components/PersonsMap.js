@@ -86,6 +86,15 @@ function buildGeocodeKey(city, address) {
   return normalizeGeoText(buildGeocodeQuery(city, address));
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 const BEIJING_DISTRICTS = [
   '东城区', '西城区', '朝阳区', '丰台区', '石景山区', '海淀区', '门头沟区', '房山区',
   '通州区', '顺义区', '昌平区', '大兴区', '怀柔区', '平谷区', '密云区', '延庆区',
@@ -121,6 +130,53 @@ function needsClientGeocode(person) {
   return lat === null || lng === null || person.geocode_address !== geocodeKey || isNearCityCenter(person);
 }
 
+function getLocationStatus(person, geocode) {
+  if (geocode?.source === 'poi') return { label: 'POI定位', color: '#1677ff' };
+  if (geocode?.source === 'geocoder') return { label: '地址定位', color: '#52c41a' };
+  if (geocode?.failed) return { label: '定位失败', color: '#fa8c16' };
+  if (person.location_status === 'locating') return { label: '定位中', color: '#1677ff' };
+  if (person.location_status === 'failed') return { label: '定位失败', color: '#fa8c16' };
+  if (person.approximate) return { label: '城市估算', color: '#fa8c16' };
+  if (person.location_status === 'saved') return { label: '已定位', color: '#52c41a' };
+  return { label: '已定位', color: '#52c41a' };
+}
+
+function buildPoiKeywords(city, address) {
+  const query = buildGeocodeQuery(city, address);
+  const cleanAddress = String(address || '').trim();
+  const withoutCityDistrict = cleanAddress
+    .replace(firstCityFromValue(city), '')
+    .replace(extractExpectedDistrict(city, address), '')
+    .trim();
+  const segments = withoutCityDistrict
+    .split(/[，,;；\s]+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+  const buildingLike = segments.find(v => /大厦|广场|中心|园区|写字楼|酒店|公寓|楼|座/.test(v));
+  return [...new Set([buildingLike, withoutCityDistrict, cleanAddress, query].filter(Boolean))];
+}
+
+function extractSuggestionLocation(item) {
+  const location = item?.location;
+  const lat = normalizeCoordinate(location?.lat);
+  const lng = normalizeCoordinate(location?.lng);
+  if (lat === null || lng === null) return null;
+  return {
+    lat,
+    lng,
+    title: item.title || item.name || '',
+    address: item.address || '',
+    district: item.ad_info?.district || item.address_components?.district || '',
+    city: item.ad_info?.city || item.address_components?.city || '',
+  };
+}
+
+function suggestionMatchesExpectedDistrict(item, expectedDistrict) {
+  if (!expectedDistrict) return true;
+  const text = normalizeGeoText(`${item.title || ''}${item.address || ''}${item.district || ''}`);
+  return text.includes(expectedDistrict);
+}
+
 function buildClientGeocodeCandidates(city, address) {
   const firstCity = firstCityFromValue(city);
   const cleanAddress = String(address || '').trim();
@@ -151,6 +207,27 @@ function extractGeocodeLocation(result) {
     result?.data?.[0]?.address_components?.district ||
     '';
   return { lat, lng, district };
+}
+
+function buildPersonInfoContent(p) {
+  const status = getLocationStatus(p, p.location_geocode);
+  const warn = p.hasWarning;
+  const daysText = p.days_since_contact !== null ? `${p.days_since_contact}天前` : '暂无互动';
+  const poiTitle = p.location_title || '';
+  const poiAddress = p.location_address || '';
+  const sourceAddress = [p.city, p.address].filter(Boolean).join(' ');
+  return `
+    <div style="background:#fff;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:14px 18px;min-width:240px;max-width:340px;">
+      <div style="font-weight:700;font-size:15px;color:#333;margin-bottom:6px;">${escapeHtml(p.name)}</div>
+      ${p.company ? `<div style="font-size:13px;color:#666;margin-bottom:4px;">${escapeHtml(p.company)}</div>` : ''}
+      <div style="font-size:12px;color:${status.color};margin-bottom:6px;">${escapeHtml(status.label)}${poiTitle ? `：${escapeHtml(poiTitle)}` : ''}</div>
+      ${poiAddress ? `<div style="font-size:12px;color:#333;margin-bottom:4px;">POI地址：${escapeHtml(poiAddress)}</div>` : ''}
+      ${sourceAddress ? `<div style="font-size:12px;color:#999;margin-bottom:4px;">人脉地址：${escapeHtml(sourceAddress)}</div>` : ''}
+      ${p.created_by_name ? `<div style="font-size:12px;color:#999;margin-bottom:4px;">创建人：${escapeHtml(p.created_by_name)}</div>` : ''}
+      <div style="font-size:12px;color:${warn ? '#ff4d4f' : '#999'};margin-bottom:2px;">上次联系：${escapeHtml(daysText)}</div>
+      ${p.phone ? `<div style="font-size:12px;color:#999;">电话：${escapeHtml(p.phone)}</div>` : ''}
+    </div>
+  `;
 }
 
 // 注入呼吸动画样式（仅一次）
@@ -212,6 +289,20 @@ if (typeof document !== 'undefined' && !document.getElementById('person-marker-s
       border-radius: 4px;
       line-height: 1.3;
     }
+    .person-marker-poi {
+      font-size: 11px;
+      color: #1677ff;
+      background: #fff;
+      border: 1px solid rgba(22,119,255,0.35);
+      padding: 1px 6px;
+      border-radius: 999px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      line-height: 1.3;
+    }
+    .person-marker--approx .person-marker-dot::before,
+    .person-marker--approx .person-marker-dot::after {
+      background: #fa8c16;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -270,6 +361,7 @@ export default function PersonsMap() {
   const destroyedRef = useRef(false);
   const initialFitDoneRef = useRef(false);
   const domLayerRef = useRef(null);
+  const lastFocusedPersonRef = useRef('');
 
   // 初始化腾讯地图
   useEffect(() => {
@@ -363,6 +455,9 @@ export default function PersonsMap() {
 
     let cancelled = false;
     const geocoder = new window.TMap.service.Geocoder();
+    const suggester = window.TMap.service.Suggestion
+      ? new window.TMap.service.Suggestion({ pageSize: 10 })
+      : null;
 
     const geocodePerson = async (person) => {
       const expectedDistrict = extractExpectedDistrict(person.city, person.address);
@@ -376,9 +471,42 @@ export default function PersonsMap() {
             lat: location.lat,
             lng: location.lng,
             geocode_address: buildGeocodeKey(person.city, person.address),
+            source: 'geocoder',
+            title: '',
+            address: buildGeocodeQuery(person.city, person.address),
           };
         } catch {
           // Try the next candidate; Tencent may reject one form but accept another.
+        }
+      }
+      if (suggester) {
+        const region = firstCityFromValue(person.city);
+        for (const keyword of buildPoiKeywords(person.city, person.address)) {
+          try {
+            const result = await suggester.getSuggestions({
+              keyword,
+              region,
+              region_fix: Boolean(region),
+            });
+            const items = (result?.data || [])
+              .map(extractSuggestionLocation)
+              .filter(Boolean)
+              .filter(item => suggestionMatchesExpectedDistrict(item, expectedDistrict));
+            if (items.length > 0) {
+              const best = items[0];
+              return {
+                lat: best.lat,
+                lng: best.lng,
+                geocode_address: buildGeocodeKey(person.city, person.address),
+                source: 'poi',
+                title: best.title,
+                address: best.address,
+                district: best.district,
+              };
+            }
+          } catch {
+            // Keep trying lower-specificity keywords.
+          }
         }
       }
       return { failed: true, geocode_address: buildGeocodeKey(person.city, person.address) };
@@ -402,12 +530,21 @@ export default function PersonsMap() {
 
   const resolvedData = useMemo(() => data.map(person => {
     const geocode = clientGeocodes[person.id];
-    if (!geocode || geocode.failed || geocode.geocode_address !== buildGeocodeKey(person.city, person.address)) return person;
+    const geocodeKey = buildGeocodeKey(person.city, person.address);
+    if (!geocode || geocode.geocode_address !== geocodeKey) {
+      if (needsClientGeocode(person)) return { ...person, lat: null, lng: null, location_status: 'locating' };
+      return { ...person, location_status: 'saved' };
+    }
+    if (geocode.failed) return { ...person, lat: null, lng: null, location_status: 'failed', location_geocode: geocode };
     return {
       ...person,
       lat: geocode.lat,
       lng: geocode.lng,
       geocode_address: geocode.geocode_address || person.geocode_address,
+      location_status: geocode.source || 'geocoder',
+      location_title: geocode.title || '',
+      location_address: geocode.address || '',
+      location_geocode: geocode,
     };
   }), [data, clientGeocodes]);
 
@@ -454,7 +591,6 @@ export default function PersonsMap() {
       let lng = normalizeCoordinate(p.lng);
       let approximate = false;
       if (lat === null || lng === null) {
-        if (normalizeGeoText(p.address)) return null;
         const fallback = jitteredCityCoord(p.id, p.city);
         if (!fallback) return null;
         lat = fallback.lat;
@@ -466,6 +602,10 @@ export default function PersonsMap() {
         address: p.address, city: p.city, phone: p.phone,
         created_by_name: p.created_by_name,
         lat, lng, approximate,
+        location_status: p.location_status || (approximate ? 'approximate' : 'saved'),
+        location_title: p.location_title,
+        location_address: p.location_address,
+        location_geocode: p.location_geocode,
         days_since_contact: p.days_since_contact,
         weight: p.weight,
         hasWarning: p.days_since_contact === null || p.days_since_contact >= WARN_DAYS,
@@ -601,31 +741,21 @@ export default function PersonsMap() {
         // 为每个人创建 DOM 标点
         const els = personPoints.map(p => {
           const el = document.createElement('div');
-          el.className = 'person-marker';
+          el.className = `person-marker${p.approximate ? ' person-marker--approx' : ''}`;
           const name = p.name.length > 6 ? p.name.slice(0, 6) + '..' : p.name;
           const delay = (p.id * 137 % 2000) + 'ms';
-          el.innerHTML = `<span class="person-marker-dot" style="--breathe-delay:${delay}"></span><span class="person-marker-name">${name}</span>`;
+          const status = getLocationStatus(p, p.location_geocode);
+          const poiText = p.location_title || status.label;
+          el.innerHTML = `<span class="person-marker-dot" style="--breathe-delay:${delay}"></span><span class="person-marker-name">${escapeHtml(name)}</span>${poiText ? `<span class="person-marker-poi">${escapeHtml(poiText)}</span>` : ''}`;
 
           el.addEventListener('click', () => {
             if (!infoWindowRef.current) return;
-            const warn = p.hasWarning;
-            const daysText = p.days_since_contact !== null ? `${p.days_since_contact}天前` : '暂无互动';
-            const content = `
-              <div style="background:#fff;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);padding:14px 18px;min-width:220px;max-width:300px;">
-                <div style="font-weight:700;font-size:15px;color:#333;margin-bottom:6px;">${p.name}</div>
-                ${p.company ? `<div style="font-size:13px;color:#666;margin-bottom:4px;">${p.company}</div>` : ''}
-                ${p.address || p.city ? `<div style="font-size:12px;color:#999;margin-bottom:4px;">${p.city || ''}${p.address ? ' ' + p.address : ''}</div>` : ''}
-                ${p.created_by_name ? `<div style="font-size:12px;color:#999;margin-bottom:4px;">创建人：${p.created_by_name}</div>` : ''}
-                <div style="font-size:12px;color:${warn ? '#ff4d4f' : '#999'};margin-bottom:2px;">上次联系：${daysText}</div>
-                ${p.phone ? `<div style="font-size:12px;color:#999;">电话：${p.phone}</div>` : ''}
-              </div>
-            `;
             try {
               const position = toLatLng(p.lat, p.lng);
               if (!position) return;
               infoWindowRef.current.open();
               infoWindowRef.current.setPosition(position);
-              infoWindowRef.current.setContent(content);
+              infoWindowRef.current.setContent(buildPersonInfoContent(p));
             } catch {}
           });
 
@@ -668,6 +798,31 @@ export default function PersonsMap() {
       console.warn('TMap markers update failed:', err);
     }
   }, [cityPoints, personPoints, mapReady, isDetailMode]);
+
+  useEffect(() => {
+    if (!mapReady || !mapInstanceRef.current || !window.TMap || personPoints.length !== 1 || !filterName.trim()) return;
+    const person = personPoints[0];
+    const focusKey = `${filterName.trim()}:${person.id}:${person.lat}:${person.lng}:${person.location_status}`;
+    if (lastFocusedPersonRef.current === focusKey) return;
+    lastFocusedPersonRef.current = focusKey;
+
+    const lat = normalizeCoordinate(person.lat);
+    const lng = normalizeCoordinate(person.lng);
+    if (lat === null || lng === null) return;
+
+    try {
+      const TMap = window.TMap;
+      const position = new TMap.LatLng(lat, lng);
+      const map = mapInstanceRef.current;
+      map.setCenter(position);
+      if (map.getZoom() < 15) map.setZoom(15);
+      if (infoWindowRef.current) {
+        infoWindowRef.current.open();
+        infoWindowRef.current.setPosition(position);
+        infoWindowRef.current.setContent(buildPersonInfoContent(person));
+      }
+    } catch {}
+  }, [filterName, mapReady, personPoints]);
 
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 260px)', minHeight: 500 }}>
@@ -754,6 +909,7 @@ export default function PersonsMap() {
                     dataSource={persons}
                     renderItem={p => {
                       const warn = p.days_since_contact === null || p.days_since_contact >= WARN_DAYS;
+                      const locationStatus = getLocationStatus(p, p.location_geocode);
                       return (
                         <List.Item style={{ padding: '4px 8px', borderBottom: '1px solid #fafafa' }}>
                           <div style={{ flex: 1 }}>
@@ -773,6 +929,11 @@ export default function PersonsMap() {
                               {p.weight && weightMap[p.weight] && (
                                 <Tag color={weightMap[p.weight].color} style={{ fontSize: 10, lineHeight: '16px', marginLeft: 4 }}>
                                   {weightMap[p.weight].label}
+                                </Tag>
+                              )}
+                              {normalizeGeoText(p.address) && (
+                                <Tag color={locationStatus.color} style={{ fontSize: 10, lineHeight: '16px', marginLeft: 4 }}>
+                                  {locationStatus.label}{p.location_title ? ` · ${p.location_title}` : ''}
                                 </Tag>
                               )}
                             </div>
