@@ -1251,6 +1251,487 @@ db.exec(`
   );
 `);
 
+// =========== 操作日志表与自动留痕 ===========
+const OPERATION_LOG_RETENTION_MONTHS = 3;
+let lastOperationLogCleanupAt = 0;
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS operation_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    operator_id INTEGER,
+    operator_name TEXT,
+    operator_role TEXT,
+    business_type TEXT NOT NULL,
+    business_id TEXT,
+    business_name TEXT,
+    action TEXT NOT NULL,
+    method TEXT,
+    path TEXT,
+    target_table TEXT,
+    status_before TEXT,
+    status_after TEXT,
+    remark TEXT,
+    request_ip TEXT,
+    user_agent TEXT,
+    success INTEGER DEFAULT 1,
+    error_message TEXT,
+    details_json TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_operation_logs_created_at ON operation_logs(created_at);
+  CREATE INDEX IF NOT EXISTS idx_operation_logs_operator_id ON operation_logs(operator_id);
+  CREATE INDEX IF NOT EXISTS idx_operation_logs_business_type ON operation_logs(business_type);
+  CREATE INDEX IF NOT EXISTS idx_operation_logs_success ON operation_logs(success);
+`);
+
+function purgeExpiredOperationLogs(force = false) {
+  const now = Date.now();
+  if (!force && now - lastOperationLogCleanupAt < 24 * 60 * 60 * 1000) return;
+  lastOperationLogCleanupAt = now;
+  try {
+    db.prepare("DELETE FROM operation_logs WHERE created_at < datetime('now', ?)").run(`-${OPERATION_LOG_RETENTION_MONTHS} months`);
+  } catch (e) {
+    console.warn('[operation-log] cleanup failed:', e.message);
+  }
+}
+
+purgeExpiredOperationLogs(true);
+const operationLogCleanupTimer = setInterval(() => purgeExpiredOperationLogs(true), 24 * 60 * 60 * 1000);
+if (typeof operationLogCleanupTimer.unref === 'function') operationLogCleanupTimer.unref();
+
+const OPERATION_LOG_STATUS_FIELDS = [
+  'status',
+  'client_status',
+  'recruit_status',
+  'launch_status',
+  'opportunity_status',
+  'done',
+  'is_read',
+  'need_weekly_report',
+  'role',
+];
+
+const OPERATION_LOG_NAME_FIELDS = [
+  'name',
+  'title',
+  'display_name',
+  'username',
+  'app_name',
+  'company_entity',
+  'destinations',
+];
+
+const OPERATION_LOG_BUSINESS_MAP = {
+  gifts: '礼品库',
+  gift_plans: '送礼计划',
+  gift_requests: '送礼申请',
+  gift_records: '送礼记录',
+  auth: '账号安全',
+  users: '用户管理',
+  teams: '小组管理',
+  'project-groups': '项目组管理',
+  admin: '系统权限',
+  persons: '人脉管理',
+  interactions: '互动记录',
+  opportunities: '商机管理',
+  'follow-up-tasks': '待跟进任务',
+  tasks: '商务任务',
+  budgets: '预算管理',
+  reminders: '提醒事项',
+  companies: '公司研究',
+  company_entities: '公司主体',
+  company_personnel: '公司人员',
+  company_products: '公司产品',
+  company_dynamics: '公司动态',
+  competitor_research: '竞品研究',
+  groups: '出差小组',
+  trips: '出差申请',
+  trip_expenses: '费用明细',
+  reports: '报销单',
+  goals: '目标管理',
+  'weekly-reports': '周报管理',
+  leads: '线索池',
+  'company-subjects': '主体管理',
+  'company-subject-attachments': '主体附件',
+  'product-assets': '产品资产',
+  'product-asset-reductions': '产品核减',
+  strategies: '策略',
+  'strategy-execution-logs': '策略执行',
+  'dev-tasks': '需求',
+  notifications: '通知',
+  executive: '公司经营',
+  attachments: '附件',
+  'cross-team-access': '跨团队权限',
+  'boss-watcher': '招聘雷达',
+};
+
+const OPERATION_LOG_TABLE_MAP = {
+  gifts: 'gifts',
+  gift_plans: 'gift_plans',
+  gift_requests: 'gift_requests',
+  gift_records: 'gift_records',
+  users: 'users',
+  teams: 'teams',
+  'project-groups': 'project_groups',
+  persons: 'persons',
+  interactions: 'interactions',
+  opportunities: 'interactions',
+  'follow-up-tasks': 'follow_up_tasks',
+  tasks: 'tasks',
+  budgets: 'budgets',
+  reminders: 'reminders',
+  companies: 'companies',
+  company_entities: 'company_entities',
+  company_personnel: 'company_personnel',
+  company_products: 'company_products',
+  company_dynamics: 'company_dynamics',
+  competitor_research: 'competitor_research',
+  groups: 'groups',
+  trips: 'business_trips',
+  trip_expenses: 'trip_expenses',
+  reports: 'expense_reports',
+  goals: 'goals',
+  'weekly-reports': 'weekly_reports',
+  leads: 'leads',
+  'company-subjects': 'company_subjects',
+  'company-subject-attachments': 'company_subject_attachments',
+  'product-assets': 'product_assets',
+  'product-asset-reductions': 'product_asset_reductions',
+  strategies: 'strategies',
+  'strategy-execution-logs': 'strategy_execution_logs',
+  'dev-tasks': 'dev_tasks',
+  notifications: 'notifications',
+  attachments: 'attachments',
+  'cross-team-access': 'cross_team_access',
+};
+
+const OPERATION_LOG_ROUTE_CONFIGS = [
+  { pattern: /^\/auth\/password$/, businessType: '账号安全', table: 'users', action: '修改密码', userTarget: true },
+  { pattern: /^\/auth\/logout$/, businessType: '账号安全', action: '退出登录' },
+  { pattern: /^\/users\/(\d+)\/reset-password$/, businessType: '用户管理', table: 'users', idGroup: 1, action: '重置密码' },
+  { pattern: /^\/users\/(\d+)\/weekly-report$/, businessType: '周报管理', table: 'users', idGroup: 1, action: '配置周报权限' },
+  { pattern: /^\/admin\/menu-perms\/(\d+)$/, businessType: '菜单权限管理', table: 'users', idGroup: 1, action: '保存菜单权限' },
+  { pattern: /^\/persons\/(\d+)\/assign$/, businessType: '人脉管理', table: 'persons', idGroup: 1, action: '分配人脉' },
+  { pattern: /^\/persons\/batch$/, businessType: '人脉管理', table: 'persons', action: '批量更新' },
+  { pattern: /^\/persons\/import$/, businessType: '人脉管理', table: 'persons', action: '导入' },
+  { pattern: /^\/persons\/import\/preview$/, businessType: '人脉管理', table: 'persons', action: '导入预览', skipSuccessLog: true },
+  { pattern: /^\/gift_requests\/(\d+)\/review$/, businessType: '送礼申请', table: 'gift_requests', idGroup: 1 },
+  { pattern: /^\/reminders\/(\d+)\/done$/, businessType: '提醒事项', table: 'reminders', idGroup: 1, action: '标记完成' },
+  { pattern: /^\/trips\/(\d+)\/submit$/, businessType: '出差申请', table: 'business_trips', idGroup: 1, action: '提交审批' },
+  { pattern: /^\/trips\/(\d+)\/approve$/, businessType: '出差申请', table: 'business_trips', idGroup: 1 },
+  { pattern: /^\/trips\/(\d+)\/complete$/, businessType: '出差申请', table: 'business_trips', idGroup: 1, action: '标记完成' },
+  { pattern: /^\/trips\/(\d+)\/expenses$/, businessType: '费用明细', table: 'trip_expenses', responseId: true },
+  { pattern: /^\/trips\/(\d+)\/report$/, businessType: '报销单', table: 'expense_reports', responseId: true, action: '创建报销单' },
+  { pattern: /^\/reports\/(\d+)\/submit$/, businessType: '报销单', table: 'expense_reports', idGroup: 1, action: '提交报销' },
+  { pattern: /^\/reports\/(\d+)\/approve$/, businessType: '报销单', table: 'expense_reports', idGroup: 1 },
+  { pattern: /^\/product-assets\/import$/, businessType: '产品资产', table: 'product_assets', action: '导入' },
+  { pattern: /^\/product-assets\/import\/preview$/, businessType: '产品资产', table: 'product_assets', action: '导入预览', skipSuccessLog: true },
+  { pattern: /^\/product-assets\/(\d+)\/reductions$/, businessType: '产品核减', table: 'product_asset_reductions', responseId: true },
+  { pattern: /^\/strategies\/(\d+)\/execution-logs$/, businessType: '策略执行', table: 'strategy_execution_logs', responseId: true },
+  { pattern: /^\/strategies\/(\d+)\/review$/, businessType: '策略复盘', table: 'strategy_reviews', idGroup: 1, action: '保存复盘' },
+  { pattern: /^\/company-subjects\/(\d+)\/attachments$/, businessType: '主体附件', table: 'company_subject_attachments', responseId: true, action: '上传附件' },
+  { pattern: /^\/attachments\/upload$/, businessType: '附件', table: 'attachments', action: '上传附件' },
+  { pattern: /^\/company_personnel\/(\d+)\/to_person$/, businessType: '公司人员', table: 'company_personnel', idGroup: 1, action: '转为人脉' },
+  { pattern: /^\/notifications\/(\d+)\/read$/, businessType: '通知', table: 'notifications', idGroup: 1, action: '标记已读' },
+  { pattern: /^\/notifications\/read-all$/, businessType: '通知', table: 'notifications', action: '全部已读' },
+];
+
+function isSafeIdentifier(value) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(value || ''));
+}
+
+function tableExists(table) {
+  if (!isSafeIdentifier(table)) return false;
+  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+}
+
+function getTableColumns(table) {
+  if (!tableExists(table)) return [];
+  return db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+}
+
+function stringifyForLog(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  try {
+    return decrypt(String(value));
+  } catch {
+    return String(value);
+  }
+}
+
+function truncateLogText(value, max = 500) {
+  if (value === null || value === undefined) return null;
+  const text = String(value);
+  return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+function sanitizeLogPayload(value, depth = 0) {
+  if (value === null || value === undefined) return value;
+  if (depth > 4) return '[Object]';
+  if (typeof value === 'string') return truncateLogText(value, 300);
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    return value.slice(0, 50).map(item => sanitizeLogPayload(item, depth + 1));
+  }
+  const out = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (/(password|passwd|pwd|token|secret|authorization|jwt|hash|master_key|hmac_key)/i.test(key)) {
+      out[key] = '[已脱敏]';
+    } else {
+      out[key] = sanitizeLogPayload(raw, depth + 1);
+    }
+  }
+  return out;
+}
+
+function safeJsonStringifyForLog(value) {
+  try {
+    return truncateLogText(JSON.stringify(value), 4000);
+  } catch {
+    return null;
+  }
+}
+
+function getOperationRouteConfig(reqPath) {
+  for (const config of OPERATION_LOG_ROUTE_CONFIGS) {
+    const match = reqPath.match(config.pattern);
+    if (match) {
+      return { ...config, match };
+    }
+  }
+
+  const segment = reqPath.split('/').filter(Boolean)[0] || 'unknown';
+  const idMatch = reqPath.match(/\/(\d+)(?:\/|$)/);
+  return {
+    businessType: OPERATION_LOG_BUSINESS_MAP[segment] || segment,
+    table: OPERATION_LOG_TABLE_MAP[segment] || null,
+    targetId: idMatch ? idMatch[1] : null,
+  };
+}
+
+function getOperationTargetId(config, req, responseBody) {
+  if (config.userTarget) return req.user?.id ? String(req.user.id) : null;
+  if (config.idGroup && config.match?.[config.idGroup]) return String(config.match[config.idGroup]);
+  if (config.targetId) return String(config.targetId);
+  if (config.responseId && responseBody?.id) return String(responseBody.id);
+  if (req.method === 'POST' && responseBody?.id) return String(responseBody.id);
+  return null;
+}
+
+function getOperationSnapshot(table, id) {
+  if (!table || !id || !tableExists(table)) return null;
+  const columns = getTableColumns(table);
+  if (!columns.includes('id')) return null;
+
+  const selectedFields = [
+    'id',
+    ...OPERATION_LOG_STATUS_FIELDS.filter(field => columns.includes(field)),
+    ...OPERATION_LOG_NAME_FIELDS.filter(field => columns.includes(field)),
+  ];
+  const uniqueFields = [...new Set(selectedFields)];
+  const row = db.prepare(`SELECT ${uniqueFields.join(', ')} FROM ${table} WHERE id = ?`).get(id);
+  if (!row) return null;
+
+  const status = {};
+  OPERATION_LOG_STATUS_FIELDS.forEach(field => {
+    if (Object.prototype.hasOwnProperty.call(row, field)) {
+      status[field] = stringifyForLog(row[field]);
+    }
+  });
+
+  let name = null;
+  for (const field of OPERATION_LOG_NAME_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(row, field) && row[field] !== null && row[field] !== undefined && row[field] !== '') {
+      name = stringifyForLog(row[field]);
+      break;
+    }
+  }
+
+  return { id: String(row.id), name: truncateLogText(name, 200), status };
+}
+
+function buildStatusChange(beforeSnapshot, afterSnapshot, method) {
+  if (method === 'DELETE') {
+    const before = beforeSnapshot?.status || {};
+    const beforeText = Object.keys(before).length
+      ? Object.entries(before).map(([key, value]) => `${key}: ${value ?? '-'}`).join('；')
+      : null;
+    return { before: beforeText, after: '已删除' };
+  }
+  if (!beforeSnapshot && afterSnapshot) {
+    const after = afterSnapshot.status || {};
+    const afterText = Object.keys(after).length
+      ? Object.entries(after).map(([key, value]) => `${key}: ${value ?? '-'}`).join('；')
+      : null;
+    return { before: null, after: afterText };
+  }
+  if (!beforeSnapshot || !afterSnapshot) return { before: null, after: null };
+
+  const fields = [...new Set([
+    ...Object.keys(beforeSnapshot.status || {}),
+    ...Object.keys(afterSnapshot.status || {}),
+  ])];
+  const beforeParts = [];
+  const afterParts = [];
+  fields.forEach(field => {
+    const beforeValue = beforeSnapshot.status?.[field] ?? null;
+    const afterValue = afterSnapshot.status?.[field] ?? null;
+    if (beforeValue !== afterValue) {
+      beforeParts.push(`${field}: ${beforeValue ?? '-'}`);
+      afterParts.push(`${field}: ${afterValue ?? '-'}`);
+    }
+  });
+  return {
+    before: beforeParts.length ? beforeParts.join('；') : null,
+    after: afterParts.length ? afterParts.join('；') : null,
+  };
+}
+
+function inferOperationAction(req, responseBody, config) {
+  if (config?.action) return config.action;
+  const pathName = req.path;
+  const bodyAction = req.body?.action;
+  if (/\/review$/.test(pathName)) {
+    if (bodyAction === 'approve') return '审核通过';
+    if (bodyAction === 'reject') return '审核驳回';
+    return '审核';
+  }
+  if (/\/approve$/.test(pathName)) {
+    if (bodyAction === 'approved') return '审批通过';
+    if (bodyAction === 'rejected') return '审批驳回';
+    return '审批';
+  }
+  if (/\/submit$/.test(pathName)) return '提交';
+  if (/\/complete$/.test(pathName)) return '完成';
+  if (/\/done$/.test(pathName)) return '标记完成';
+  if (/\/assign$/.test(pathName)) return '分配';
+  if (/\/import$/.test(pathName)) return '导入';
+  if (/\/upload$/.test(pathName)) return '上传';
+  if (pathName === '/weekly-reports' && req.method === 'POST') {
+    if (responseBody?.updated) return '更新';
+    if (responseBody?.created) return '创建';
+    return '创建或更新';
+  }
+  if (req.method === 'POST') return '创建';
+  if (req.method === 'PUT' || req.method === 'PATCH') return '更新';
+  if (req.method === 'DELETE') return '删除';
+  return req.method;
+}
+
+function extractOperationRemark(req) {
+  const body = req.body || {};
+  const fields = [
+    'remark',
+    'remarks',
+    'note',
+    'notes',
+    'review_note',
+    'approve_note',
+    'feedback',
+    'completion_note',
+    'done_note',
+    'update_notes',
+    'reason_analysis',
+  ];
+  const parts = [];
+  fields.forEach(field => {
+    if (body[field] !== undefined && body[field] !== null && body[field] !== '') {
+      parts.push(`${field}: ${truncateLogText(body[field], 160)}`);
+    }
+  });
+  return parts.length ? parts.join('；') : null;
+}
+
+function writeOperationLog(entry) {
+  try {
+    purgeExpiredOperationLogs();
+    const operator = entry.operator || entry.req?.user || {};
+    db.prepare(`
+      INSERT INTO operation_logs (
+        operator_id, operator_name, operator_role, business_type, business_id, business_name,
+        action, method, path, target_table, status_before, status_after, remark, request_ip,
+        user_agent, success, error_message, details_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      operator.id || entry.operator_id || null,
+      entry.operator_name || operator.display_name || operator.username || null,
+      entry.operator_role || operator.role || null,
+      entry.business_type || '系统',
+      entry.business_id || null,
+      truncateLogText(entry.business_name, 200),
+      entry.action || '操作',
+      entry.method || entry.req?.method || null,
+      entry.path || entry.req?.originalUrl || entry.req?.path || null,
+      entry.target_table || null,
+      truncateLogText(entry.status_before, 500),
+      truncateLogText(entry.status_after, 500),
+      truncateLogText(entry.remark, 500),
+      entry.request_ip || entry.req?.ip || null,
+      entry.user_agent || entry.req?.headers?.['user-agent'] || null,
+      entry.success ? 1 : 0,
+      truncateLogText(entry.error_message, 500),
+      entry.details_json || null
+    );
+  } catch (e) {
+    console.warn('[operation-log] write failed:', e.message);
+  }
+}
+
+function operationLogMiddleware(req, res, next) {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  if (req.path === '/auth/login' || req.path.startsWith('/operation-logs')) return next();
+
+  const config = getOperationRouteConfig(req.path);
+  const initialTargetId = getOperationTargetId(config, req, null);
+  const beforeSnapshot = getOperationSnapshot(config.table, initialTargetId);
+  const originalJson = res.json.bind(res);
+
+  res.json = (body) => {
+    res.locals.operationLogResponseBody = body;
+    return originalJson(body);
+  };
+
+  res.on('finish', () => {
+    const responseBody = res.locals.operationLogResponseBody;
+    const success = res.statusCode < 400;
+    if (success && config.skipSuccessLog) return;
+
+    const targetId = initialTargetId || getOperationTargetId(config, req, responseBody);
+    const afterSnapshot = success && req.method !== 'DELETE'
+      ? getOperationSnapshot(config.table, targetId)
+      : null;
+    const statusChange = buildStatusChange(beforeSnapshot, afterSnapshot, req.method);
+    const targetSnapshot = afterSnapshot || beforeSnapshot;
+    const details = {
+      query: sanitizeLogPayload(req.query || {}),
+      body: sanitizeLogPayload(req.body || {}),
+      statusCode: res.statusCode,
+    };
+    const errorMessage = success ? null : (responseBody?.error || responseBody?.message || `HTTP ${res.statusCode}`);
+
+    writeOperationLog({
+      req,
+      business_type: config.businessType || '系统',
+      business_id: targetId,
+      business_name: targetSnapshot?.name || null,
+      action: inferOperationAction(req, responseBody, config),
+      target_table: config.table || null,
+      status_before: statusChange.before,
+      status_after: statusChange.after,
+      remark: extractOperationRemark(req),
+      success,
+      error_message: errorMessage,
+      details_json: safeJsonStringifyForLog(details),
+    });
+  });
+
+  next();
+}
+
+app.use('/api', operationLogMiddleware);
+
 // =========== 送礼模块 API ===========
 
 // 礼品库
@@ -1463,12 +1944,123 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// 仅系统管理员可访问；不包含 CEO/COO/CTO/CMO 等高管角色
+function systemAdminOnly(req, res, next) {
+  if (req.user.role !== 'admin') return res.status(403).json({ error: '仅管理员可访问' });
+  next();
+}
+
 // 只读校验（readonly/guest 不能写）
 function canWrite(req, res, next) {
   if (req.user.role === 'readonly') return res.status(403).json({ error: '只读账号无法操作' });
   if (req.user.role === 'guest') return res.status(403).json({ error: '访客无法操作' });
   next();
 }
+
+// =========== 操作日志 API（admin only）===========
+app.get('/api/operation-logs/meta', auth, systemAdminOnly, (req, res) => {
+  const businessTypes = db.prepare(`
+    SELECT DISTINCT business_type
+    FROM operation_logs
+    WHERE business_type IS NOT NULL AND business_type != ''
+    ORDER BY business_type ASC
+  `).all().map(r => r.business_type);
+  const actions = db.prepare(`
+    SELECT DISTINCT action
+    FROM operation_logs
+    WHERE action IS NOT NULL AND action != ''
+    ORDER BY action ASC
+  `).all().map(r => r.action);
+  const operators = db.prepare(`
+    SELECT id, username, display_name, role
+    FROM users
+    ORDER BY display_name ASC, username ASC
+  `).all();
+  res.json({ businessTypes, actions, operators });
+});
+
+app.get('/api/operation-logs', auth, systemAdminOnly, (req, res) => {
+  const {
+    page = 1,
+    page_size = 20,
+    operator_id,
+    business_type,
+    action,
+    success,
+    keyword,
+    start_date,
+    end_date,
+  } = req.query;
+
+  const where = ['1=1'];
+  const params = [];
+
+  if (operator_id) {
+    where.push('operator_id = ?');
+    params.push(operator_id);
+  }
+  if (business_type) {
+    where.push('business_type = ?');
+    params.push(business_type);
+  }
+  if (action) {
+    where.push('action = ?');
+    params.push(action);
+  }
+  if (success === '0' || success === '1') {
+    where.push('success = ?');
+    params.push(Number(success));
+  }
+  if (start_date) {
+    where.push('created_at >= ?');
+    params.push(`${start_date} 00:00:00`);
+  }
+  if (end_date) {
+    where.push('created_at <= ?');
+    params.push(`${end_date} 23:59:59`);
+  }
+  if (keyword) {
+    where.push(`(
+      operator_name LIKE ?
+      OR business_type LIKE ?
+      OR business_id LIKE ?
+      OR business_name LIKE ?
+      OR action LIKE ?
+      OR remark LIKE ?
+      OR path LIKE ?
+      OR error_message LIKE ?
+    )`);
+    const like = `%${keyword}%`;
+    params.push(like, like, like, like, like, like, like, like);
+  }
+
+  const whereSql = where.join(' AND ');
+  const pageNumber = Math.max(1, Number(page) || 1);
+  const pageSize = Math.min(100, Math.max(10, Number(page_size) || 20));
+  const offset = (pageNumber - 1) * pageSize;
+  const total = db.prepare(`SELECT COUNT(*) as count FROM operation_logs WHERE ${whereSql}`).get(...params).count;
+  const items = db.prepare(`
+    SELECT *
+    FROM operation_logs
+    WHERE ${whereSql}
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset);
+
+  res.json({ items, total, page: pageNumber, page_size: pageSize });
+});
+
+app.get('/api/operation-logs/:id', auth, systemAdminOnly, (req, res) => {
+  const row = db.prepare('SELECT * FROM operation_logs WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: '日志不存在' });
+  let details = null;
+  try {
+    details = row.details_json ? JSON.parse(row.details_json) : null;
+  } catch {
+    details = row.details_json;
+  }
+  res.json({ ...row, details });
+});
 
 function getUserTeamIds(userId) {
   const primaryRows = db.prepare('SELECT team_id FROM users WHERE id = ? AND team_id IS NOT NULL').all(userId).map(r => r.team_id);
@@ -1824,6 +2416,17 @@ app.post('/api/auth/login', (req, res) => {
   if (!username || !password) return res.status(400).json({ error: '请输入用户名和密码' });
   const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+    writeOperationLog({
+      req,
+      operator_name: username || null,
+      business_type: '账号安全',
+      action: '登录失败',
+      method: 'POST',
+      path: req.originalUrl,
+      success: false,
+      error_message: '用户名或密码错误',
+      details_json: safeJsonStringifyForLog({ body: sanitizeLogPayload({ username }) }),
+    });
     return res.status(401).json({ error: '用户名或密码错误' });
   }
   db.prepare("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
@@ -1837,6 +2440,20 @@ app.post('/api/auth/login', (req, res) => {
   const teamIds = getUserTeamIds(user.id);
   const managedTeamIds = getManagedTeamIds(user.id, user.role) || [];
   const projectGroupIds = getUserProjectGroupIds(user.id);
+  writeOperationLog({
+    req,
+    operator: user,
+    business_type: '账号安全',
+    business_id: String(user.id),
+    business_name: user.display_name || user.username,
+    action: '登录',
+    method: 'POST',
+    path: req.originalUrl,
+    target_table: 'users',
+    success: true,
+    remark: '登录成功',
+    details_json: safeJsonStringifyForLog({ body: sanitizeLogPayload({ username }) }),
+  });
   res.json({
     token,
     user: {

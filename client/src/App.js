@@ -9,7 +9,7 @@ import {
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined, RadarChartOutlined,
-  AppstoreOutlined
+  AppstoreOutlined, HistoryOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -87,6 +87,7 @@ import TripStats from './pages/TripStats';
 import Budgets from './pages/Budgets';
 import MenuPerms from './pages/MenuPerms';
 import CrossTeamAccess from './pages/CrossTeamAccess';
+import OperationLogs from './pages/OperationLogs';
 import FollowUpTasks from './pages/FollowUpTasks';
 import MyTasks from './pages/MyTasks';
 import TaskBoard from './pages/TaskBoard';
@@ -123,10 +124,18 @@ const roleLabel = { admin: '管理员', leader: '组长', member: '成员', read
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
 
 // 路由守卫
-function PrivateRoute({ children, module, executiveOnly }) {
+function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
   const { user, loading, canAccessModule, isExecutive } = useAuth();
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
+  if (adminOnly && user.role !== 'admin') {
+    return (
+      <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🚫</div>
+        <div>该页面仅限管理员访问</div>
+      </div>
+    );
+  }
   if (executiveOnly && !isExecutive()) {
     return (
       <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
@@ -348,6 +357,7 @@ function AppLayout() {
     '/project-groups': '项目组管理',
     '/menu-perms': '菜单权限管理',
     '/cross-team-access': '跨团队权限',
+    '/operation-logs': '操作日志',
   };
   const currentPageTitle = pageTitleMap[location.pathname] || '';
 
@@ -500,7 +510,8 @@ function AppLayout() {
         { key: '/project-groups', icon: <ApartmentOutlined />, label: <Link to="/project-groups">项目组管理</Link> },
         { key: '/menu-perms', icon: <MenuOutlined />, label: <Link to="/menu-perms">菜单权限管理</Link> },
         { key: '/cross-team-access', icon: <TeamOutlined />, label: <Link to="/cross-team-access">跨团队权限</Link> },
-      ],
+        user?.role === 'admin' && { key: '/operation-logs', icon: <HistoryOutlined />, label: <Link to="/operation-logs">操作日志</Link> },
+      ].filter(Boolean),
     },
   ].filter(Boolean);
 
@@ -793,6 +804,7 @@ function AppLayout() {
             <Route path="/budgets" element={<PrivateRoute><Budgets /></PrivateRoute>} />
             <Route path="/menu-perms" element={<PrivateRoute><MenuPerms /></PrivateRoute>} />
             <Route path="/cross-team-access" element={<PrivateRoute><CrossTeamAccess /></PrivateRoute>} />
+            <Route path="/operation-logs" element={<PrivateRoute adminOnly><OperationLogs /></PrivateRoute>} />
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
             <Route path="/my-tasks" element={<PrivateRoute><MyTasks /></PrivateRoute>} />
             <Route path="/task-board" element={<PrivateRoute><TaskBoard /></PrivateRoute>} />

@@ -206,6 +206,12 @@ export const menuPermsApi = {
   save: (userId, menuKeys) => api.put(`/admin/menu-perms/${userId}`, { menuKeys }).then(r => r.data),
 };
 
+export const operationLogsApi = {
+  list: (params) => api.get('/operation-logs', { params }).then(r => r.data),
+  meta: () => api.get('/operation-logs/meta').then(r => r.data),
+  get: (id) => api.get(`/operation-logs/${id}`).then(r => r.data),
+};
+
 export const tasksApi = {
   list: (params) => api.get('/tasks', { params }).then(r => r.data),
   count: () => api.get('/tasks/count').then(r => r.data),
