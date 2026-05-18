@@ -132,7 +132,11 @@ function needsClientGeocode(person) {
   const lng = normalizeCoordinate(person.lng);
   const geocodeKey = buildGeocodeKey(person.city, person.address);
   if (!geocodeKey) return false;
-  return lat === null || lng === null || person.geocode_address !== geocodeKey || isNearCityCenter(person);
+  return lat === null ||
+    lng === null ||
+    person.geocode_address !== geocodeKey ||
+    isNearCityCenter(person) ||
+    addressLooksLikePoi(person.city, person.address);
 }
 
 function getLocationStatus(person, geocode) {
@@ -177,7 +181,15 @@ function stripStreetPrefixBeforePoi(value) {
   if (poiIndex < 0) return text;
   const prefix = text.slice(0, poiIndex);
   const cutIndex = Math.max(prefix.lastIndexOf('号'), prefix.lastIndexOf('弄'), prefix.lastIndexOf('巷'));
-  return cutIndex >= 0 ? text.slice(cutIndex + 1) : text;
+  if (cutIndex >= 0) return text.slice(cutIndex + 1);
+
+  const roadMatches = [...prefix.matchAll(/[\u4e00-\u9fa5A-Za-z0-9]+(?:大道|大街|路|街|道|巷|弄)/g)];
+  const lastRoad = roadMatches[roadMatches.length - 1];
+  if (lastRoad) {
+    const roadEnd = lastRoad.index + lastRoad[0].length;
+    if (roadEnd < prefix.length) return text.slice(roadEnd);
+  }
+  return text;
 }
 
 function normalizePoiKeyword(value) {
@@ -256,6 +268,26 @@ function suggestionMatchesExpectedDistrict(item, expectedDistrict) {
   return text.includes(expectedDistrict);
 }
 
+function getSuggestionSearchText(item) {
+  return normalizeGeoText(`${item.title || ''}${item.address || ''}${item.district || ''}${item.city || ''}`);
+}
+
+function suggestionContainsText(item, value) {
+  const needle = normalizeGeoText(value);
+  return Boolean(needle) && getSuggestionSearchText(item).includes(needle);
+}
+
+function suggestionMatchesRequiredText(item, context) {
+  const buildingName = normalizeGeoText(context.buildingName);
+  if (buildingName) return suggestionContainsText(item, buildingName);
+
+  const keyword = normalizeGeoText(context.keyword);
+  const roadKeyword = normalizeGeoText(context.roadKeyword);
+  if (keyword.length >= 4 && suggestionContainsText(item, keyword)) return true;
+  if (roadKeyword && suggestionContainsText(item, roadKeyword)) return true;
+  return !keyword && !roadKeyword;
+}
+
 function normalizeSuggestionItems(result) {
   const data = result?.data || result?.result?.data || result?.result || [];
   return (Array.isArray(data) ? data : [])
@@ -285,11 +317,14 @@ function scoreSuggestionItem(item, context) {
 
 function selectBestSuggestion(items, context) {
   if (items.length === 0) return null;
-  const ranked = items
+  const eligibleItems = items.filter(item => suggestionMatchesRequiredText(item, context));
+  if (eligibleItems.length === 0) return null;
+  const ranked = eligibleItems
     .map(item => ({ item, score: scoreSuggestionItem(item, context) }))
     .sort((a, b) => b.score - a.score);
   const best = ranked[0];
-  return best?.score > 0 ? best.item : null;
+  const minScore = normalizeGeoText(context.buildingName) ? 55 : 15;
+  return best?.score >= minScore ? best.item : null;
 }
 
 function createSuggestionService(SuggestionCtor, region) {

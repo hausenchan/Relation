@@ -69,6 +69,7 @@ const COMPANY_PERSON_SCOPE = 'company';
 // 腾讯地图 Key（地理编码用）
 const TMAP_KEY = 'BFBBZ-CNXC4-XEWUR-KQN7R-QOUGJ-Q4B66';
 let tencentServerGeocodeDisabled = false;
+const POI_SUFFIX_PATTERN = /(大厦|广场|中心|园区|写字楼|酒店|公寓|大楼|商厦|商城|科技园|产业园|创业园|办公楼|商务楼|大院)/;
 
 function normalizeGeoText(value) {
   return String(value || '').trim().replace(/\s+/g, '');
@@ -100,6 +101,10 @@ function buildGeocodeQuery(city, address) {
 
 function buildGeocodeKey(city, address) {
   return normalizeGeoText(buildGeocodeQuery(city, address));
+}
+
+function addressLooksLikePoi(address) {
+  return POI_SUFFIX_PATTERN.test(normalizeGeoText(address));
 }
 
 async function requestTencentGeocode(candidate) {
@@ -154,6 +159,7 @@ function buildGeocodeCandidates(city, address) {
 async function geocodeAddress(city, address) {
   const geocodeKey = buildGeocodeKey(city, address);
   if (!geocodeKey) return { lat: null, lng: null, geocode_address: null };
+  if (addressLooksLikePoi(address)) return { lat: null, lng: null, geocode_address: null };
   try {
     for (const candidate of buildGeocodeCandidates(city, address)) {
       const result = await requestTencentGeocode(candidate);
