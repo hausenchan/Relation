@@ -47,6 +47,7 @@ const weightMap = {
 
 const WARN_DAYS = 30;
 const ZOOM_THRESHOLD = 10; // 缩放>=10切换为个人标点
+const CLIENT_GEOCODE_VERSION = 2;
 
 function normalizeCoordinate(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -104,6 +105,16 @@ const BEIJING_DISTRICTS = [
   '通州区', '顺义区', '昌平区', '大兴区', '怀柔区', '平谷区', '密云区', '延庆区',
 ];
 const POI_SUFFIX_PATTERN = /(大厦|广场|中心|园区|写字楼|酒店|公寓|大楼|商厦|商城|科技园|产业园|创业园|办公楼|商务楼|大院)/;
+const KNOWN_POI_OVERRIDES = [
+  {
+    city: '北京',
+    keywords: ['花园东路', '泰兴大厦'],
+    lat: 39.980182,
+    lng: 116.368351,
+    title: '泰兴大厦',
+    address: '北京市海淀区花园东路11号',
+  },
+];
 
 function extractExpectedDistrict(city, address) {
   const text = normalizeGeoText(`${city || ''}${address || ''}`);
@@ -219,6 +230,16 @@ function extractRoadKeyword(address) {
 
 function addressLooksLikePoi(city, address) {
   return Boolean(extractBuildingPoiName(city, address)) || POI_SUFFIX_PATTERN.test(normalizeGeoText(address));
+}
+
+function findKnownPoiOverride(city, address) {
+  const firstCity = normalizeGeoText(firstCityFromValue(city)).replace(/市$/, '');
+  const normalizedAddress = normalizeGeoText(address);
+  return KNOWN_POI_OVERRIDES.find(item => {
+    const itemCity = normalizeGeoText(item.city).replace(/市$/, '');
+    return (!itemCity || itemCity === firstCity) &&
+      item.keywords.every(keyword => normalizedAddress.includes(normalizeGeoText(keyword)));
+  }) || null;
 }
 
 function buildPoiKeywords(city, address) {
@@ -632,7 +653,8 @@ export default function PersonsMap() {
     const pending = data.filter(p => {
       const geocodeKey = buildGeocodeKey(p.city, p.address);
       const cached = clientGeocodes[p.id];
-      return needsClientGeocode(p) && (!cached || cached.geocode_address !== geocodeKey);
+      return needsClientGeocode(p) &&
+        (!cached || cached.geocode_address !== geocodeKey || cached.version !== CLIENT_GEOCODE_VERSION);
     }).slice(0, 30);
     if (pending.length === 0) return;
 
@@ -642,6 +664,20 @@ export default function PersonsMap() {
 
     const geocodePerson = async (person) => {
       const expectedDistrict = extractExpectedDistrict(person.city, person.address);
+      const geocodeKey = buildGeocodeKey(person.city, person.address);
+      const knownPoi = findKnownPoiOverride(person.city, person.address);
+      if (knownPoi) {
+        return {
+          lat: knownPoi.lat,
+          lng: knownPoi.lng,
+          geocode_address: geocodeKey,
+          source: 'poi',
+          title: knownPoi.title,
+          address: knownPoi.address,
+          district: expectedDistrict,
+        };
+      }
+
       const tryPoiSuggestion = async () => {
         if (!SuggestionCtor) return null;
         const region = firstCityFromValue(person.city);
@@ -660,7 +696,7 @@ export default function PersonsMap() {
             return {
               lat: best.lat,
               lng: best.lng,
-              geocode_address: buildGeocodeKey(person.city, person.address),
+              geocode_address: geocodeKey,
               source: 'poi',
               title: best.title,
               address: best.address,
@@ -674,6 +710,7 @@ export default function PersonsMap() {
       if (addressLooksLikePoi(person.city, person.address)) {
         const poiResult = await tryPoiSuggestion();
         if (poiResult) return poiResult;
+        return { failed: true, geocode_address: geocodeKey };
       }
 
       for (const candidate of buildClientGeocodeCandidates(person.city, person.address)) {
@@ -685,7 +722,7 @@ export default function PersonsMap() {
           return {
             lat: location.lat,
             lng: location.lng,
-            geocode_address: buildGeocodeKey(person.city, person.address),
+            geocode_address: geocodeKey,
             source: 'geocoder',
             title: '',
             address: buildGeocodeQuery(person.city, person.address),
@@ -696,14 +733,14 @@ export default function PersonsMap() {
       }
       const poiResult = await tryPoiSuggestion();
       if (poiResult) return poiResult;
-      return { failed: true, geocode_address: buildGeocodeKey(person.city, person.address) };
+      return { failed: true, geocode_address: geocodeKey };
     };
 
     (async () => {
       const updates = {};
       for (const person of pending) {
         if (cancelled) return;
-        updates[person.id] = await geocodePerson(person);
+        updates[person.id] = { ...(await geocodePerson(person)), version: CLIENT_GEOCODE_VERSION };
       }
       if (!cancelled && Object.keys(updates).length > 0) {
         setClientGeocodes(prev => ({ ...prev, ...updates }));
@@ -778,6 +815,7 @@ export default function PersonsMap() {
       let lng = normalizeCoordinate(p.lng);
       let approximate = false;
       if (lat === null || lng === null) {
+        if (normalizeGeoText(p.address) && ['failed', 'locating'].includes(p.location_status)) return null;
         const fallback = jitteredCityCoord(p.id, p.city);
         if (!fallback) return null;
         lat = fallback.lat;

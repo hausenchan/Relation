@@ -70,6 +70,14 @@ const COMPANY_PERSON_SCOPE = 'company';
 const TMAP_KEY = 'BFBBZ-CNXC4-XEWUR-KQN7R-QOUGJ-Q4B66';
 let tencentServerGeocodeDisabled = false;
 const POI_SUFFIX_PATTERN = /(大厦|广场|中心|园区|写字楼|酒店|公寓|大楼|商厦|商城|科技园|产业园|创业园|办公楼|商务楼|大院)/;
+const KNOWN_POI_OVERRIDES = [
+  {
+    city: '北京',
+    keywords: ['花园东路', '泰兴大厦'],
+    lat: 39.980182,
+    lng: 116.368351,
+  },
+];
 
 function normalizeGeoText(value) {
   return String(value || '').trim().replace(/\s+/g, '');
@@ -105,6 +113,16 @@ function buildGeocodeKey(city, address) {
 
 function addressLooksLikePoi(address) {
   return POI_SUFFIX_PATTERN.test(normalizeGeoText(address));
+}
+
+function findKnownPoiOverride(city, address) {
+  const firstCity = normalizeGeoText(firstCityFromValue(city)).replace(/市$/, '');
+  const normalizedAddress = normalizeGeoText(address);
+  return KNOWN_POI_OVERRIDES.find(item => {
+    const itemCity = normalizeGeoText(item.city).replace(/市$/, '');
+    return (!itemCity || itemCity === firstCity) &&
+      item.keywords.every(keyword => normalizedAddress.includes(normalizeGeoText(keyword)));
+  }) || null;
 }
 
 async function requestTencentGeocode(candidate) {
@@ -159,6 +177,8 @@ function buildGeocodeCandidates(city, address) {
 async function geocodeAddress(city, address) {
   const geocodeKey = buildGeocodeKey(city, address);
   if (!geocodeKey) return { lat: null, lng: null, geocode_address: null };
+  const knownPoi = findKnownPoiOverride(city, address);
+  if (knownPoi) return { lat: knownPoi.lat, lng: knownPoi.lng, geocode_address: geocodeKey };
   if (addressLooksLikePoi(address)) return { lat: null, lng: null, geocode_address: null };
   try {
     for (const candidate of buildGeocodeCandidates(city, address)) {
