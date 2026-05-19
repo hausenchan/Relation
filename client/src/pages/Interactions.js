@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography, Descriptions, Upload } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined, UploadOutlined, EyeOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined, UploadOutlined, EyeOutlined, LockOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
@@ -50,6 +50,9 @@ const opportunityStatusMap = {
   won: { label: '已成交', color: 'green' },
   lost: { label: '已关闭', color: 'default' },
 };
+
+const isPrivateInteraction = (record) =>
+  (record?.person_visibility_scope || record?.visibility_scope) === PRIVATE_PERSON_SCOPE;
 
 export default function Interactions() {
   const { user } = useAuth();
@@ -175,7 +178,12 @@ export default function Interactions() {
     {
       title: '姓名',
       dataIndex: 'person_name',
-      render: v => v || '-',
+      render: (v, record) => (
+        <Space size={4} wrap>
+          <span>{v || '-'}</span>
+          {isPrivateInteraction(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
+        </Space>
+      ),
     },
     { title: '日期', dataIndex: 'date', sorter: (a, b) => a.date.localeCompare(b.date) },
     {
@@ -243,6 +251,7 @@ export default function Interactions() {
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.person_name || '-'}</div>
                 <Space wrap size={[6, 6]}>
+                  {isPrivateInteraction(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
                   {record.person_category && <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>}
                   <Tag color={type.color}>{type.label}</Tag>
                   <Tag color={importance.color}>{importance.label}</Tag>

@@ -3632,7 +3632,9 @@ app.get('/api/interactions', (req, res) => {
   const { person_id, type, city, weight, importance, date_start, date_end, created_by, visibility_scope } = req.query;
   const { id: me, role } = req.user;
   let query = `
-    SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company, p.city, p.weight
+    SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company, p.city, p.weight,
+      p.visibility_scope as person_visibility_scope,
+      p.private_owner_id as person_private_owner_id
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
     WHERE 1=1
