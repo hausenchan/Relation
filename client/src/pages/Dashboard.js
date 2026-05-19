@@ -239,7 +239,7 @@ export default function Dashboard() {
         const watchedFollowUpData = await followUpTasksApi.watch();
         setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
         setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
-        setWatchedTasks(buildWatchedTasks(watchedFollowUpData));
+        setWatchedTasks(buildWatchedTasks(allTasks, watchedFollowUpData));
         setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
       } catch {}
     }, 30000);
@@ -393,7 +393,22 @@ export default function Dashboard() {
     return sortDashboardTasks([...normalTasks, ...followUpItems]);
   };
 
-  const buildWatchedTasks = (watchData) => {
+  const buildWatchedTasks = (allTasks, watchData) => {
+    const sharedNormalTasks = allTasks
+      .filter(t => Number(t.shared_to_me) === 1 && t.assigned_to !== user?.id)
+      .map(t => ({
+        ...t,
+        task_source: 'normal',
+        task_source_label: '共享任务',
+        plan_date: t.date,
+        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
+        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        display_status: toDisplayStatus(t.status),
+        display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
+        display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
+        display_result: t.result || '',
+      }));
+
     const watchedItems = watchData.map(t => ({
       ...t,
       id: `watch_${t.id}`,
@@ -408,7 +423,7 @@ export default function Dashboard() {
       display_result: t.done_note || '',
       created_by_name: t.assigned_by_name,
     }));
-    return sortDashboardTasks(watchedItems);
+    return sortDashboardTasks([...sharedNormalTasks, ...watchedItems]);
   };
 
   const countUnfinished = (items) => items.filter(item => ACTIVE_TASK_STATUSES.has(item.display_status || item.status)).length;
@@ -436,7 +451,7 @@ export default function Dashboard() {
       const watchedFollowUpData = await followUpTasksApi.watch();
       setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
-      setWatchedTasks(buildWatchedTasks(watchedFollowUpData));
+      setWatchedTasks(buildWatchedTasks(allTasks, watchedFollowUpData));
       setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
 
     } catch (err) {
@@ -815,7 +830,9 @@ export default function Dashboard() {
       render: (text, record) => (
         <Space direction="vertical" size={0}>
           <Text strong>{text}</Text>
-          {record.opportunity_note && <Text type="secondary" style={{ fontSize: 12 }}>{record.opportunity_note}</Text>}
+          {(record.description || record.opportunity_note) && (
+            <Text type="secondary" style={{ fontSize: 12 }}>{record.description || record.opportunity_note}</Text>
+          )}
         </Space>
       ),
     },
@@ -824,14 +841,14 @@ export default function Dashboard() {
       dataIndex: 'task_source_label',
       key: 'task_source_label',
       width: 100,
-      render: (value) => <Tag color="purple">{value}</Tag>,
+      render: (value, record) => <Tag color={record.task_source === 'opportunity' ? 'purple' : 'cyan'}>{value}</Tag>,
     },
     {
       title: '指派人',
       dataIndex: 'assigned_by_name',
       key: 'assigned_by_name',
       width: 110,
-      render: (value) => value || <Text type="secondary">-</Text>,
+      render: (value, record) => value || record.created_by_name || <Text type="secondary">-</Text>,
     },
     {
       title: '执行人',
@@ -881,8 +898,12 @@ export default function Dashboard() {
       title: '操作',
       key: 'action',
       width: 100,
-      render: () => (
-        <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>
+      render: (_, record) => (
+        <Button
+          type="link"
+          size="small"
+          onClick={() => (record.task_source === 'opportunity' ? navigate('/follow-up-tasks') : openTaskDetail(record))}
+        >
           查看
         </Button>
       ),
