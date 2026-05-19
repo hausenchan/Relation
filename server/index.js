@@ -4191,6 +4191,7 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
 });
 
 // =========== 商务任务 API ===========
+const TASK_STATUSES = new Set(['pending', 'in_progress', 'done', 'suspended']);
 
 // 获取可见任务（按角色过滤）
 app.get('/api/tasks', (req, res) => {
@@ -4254,7 +4255,7 @@ app.get('/api/tasks/count', (req, res) => {
   const today = new Date().toISOString().slice(0, 10);
   const cnt = db.prepare(`
     SELECT COUNT(*) as cnt FROM tasks
-    WHERE assigned_to = ? AND date = ? AND status != 'done'
+    WHERE assigned_to = ? AND date = ? AND status IN ('pending', 'in_progress')
   `).get(me, today).cnt;
   res.json({ count: cnt });
 });
@@ -4311,9 +4312,13 @@ app.get('/api/tasks/board', (req, res) => {
 
 // 创建任务
 app.post('/api/tasks', (req, res) => {
-  const { title, description, date, priority, assigned_to, team_id, parent_id, result, shared_to } = req.body;
+  const { title, description, date, status, priority, assigned_to, team_id, parent_id, result, shared_to } = req.body;
   const { id: me } = req.user;
   if (!title || !date || !assigned_to) return res.status(400).json({ error: '标题、日期、被指派人必填' });
+  const normalizedStatus = status || 'pending';
+  if (!TASK_STATUSES.has(normalizedStatus)) {
+    return res.status(400).json({ error: '任务状态不合法' });
+  }
 
   // 计算 depth
   let depth = 0;
@@ -4332,11 +4337,12 @@ app.post('/api/tasks', (req, res) => {
   const enc = encryptRow('tasks', { title, description, result });
   const r = db.prepare(`
     INSERT INTO tasks (title, description, date, status, priority, created_by, assigned_to, team_id, parent_id, depth, result)
-    VALUES (?,?,?,'pending',?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     enc.title,
     enc.description || null,
     date,
+    normalizedStatus,
     priority || 'medium',
     me,
     assigned_to,
@@ -4358,6 +4364,9 @@ app.put('/api/tasks/:id', (req, res) => {
   const { title, description, status, priority, date, result, shared_to } = req.body;
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
+  if (status !== undefined && !TASK_STATUSES.has(status)) {
+    return res.status(400).json({ error: '任务状态不合法' });
+  }
 
   const { id: me, role } = req.user;
   // 只有被指派人或创建人可修改

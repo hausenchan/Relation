@@ -18,8 +18,12 @@ const { useBreakpoint } = Grid;
 const statusMap = {
   pending:     { label: '待处理', color: 'default',  badge: 'default' },
   in_progress: { label: '进行中', color: 'orange',   badge: 'processing' },
+  suspended:   { label: '挂起',   color: 'gold',     badge: 'warning' },
   done:        { label: '已完成', color: 'green',    badge: 'success' },
 };
+
+const TASK_STATUS_VALUES = Object.keys(statusMap);
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'in_progress']);
 
 const priorityMap = {
   high:   { label: '高', color: 'red' },
@@ -69,6 +73,7 @@ export default function TaskBoard() {
     form.setFieldsValue({
       date: selectedDate,
       priority: 'medium',
+      status: 'pending',
       assigned_to: member?.id || user?.id,
     });
     setModalOpen(true);
@@ -138,7 +143,7 @@ export default function TaskBoard() {
   const totalTasks = boardData.reduce((sum, m) => sum + m.tasks.length, 0);
   const doneTasks = boardData.reduce((sum, m) => sum + m.tasks.filter(t => t.status === 'done').length, 0);
   const inProgressTasks = boardData.reduce((sum, m) => sum + m.tasks.filter(t => t.status === 'in_progress').length, 0);
-  const pendingTasks = totalTasks - doneTasks - inProgressTasks;
+  const pendingTasks = boardData.reduce((sum, m) => sum + m.tasks.filter(t => t.status === 'pending').length, 0);
 
   // 统计我指派给别人的任务
   const myAssignedTasks = boardData.reduce((sum, m) => {
@@ -242,6 +247,7 @@ export default function TaskBoard() {
               <Row gutter={[12, 12]}>
                 {members.map(member => {
                   const mDone = member.tasks.filter(t => t.status === 'done').length;
+                  const mActive = member.tasks.filter(t => ACTIVE_TASK_STATUSES.has(t.status)).length;
                   const mTotal = member.tasks.length;
                   const allDone = mTotal > 0 && mDone === mTotal;
 
@@ -259,7 +265,7 @@ export default function TaskBoard() {
                             <Text strong style={{ fontSize: 13, maxWidth: isMobile ? 150 : undefined }} ellipsis={{ tooltip: member.display_name }}>{member.display_name}</Text>
                             {mTotal > 0 && (
                               <Badge
-                                count={mTotal - mDone}
+                                count={mActive}
                                 style={{ backgroundColor: allDone ? '#52c41a' : '#ff4d4f' }}
                                 showZero={false}
                               />
@@ -343,6 +349,17 @@ export default function TaskBoard() {
               </Select>
             </Form.Item>
           </Space>
+          {editing && (
+            <Form.Item label="任务状态" name="status" rules={[{ required: true, message: '请选择任务状态' }]} style={{ marginTop: 12 }}>
+              <Select>
+                {TASK_STATUS_VALUES.map(value => (
+                  <Option key={value} value={value}>
+                    <Tag color={statusMap[value].color}>{statusMap[value].label}</Tag>
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
           <Form.Item label="指派给" name="assigned_to" style={{ marginTop: 12 }} rules={[{ required: true }]}>
             <Select
               showSearch

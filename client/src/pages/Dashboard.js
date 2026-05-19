@@ -31,8 +31,15 @@ const categoryMap = {
 const statusMap = {
   pending:     { label: '未开始', color: 'default',  badge: 'default' },
   in_progress: { label: '进行中', color: 'orange',   badge: 'processing' },
+  suspended:   { label: '挂起',   color: 'gold',     badge: 'warning' },
   done:        { label: '已完成', color: 'green',    badge: 'success' },
 };
+
+const TASK_STATUS_VALUES = Object.keys(statusMap);
+const TASK_STATUS_OPTIONS = TASK_STATUS_VALUES.map(value => ({
+  value,
+  label: statusMap[value].label,
+}));
 
 const priorityMap = {
   high:   { label: '高', color: 'red' },
@@ -194,19 +201,19 @@ export default function Dashboard() {
   const navigate = useNavigate();
 
   // 筛选条件 - 我指派给别人的任务
-  const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
+  const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
 
   // 筛选条件 - 需我执行的任务
-  const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
+  const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [executionTaskDateRange, setExecutionTaskDateRange] = useState(null);
 
   // 筛选条件 - 需我关注的任务
-  const [watchedTaskStatusFilter, setWatchedTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
+  const [watchedTaskStatusFilter, setWatchedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [watchedTaskDateRange, setWatchedTaskDateRange] = useState(null);
 
   // 筛选条件 - 团队任务
-  const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState(['pending', 'in_progress', 'done']);
+  const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [teamTaskDateRange, setTeamTaskDateRange] = useState(null);
   const [teamTaskAssignerFilter, setTeamTaskAssignerFilter] = useState([]);
   const [teamTaskFollowerFilter, setTeamTaskFollowerFilter] = useState([]);
@@ -249,9 +256,7 @@ export default function Dashboard() {
   }, [taskColumnWidths]);
 
   const toDisplayStatus = (status) => {
-    if (status === 'pending') return 'pending';
-    if (status === 'in_progress') return 'in_progress';
-    return 'done';
+    return statusMap[status] ? status : 'done';
   };
 
   const buildAssignedTasks = (allTasks, allFollowUpData) => {
@@ -427,6 +432,7 @@ export default function Dashboard() {
       priority: 'medium',
       assigned_to: user?.id,
       shared_to: [],
+      status: 'pending',
       result: '',
     });
     setModalOpen(true);
@@ -1062,11 +1068,7 @@ export default function Dashboard() {
                 value={assignedTaskStatusFilter}
                 onChange={setAssignedTaskStatusFilter}
                 style={isMobile ? { width: '100%' } : { minWidth: 200 }}
-                options={[
-                  { label: '未开始', value: 'pending' },
-                  { label: '进行中', value: 'in_progress' },
-                  { label: '已完成', value: 'done' },
-                ]}
+                options={TASK_STATUS_OPTIONS}
               />
               <RangePicker
                 placeholder={['开始日期', '结束日期']}
@@ -1074,11 +1076,11 @@ export default function Dashboard() {
                 onChange={setAssignedTaskDateRange}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(assignedTaskStatusFilter.length !== 3 || assignedTaskDateRange) && (
+              {(assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
-                    setAssignedTaskStatusFilter(['pending', 'in_progress', 'done']);
+                    setAssignedTaskStatusFilter([...TASK_STATUS_VALUES]);
                     setAssignedTaskDateRange(null);
                   }}
                 >
@@ -1134,11 +1136,7 @@ export default function Dashboard() {
                 value={executionTaskStatusFilter}
                 onChange={setExecutionTaskStatusFilter}
                 style={isMobile ? { width: '100%' } : { minWidth: 200 }}
-                options={[
-                  { label: '未开始', value: 'pending' },
-                  { label: '进行中', value: 'in_progress' },
-                  { label: '已完成', value: 'done' },
-                ]}
+                options={TASK_STATUS_OPTIONS}
               />
               <RangePicker
                 placeholder={['开始日期', '结束日期']}
@@ -1146,11 +1144,11 @@ export default function Dashboard() {
                 onChange={setExecutionTaskDateRange}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(executionTaskStatusFilter.length !== 3 || executionTaskDateRange) && (
+              {(executionTaskStatusFilter.length !== TASK_STATUS_VALUES.length || executionTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
-                    setExecutionTaskStatusFilter(['pending', 'in_progress', 'done']);
+                    setExecutionTaskStatusFilter([...TASK_STATUS_VALUES]);
                     setExecutionTaskDateRange(null);
                   }}
                 >
@@ -1205,11 +1203,7 @@ export default function Dashboard() {
               value={watchedTaskStatusFilter}
               onChange={setWatchedTaskStatusFilter}
               style={isMobile ? { width: '100%' } : { minWidth: 200 }}
-              options={[
-                { label: '未开始', value: 'pending' },
-                { label: '进行中', value: 'in_progress' },
-                { label: '已完成', value: 'done' },
-              ]}
+              options={TASK_STATUS_OPTIONS}
             />
             <RangePicker
               placeholder={['开始日期', '结束日期']}
@@ -1217,11 +1211,11 @@ export default function Dashboard() {
               onChange={setWatchedTaskDateRange}
               style={isMobile ? { width: '100%' } : { width: 240 }}
             />
-            {(watchedTaskStatusFilter.length !== 3 || watchedTaskDateRange) && (
+            {(watchedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || watchedTaskDateRange) && (
               <Button
                 size="small"
                 onClick={() => {
-                  setWatchedTaskStatusFilter(['pending', 'in_progress', 'done']);
+                  setWatchedTaskStatusFilter([...TASK_STATUS_VALUES]);
                   setWatchedTaskDateRange(null);
                 }}
               >
@@ -1276,11 +1270,7 @@ export default function Dashboard() {
                 value={teamTaskStatusFilter}
                 onChange={setTeamTaskStatusFilter}
                 style={isMobile ? { width: '100%' } : { minWidth: 200 }}
-                options={[
-                  { label: '未开始', value: 'pending' },
-                  { label: '进行中', value: 'in_progress' },
-                  { label: '已完成', value: 'done' },
-                ]}
+                options={TASK_STATUS_OPTIONS}
               />
               <Select
                 mode="multiple"
@@ -1304,11 +1294,11 @@ export default function Dashboard() {
                 onChange={setTeamTaskDateRange}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(teamTaskStatusFilter.length !== 3 || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
+              {(teamTaskStatusFilter.length !== TASK_STATUS_VALUES.length || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
                 <Button
                   size="small"
                   onClick={() => {
-                    setTeamTaskStatusFilter(['pending', 'in_progress', 'done']);
+                    setTeamTaskStatusFilter([...TASK_STATUS_VALUES]);
                     setTeamTaskDateRange(null);
                     setTeamTaskAssignerFilter([]);
                     setTeamTaskFollowerFilter([]);
@@ -1489,6 +1479,17 @@ export default function Dashboard() {
               <Option value="low"><Tag color="default">低</Tag></Option>
             </Select>
           </Form.Item>
+          {editing && (
+            <Form.Item label="任务状态" name="status" rules={[{ required: true, message: '请选择任务状态' }]}>
+              <Select>
+                {TASK_STATUS_VALUES.map(value => (
+                  <Option key={value} value={value}>
+                    <Tag color={statusMap[value].color}>{statusMap[value].label}</Tag>
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
           {canAssignOthers && (
             <Form.Item label="指派给" name="assigned_to" rules={[{ required: true, message: '请选择负责人' }]}>
               <Select

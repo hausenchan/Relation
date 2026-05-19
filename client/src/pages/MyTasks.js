@@ -18,8 +18,11 @@ const { useBreakpoint } = Grid;
 const statusMap = {
   pending:     { label: '待处理', color: 'default',  badge: 'default' },
   in_progress: { label: '进行中', color: 'orange',   badge: 'processing' },
+  suspended:   { label: '挂起',   color: 'gold',     badge: 'warning' },
   done:        { label: '已完成', color: 'green',    badge: 'success' },
 };
+
+const TASK_STATUS_VALUES = Object.keys(statusMap);
 
 const priorityMap = {
   high:   { label: '高', color: 'red' },
@@ -76,6 +79,7 @@ export default function MyTasks() {
     form.setFieldsValue({
       date: dayjs(activeDate),
       priority: 'medium',
+      status: 'pending',
       assigned_to: user?.id,
       result: '',
     });
@@ -390,6 +394,17 @@ export default function MyTasks() {
               </Select>
             </Form.Item>
           </Space>
+          {editing && (
+            <Form.Item label="任务状态" name="status" rules={[{ required: true, message: '请选择任务状态' }]} style={{ marginTop: 12 }}>
+              <Select>
+                {TASK_STATUS_VALUES.map(value => (
+                  <Option key={value} value={value}>
+                    <Tag color={statusMap[value].color}>{statusMap[value].label}</Tag>
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
           {canAssignOthers && !editing && (
             <Form.Item label="指派给" name="assigned_to" style={{ marginTop: 12 }} rules={[{ required: true }]}>
               <Select
