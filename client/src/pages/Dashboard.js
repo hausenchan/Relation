@@ -40,6 +40,7 @@ const TASK_STATUS_OPTIONS = TASK_STATUS_VALUES.map(value => ({
   value,
   label: statusMap[value].label,
 }));
+const ACTIVE_TASK_STATUSES = new Set(['pending', 'in_progress']);
 
 const priorityMap = {
   high:   { label: '高', color: 'red' },
@@ -259,6 +260,28 @@ export default function Dashboard() {
     return statusMap[status] ? status : 'done';
   };
 
+  const priorityRank = (priority) => ({ high: 0, medium: 1, low: 2 }[priority] ?? 3);
+  const taskSortTime = (task) => {
+    const date = task.plan_date || task.created_at;
+    return date ? dayjs(date).valueOf() : Number.MAX_SAFE_INTEGER;
+  };
+  const taskSortBucket = (task) => {
+    const status = task.display_status || task.status;
+    const active = ACTIVE_TASK_STATUSES.has(status);
+    const inThisWeek = task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'week');
+    if (active && inThisWeek) return 0;
+    if (active) return 1;
+    if (status === 'suspended') return 2;
+    return 3;
+  };
+  const sortDashboardTasks = (tasks) => [...tasks].sort((a, b) => {
+    const bucketDiff = taskSortBucket(a) - taskSortBucket(b);
+    if (bucketDiff !== 0) return bucketDiff;
+    const timeDiff = taskSortTime(a) - taskSortTime(b);
+    if (timeDiff !== 0) return timeDiff;
+    return priorityRank(a.priority) - priorityRank(b.priority);
+  });
+
   const buildAssignedTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
       .filter(t => t.created_by === user?.id && t.assigned_to !== user?.id)
@@ -293,7 +316,7 @@ export default function Dashboard() {
         display_result: t.done_note || '',
       }));
 
-    return [...normalTasks, ...followUpItems].sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
+    return sortDashboardTasks([...normalTasks, ...followUpItems]);
   };
 
   const buildExecutionTasks = (allTasks, allFollowUpData) => {
@@ -330,7 +353,7 @@ export default function Dashboard() {
         display_result: t.done_note || '',
       }));
 
-    return [...normalTasks, ...followUpItems].sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
+    return sortDashboardTasks([...normalTasks, ...followUpItems]);
   };
 
   const buildTeamTasks = (allTasks, allFollowUpData) => {
@@ -367,11 +390,11 @@ export default function Dashboard() {
         follower_name: t.assigned_to_name,
       })) : [];
 
-    return [...normalTasks, ...followUpItems].sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
+    return sortDashboardTasks([...normalTasks, ...followUpItems]);
   };
 
   const buildWatchedTasks = (watchData) => {
-    return watchData.map(t => ({
+    const watchedItems = watchData.map(t => ({
       ...t,
       id: `watch_${t.id}`,
       task_source: 'opportunity',
@@ -384,10 +407,11 @@ export default function Dashboard() {
       display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
       display_result: t.done_note || '',
       created_by_name: t.assigned_by_name,
-    })).sort((a, b) => dayjs(b.plan_date || b.created_at).valueOf() - dayjs(a.plan_date || a.created_at).valueOf());
+    }));
+    return sortDashboardTasks(watchedItems);
   };
 
-  const countUnfinished = (items) => items.filter(item => ['pending', 'in_progress'].includes(item.display_status || item.status)).length;
+  const countUnfinished = (items) => items.filter(item => ACTIVE_TASK_STATUSES.has(item.display_status || item.status)).length;
 
   const isWithinRange = (date, range) => {
     if (!range || range.length !== 2) return true;
