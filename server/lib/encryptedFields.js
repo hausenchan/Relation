@@ -18,7 +18,7 @@ module.exports = {
       'skills', 'education', 'expected_salary',
       'source',
       'heart', 'brain', 'mouth', 'hand',
-      'resources', 'demands',
+      'resources', 'demands', 'success_traits',
     ],
     indexed: [],
   },

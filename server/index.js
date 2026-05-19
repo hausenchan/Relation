@@ -287,6 +287,7 @@ db.exec(`
     address TEXT,
     tags TEXT,
     notes TEXT,
+    success_traits TEXT,
     -- 商务圈字段
     relationship_level TEXT DEFAULT 'normal',
     client_status TEXT DEFAULT 'active',
@@ -494,6 +495,7 @@ if (existingCols.length > 0) {
     ["city",          "TEXT"],
     ["resources",     "TEXT"],
     ["demands",       "TEXT"],
+    ["success_traits", "TEXT"],
     ["potential_level","TEXT"],
     ["weight",        "TEXT DEFAULT 'medium'"],
     ["created_by",    "INTEGER DEFAULT NULL"],
@@ -2840,7 +2842,7 @@ app.get('/api/persons', (req, res) => {
     const hit = v => v && String(v).toLowerCase().includes(s);
     return res.json(rows.filter(r =>
       hit(r.name) || hit(r.company) || hit(r.current_company) ||
-      hit(r.phone) || hit(r.tags) || hit(r.skills)
+      hit(r.phone) || hit(r.tags) || hit(r.skills) || hit(r.success_traits)
     ));
   }
   res.json(rows);
@@ -2936,7 +2938,7 @@ app.get('/api/persons/:id', (req, res, next) => {
 app.post('/api/persons', canWrite, async (req, res) => {
   const {
     name, person_category, relation_types, city, company, position, industry,
-    phone, email, wechat, birthday, address, tags, notes, resources, demands,
+    phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
     relationship_level, client_status,
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
@@ -2955,21 +2957,21 @@ app.post('/api/persons', canWrite, async (req, res) => {
     name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
     current_company, current_position, target_position,
     skills, education, expected_salary, source,
-    heart, brain, mouth, hand, resources, demands,
+    heart, brain, mouth, hand, resources, demands, success_traits,
   });
   const result = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, city, company, position, industry,
-      phone, email, wechat, birthday, address, tags, notes, resources, demands,
+      phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
       relationship_level, client_status,
       talent_type, current_company, current_position, target_position,
       skills, experience_years, education, recruit_status, intent_level,
       potential_level, expected_salary, source, heart, brain, mouth, hand, weight, lat, lng, created_by,
       visibility_scope, private_owner_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     enc.name, person_category || 'social', relation_types || '', city,
     enc.company, enc.position, industry, enc.phone, enc.email, enc.wechat, birthday, enc.address, enc.tags, enc.notes,
-    enc.resources, enc.demands, relationship_level || 'normal', client_status || 'active',
+    enc.resources, enc.demands, enc.success_traits, relationship_level || 'normal', client_status || 'active',
     talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status || 'potential', intent_level || 'low',
     potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium', geo.lat, geo.lng, req.user.id
@@ -3192,7 +3194,7 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
   }
   const {
     name, person_category, relation_types, city, company, position, industry,
-    phone, email, wechat, birthday, address, tags, notes, resources, demands,
+    phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
     relationship_level, client_status,
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
@@ -3222,11 +3224,11 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     name: normalizedName, company, position, phone, email, wechat, address, tags, notes,
     current_company, current_position, target_position,
     skills, education, expected_salary, source,
-    heart, brain, mouth, hand, resources, demands,
+    heart, brain, mouth, hand, resources, demands, success_traits,
   });
   db.prepare(`
     UPDATE persons SET name=?, person_category=?, relation_types=?, city=?, company=?, position=?, industry=?,
-      phone=?, email=?, wechat=?, birthday=?, address=?, tags=?, notes=?, resources=?, demands=?,
+      phone=?, email=?, wechat=?, birthday=?, address=?, tags=?, notes=?, resources=?, demands=?, success_traits=?,
       relationship_level=?, client_status=?,
       talent_type=?, current_company=?, current_position=?, target_position=?,
       skills=?, experience_years=?, education=?, recruit_status=?, intent_level=?,
@@ -3236,7 +3238,7 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
   `).run(
     enc.name, person_category, relation_types || '', city,
     enc.company, enc.position, industry, enc.phone, enc.email, enc.wechat, birthday, enc.address, enc.tags, enc.notes,
-    enc.resources, enc.demands, relationship_level, client_status,
+    enc.resources, enc.demands, enc.success_traits, relationship_level, client_status,
     talent_type, enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status, intent_level,
     potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium',
@@ -3299,6 +3301,7 @@ const PERSON_IMPORT_FIELD_LABELS = {
   notes: '备注',
   resources: '拥有资源',
   demands: '诉求',
+  success_traits: '关键成事特质',
   relationship_level: '关系等级',
   client_status: '客户状态',
   talent_type: '人才类型',
@@ -3357,7 +3360,7 @@ function getVisiblePersonsForImport(user) {
   let query = `
     SELECT p.id, p.created_by, p.assigned_to, p.visibility_scope, p.private_owner_id,
       p.name, p.person_category, p.relation_types, p.city, p.company, p.position, p.industry,
-      p.phone, p.email, p.wechat, p.birthday, p.address, p.tags, p.notes, p.resources, p.demands,
+      p.phone, p.email, p.wechat, p.birthday, p.address, p.tags, p.notes, p.resources, p.demands, p.success_traits,
       p.relationship_level, p.client_status, p.talent_type, p.current_company, p.current_position,
       p.target_position, p.skills, p.experience_years, p.education, p.recruit_status, p.intent_level,
       p.potential_level, p.expected_salary, p.source, p.weight
@@ -3514,7 +3517,7 @@ function insertImportedPerson(insert, row, userId) {
     name: normalizedName,
     company: row.company, position: row.position,
     phone: row.phone, email: row.email, wechat: row.wechat, address: row.address,
-    tags: row.tags, notes: row.notes, resources: row.resources, demands: row.demands,
+    tags: row.tags, notes: row.notes, resources: row.resources, demands: row.demands, success_traits: row.success_traits,
     current_company: row.current_company, current_position: row.current_position, target_position: row.target_position,
     skills: row.skills, education: row.education, expected_salary: row.expected_salary, source: row.source,
   });
@@ -3522,7 +3525,7 @@ function insertImportedPerson(insert, row, userId) {
     enc.name, row.person_category || 'social', row.relation_types || '',
     row.city, enc.company, enc.position, row.industry,
     enc.phone, enc.email, enc.wechat, row.birthday, enc.address, enc.tags, enc.notes,
-    enc.resources, enc.demands,
+    enc.resources, enc.demands, enc.success_traits,
     row.relationship_level || 'normal', row.client_status || 'active',
     row.talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
     enc.skills, row.experience_years || null, enc.education,
@@ -3568,12 +3571,12 @@ app.post('/api/persons/import', canWrite, (req, res) => {
   const plan = buildPersonImportPlan(rows, req.user);
   const insert = db.prepare(`
     INSERT INTO persons (name, person_category, relation_types, city, company, position, industry,
-      phone, email, wechat, birthday, address, tags, notes, resources, demands,
+      phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
       relationship_level, client_status,
       talent_type, current_company, current_position, target_position,
       skills, experience_years, education, recruit_status, intent_level,
       potential_level, expected_salary, source, weight, created_by, visibility_scope, private_owner_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `);
 
   const result = {
