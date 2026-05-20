@@ -1326,7 +1326,7 @@ const OPERATION_LOG_NAME_FIELDS = [
 
 const OPERATION_LOG_BUSINESS_MAP = {
   gifts: '礼品库',
-  gift_plans: '送礼计划',
+  gift_plans: '客户答谢',
   gift_requests: '送礼申请',
   gift_records: '送礼记录',
   auth: '账号安全',
@@ -1757,7 +1757,7 @@ app.delete('/api/gifts/:id', canWrite, (req, res) => {
   res.json({ success: true });
 });
 
-// 送礼计划
+// 客户答谢
 app.get('/api/gift_plans', (req, res) => {
   const plans = db.prepare(`SELECT gp.*, u.display_name as creator_name FROM gift_plans gp LEFT JOIN users u ON gp.created_by = u.id ORDER BY gp.created_at DESC`).all();
   res.json(plans);

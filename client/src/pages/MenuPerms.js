@@ -53,7 +53,7 @@ const MENU_TREE = [
     key: 'team-mgmt',
     children: [
       { title: '任务看板', key: '/task-board' },
-      { title: '送礼计划', key: '/gift-plans' },
+      { title: '客户答谢', key: '/gift-plans' },
       { title: '审核与记录', key: '/gift-review' },
       { title: '礼品库', key: '/gifts' },
       { title: '出差申请', key: '/trips' },

@@ -215,7 +215,7 @@ export default function GiftPlansPage() {
           rowKey="id"
           loading={loading}
           pagination={{ defaultPageSize: 15, showSizeChanger: false }}
-          locale={{ emptyText: '暂无送礼计划' }}
+          locale={{ emptyText: '暂无客户答谢' }}
           renderItem={renderPlanCard}
         />
       ) : (
@@ -223,13 +223,13 @@ export default function GiftPlansPage() {
       )}
 
       {/* 计划编辑 Modal */}
-      <Modal title={editingPlan ? '编辑计划' : '新建送礼计划'} open={planModalOpen}
+      <Modal title={editingPlan ? '编辑客户答谢' : '新建客户答谢'} open={planModalOpen}
         onOk={handlePlanSave} onCancel={() => setPlanModalOpen(false)} okText="保存" cancelText="取消"
         width={isMobile ? '100%' : 480}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}>
         <Form form={planForm} layout="vertical" size="small">
           <Form.Item label="计划名称" name="title" rules={[{ required: true }]}>
-            <Input placeholder="如：2026年中秋送礼计划" />
+            <Input placeholder="如：2026年中秋客户答谢" />
           </Form.Item>
           <Row gutter={16}>
             <Col span={isMobile ? 24 : 12}>

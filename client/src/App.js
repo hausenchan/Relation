@@ -338,7 +338,7 @@ function AppLayout() {
     '/follow-up-tasks': '待跟进任务',
     '/my-tasks': '我的任务',
     '/task-board': '任务看板',
-    '/gift-plans': '送礼计划',
+    '/gift-plans': '客户答谢',
     '/gift-review': '审核与记录',
     '/gifts': '礼品库',
     '/trips': '出差申请',
@@ -421,9 +421,9 @@ function AppLayout() {
     canViewTaskBoard && {
       key: '/task-board', icon: <ApartmentOutlined />, label: <Link to="/task-board">任务看板</Link>,
     },
-    // 送礼管理子菜单
+    // 客户答谢子菜单
     canAccessMenu('/gift-plans') && {
-      key: '/gift-plans', icon: <CalendarOutlined />, label: <Link to="/gift-plans">送礼计划</Link>,
+      key: '/gift-plans', icon: <CalendarOutlined />, label: <Link to="/gift-plans">客户答谢</Link>,
     },
     canAccessMenu('/gift-review') && {
       key: '/gift-review', icon: <AuditOutlined />,
