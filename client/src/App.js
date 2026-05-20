@@ -382,6 +382,10 @@ function AppLayout() {
     canAccessMenu('/product-assets') && {
       key: '/product-assets', icon: <AppstoreOutlined />, label: <Link to="/product-assets">产品资产</Link>,
     },
+    // 预算管理（高管或 menuPerms 配置的用户可见）
+    (isAdmin(user) || canAccessMenu('/budgets')) && {
+      key: '/budgets', icon: <FileTextOutlined />, label: <Link to="/budgets">预算管理</Link>,
+    },
   ].filter(Boolean);
 
   // ── 商务协作 ────────────────────────────────────────────────
@@ -449,10 +453,6 @@ function AppLayout() {
     },
     canAccessMenu('/trip-stats') && {
       key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link>,
-    },
-    // 预算管理（高管或 menuPerms 配置的用户可见）
-    (isAdmin(user) || canAccessMenu('/budgets')) && {
-      key: '/budgets', icon: <FileTextOutlined />, label: <Link to="/budgets">预算管理</Link>,
     },
   ].filter(Boolean);
 
