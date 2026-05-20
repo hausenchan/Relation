@@ -6222,6 +6222,40 @@ function normalizeSubjectMatchText(value) {
   return normalizeAssetImportText(value);
 }
 
+const PRODUCT_ASSET_LAUNCH_STATUS_RANK = {
+  running: 0,
+  launched: 1,
+  launched_available: 1,
+  launched_unavailable: 2,
+  not_launched: 3,
+  paused: 4,
+  offline: 5,
+};
+
+function productAssetLaunchStatusRank(status) {
+  return PRODUCT_ASSET_LAUNCH_STATUS_RANK[status] ?? 99;
+}
+
+function productAssetSubjectSortKey(asset) {
+  const entity = normalizeSubjectMatchText(asset.company_entity).toLowerCase();
+  const group = normalizeSubjectMatchText(asset.group_name).toLowerCase();
+  const subjectId = asset.company_subject_id ? String(asset.company_subject_id).padStart(12, '0') : '';
+  return [entity, group, subjectId].filter(Boolean).join('|') || '~';
+}
+
+function compareProductAssets(a, b) {
+  const statusDiff = productAssetLaunchStatusRank(a.launch_status) - productAssetLaunchStatusRank(b.launch_status);
+  if (statusDiff !== 0) return statusDiff;
+
+  const subjectDiff = productAssetSubjectSortKey(a).localeCompare(productAssetSubjectSortKey(b), 'zh-Hans-CN');
+  if (subjectDiff !== 0) return subjectDiff;
+
+  const updatedDiff = String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+  if (updatedDiff !== 0) return updatedDiff;
+
+  return Number(b.id || 0) - Number(a.id || 0);
+}
+
 app.get('/api/company-subjects', (req, res) => {
   const { group_name, company_entity, legal_person, email } = req.query;
   const rows = db.prepare(`
@@ -6425,6 +6459,7 @@ app.get('/api/product-assets', (req, res) => {
     const keyword = String(appid).trim();
     rows = rows.filter(r => (r.appid || '').includes(keyword));
   }
+  rows.sort(compareProductAssets);
   res.json(rows);
 });
 
