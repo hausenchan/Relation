@@ -28,6 +28,8 @@ const departmentOptions = [
   { value: 'commercial', label: '商务' },
   { value: 'operation', label: '产运' },
   { value: 'rd', label: '研发' },
+  { value: 'general', label: '综合' },
+  { value: 'ad_delivery', label: '投放' },
 ];
 
 const MODULE_LIST = [

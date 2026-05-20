@@ -21,11 +21,15 @@ const departmentMap = {
   commercial: '商务',
   operation: '产运',
   rd: '研发',
+  general: '综合',
+  ad_delivery: '投放',
   business: '商务',
   product: '产运',
   '商务部': '商务',
   '产运部': '产运',
   '研发部': '研发',
+  '综合部': '综合',
+  '投放部': '投放',
 };
 
 const getDepartmentLabel = (department) => departmentMap[department] || department || '-';

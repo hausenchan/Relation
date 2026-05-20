@@ -11,10 +11,12 @@ const departmentOptions = [
   { value: 'commercial', label: '商务' },
   { value: 'operation', label: '产运' },
   { value: 'rd', label: '研发' },
+  { value: 'general', label: '综合' },
+  { value: 'ad_delivery', label: '投放' },
 ];
 
-const departmentLabel = { commercial: '商务', operation: '产运', rd: '研发' };
-const departmentColor = { commercial: 'blue', operation: 'green', rd: 'purple' };
+const departmentLabel = { commercial: '商务', operation: '产运', rd: '研发', general: '综合', ad_delivery: '投放' };
+const departmentColor = { commercial: 'blue', operation: 'green', rd: 'purple', general: 'cyan', ad_delivery: 'magenta' };
 
 export default function Teams() {
   const screens = useBreakpoint();
@@ -126,7 +128,10 @@ export default function Teams() {
   ];
 
   // 按部门分组显示
-  const departments = ['commercial', 'operation', 'rd'];
+  const departments = [
+    ...departmentOptions.map(item => item.value),
+    ...teams.map(item => item.department).filter(Boolean).filter(dept => !departmentOptions.some(item => item.value === dept)),
+  ];
 
   const renderTeamCard = (record) => {
     const members = users.filter(u => (u.team_ids || (u.team_id ? [u.team_id] : [])).includes(record.id));

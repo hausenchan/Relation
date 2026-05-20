@@ -62,6 +62,8 @@ const departmentMap = {
   commercial: '商务',
   operation: '产运',
   rd: '研发',
+  general: '综合',
+  ad_delivery: '投放',
   marketing: '市场',
   hr: '人事',
   finance: '财务',
