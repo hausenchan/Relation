@@ -363,16 +363,16 @@ function AppLayout() {
 
   // ── 目标与计划 ──────────────────────────────────────────────
   const goalChildren = [
-    { key: '/goals', icon: <AimOutlined />, label: <Link to="/goals">目标管理</Link> },
-    { key: '/weekly-reports', icon: <FileTextOutlined />, label: <Link to="/weekly-reports">周报管理</Link> },
-  ];
+    canAccessMenu('/goals') && { key: '/goals', icon: <AimOutlined />, label: <Link to="/goals">目标管理</Link> },
+    canAccessMenu('/weekly-reports') && { key: '/weekly-reports', icon: <FileTextOutlined />, label: <Link to="/weekly-reports">周报管理</Link> },
+  ].filter(Boolean);
 
   // ── 业务流转 ────────────────────────────────────────────────
   const bizFlowChildren = [
-    { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">商机</Link> },
-    { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
-    { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
-  ];
+    canAccessMenu('/leads') && { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">商机</Link> },
+    canAccessMenu('/strategies') && { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
+    canAccessMenu('/dev-tasks') && { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
+  ].filter(Boolean);
 
   // ── 资产管理 ────────────────────────────────────────────────
   const assetMgmtChildren = [
@@ -408,7 +408,7 @@ function AppLayout() {
         </span>
       ),
     },
-    {
+    canAccessMenu('/follow-up-tasks') && {
       key: '/follow-up-tasks', icon: <ThunderboltOutlined />,
       label: (
         <span>
@@ -422,7 +422,7 @@ function AppLayout() {
   // ── 团队管理 ────────────────────────────────────────────────
   const canViewTaskBoard = ['leader', 'sales_director', 'admin'].includes(user?.role) || (user?.managed_team_ids?.length > 0);
   const teamChildren = [
-    canViewTaskBoard && {
+    canAccessMenu('/task-board') && canViewTaskBoard && {
       key: '/task-board', icon: <ApartmentOutlined />, label: <Link to="/task-board">任务看板</Link>,
     },
     // 客户答谢子菜单
@@ -438,7 +438,7 @@ function AppLayout() {
         </span>
       ),
     },
-    canAccessMenu('/gifts') && isAdmin(user) && {
+    canAccessMenu('/gifts') && {
       key: '/gifts', icon: <GiftOutlined />, label: <Link to="/gifts">礼品库</Link>,
     },
     // 出差管理
@@ -470,9 +470,9 @@ function AppLayout() {
 
   const menuItems = [
     // 工作台
-    { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
+    canAccessMenu('/') && { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
     // 目标与计划
-    {
+    goalChildren.length > 0 && {
       key: 'goal-plan', icon: <AimOutlined />, label: '目标计划',
       children: goalChildren,
     },
@@ -482,7 +482,7 @@ function AppLayout() {
       children: executiveChildren,
     },
     // 业务流转
-    {
+    bizFlowChildren.length > 0 && {
       key: 'biz-flow', icon: <BranchesOutlined />, label: '业务流转',
       children: bizFlowChildren,
     },

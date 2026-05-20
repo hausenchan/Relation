@@ -2439,6 +2439,7 @@ app.post('/api/auth/login', (req, res) => {
   );
   // 查模块权限
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
+  const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(user.id).map(r => r.menu_key);
   const teamIds = getUserTeamIds(user.id);
   const managedTeamIds = getManagedTeamIds(user.id, user.role) || [];
   const projectGroupIds = getUserProjectGroupIds(user.id);
@@ -2470,6 +2471,7 @@ app.post('/api/auth/login', (req, res) => {
       project_group_ids: projectGroupIds,
       executive_role: user.executive_role,
       modulePerms,
+      menuPerms,
     }
   });
 });
