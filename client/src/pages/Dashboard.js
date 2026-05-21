@@ -52,6 +52,7 @@ const taskTableDefaultWidths = {
   assigned: {
     title: 360,
     task_source_label: 100,
+    priority: 80,
     assigned_to_name: 100,
     shared_to_names: 140,
     plan_date: 110,
@@ -77,6 +78,7 @@ const taskTableDefaultWidths = {
   watched: {
     title: 360,
     task_source_label: 100,
+    priority: 80,
     assigned_by_name: 110,
     assigned_to_name: 110,
     shared_to_names: 140,
@@ -204,20 +206,24 @@ export default function Dashboard() {
   // 筛选条件 - 我指派给别人的任务
   const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
+  const [assignedTaskTitleSearch, setAssignedTaskTitleSearch] = useState('');
 
   // 筛选条件 - 需我执行的任务
   const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [executionTaskDateRange, setExecutionTaskDateRange] = useState(null);
+  const [executionTaskTitleSearch, setExecutionTaskTitleSearch] = useState('');
 
   // 筛选条件 - 需我关注的任务
   const [watchedTaskStatusFilter, setWatchedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [watchedTaskDateRange, setWatchedTaskDateRange] = useState(null);
+  const [watchedTaskTitleSearch, setWatchedTaskTitleSearch] = useState('');
 
   // 筛选条件 - 团队任务
   const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [teamTaskDateRange, setTeamTaskDateRange] = useState(null);
   const [teamTaskAssignerFilter, setTeamTaskAssignerFilter] = useState([]);
   const [teamTaskFollowerFilter, setTeamTaskFollowerFilter] = useState([]);
+  const [teamTaskTitleSearch, setTeamTaskTitleSearch] = useState('');
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
@@ -435,6 +441,12 @@ export default function Dashboard() {
     return !value.isBefore(range[0], 'day') && !value.isAfter(range[1], 'day');
   };
 
+  const isTitleSearchHit = (task, keyword) => {
+    const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+    if (!normalizedKeyword) return true;
+    return String(task.title || '').toLowerCase().includes(normalizedKeyword);
+  };
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -586,21 +598,25 @@ export default function Dashboard() {
   };
 
   const filteredAssignedTasks = assignedTasks.filter(t => {
+    if (!isTitleSearchHit(t, assignedTaskTitleSearch)) return false;
     if (!assignedTaskStatusFilter.includes(t.display_status)) return false;
     return isWithinRange(t.plan_date, assignedTaskDateRange);
   });
 
   const filteredExecutionTasks = executionTasks.filter(t => {
+    if (!isTitleSearchHit(t, executionTaskTitleSearch)) return false;
     if (!executionTaskStatusFilter.includes(t.display_status)) return false;
     return isWithinRange(t.plan_date, executionTaskDateRange);
   });
 
   const filteredWatchedTasks = watchedTasks.filter(t => {
+    if (!isTitleSearchHit(t, watchedTaskTitleSearch)) return false;
     if (!watchedTaskStatusFilter.includes(t.display_status)) return false;
     return isWithinRange(t.plan_date, watchedTaskDateRange);
   });
 
   const filteredTeamTasks = teamTasks.filter(t => {
+    if (!isTitleSearchHit(t, teamTaskTitleSearch)) return false;
     if (!teamTaskStatusFilter.includes(t.display_status)) return false;
     if (teamTaskAssignerFilter.length > 0 && !teamTaskAssignerFilter.includes(t.assigner_name)) return false;
     if (teamTaskFollowerFilter.length > 0 && !teamTaskFollowerFilter.includes(t.follower_name)) return false;
@@ -758,6 +774,13 @@ export default function Dashboard() {
       render: (value, record) => <Tag color={record.task_source === 'opportunity' ? 'purple' : 'blue'}>{value}</Tag>,
     },
     {
+      title: '优先级',
+      dataIndex: 'priority',
+      key: 'priority',
+      width: 80,
+      render: (priority) => priority ? <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag> : <Text type="secondary">-</Text>,
+    },
+    {
       title: '负责人',
       dataIndex: 'assigned_to_name',
       key: 'assigned_to_name',
@@ -842,6 +865,13 @@ export default function Dashboard() {
       key: 'task_source_label',
       width: 100,
       render: (value, record) => <Tag color={record.task_source === 'opportunity' ? 'purple' : 'cyan'}>{value}</Tag>,
+    },
+    {
+      title: '优先级',
+      dataIndex: 'priority',
+      key: 'priority',
+      width: 80,
+      render: (priority) => priority ? <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag> : <Text type="secondary">-</Text>,
     },
     {
       title: '指派人',
@@ -1107,6 +1137,13 @@ export default function Dashboard() {
         <div>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+              <Input
+                allowClear
+                placeholder="搜索任务标题"
+                value={assignedTaskTitleSearch}
+                onChange={event => setAssignedTaskTitleSearch(event.target.value)}
+                style={isMobile ? { width: '100%' } : { width: 220 }}
+              />
               <Select
                 mode="multiple"
                 placeholder="状态筛选"
@@ -1121,10 +1158,11 @@ export default function Dashboard() {
                 onChange={setAssignedTaskDateRange}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskDateRange) && (
+              {(assignedTaskTitleSearch.trim() || assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
+                    setAssignedTaskTitleSearch('');
                     setAssignedTaskStatusFilter([...TASK_STATUS_VALUES]);
                     setAssignedTaskDateRange(null);
                   }}
@@ -1175,6 +1213,13 @@ export default function Dashboard() {
         <div>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+              <Input
+                allowClear
+                placeholder="搜索任务标题"
+                value={executionTaskTitleSearch}
+                onChange={event => setExecutionTaskTitleSearch(event.target.value)}
+                style={isMobile ? { width: '100%' } : { width: 220 }}
+              />
               <Select
                 mode="multiple"
                 placeholder="状态筛选"
@@ -1189,10 +1234,11 @@ export default function Dashboard() {
                 onChange={setExecutionTaskDateRange}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(executionTaskStatusFilter.length !== TASK_STATUS_VALUES.length || executionTaskDateRange) && (
+              {(executionTaskTitleSearch.trim() || executionTaskStatusFilter.length !== TASK_STATUS_VALUES.length || executionTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
+                    setExecutionTaskTitleSearch('');
                     setExecutionTaskStatusFilter([...TASK_STATUS_VALUES]);
                     setExecutionTaskDateRange(null);
                   }}
@@ -1242,6 +1288,13 @@ export default function Dashboard() {
       <div>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="搜索任务标题"
+              value={watchedTaskTitleSearch}
+              onChange={event => setWatchedTaskTitleSearch(event.target.value)}
+              style={isMobile ? { width: '100%' } : { width: 220 }}
+            />
             <Select
               mode="multiple"
               placeholder="状态筛选"
@@ -1256,10 +1309,11 @@ export default function Dashboard() {
               onChange={setWatchedTaskDateRange}
               style={isMobile ? { width: '100%' } : { width: 240 }}
             />
-            {(watchedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || watchedTaskDateRange) && (
+            {(watchedTaskTitleSearch.trim() || watchedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || watchedTaskDateRange) && (
               <Button
                 size="small"
                 onClick={() => {
+                  setWatchedTaskTitleSearch('');
                   setWatchedTaskStatusFilter([...TASK_STATUS_VALUES]);
                   setWatchedTaskDateRange(null);
                 }}
@@ -1309,6 +1363,13 @@ export default function Dashboard() {
         <div>
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+              <Input
+                allowClear
+                placeholder="搜索任务标题"
+                value={teamTaskTitleSearch}
+                onChange={event => setTeamTaskTitleSearch(event.target.value)}
+                style={isMobile ? { width: '100%' } : { width: 220 }}
+              />
               <Select
                 mode="multiple"
                 placeholder="状态筛选"
@@ -1339,10 +1400,11 @@ export default function Dashboard() {
                 onChange={setTeamTaskDateRange}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(teamTaskStatusFilter.length !== TASK_STATUS_VALUES.length || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
+              {(teamTaskTitleSearch.trim() || teamTaskStatusFilter.length !== TASK_STATUS_VALUES.length || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
                 <Button
                   size="small"
                   onClick={() => {
+                    setTeamTaskTitleSearch('');
                     setTeamTaskStatusFilter([...TASK_STATUS_VALUES]);
                     setTeamTaskDateRange(null);
                     setTeamTaskAssignerFilter([]);
