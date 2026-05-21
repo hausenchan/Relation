@@ -56,6 +56,7 @@ export const projectGroupsApi = {
 export const personsApi = {
   list: (params) => api.get('/persons', { params }).then(r => r.data),
   get: (id) => api.get(`/persons/${id}`).then(r => r.data),
+  duplicateCheck: (params) => api.get('/persons/duplicate-check', { params }).then(r => r.data),
   create: (data) => api.post('/persons', data).then(r => r.data),
   update: (id, data) => api.put(`/persons/${id}`, data).then(r => r.data),
   batchUpdate: (data) => api.put('/persons/batch', data).then(r => r.data),

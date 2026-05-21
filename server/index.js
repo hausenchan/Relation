@@ -38,6 +38,30 @@ function normalizePersonName(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function getPersonNameKey(value) {
+  return normalizePersonName(value).toLowerCase();
+}
+
+function getThreeCharGivenNameKey(value) {
+  const chars = Array.from(getPersonNameKey(value));
+  return chars.length === 3 ? chars.slice(1).join('') : '';
+}
+
+function getPersonNameDuplicateReason(inputName, existingName) {
+  const inputKey = getPersonNameKey(inputName);
+  const existingKey = getPersonNameKey(existingName);
+  if (!inputKey || !existingKey) return null;
+  if (inputKey === existingKey) return 'same_full_name';
+
+  const inputGivenName = getThreeCharGivenNameKey(inputKey);
+  const existingGivenName = getThreeCharGivenNameKey(existingKey);
+  if ((inputGivenName && inputGivenName === existingKey) || (existingGivenName && existingGivenName === inputKey)) {
+    return 'same_given_name';
+  }
+
+  return null;
+}
+
 function uploadAttachments(req, res, next) {
   upload.array('files', 10)(req, res, (err) => {
     if (!err) return next();
@@ -2848,6 +2872,31 @@ app.get('/api/persons', (req, res) => {
     ));
   }
   res.json(rows);
+});
+
+app.get('/api/persons/duplicate-check', canWrite, (req, res) => {
+  const name = normalizePersonName(req.query.name);
+  if (!name) return res.json({ total: 0, matches: [] });
+
+  const visiblePersons = getVisiblePersonsForImport(req.user);
+  const matches = visiblePersons
+    .map(person => ({
+      person,
+      reason: getPersonNameDuplicateReason(name, person.name),
+    }))
+    .filter(item => item.reason);
+
+  res.json({
+    total: matches.length,
+    matches: matches.slice(0, 10).map(({ person, reason }) => ({
+      id: person.id,
+      name: person.name,
+      company: person.company || person.current_company || '',
+      position: person.position || person.current_position || '',
+      person_category: person.person_category,
+      reason,
+    })),
+  });
 });
 
 const MAP_GEOCODE_REFRESH_LIMIT = 40;

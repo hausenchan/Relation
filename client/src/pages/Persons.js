@@ -102,6 +102,54 @@ const isExecutiveUser = (user) =>
 
 const isPrivatePerson = (record) => record?.visibility_scope === PRIVATE_PERSON_SCOPE;
 
+const personDuplicateReasonText = {
+  same_full_name: '姓名相同',
+  same_given_name: '名字相同',
+};
+
+function confirmPersonDuplicateInsert(duplicateInfo) {
+  const matches = Array.isArray(duplicateInfo?.matches) ? duplicateInfo.matches : [];
+  const total = duplicateInfo?.total || matches.length;
+  const hiddenCount = Math.max(total - matches.length, 0);
+
+  return new Promise(resolve => {
+    Modal.confirm({
+      title: '发现疑似同名人脉',
+      content: (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Text>系统中已有疑似同名人脉，请确认是否仍然添加。</Text>
+          <List
+            size="small"
+            dataSource={matches}
+            renderItem={item => (
+              <List.Item>
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  <Space size={6} wrap>
+                    <Text strong>{item.name}</Text>
+                    <Tag color={item.reason === 'same_given_name' ? 'orange' : 'red'}>
+                      {personDuplicateReasonText[item.reason] || '疑似同名'}
+                    </Tag>
+                  </Space>
+                  {(item.company || item.position) && (
+                    <Text type="secondary">
+                      {[item.company, item.position].filter(Boolean).join(' / ')}
+                    </Text>
+                  )}
+                </Space>
+              </List.Item>
+            )}
+          />
+          {hiddenCount > 0 && <Text type="secondary">另有 {hiddenCount} 条疑似同名记录未展示。</Text>}
+        </Space>
+      ),
+      okText: '仍然添加',
+      cancelText: '返回修改',
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
+}
+
 function RelationTags({ value }) {
   const types = parseRelationTypes(value);
   return (
@@ -587,6 +635,15 @@ export default function Persons() {
         setCurrent({ ...editing, ...payload });
       }
     } else {
+      try {
+        const duplicateInfo = await personsApi.duplicateCheck({ name: payload.name });
+        if ((duplicateInfo?.total || 0) > 0) {
+          const shouldContinue = await confirmPersonDuplicateInsert(duplicateInfo);
+          if (!shouldContinue) return;
+        }
+      } catch {
+        message.warning('重名检查失败，将继续保存当前人脉');
+      }
       await personsApi.create(payload);
       message.success('添加成功');
     }
