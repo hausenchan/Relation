@@ -79,6 +79,53 @@ const importanceMap = {
   low:    { label: '低',   color: 'default' },
 };
 
+const companyDuplicateMatchText = {
+  same_name: '名称相同',
+  keyword_contains: '关键词命中',
+};
+
+function showCompanyDuplicateWarning(duplicateInfo) {
+  const matches = Array.isArray(duplicateInfo?.matches) ? duplicateInfo.matches : [];
+  const total = duplicateInfo?.total || matches.length;
+  const hiddenCount = Math.max(total - matches.length, 0);
+
+  return new Promise(resolve => {
+    Modal.warning({
+      title: '系统已存在疑似同名公司',
+      content: (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Text>为避免重复建档，请优先使用已有公司记录。</Text>
+          <List
+            size="small"
+            dataSource={matches}
+            renderItem={item => (
+              <List.Item>
+                <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                  <Space size={6} wrap>
+                    <Text strong>{item.name}</Text>
+                    <Tag color={item.match_type === 'same_name' ? 'red' : 'orange'}>
+                      {companyDuplicateMatchText[item.match_type] || '疑似重复'}
+                    </Tag>
+                    <Tag color={item.visible ? 'blue' : 'gold'}>{item.visible ? '你可见' : '需共享'}</Tag>
+                  </Space>
+                  <Text type="secondary">
+                    {item.visible
+                      ? '你已有权限，请到公司列表搜索后打开维护。'
+                      : `由 ${item.created_by_name || '其他用户'} 创建，请联系对方共享给你。`}
+                  </Text>
+                </Space>
+              </List.Item>
+            )}
+          />
+          {hiddenCount > 0 && <Text type="secondary">另有 {hiddenCount} 条疑似重复记录未展示。</Text>}
+        </Space>
+      ),
+      okText: '知道了',
+      onOk: () => resolve(),
+    });
+  });
+}
+
 // ==================== 子表单：添加/编辑公司 ====================
 function CompanyModal({ open, editing, onClose, onSuccess }) {
   const screens = useBreakpoint();
@@ -103,12 +150,26 @@ function CompanyModal({ open, editing, onClose, onSuccess }) {
 
   const handleOk = async () => {
     const values = await form.validateFields();
-    if (editing) {
-      await companiesApi.update(editing.id, values);
-      message.success('更新成功');
-    } else {
-      await companiesApi.create(values);
-      message.success('添加成功');
+    try {
+      if (editing) {
+        await companiesApi.update(editing.id, values);
+        message.success('更新成功');
+      } else {
+        const duplicateInfo = await companiesApi.duplicateCheck({ name: values.name });
+        if (duplicateInfo?.blocking) {
+          await showCompanyDuplicateWarning(duplicateInfo);
+          return;
+        }
+        await companiesApi.create(values);
+        message.success('添加成功');
+      }
+    } catch (err) {
+      if (err.response?.status === 409 && err.response?.data?.duplicate) {
+        await showCompanyDuplicateWarning(err.response.data.duplicate);
+        return;
+      }
+      message.error(err.response?.data?.error || '保存失败，请重试');
+      return;
     }
     onClose();
     onSuccess();

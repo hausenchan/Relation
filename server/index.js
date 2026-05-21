@@ -62,6 +62,47 @@ function getPersonNameDuplicateReason(inputName, existingName) {
   return null;
 }
 
+function normalizeCompanyNameForMatch(value) {
+  return typeof value === 'string'
+    ? value
+      .trim()
+      .toLowerCase()
+      .replace(/[()\[\]（）【】「」『』·\s.,，。:：;；\-_/\\]/g, '')
+    : '';
+}
+
+function getCompanyNameMatchKeys(value) {
+  const full = normalizeCompanyNameForMatch(value);
+  if (!full) return [];
+  const suffixes = [
+    '股份有限公司',
+    '有限责任公司',
+    '有限公司',
+    '控股集团',
+    '集团公司',
+    '集团',
+    '公司',
+  ];
+  const keys = new Set([full]);
+  suffixes.forEach(suffix => {
+    if (full.endsWith(suffix) && full.length > suffix.length) {
+      keys.add(full.slice(0, -suffix.length));
+    }
+  });
+  return [...keys].filter(key => key.length >= 2);
+}
+
+function getCompanyNameDuplicateReason(inputName, existingName) {
+  const inputKeys = getCompanyNameMatchKeys(inputName);
+  const existingKeys = getCompanyNameMatchKeys(existingName);
+  if (inputKeys.length === 0 || existingKeys.length === 0) return null;
+  if (inputKeys.some(inputKey => existingKeys.includes(inputKey))) return 'same_name';
+  if (inputKeys.some(inputKey => existingKeys.some(existingKey => inputKey.includes(existingKey) || existingKey.includes(inputKey)))) {
+    return 'keyword_contains';
+  }
+  return null;
+}
+
 function uploadAttachments(req, res, next) {
   upload.array('files', 10)(req, res, (err) => {
     if (!err) return next();
@@ -4800,6 +4841,40 @@ db.exec(`
 // =========== 公司研究 API ===========
 
 // 公司
+function canAccessCompany(user, company) {
+  if (isAdmin(user.role)) return true;
+  const shared = String(company.shared_with || '').split(',').filter(Boolean).map(Number);
+  return Number(company.created_by) === Number(user.id) || shared.includes(Number(user.id));
+}
+
+function buildCompanyDuplicateInfo(name, user) {
+  const rows = decryptRows('companies', db.prepare(`
+    SELECT c.*, COALESCE(u.display_name, u.username) as created_by_name
+    FROM companies c
+    LEFT JOIN users u ON c.created_by = u.id
+    ORDER BY c.updated_at DESC
+  `).all());
+  const matches = rows
+    .map(company => ({
+      company,
+      match_type: getCompanyNameDuplicateReason(name, company.name),
+      visible: canAccessCompany(user, company),
+    }))
+    .filter(item => item.match_type);
+
+  return {
+    total: matches.length,
+    blocking: matches.length > 0,
+    matches: matches.slice(0, 10).map(({ company, match_type, visible }) => ({
+      id: visible ? company.id : null,
+      name: company.name,
+      match_type,
+      visible,
+      created_by_name: company.created_by_name || '未知用户',
+    })),
+  };
+}
+
 app.get('/api/companies', (req, res) => {
   const { search, category } = req.query;
   let q = 'SELECT * FROM companies WHERE 1=1';
@@ -4823,21 +4898,31 @@ app.get('/api/companies', (req, res) => {
   res.json(rows);
 });
 
+app.get('/api/companies/duplicate-check', canWrite, (req, res) => {
+  const name = typeof req.query.name === 'string' ? req.query.name.trim() : '';
+  if (!name) return res.json({ total: 0, blocking: false, matches: [] });
+  res.json(buildCompanyDuplicateInfo(name, req.user));
+});
+
 app.get('/api/companies/:id', (req, res) => {
   const c = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id);
   if (!c) return res.status(404).json({ error: '未找到' });
-  if (!isAdmin(req.user.role)) {
-    const uid = req.user.id;
-    const shared = String(c.shared_with || '').split(',').filter(Boolean).map(Number);
-    if (c.created_by !== uid && !shared.includes(uid)) {
-      return res.status(403).json({ error: '无权访问' });
-    }
+  if (!canAccessCompany(req.user, c)) {
+    return res.status(403).json({ error: '无权访问' });
   }
   res.json(decryptRow('companies', c));
 });
 
 app.post('/api/companies', canWrite, (req, res) => {
   const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with } = req.body;
+  if (!String(name || '').trim()) return res.status(400).json({ error: '公司名称必填' });
+  const duplicate = buildCompanyDuplicateInfo(name, req.user);
+  if (duplicate.blocking) {
+    return res.status(409).json({
+      error: '系统已存在疑似同名公司，请联系创建人共享后再维护，避免重复新建',
+      duplicate,
+    });
+  }
   const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
   const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   const r = db.prepare(`

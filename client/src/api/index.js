@@ -102,6 +102,7 @@ export const companiesApi = {
   list: (params) => api.get('/companies', { params }).then(r => r.data),
   get: (id) => api.get(`/companies/${id}`).then(r => r.data),
   summary: (id) => api.get(`/companies/${id}/summary`).then(r => r.data),
+  duplicateCheck: (params) => api.get('/companies/duplicate-check', { params }).then(r => r.data),
   create: (data) => api.post('/companies', data).then(r => r.data),
   update: (id, data) => api.put(`/companies/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/companies/${id}`).then(r => r.data),
