@@ -192,22 +192,35 @@ function RecordsTab() {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterPersonName, setFilterPersonName] = useState('');
+  const [filterCompany, setFilterCompany] = useState('');
   const [editModal, setEditModal] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await giftRecordsApi.list({ status: filterStatus || undefined });
+    const res = await giftRecordsApi.list({
+      status: filterStatus || undefined,
+      person_name: filterPersonName.trim() || undefined,
+      company: filterCompany.trim() || undefined,
+    });
     setData(res);
     setLoading(false);
-  }, [filterStatus]);
+  }, [filterStatus, filterPersonName, filterCompany]);
 
   useEffect(() => { load(); }, [load]);
 
   const openEdit = (r) => {
     setEditing(r);
-    form.setFieldsValue({ status: r.status, send_date: r.send_date, feedback: r.feedback, rating: r.rating });
+    form.setFieldsValue({
+      status: r.status,
+      send_date: r.send_date,
+      courier_company: r.courier_company,
+      tracking_number: r.tracking_number,
+      feedback: r.feedback,
+      rating: r.rating,
+    });
     setEditModal(true);
   };
 
@@ -223,18 +236,21 @@ function RecordsTab() {
 
   const columns = [
     { title: '送礼人', dataIndex: 'sender_name' },
-    {
-      title: '收礼人',
-      render: (_, r) => (
-        <div>
-          <Text strong>{r.person_name}</Text>
-          <div style={{ fontSize: 11, color: '#888' }}>{r.company || r.city}</div>
-        </div>
-      ),
-    },
-    { title: '礼品', render: (_, r) => <span>{r.gift_name} × {r.quantity}{r.gift_unit}</span> },
-    { title: '礼品价值', render: (_, r) => `¥${((r.gift_price || 0) * r.quantity).toFixed(2)}` },
-    { title: '送出日期', dataIndex: 'send_date', render: v => v || '-' },
+	    {
+	      title: '收礼人',
+	      render: (_, r) => (
+	        <div>
+	          <Text strong>{r.person_name}</Text>
+	          <div style={{ fontSize: 11, color: '#888' }}>{r.city || '-'}</div>
+	        </div>
+	      ),
+	    },
+    { title: '公司', dataIndex: 'company', render: v => v || '-' },
+	    { title: '礼品', render: (_, r) => <span>{r.gift_name} × {r.quantity}{r.gift_unit}</span> },
+	    { title: '礼品价值', render: (_, r) => `¥${((r.gift_price || 0) * r.quantity).toFixed(2)}` },
+	    { title: '送出日期', dataIndex: 'send_date', render: v => v || '-' },
+    { title: '快递公司', dataIndex: 'courier_company', render: v => v || '-' },
+    { title: '快递单号', dataIndex: 'tracking_number', ellipsis: true, render: v => v || '-' },
     {
       title: '状态', dataIndex: 'status',
       render: v => { const m = recordStatusMap[v]; return m ? <Tag color={m.color}>{m.label}</Tag> : v; },
@@ -264,10 +280,14 @@ function RecordsTab() {
             </div>
             <Tag color={recordStatusMap[record.status]?.color}>{recordStatusMap[record.status]?.label}</Tag>
           </div>
-          <Text>礼品：{record.gift_name} × {record.quantity}{record.gift_unit}</Text>
-          <Text type="secondary">送礼人：{record.sender_name || '-'}</Text>
-          <Text type="secondary">礼品价值：¥{((record.gift_price || 0) * record.quantity).toFixed(2)}</Text>
-          {record.send_date && <Text type="secondary">送出日期：{record.send_date}</Text>}
+	          <Text>礼品：{record.gift_name} × {record.quantity}{record.gift_unit}</Text>
+          <Text type="secondary">公司：{record.company || '-'}</Text>
+	          <Text type="secondary">送礼人：{record.sender_name || '-'}</Text>
+	          <Text type="secondary">礼品价值：¥{((record.gift_price || 0) * record.quantity).toFixed(2)}</Text>
+	          {record.send_date && <Text type="secondary">送出日期：{record.send_date}</Text>}
+          {(record.courier_company || record.tracking_number) && (
+            <Text type="secondary">物流：{[record.courier_company, record.tracking_number].filter(Boolean).join(' / ')}</Text>
+          )}
           {record.rating ? <Rate disabled value={record.rating} style={{ fontSize: 12 }} /> : <Text type="secondary" style={{ fontSize: 12 }}>未填写评分</Text>}
           {record.feedback && (
             <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
@@ -285,9 +305,25 @@ function RecordsTab() {
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Select value={filterStatus || undefined} allowClear placeholder="全部状态" style={{ width: isMobile ? '100%' : 120 }} onChange={v => setFilterStatus(v || '')}>
-          {Object.entries(recordStatusMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
-        </Select>
+        <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+          <Select value={filterStatus || undefined} allowClear placeholder="全部状态" style={{ width: isMobile ? '100%' : 120 }} onChange={v => setFilterStatus(v || '')}>
+            {Object.entries(recordStatusMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
+          </Select>
+          <Input
+            allowClear
+            placeholder="收礼人"
+            value={filterPersonName}
+            onChange={event => setFilterPersonName(event.target.value)}
+            style={{ width: isMobile ? '100%' : 180 }}
+          />
+          <Input
+            allowClear
+            placeholder="公司名称"
+            value={filterCompany}
+            onChange={event => setFilterCompany(event.target.value)}
+            style={{ width: isMobile ? '100%' : 200 }}
+          />
+        </Space>
       </div>
 
       {isMobile ? (
@@ -301,7 +337,7 @@ function RecordsTab() {
         />
       ) : (
         <Table columns={columns} dataSource={data} rowKey="id" loading={loading} size="small"
-          pagination={{ defaultPageSize: 15 }} scroll={{ x: 1100 }} />
+          pagination={{ defaultPageSize: 15 }} scroll={{ x: 1380 }} />
       )}
 
       <Modal title="更新送礼状态 & 回填反馈" open={editModal}
@@ -316,6 +352,12 @@ function RecordsTab() {
           </Form.Item>
           <Form.Item label="实际送出日期" name="send_date">
             <Input placeholder="如：2026-09-29" />
+          </Form.Item>
+          <Form.Item label="快递公司" name="courier_company">
+            <Input placeholder="如：顺丰、京东、德邦" />
+          </Form.Item>
+          <Form.Item label="快递单号" name="tracking_number">
+            <Input placeholder="填写快递单号" />
           </Form.Item>
           <Form.Item label="收礼人满意度" name="rating">
             <Rate allowClear />

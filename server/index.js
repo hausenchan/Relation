@@ -1309,14 +1309,22 @@ db.exec(`
     gift_id INTEGER NOT NULL,
     quantity INTEGER DEFAULT 1,
     sender_id INTEGER NOT NULL,
-    send_date TEXT,
-    status TEXT DEFAULT 'pending',
-    feedback TEXT,
-    rating INTEGER,
+	    send_date TEXT,
+	    status TEXT DEFAULT 'pending',
+	    courier_company TEXT,
+	    tracking_number TEXT,
+	    feedback TEXT,
+	    rating INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
-`);
+	`);
+
+const giftRecordCols = db.prepare("PRAGMA table_info(gift_records)").all().map(c => c.name);
+if (giftRecordCols.length > 0) {
+  if (!giftRecordCols.includes('courier_company')) db.exec("ALTER TABLE gift_records ADD COLUMN courier_company TEXT");
+  if (!giftRecordCols.includes('tracking_number')) db.exec("ALTER TABLE gift_records ADD COLUMN tracking_number TEXT");
+}
 
 // =========== 操作日志表与自动留痕 ===========
 const OPERATION_LOG_RETENTION_MONTHS = 3;
@@ -1939,7 +1947,7 @@ app.post('/api/gift_requests/:id/review', (req, res) => {
 
 // 送礼记录
 app.get('/api/gift_records', (req, res) => {
-  const { status } = req.query;
+  const { status, person_name, company } = req.query;
   let q = `
     SELECT gr.*,
       p.name as person_name, p.company, p.city, p.phone, p.wechat,
@@ -1962,18 +1970,27 @@ app.get('/api/gift_records', (req, res) => {
   }
   if (status) { q += ' AND gr.status = ?'; params.push(status); }
   q += ' ORDER BY gr.created_at DESC';
-  res.json(db.prepare(q).all(...params).map(r => ({
+  let rows = db.prepare(q).all(...params).map(r => ({
     ...r,
     person_name: decrypt(r.person_name),
     company: decrypt(r.company),
     phone: decrypt(r.phone),
     wechat: decrypt(r.wechat),
     gift_name: decrypt(r.gift_name),
-  })));
+  }));
+  const personKeyword = String(person_name || '').trim().toLowerCase();
+  const companyKeyword = String(company || '').trim().toLowerCase();
+  if (personKeyword) {
+    rows = rows.filter(r => String(r.person_name || '').toLowerCase().includes(personKeyword));
+  }
+  if (companyKeyword) {
+    rows = rows.filter(r => String(r.company || '').toLowerCase().includes(companyKeyword));
+  }
+  res.json(rows);
 });
 
 app.put('/api/gift_records/:id', (req, res) => {
-  const { status, feedback, rating, send_date } = req.body;
+  const { status, feedback, rating, send_date, courier_company, tracking_number } = req.body;
   const record = db.prepare('SELECT * FROM gift_records WHERE id = ?').get(req.params.id);
   if (!record) return res.status(404).json({ error: '未找到' });
   const person = getPersonAccessRecord(record.person_id);
@@ -1983,8 +2000,8 @@ app.put('/api/gift_records/:id', (req, res) => {
   }
 
   const updateAndLog = db.transaction(() => {
-    db.prepare(`UPDATE gift_records SET status=?, feedback=?, rating=?, send_date=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-      .run(status, feedback, rating || null, send_date, req.params.id);
+    db.prepare(`UPDATE gift_records SET status=?, feedback=?, rating=?, send_date=?, courier_company=?, tracking_number=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+      .run(status, feedback, rating || null, send_date, courier_company || null, tracking_number || null, req.params.id);
 
     // 状态变为「已接收」且之前不是「已接收」时，自动生成互动记录
     if (status === 'received' && record.status !== 'received') {
