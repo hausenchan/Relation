@@ -786,6 +786,11 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                     </Space>
                   </div>
                   {p.launch_date && <Text type="secondary" style={{ fontSize: 12 }}>上线：{p.launch_date}</Text>}
+                  {p.discovery_source && (
+                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                      <Text type="secondary">产品发现出处：</Text>{p.discovery_source}
+                    </div>
+                  )}
                   {p.description && <Paragraph style={{ marginTop: 6, marginBottom: 4, fontSize: 13 }}>{p.description}</Paragraph>}
                   {p.target_users && <div style={{ fontSize: 12 }}><Text type="secondary">目标用户：</Text>{p.target_users}</div>}
                   {p.core_features && (
@@ -848,6 +853,15 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
             <Col span={isMobile ? 24 : 12}>
               <Form.Item label="上线时间" name="launch_date">
                 <Input placeholder="如：2023-06" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item
+                label="产品发现出处"
+                name="discovery_source"
+                extra="发现该产品的出处，比如中青看点"
+              >
+                <Input placeholder="如：中青看点" />
               </Form.Item>
             </Col>
             <Col span={24}>
