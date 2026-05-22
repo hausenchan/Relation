@@ -1955,7 +1955,7 @@ app.get('/api/gift_records', (req, res) => {
   const privacy = buildPersonPrivacyFilter(req.user.id, 'p');
   q += privacy.sql;
   params.push(...privacy.params);
-  const visibleIds2 = getVisibleUserIds(req.user.id, req.user.role);
+  const visibleIds2 = canViewAllGiftRecords(req.user) ? null : getVisibleUserIds(req.user.id, req.user.role);
   if (visibleIds2 !== null) {
     q += ` AND gr.sender_id IN (${visibleIds2.map(() => '?').join(',')})`;
     params.push(...visibleIds2);
@@ -2145,6 +2145,30 @@ function getUsersByTeamIds(teamIds) {
   const fromUsers = db.prepare(`SELECT id FROM users WHERE team_id IN (${placeholders})`).all(...teamIds).map(u => u.id);
   const fromRelations = db.prepare(`SELECT user_id as id FROM user_teams WHERE team_id IN (${placeholders})`).all(...teamIds).map(u => u.id);
   return [...new Set([...fromUsers, ...fromRelations])];
+}
+
+function isAdministrativeTeam(team) {
+  const name = String(team?.name || '').toLowerCase();
+  const department = String(team?.department || '').toLowerCase();
+  return (
+    ['admin', 'administration', 'administrative'].includes(department)
+    || name.includes('行政')
+    || name.includes('admin')
+    || name.includes('administration')
+  );
+}
+
+function canViewAllGiftRecords(user) {
+  if (!user) return false;
+  if (isAdmin(user.role)) return true;
+  const department = String(user.department || '').toLowerCase();
+  if (['admin', 'administration', 'administrative'].includes(department)) return true;
+
+  const teamIds = getUserTeamIds(user.id);
+  if (!teamIds.length) return false;
+  const placeholders = teamIds.map(() => '?').join(',');
+  const teams = db.prepare(`SELECT name, department FROM teams WHERE id IN (${placeholders})`).all(...teamIds);
+  return teams.some(isAdministrativeTeam);
 }
 
 function getManagedTeamIds(userId, role) {
