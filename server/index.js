@@ -12,10 +12,29 @@ const { decrypt } = require('./lib/crypto');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
+function normalizeUploadedFilename(filename) {
+  if (typeof filename !== 'string' || !filename) return filename;
+  if (/[\u4e00-\u9fff]/.test(filename) || !/[\u0080-\u00ff]/.test(filename)) return filename;
+
+  const decoded = Buffer.from(filename, 'latin1').toString('utf8');
+  if (decoded && !decoded.includes('\uFFFD') && /[\u4e00-\u9fff]/.test(decoded)) {
+    return decoded;
+  }
+  return filename;
+}
+
+function normalizeGenericAttachmentRow(row) {
+  return row ? { ...row, filename: normalizeUploadedFilename(row.filename) } : row;
+}
+
+function normalizeSubjectAttachmentRow(row) {
+  return row ? { ...row, file_name: normalizeUploadedFilename(row.file_name) } : row;
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOADS_DIR),
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
+    const ext = path.extname(normalizeUploadedFilename(file.originalname));
     cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
   },
 });
@@ -24,7 +43,7 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|mp4|mov|avi)$/i;
-    if (!allowed.test(file.originalname)) {
+    if (!allowed.test(normalizeUploadedFilename(file.originalname))) {
       cb(new Error('不支持的文件类型'));
       return;
     }
@@ -6550,7 +6569,7 @@ app.get('/api/company-subjects/:id', (req, res) => {
     WHERE a.subject_id = ?
     ORDER BY a.created_at DESC, a.id DESC
   `).all(req.params.id);
-  res.json({ ...decryptRow('company_subjects', row), attachments });
+  res.json({ ...decryptRow('company_subjects', row), attachments: attachments.map(normalizeSubjectAttachmentRow) });
 });
 
 app.post('/api/company-subjects', (req, res) => {
@@ -6636,7 +6655,7 @@ app.post('/api/company-subjects/:id/attachments', (req, res) => {
     `).run(
       req.params.id,
       attachment_type,
-      req.file.originalname,
+      normalizeUploadedFilename(req.file.originalname),
       req.file.filename,
       req.file.size,
       req.file.mimetype,
@@ -8436,8 +8455,9 @@ app.post('/api/attachments/upload', auth, uploadAttachments, (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const results = req.files.map(f => {
-    const r = insert.run(source_type, source_id, f.originalname, f.filename, f.mimetype, f.size, req.user.id);
-    return { id: r.lastInsertRowid, filename: f.originalname, filepath: f.filename, size: f.size, mimetype: f.mimetype };
+    const filename = normalizeUploadedFilename(f.originalname);
+    const r = insert.run(source_type, source_id, filename, f.filename, f.mimetype, f.size, req.user.id);
+    return { id: r.lastInsertRowid, filename, filepath: f.filename, size: f.size, mimetype: f.mimetype };
   });
   res.json(results);
 });
@@ -8451,11 +8471,11 @@ app.get('/api/attachments', auth, (req, res) => {
     WHERE a.source_type = ? AND a.source_id = ?
     ORDER BY a.created_at ASC
   `).all(source_type, source_id);
-  res.json(rows);
+  res.json(rows.map(normalizeGenericAttachmentRow));
 });
 
 app.get('/api/attachments/:id/download', auth, (req, res) => {
-  const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
+  const row = normalizeGenericAttachmentRow(db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id));
   if (!row) return res.status(404).json({ error: '附件不存在' });
   const filePath = path.join(UPLOADS_DIR, row.filepath);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
