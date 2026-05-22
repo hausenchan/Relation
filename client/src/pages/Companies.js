@@ -786,6 +786,14 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                     </Space>
                   </div>
                   {p.launch_date && <Text type="secondary" style={{ fontSize: 12 }}>上线：{p.launch_date}</Text>}
+                  {p.product_link && (
+                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                      <Text type="secondary">产品链接：</Text>
+                      <a href={p.product_link} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>
+                        <LinkOutlined /> 打开链接
+                      </a>
+                    </div>
+                  )}
                   {p.discovery_source && (
                     <div style={{ marginTop: 6, fontSize: 12 }}>
                       <Text type="secondary">产品发现出处：</Text>{p.discovery_source}
@@ -853,6 +861,11 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
             <Col span={isMobile ? 24 : 12}>
               <Form.Item label="上线时间" name="launch_date">
                 <Input placeholder="如：2023-06" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="产品链接" name="product_link">
+                <Input placeholder="请输入 H5 链接或 deeplink 链接，如：https://... 或 app://..." />
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>

@@ -611,6 +611,9 @@ const prCols = db.prepare("PRAGMA table_info(company_products)").all().map(c => 
 if (prCols.length > 0 && !prCols.includes('entity_id')) {
   db.exec("ALTER TABLE company_products ADD COLUMN entity_id INTEGER DEFAULT NULL");
 }
+if (prCols.length > 0 && !prCols.includes('product_link')) {
+  db.exec("ALTER TABLE company_products ADD COLUMN product_link TEXT DEFAULT NULL");
+}
 if (prCols.length > 0 && !prCols.includes('discovery_source')) {
   db.exec("ALTER TABLE company_products ADD COLUMN discovery_source TEXT DEFAULT NULL");
 }
@@ -4894,6 +4897,7 @@ db.exec(`
     category TEXT,
     status TEXT DEFAULT 'active',
     launch_date TEXT,
+    product_link TEXT,
     discovery_source TEXT,
     description TEXT,
     target_users TEXT,
@@ -5239,20 +5243,20 @@ app.get('/api/company_products', (req, res) => {
 });
 
 app.post('/api/company_products', (req, res) => {
-  const { company_id, name, category, status, launch_date, discovery_source, description, target_users, core_features, notes, entity_id } = req.body;
+  const { company_id, name, category, status, launch_date, product_link, discovery_source, description, target_users, core_features, notes, entity_id } = req.body;
   const r = db.prepare(`
-    INSERT INTO company_products (company_id, name, category, status, launch_date, discovery_source, description, target_users, core_features, notes, entity_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, name, category, status || 'active', launch_date, discovery_source || null, description, target_users, core_features, notes, entity_id || null);
+    INSERT INTO company_products (company_id, name, category, status, launch_date, product_link, discovery_source, description, target_users, core_features, notes, entity_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(company_id, name, category, status || 'active', launch_date, product_link || null, discovery_source || null, description, target_users, core_features, notes, entity_id || null);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/company_products/:id', (req, res) => {
-  const { name, category, status, launch_date, discovery_source, description, target_users, core_features, notes, entity_id } = req.body;
+  const { name, category, status, launch_date, product_link, discovery_source, description, target_users, core_features, notes, entity_id } = req.body;
   db.prepare(`
-    UPDATE company_products SET name=?, category=?, status=?, launch_date=?, discovery_source=?, description=?, target_users=?, core_features=?, notes=?, entity_id=?, updated_at=CURRENT_TIMESTAMP
+    UPDATE company_products SET name=?, category=?, status=?, launch_date=?, product_link=?, discovery_source=?, description=?, target_users=?, core_features=?, notes=?, entity_id=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
-  `).run(name, category, status, launch_date, discovery_source || null, description, target_users, core_features, notes, entity_id || null, req.params.id);
+  `).run(name, category, status, launch_date, product_link || null, discovery_source || null, description, target_users, core_features, notes, entity_id || null, req.params.id);
   res.json({ success: true });
 });
 
