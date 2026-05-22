@@ -5050,19 +5050,43 @@ app.get('/api/company_entities', (req, res) => {
 
 app.post('/api/company_entities', (req, res) => {
   const { company_id, name, reg_name, city, business, notes, sort_order } = req.body;
+  const targetCompanyId = Number(company_id);
+  if (!targetCompanyId) return res.status(400).json({ error: '所属公司必填' });
+  const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(targetCompanyId);
+  if (!company || !canAccessCompany(req.user, company)) return res.status(404).json({ error: '所属公司不存在或无权访问' });
   const r = db.prepare(`
     INSERT INTO company_entities (company_id, name, reg_name, city, business, notes, sort_order)
     VALUES (?,?,?,?,?,?,?)
-  `).run(company_id, name, reg_name, city, business, notes, sort_order || 0);
+  `).run(targetCompanyId, name, reg_name, city, business, notes, sort_order || 0);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/company_entities/:id', (req, res) => {
-  const { name, reg_name, city, business, notes, sort_order } = req.body;
-  db.prepare(`
-    UPDATE company_entities SET name=?, reg_name=?, city=?, business=?, notes=?, sort_order=?,
-      updated_at=CURRENT_TIMESTAMP WHERE id=?
-  `).run(name, reg_name, city, business, notes, sort_order || 0, req.params.id);
+  const { company_id, name, reg_name, city, business, notes, sort_order } = req.body;
+  const id = Number(req.params.id);
+  const currentEntity = db.prepare('SELECT * FROM company_entities WHERE id = ?').get(id);
+  if (!currentEntity) return res.status(404).json({ error: '主体不存在' });
+  const currentCompany = db.prepare('SELECT * FROM companies WHERE id = ?').get(currentEntity.company_id);
+  if (!currentCompany || !canAccessCompany(req.user, currentCompany)) return res.status(403).json({ error: '无权编辑该主体' });
+
+  const targetCompanyId = Number(company_id || currentEntity.company_id);
+  const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(targetCompanyId);
+  if (!company || !canAccessCompany(req.user, company)) return res.status(404).json({ error: '所属公司不存在或无权访问' });
+
+  const updateEntity = db.transaction(() => {
+    db.prepare(`
+      UPDATE company_entities SET company_id=?, name=?, reg_name=?, city=?, business=?, notes=?, sort_order=?,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?
+    `).run(targetCompanyId, name, reg_name, city, business, notes, sort_order || 0, id);
+
+    if (Number(currentEntity.company_id) !== targetCompanyId) {
+      db.prepare(`
+        UPDATE company_products SET company_id=?, updated_at=CURRENT_TIMESTAMP
+        WHERE entity_id=?
+      `).run(targetCompanyId, id);
+    }
+  });
+  updateEntity();
   res.json({ success: true });
 });
 
@@ -5160,12 +5184,17 @@ app.post('/api/company_personnel/:id/to_person', (req, res) => {
 // 产品
 app.get('/api/company_products', (req, res) => {
   const { company_id, entity_id } = req.query;
-  let q = 'SELECT * FROM company_products WHERE 1=1';
+  let q = `
+    SELECT cp.*,
+      (SELECT COUNT(*) FROM attachments a WHERE a.source_type = 'company_product' AND a.source_id = cp.id) as attachment_count
+    FROM company_products cp
+    WHERE 1=1
+  `;
   const params = [];
-  if (company_id) { q += ' AND company_id = ?'; params.push(company_id); }
-  if (entity_id === 'null') { q += ' AND entity_id IS NULL'; }
-  else if (entity_id) { q += ' AND entity_id = ?'; params.push(entity_id); }
-  q += ' ORDER BY launch_date DESC, created_at DESC';
+  if (company_id) { q += ' AND cp.company_id = ?'; params.push(company_id); }
+  if (entity_id === 'null') { q += ' AND cp.entity_id IS NULL'; }
+  else if (entity_id) { q += ' AND cp.entity_id = ?'; params.push(entity_id); }
+  q += ' ORDER BY cp.launch_date DESC, cp.created_at DESC';
   res.json(db.prepare(q).all(...params));
 });
 
@@ -5188,7 +5217,18 @@ app.put('/api/company_products/:id', (req, res) => {
 });
 
 app.delete('/api/company_products/:id', (req, res) => {
-  db.prepare('DELETE FROM company_products WHERE id = ?').run(req.params.id);
+  const product = db.prepare('SELECT id FROM company_products WHERE id = ?').get(req.params.id);
+  if (!product) return res.status(404).json({ error: '产品不存在' });
+
+  const attachmentRows = db.prepare("SELECT filepath FROM attachments WHERE source_type = 'company_product' AND source_id = ?").all(req.params.id);
+  const deleteProduct = db.transaction((id) => {
+    db.prepare("DELETE FROM attachments WHERE source_type = 'company_product' AND source_id = ?").run(id);
+    db.prepare('DELETE FROM company_products WHERE id = ?').run(id);
+  });
+  deleteProduct(req.params.id);
+  attachmentRows.forEach(att => {
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.filepath)); } catch {}
+  });
   res.json({ success: true });
 });
 

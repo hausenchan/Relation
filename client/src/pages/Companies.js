@@ -8,7 +8,7 @@ import {
   PlusOutlined, EditOutlined, DeleteOutlined, BankOutlined,
   UserOutlined, AppstoreOutlined, ThunderboltOutlined,
   UserAddOutlined, LinkOutlined, GlobalOutlined, TeamOutlined,
-  ApartmentOutlined, UnorderedListOutlined, RiseOutlined, UploadOutlined
+  ApartmentOutlined, UnorderedListOutlined, RiseOutlined, UploadOutlined, PaperClipOutlined
 } from '@ant-design/icons';
 import { Tree, TreeNode } from 'react-organizational-chart';
 import {
@@ -661,8 +661,10 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [data, setData] = useState([]);
+  const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [fileList, setFileList] = useState([]);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -676,12 +678,18 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
 
   const openAdd = () => {
     setEditing(null);
+    setFileList([]);
     form.resetFields();
     // 如果是在某个主体下打开，预填主体
     if (entityId != null) form.setFieldsValue({ entity_id: entityId });
     setModalOpen(true);
   };
-  const openEdit = (r) => { setEditing(r); form.setFieldsValue(r); setModalOpen(true); };
+  const openEdit = (r) => {
+    setEditing(r);
+    setFileList([]);
+    form.setFieldsValue(r);
+    setModalOpen(true);
+  };
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -691,10 +699,26 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
       company_id: companyId,
       entity_id: values.entity_id ?? entityId ?? null,
     };
-    if (editing) { await companyProductsApi.update(editing.id, payload); message.success('已更新'); }
-    else { await companyProductsApi.create(payload); message.success('已添加'); }
-    setModalOpen(false);
-    load();
+    setSaving(true);
+    try {
+      const productId = editing ? editing.id : (await companyProductsApi.create(payload)).id;
+      if (editing) {
+        await companyProductsApi.update(editing.id, payload);
+      }
+      if (fileList.length > 0) {
+        try {
+          await uploadAttachments('company_product', productId, fileList);
+        } catch {
+          message.warning('附件上传失败，但产品信息已保存');
+        }
+      }
+      message.success(editing ? '已更新' : '已添加');
+      setModalOpen(false);
+      setFileList([]);
+      load();
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleDelete = async (id) => {
@@ -731,6 +755,9 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                       {entityName && (
                         <Tag color="geekblue" style={{ fontSize: 11 }}>{entityName}</Tag>
                       )}
+                      {(p.attachment_count || 0) > 0 && (
+                        <Tag icon={<PaperClipOutlined />} style={{ fontSize: 11 }}>附件 {p.attachment_count}</Tag>
+                      )}
                       <Tag color={productStatusMap[p.status]?.color}>{productStatusMap[p.status]?.label || p.status}</Tag>
                       <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(p)} />
                       <Popconfirm title="确认删除？" onConfirm={() => handleDelete(p.id)}>
@@ -759,7 +786,8 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
         title={editing ? '编辑产品' : '添加产品'}
         open={modalOpen}
         onOk={handleSave}
-        onCancel={() => setModalOpen(false)}
+        confirmLoading={saving}
+        onCancel={() => { setModalOpen(false); setFileList([]); }}
         width={isMobile ? '100%' : 600}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
@@ -823,6 +851,26 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                 <TextArea rows={2} />
               </Form.Item>
             </Col>
+            <Col span={24}>
+              <Form.Item label="附件">
+                <Upload
+                  fileList={fileList}
+                  onChange={({ fileList: newFileList }) => setFileList(newFileList)}
+                  beforeUpload={validateAttachment}
+                  maxCount={10}
+                  multiple
+                  accept={ATTACHMENT_ACCEPT}
+                >
+                  <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
+                </Upload>
+              </Form.Item>
+            </Col>
+            {editing && (
+              <Col span={24}>
+                <Divider style={{ margin: '8px 0 12px' }} />
+                <AttachmentList sourceType="company_product" sourceId={editing.id} title="已上传附件" showPreview />
+              </Col>
+            )}
           </Row>
         </Form>
       </Modal>
@@ -1220,11 +1268,18 @@ function CompetitorResearchTab({ companyId }) {
               onChange={({ fileList: newFileList }) => setFileList(newFileList)}
               beforeUpload={validateAttachment}
               maxCount={10}
+              multiple
               accept={ATTACHMENT_ACCEPT}
             >
               <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
             </Upload>
           </Form.Item>
+          {editing && (
+            <>
+              <Divider style={{ margin: '8px 0 12px' }} />
+              <AttachmentList sourceType="competitor_research" sourceId={editing.id} title="已上传附件" showPreview />
+            </>
+          )}
         </Form>
       </Modal>
 
@@ -1299,7 +1354,7 @@ function CompetitorResearchTab({ companyId }) {
               </Descriptions>
 
               <div style={{ marginTop: 20 }}>
-                <AttachmentList sourceType="competitor_research" sourceId={r.id} />
+                <AttachmentList sourceType="competitor_research" sourceId={r.id} showPreview />
               </div>
             </>
           );
@@ -1502,10 +1557,35 @@ function EntityManager({ companyId, entities, onRefresh }) {
   const isMobile = !screens.md;
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [companyOptions, setCompanyOptions] = useState([]);
+  const [companyLoading, setCompanyLoading] = useState(false);
   const [form] = Form.useForm();
 
-  const openAdd = () => { setEditing(null); form.resetFields(); setModalOpen(true); };
-  const openEdit = (e) => { setEditing(e); form.setFieldsValue(e); setModalOpen(true); };
+  const loadCompanyOptions = useCallback(async () => {
+    setCompanyLoading(true);
+    try {
+      const rows = await companiesApi.list();
+      setCompanyOptions(rows);
+    } catch (err) {
+      message.error(err.response?.data?.error || '公司列表加载失败');
+    } finally {
+      setCompanyLoading(false);
+    }
+  }, []);
+
+  const openAdd = () => {
+    setEditing(null);
+    form.resetFields();
+    form.setFieldsValue({ company_id: companyId });
+    setModalOpen(true);
+    loadCompanyOptions();
+  };
+  const openEdit = (e) => {
+    setEditing(e);
+    form.setFieldsValue({ ...e, company_id: e.company_id || companyId });
+    setModalOpen(true);
+    loadCompanyOptions();
+  };
 
   const handleSave = async () => {
     const values = await form.validateFields();
@@ -1513,7 +1593,7 @@ function EntityManager({ companyId, entities, onRefresh }) {
       await companyEntitiesApi.update(editing.id, values);
       message.success('已更新');
     } else {
-      await companyEntitiesApi.create({ ...values, company_id: companyId });
+      await companyEntitiesApi.create(values);
       message.success('已添加');
     }
     setModalOpen(false);
@@ -1540,6 +1620,17 @@ function EntityManager({ companyId, entities, onRefresh }) {
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
+            <Col span={24}>
+              <Form.Item label="所属公司" name="company_id" rules={[{ required: true, message: '请选择所属公司' }]}>
+                <Select
+                  showSearch
+                  loading={companyLoading}
+                  placeholder="请选择所属公司"
+                  optionFilterProp="label"
+                  options={companyOptions.map(c => ({ value: c.id, label: c.name }))}
+                />
+              </Form.Item>
+            </Col>
             <Col span={isMobile ? 24 : 12}>
               <Form.Item label="主体名称（简称）" name="name" rules={[{ required: true }]}>
                 <Input placeholder="如：北京主体、电商品牌" />

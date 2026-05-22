@@ -267,6 +267,14 @@ export const attachmentsApi = {
   upload: (formData) => api.post('/attachments/upload', formData).then(r => r.data),
   list: (params) => api.get('/attachments', { params }).then(r => r.data),
   delete: (id) => api.delete(`/attachments/${id}`).then(r => r.data),
+  getBlob: async (id) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/api/attachments/${id}/download`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error('附件读取失败');
+    return res.blob();
+  },
   download: async (id, filename) => {
     const token = localStorage.getItem('token');
     const res = await fetch(`/api/attachments/${id}/download`, {
