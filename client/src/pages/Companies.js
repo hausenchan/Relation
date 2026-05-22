@@ -764,18 +764,17 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
               <Col xs={24} md={12} key={p.id}>
                 <Card
                   size="small"
-                  title={
-                    <Space>
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                    <Space size={6} wrap style={{ minWidth: 0, flex: '1 1 180px' }}>
                       <AppstoreOutlined />
-                      <Text strong>{p.name}</Text>
+                      <Text strong style={{ wordBreak: 'break-word' }}>{p.name}</Text>
                       {p.category && <Tag>{p.category}</Tag>}
-                    </Space>
-                  }
-                  extra={
-                    <Space>
                       {entityName && (
                         <Tag color="geekblue" style={{ fontSize: 11 }}>{entityName}</Tag>
                       )}
+                    </Space>
+                    <Space size={6} wrap style={{ justifyContent: 'flex-end', flex: '1 0 auto' }}>
                       {(p.attachment_count || 0) > 0 && (
                         <Tag icon={<PaperClipOutlined />} style={{ fontSize: 11 }}>附件 {p.attachment_count}</Tag>
                       )}
@@ -785,8 +784,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                         <Button size="small" danger icon={<DeleteOutlined />} />
                       </Popconfirm>
                     </Space>
-                  }
-                >
+                  </div>
                   {p.launch_date && <Text type="secondary" style={{ fontSize: 12 }}>上线：{p.launch_date}</Text>}
                   {p.description && <Paragraph style={{ marginTop: 6, marginBottom: 4, fontSize: 13 }}>{p.description}</Paragraph>}
                   {p.target_users && <div style={{ fontSize: 12 }}><Text type="secondary">目标用户：</Text>{p.target_users}</div>}
