@@ -745,6 +745,7 @@ const companyCols = db.prepare("PRAGMA table_info(companies)").all().map(c => c.
 if (companyCols.length > 0) {
   if (!companyCols.includes('created_by')) db.exec("ALTER TABLE companies ADD COLUMN created_by INTEGER DEFAULT NULL");
   if (!companyCols.includes('shared_with')) db.exec("ALTER TABLE companies ADD COLUMN shared_with TEXT DEFAULT NULL");
+  if (!companyCols.includes('project_group_ids')) db.exec("ALTER TABLE companies ADD COLUMN project_group_ids TEXT DEFAULT NULL");
 }
 
 // =========== 商务任务表 ===========
@@ -4904,6 +4905,14 @@ function canAccessCompany(user, company) {
   return Number(company.created_by) === Number(user.id) || shared.includes(Number(user.id));
 }
 
+function normalizeProjectGroupIds(projectGroupIds) {
+  const raw = Array.isArray(projectGroupIds)
+    ? projectGroupIds
+    : String(projectGroupIds || '').split(',');
+  const ids = [...new Set(raw.map(id => Number(id)).filter(Boolean))];
+  return ids.length ? ids.join(',') : null;
+}
+
 function buildCompanyDuplicateInfo(name, user) {
   const rows = decryptRows('companies', db.prepare(`
     SELECT c.*, COALESCE(u.display_name, u.username) as created_by_name
@@ -4933,11 +4942,17 @@ function buildCompanyDuplicateInfo(name, user) {
 }
 
 app.get('/api/companies', (req, res) => {
-  const { search, category } = req.query;
+  const { search, category, project_group_id, project_group_ids } = req.query;
   let q = 'SELECT * FROM companies WHERE 1=1';
   const p = [];
   // name / business / tags 已加密，无法 SQL LIKE；search 全部走内存过滤
   if (category) { q += ' AND category = ?'; p.push(category); }
+  const filterProjectGroupIds = normalizeProjectGroupIds(project_group_ids || project_group_id);
+  if (filterProjectGroupIds) {
+    const ids = filterProjectGroupIds.split(',');
+    q += ` AND (${ids.map(() => "(',' || IFNULL(project_group_ids,'') || ',') LIKE ?").join(' OR ')})`;
+    ids.forEach(id => p.push(`%,${id},%`));
+  }
   if (!isAdmin(req.user.role)) {
     const uid = req.user.id;
     q += " AND (created_by = ? OR (',' || IFNULL(shared_with,'') || ',') LIKE ?)";
@@ -4971,7 +4986,7 @@ app.get('/api/companies/:id', (req, res) => {
 });
 
 app.post('/api/companies', canWrite, (req, res) => {
-  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with } = req.body;
+  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with, project_group_ids } = req.body;
   if (!String(name || '').trim()) return res.status(400).json({ error: '公司名称必填' });
   const duplicate = buildCompanyDuplicateInfo(name, req.user);
   if (duplicate.blocking) {
@@ -4982,22 +4997,24 @@ app.post('/api/companies', canWrite, (req, res) => {
   }
   const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
   const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
+  const projectGroupCsv = normalizeProjectGroupIds(project_group_ids);
   const r = db.prepare(`
-    INSERT INTO companies (name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, created_by, shared_with)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(enc.name, category || 'competitor', industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, req.user.id, sharedCsv);
+    INSERT INTO companies (name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, created_by, shared_with, project_group_ids)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(enc.name, category || 'competitor', industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, req.user.id, sharedCsv, projectGroupCsv);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/companies/:id', canWrite, (req, res) => {
-  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with } = req.body;
+  const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with, project_group_ids } = req.body;
   const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
   const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
+  const projectGroupCsv = normalizeProjectGroupIds(project_group_ids);
   db.prepare(`
     UPDATE companies SET name=?, category=?, industry=?, scale=?, founded_year=?, hq_city=?, website=?,
-      business=?, business_model=?, revenue_scale=?, tags=?, notes=?, shared_with=?, updated_at=CURRENT_TIMESTAMP
+      business=?, business_model=?, revenue_scale=?, tags=?, notes=?, shared_with=?, project_group_ids=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
-  `).run(enc.name, category, industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, sharedCsv, req.params.id);
+  `).run(enc.name, category, industry, scale, founded_year, hq_city, enc.website, enc.business, enc.business_model, enc.revenue_scale, enc.tags, enc.notes, sharedCsv, projectGroupCsv, req.params.id);
   res.json({ success: true });
 });
 

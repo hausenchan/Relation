@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import { Tree, TreeNode } from 'react-organizational-chart';
 import {
-  companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi, usersApi
+  companiesApi, companyPersonnelApi, companyProductsApi, companyDynamicsApi, companyEntitiesApi, competitorResearchApi, usersApi, projectGroupsApi
 } from '../api';
 import ResizableTable from '../components/ResizableTable';
 import AttachmentList from '../components/AttachmentList';
@@ -126,8 +126,13 @@ function showCompanyDuplicateWarning(duplicateInfo) {
   });
 }
 
+function parseIdList(value) {
+  if (Array.isArray(value)) return value.map(Number).filter(Boolean);
+  return String(value || '').split(',').map(Number).filter(Boolean);
+}
+
 // ==================== 子表单：添加/编辑公司 ====================
-function CompanyModal({ open, editing, onClose, onSuccess }) {
+function CompanyModal({ open, editing, projectGroups = [], onClose, onSuccess }) {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [form] = Form.useForm();
@@ -141,7 +146,11 @@ function CompanyModal({ open, editing, onClose, onSuccess }) {
         const sharedArr = editing.shared_with
           ? String(editing.shared_with).split(',').filter(Boolean).map(Number)
           : [];
-        form.setFieldsValue({ ...editing, shared_with: sharedArr });
+        form.setFieldsValue({
+          ...editing,
+          shared_with: sharedArr,
+          project_group_ids: parseIdList(editing.project_group_ids),
+        });
       } else {
         form.resetFields();
       }
@@ -255,6 +264,18 @@ function CompanyModal({ open, editing, onClose, onSuccess }) {
           <Col span={24}>
             <Form.Item label="备注" name="notes">
               <TextArea rows={2} />
+            </Form.Item>
+          </Col>
+          <Col span={24}>
+            <Form.Item label="关联项目组" name="project_group_ids">
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="请选择关联项目组"
+                options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
+              />
             </Form.Item>
           </Col>
           <Col span={24}>
@@ -1818,6 +1839,7 @@ export default function Companies() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
+  const [filterProjectGroups, setFilterProjectGroups] = useState([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [current, setCurrent] = useState(null);
   const [entities, setEntities] = useState([]);
@@ -1825,20 +1847,23 @@ export default function Companies() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [users, setUsers] = useState([]);
+  const [projectGroups, setProjectGroups] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     const params = { search };
     if (filterCategory) params.category = filterCategory;
+    if (filterProjectGroups.length > 0) params.project_group_ids = filterProjectGroups.join(',');
     const res = await companiesApi.list(params);
     setData(res);
     setLoading(false);
-  }, [search, filterCategory]);
+  }, [search, filterCategory, filterProjectGroups]);
 
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
     usersApi.listSimple().then(setUsers).catch(() => {});
+    projectGroupsApi.list().then(setProjectGroups).catch(() => {});
   }, []);
 
   const loadEntities = useCallback(async (companyId) => {
@@ -1861,6 +1886,18 @@ export default function Companies() {
     await companiesApi.delete(id);
     message.success('删除成功');
     load();
+  };
+
+  const getProjectGroupTags = (projectGroupIds) => {
+    const ids = parseIdList(projectGroupIds);
+    if (ids.length === 0) return null;
+    const groups = ids.map(id => projectGroups.find(group => Number(group.id) === Number(id))).filter(Boolean);
+    if (groups.length === 0) return null;
+    return (
+      <Space size={[4, 4]} wrap>
+        {groups.map(group => <Tag key={group.id} color="geekblue">{group.name}</Tag>)}
+      </Space>
+    );
   };
 
   const columns = [
@@ -1895,6 +1932,12 @@ export default function Companies() {
       title: '标签',
       dataIndex: 'tags',
       render: v => v ? v.split(',').map(t => <Tag key={t} style={{ marginBottom: 2 }}>{t.trim()}</Tag>) : '-',
+    },
+    {
+      title: '关联项目组',
+      dataIndex: 'project_group_ids',
+      width: 180,
+      render: v => getProjectGroupTags(v) || '-',
     },
     { title: '更新时间', dataIndex: 'updated_at', render: v => v?.slice(0, 10) },
     {
@@ -1977,6 +2020,12 @@ export default function Companies() {
               {record.tags.split(',').filter(Boolean).map(tag => <Tag key={`${record.id}-${tag}`}>{tag.trim()}</Tag>)}
             </Space>
           )}
+          {getProjectGroupTags(record.project_group_ids) && (
+            <div>
+              <Text type="secondary">关联项目组：</Text>
+              {getProjectGroupTags(record.project_group_ids)}
+            </div>
+          )}
           <Space size="small" wrap onClick={(e) => e.stopPropagation()}>
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
             <Popconfirm title="确认删除？该公司所有人员、产品、动向将同步删除。" onConfirm={() => handleDelete(record.id)}>
@@ -2011,6 +2060,17 @@ export default function Companies() {
         >
           {Object.entries(categoryMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
+        <Select
+          placeholder="关联项目组"
+          mode="multiple"
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          style={{ width: isMobile ? '100%' : 180 }}
+          value={filterProjectGroups}
+          onChange={value => setFilterProjectGroups(value)}
+          options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
+        />
       </Space>
 
       {isMobile ? (
@@ -2030,7 +2090,7 @@ export default function Companies() {
           rowKey="id"
           loading={loading}
           size="small"
-          scroll={{ x: 1000 }}
+          scroll={{ x: 1180 }}
           pagination={{ defaultPageSize: 15 }}
           onRow={record => ({
             onDoubleClick: () => openDetail(record),
@@ -2043,6 +2103,7 @@ export default function Companies() {
       <CompanyModal
         open={modalOpen}
         editing={editing}
+        projectGroups={projectGroups}
         onClose={() => setModalOpen(false)}
         onSuccess={load}
       />
