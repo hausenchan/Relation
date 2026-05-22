@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Modal, Form, Input, InputNumber, Select, Space,
-  Tag, Popconfirm, message, Typography, Divider, Row, Col, Grid, List, Card
+  Tag, Popconfirm, message, Typography, Divider, Row, Col, Grid, List, Card, Upload
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, UploadOutlined, PaperClipOutlined } from '@ant-design/icons';
 import { giftsApi } from '../api';
+import AttachmentList from '../components/AttachmentList';
+import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -18,8 +20,10 @@ export default function GiftsPage() {
   const isMobile = !screens.md;
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [fileList, setFileList] = useState([]);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -31,20 +35,42 @@ export default function GiftsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const openAdd = () => { setEditing(null); form.resetFields(); form.setFieldsValue({ unit: '个', stock: 0 }); setModalOpen(true); };
-  const openEdit = (r) => { setEditing(r); form.setFieldsValue(r); setModalOpen(true); };
+  const openAdd = () => {
+    setEditing(null);
+    setFileList([]);
+    form.resetFields();
+    form.setFieldsValue({ unit: '个', stock: 0 });
+    setModalOpen(true);
+  };
+  const openEdit = (r) => {
+    setEditing(r);
+    setFileList([]);
+    form.setFieldsValue(r);
+    setModalOpen(true);
+  };
 
   const handleSave = async () => {
     const values = await form.validateFields();
-    if (editing) {
-      await giftsApi.update(editing.id, values);
-      message.success('已更新');
-    } else {
-      await giftsApi.create(values);
-      message.success('已添加');
+    setSaving(true);
+    try {
+      const giftId = editing ? editing.id : (await giftsApi.create(values)).id;
+      if (editing) {
+        await giftsApi.update(editing.id, values);
+      }
+      if (fileList.length > 0) {
+        try {
+          await uploadAttachments('gift', giftId, fileList);
+        } catch {
+          message.warning('附件上传失败，但礼品信息已保存');
+        }
+      }
+      message.success(editing ? '已更新' : '已添加');
+      setFileList([]);
+      setModalOpen(false);
+      load();
+    } finally {
+      setSaving(false);
     }
-    setModalOpen(false);
-    load();
   };
 
   const handleDelete = async (id) => {
@@ -66,6 +92,7 @@ export default function GiftsPage() {
       ),
     },
     { title: '描述', dataIndex: 'description', ellipsis: true, render: v => v || '-' },
+    { title: '附件', dataIndex: 'attachment_count', width: 90, render: v => <Tag icon={<PaperClipOutlined />}>{v || 0}</Tag> },
     {
       title: '操作',
       render: (_, r) => (
@@ -91,6 +118,7 @@ export default function GiftsPage() {
                 <Tag color={record.stock <= 5 ? 'red' : record.stock <= 20 ? 'orange' : 'green'}>
                   库存 {record.stock} {record.unit}
                 </Tag>
+                <Tag icon={<PaperClipOutlined />}>附件 {record.attachment_count || 0}</Tag>
               </Space>
             </div>
             <Text strong style={{ color: '#fa8c16' }}>¥{(record.price || 0).toFixed(2)}</Text>
@@ -141,7 +169,8 @@ export default function GiftsPage() {
         title={editing ? '编辑礼品' : '添加礼品'}
         open={modalOpen}
         onOk={handleSave}
-        onCancel={() => setModalOpen(false)}
+        confirmLoading={saving}
+        onCancel={() => { setModalOpen(false); setFileList([]); }}
         okText="保存" cancelText="取消"
         width={isMobile ? '100%' : 520}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
@@ -187,6 +216,26 @@ export default function GiftsPage() {
                 <TextArea rows={2} />
               </Form.Item>
             </Col>
+            <Col span={24}>
+              <Form.Item label="附件">
+                <Upload
+                  fileList={fileList}
+                  onChange={({ fileList: nextFileList }) => setFileList(nextFileList)}
+                  beforeUpload={validateAttachment}
+                  maxCount={10}
+                  multiple
+                  accept={ATTACHMENT_ACCEPT}
+                >
+                  <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大50MB）</Button>
+                </Upload>
+              </Form.Item>
+            </Col>
+            {editing && (
+              <Col span={24}>
+                <Divider style={{ margin: '8px 0 12px' }} />
+                <AttachmentList sourceType="gift" sourceId={editing.id} title="已上传附件" />
+              </Col>
+            )}
           </Row>
         </Form>
       </Modal>

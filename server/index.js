@@ -1811,7 +1811,12 @@ app.use('/api', operationLogMiddleware);
 
 // 礼品库
 app.get('/api/gifts', (req, res) => {
-  res.json(db.prepare('SELECT * FROM gifts ORDER BY category, name').all());
+  res.json(db.prepare(`
+    SELECT g.*,
+      (SELECT COUNT(*) FROM attachments a WHERE a.source_type = 'gift' AND a.source_id = g.id) as attachment_count
+    FROM gifts g
+    ORDER BY g.category, g.name
+  `).all());
 });
 app.post('/api/gifts', canWrite, (req, res) => {
   const { name, category, description, price, stock, unit, notes } = req.body;
@@ -1826,7 +1831,18 @@ app.put('/api/gifts/:id', canWrite, (req, res) => {
   res.json({ success: true });
 });
 app.delete('/api/gifts/:id', canWrite, (req, res) => {
-  db.prepare('DELETE FROM gifts WHERE id = ?').run(req.params.id);
+  const gift = db.prepare('SELECT id FROM gifts WHERE id = ?').get(req.params.id);
+  if (!gift) return res.status(404).json({ error: '礼品不存在' });
+
+  const attachmentRows = db.prepare("SELECT filepath FROM attachments WHERE source_type = 'gift' AND source_id = ?").all(req.params.id);
+  const deleteGift = db.transaction((id) => {
+    db.prepare("DELETE FROM attachments WHERE source_type = 'gift' AND source_id = ?").run(id);
+    db.prepare('DELETE FROM gifts WHERE id = ?').run(id);
+  });
+  deleteGift(req.params.id);
+  attachmentRows.forEach(att => {
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.filepath)); } catch {}
+  });
   res.json({ success: true });
 });
 
