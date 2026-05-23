@@ -84,15 +84,39 @@ function escapeCsvValue(value) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
+function downloadCsvFile(filename, rows) {
+  const csv = rows.map(row => {
+    if (!row) return '';
+    return row.map(escapeCsvValue).join(',');
+  }).join('\n');
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function MobileTaskCenter() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [activeTab, setActiveTab] = useState('records');
   const [apps, setApps] = useState([]);
   const [records, setRecords] = useState([]);
+  const [summary, setSummary] = useState({
+    overview: {},
+    daily_stats: [],
+    app_stats: [],
+    company_stats: [],
+    capture_method_stats: [],
+    issue_stats: [],
+  });
   const [recordsLoading, setRecordsLoading] = useState(false);
   const [appsLoading, setAppsLoading] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [filters, setFilters] = useState({ limit: 100 });
+  const [summaryDays, setSummaryDays] = useState(30);
   const [detail, setDetail] = useState(null);
   const [reviewNote, setReviewNote] = useState('');
   const [reviewSaving, setReviewSaving] = useState(false);
@@ -123,8 +147,20 @@ export default function MobileTaskCenter() {
     }
   }, [filters]);
 
+  const loadSummary = useCallback(async () => {
+    setSummaryLoading(true);
+    try {
+      setSummary(await mobileTaskCenterApi.getSummary({ days: summaryDays }));
+    } catch (e) {
+      message.error(e.response?.data?.error || '加载分析报表失败');
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [summaryDays]);
+
   useEffect(() => { loadApps(); }, [loadApps]);
   useEffect(() => { loadRecords(); }, [loadRecords]);
+  useEffect(() => { loadSummary(); }, [loadSummary]);
   useEffect(() => { setReviewNote(detail?.review_note || ''); }, [detail]);
 
   const stats = useMemo(() => {
@@ -262,15 +298,98 @@ export default function MobileTaskCenter() {
       record.skip_reason || record.error_message,
       record.review_note,
     ]);
-    const csv = [header, ...rows].map(row => row.map(escapeCsvValue).join(',')).join('\n');
-    const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `手机采集日志_${dayjs().format('YYYYMMDD_HHmmss')}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadCsvFile(`手机采集日志_${dayjs().format('YYYYMMDD_HHmmss')}.csv`, [header, ...rows]);
   };
+
+  const exportSummaryReport = () => {
+    const overview = summary?.overview || {};
+    if (!overview.total_records) {
+      message.warning('当前统计周期没有可导出的数据');
+      return;
+    }
+
+    const rows = [
+      ['手机端任务中心采集分析报告'],
+      ['统计范围', `${summary?.date_range?.start_date || '-'} 至 ${summary?.date_range?.end_date || '-'}`],
+      ['统计周期(天)', summaryDays],
+      ['总记录数', overview.total_records || 0],
+      ['有效入库', overview.effective_records || 0],
+      ['新增产品', overview.new_products || 0],
+      ['待复核', overview.pending_review_records || 0],
+      ['跳过', overview.skipped_records || 0],
+      ['失败', overview.failed_records || 0],
+      ['覆盖 App', overview.apps_covered || 0],
+      ['覆盖公司', overview.companies_covered || 0],
+      ['覆盖产品', overview.products_covered || 0],
+      ['最近采集时间', overview.last_collected_at || ''],
+      null,
+      ['按时间趋势'],
+      ['日期', '总记录', '有效入库', '新增产品', '待复核', '跳过', '失败'],
+      ...(summary?.daily_stats || []).map(item => [
+        item.date,
+        item.total_records,
+        item.effective_records,
+        item.new_product_count,
+        item.pending_review_count,
+        item.skipped_records,
+        item.failed_records,
+      ]),
+      null,
+      ['来源 App 分布'],
+      ['来源 App', '总记录', '有效入库', '新增产品', '待复核', '覆盖产品', '覆盖公司', '最近采集'],
+      ...(summary?.app_stats || []).map(item => [
+        item.source_app,
+        item.total_records,
+        item.effective_records,
+        item.new_product_count,
+        item.pending_review_count,
+        item.product_count,
+        item.company_count,
+        item.last_collected_at,
+      ]),
+      null,
+      ['公司主体分布'],
+      ['公司', '主体', '有效记录', '覆盖产品', '新增产品', '来源 App 数', '最近采集'],
+      ...(summary?.company_stats || []).map(item => [
+        item.company_name,
+        item.entity_name,
+        item.record_count,
+        item.product_count,
+        item.new_product_count,
+        item.source_app_count,
+        item.last_collected_at,
+      ]),
+      null,
+      ['捕获方式分布'],
+      ['捕获方式', '记录数'],
+      ...(summary?.capture_method_stats || []).map(item => [
+        item.capture_method,
+        item.count,
+      ]),
+      null,
+      ['失败与跳过原因'],
+      ['类型', '原因', '次数'],
+      ...(summary?.issue_stats || []).map(item => [
+        item.type,
+        item.reason,
+        item.count,
+      ]),
+    ];
+
+    downloadCsvFile(`手机采集分析报告_${dayjs().format('YYYYMMDD_HHmmss')}.csv`, rows);
+  };
+
+  const summaryCards = useMemo(() => {
+    const overview = summary?.overview || {};
+    return [
+      { label: '有效入库', value: overview.effective_records || 0, color: '#10B981' },
+      { label: '新增产品', value: overview.new_products || 0, color: '#1677FF' },
+      { label: '待复核', value: overview.pending_review_records || 0, color: '#FA8C16' },
+      { label: '覆盖 App', value: overview.apps_covered || 0, color: '#722ED1' },
+      { label: '覆盖公司', value: overview.companies_covered || 0, color: '#13C2C2' },
+      { label: '覆盖产品', value: overview.products_covered || 0, color: '#EB2F96' },
+    ];
+  }, [summary]);
 
   const recordColumns = [
     { title: '采集时间', dataIndex: 'collected_at', width: 170, fixed: 'left', render: formatTime },
@@ -315,6 +434,76 @@ export default function MobileTaskCenter() {
       fixed: 'right',
       render: (_, record) => <Button size="small" icon={<EyeOutlined />} onClick={() => setDetail(record)}>详情</Button>,
     },
+  ];
+
+  const dailyColumns = [
+    { title: '日期', dataIndex: 'date', width: 110 },
+    { title: '总记录', dataIndex: 'total_records', width: 90 },
+    { title: '有效入库', dataIndex: 'effective_records', width: 90 },
+    { title: '新增产品', dataIndex: 'new_product_count', width: 90 },
+    { title: '待复核', dataIndex: 'pending_review_count', width: 90 },
+    { title: '跳过', dataIndex: 'skipped_records', width: 80 },
+    { title: '失败', dataIndex: 'failed_records', width: 80 },
+  ];
+
+  const appSummaryColumns = [
+    { title: '来源 App', dataIndex: 'source_app', width: 140 },
+    { title: '总记录', dataIndex: 'total_records', width: 90 },
+    { title: '有效入库', dataIndex: 'effective_records', width: 90 },
+    { title: '新增产品', dataIndex: 'new_product_count', width: 90 },
+    { title: '待复核', dataIndex: 'pending_review_count', width: 90 },
+    { title: '覆盖产品', dataIndex: 'product_count', width: 90 },
+    { title: '覆盖公司', dataIndex: 'company_count', width: 90 },
+    { title: '最近采集', dataIndex: 'last_collected_at', width: 170, render: formatTime },
+  ];
+
+  const companySummaryColumns = [
+    {
+      title: '公司',
+      dataIndex: 'company_name',
+      width: 170,
+      render: value => <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>{value || '-'}</Paragraph>,
+    },
+    {
+      title: '主体',
+      dataIndex: 'entity_name',
+      width: 180,
+      render: value => <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>{value || '-'}</Paragraph>,
+    },
+    { title: '有效记录', dataIndex: 'record_count', width: 90 },
+    { title: '覆盖产品', dataIndex: 'product_count', width: 90 },
+    { title: '新增产品', dataIndex: 'new_product_count', width: 90 },
+    { title: '来源 App 数', dataIndex: 'source_app_count', width: 100 },
+    { title: '最近采集', dataIndex: 'last_collected_at', width: 170, render: formatTime },
+  ];
+
+  const captureMethodColumns = [
+    { title: '捕获方式', dataIndex: 'capture_method', width: 180 },
+    { title: '记录数', dataIndex: 'count', width: 90 },
+    {
+      title: '占比',
+      width: 90,
+      render: (_, record) => {
+        const total = summary?.overview?.effective_records || 0;
+        if (!total) return '-';
+        return `${((record.count / total) * 100).toFixed(1)}%`;
+      },
+    },
+  ];
+
+  const issueColumns = [
+    {
+      title: '类型',
+      dataIndex: 'type',
+      width: 90,
+      render: value => statusTag(value),
+    },
+    {
+      title: '原因',
+      dataIndex: 'reason',
+      render: value => <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>{value || '-'}</Paragraph>,
+    },
+    { title: '次数', dataIndex: 'count', width: 90 },
   ];
 
   const appColumns = [
@@ -481,6 +670,115 @@ export default function MobileTaskCenter() {
                     pagination={false}
                   />
                 )}
+              </Space>
+            ),
+          },
+          {
+            key: 'summary',
+            label: '分析报表',
+            children: (
+              <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                <Row gutter={[12, 12]}>
+                  {summaryCards.map(card => (
+                    <Col key={card.label} xs={12} md={8} xl={4}>
+                      <Card size="small">
+                        <Text type="secondary">{card.label}</Text>
+                        <div style={{ fontSize: 24, fontWeight: 700, color: card.color }}>{card.value}</div>
+                      </Card>
+                    </Col>
+                  ))}
+                </Row>
+
+                <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                  <Space wrap>
+                    <Select value={summaryDays} style={{ width: 120 }} onChange={setSummaryDays}>
+                      <Option value={7}>近 7 天</Option>
+                      <Option value={30}>近 30 天</Option>
+                      <Option value={90}>近 90 天</Option>
+                      <Option value={180}>近 180 天</Option>
+                      <Option value={365}>近 365 天</Option>
+                    </Select>
+                    <Text type="secondary">
+                      统计范围：{summary?.date_range?.start_date || '-'} 至 {summary?.date_range?.end_date || '-'}
+                    </Text>
+                    <Text type="secondary">
+                      最近采集：{formatTime(summary?.overview?.last_collected_at)}
+                    </Text>
+                  </Space>
+                  <Space>
+                    <Button icon={<DownloadOutlined />} onClick={exportSummaryReport} disabled={!summary?.overview?.total_records}>
+                      导出报告
+                    </Button>
+                    <Button icon={<ReloadOutlined />} onClick={loadSummary} loading={summaryLoading}>刷新</Button>
+                  </Space>
+                </Space>
+
+                <Card size="small" title="按时间趋势">
+                  <Table
+                    size="small"
+                    rowKey="date"
+                    columns={dailyColumns}
+                    dataSource={summary?.daily_stats || []}
+                    loading={summaryLoading}
+                    pagination={false}
+                    scroll={{ x: 700 }}
+                  />
+                </Card>
+
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} xl={12}>
+                    <Card size="small" title="来源 App 分布">
+                      <Table
+                        size="small"
+                        rowKey="source_app"
+                        columns={appSummaryColumns}
+                        dataSource={summary?.app_stats || []}
+                        loading={summaryLoading}
+                        pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                        scroll={{ x: 860 }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} xl={12}>
+                    <Card size="small" title="捕获方式分布">
+                      <Table
+                        size="small"
+                        rowKey="capture_method"
+                        columns={captureMethodColumns}
+                        dataSource={summary?.capture_method_stats || []}
+                        loading={summaryLoading}
+                        pagination={false}
+                        scroll={{ x: 380 }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} xl={12}>
+                    <Card size="small" title="公司主体分布">
+                      <Table
+                        size="small"
+                        rowKey="key"
+                        columns={companySummaryColumns}
+                        dataSource={summary?.company_stats || []}
+                        loading={summaryLoading}
+                        pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                        scroll={{ x: 890 }}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} xl={12}>
+                    <Card size="small" title="失败与跳过原因">
+                      <Table
+                        size="small"
+                        rowKey={record => `${record.type}-${record.reason}`}
+                        columns={issueColumns}
+                        dataSource={summary?.issue_stats || []}
+                        loading={summaryLoading}
+                        pagination={{ pageSize: 8, hideOnSinglePage: true }}
+                        scroll={{ x: 500 }}
+                      />
+                    </Card>
+                  </Col>
+                </Row>
               </Space>
             ),
           },

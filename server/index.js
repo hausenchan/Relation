@@ -5616,6 +5616,295 @@ function getMobileTaskRecordAttachments(row) {
   return ids.map(id => byId.get(id)).filter(Boolean);
 }
 
+function getTaskCenterRecordTimeValue(record) {
+  return normalizeTaskCenterText(record?.collected_at)
+    || normalizeTaskCenterText(record?.created_at)
+    || normalizeTaskCenterText(record?.record_at);
+}
+
+function getTaskCenterRecordDateKey(value) {
+  return normalizeTaskCenterText(value).slice(0, 10);
+}
+
+function getTaskCenterRecordTimeMs(value) {
+  const text = normalizeTaskCenterText(value);
+  if (!text) return Number.NaN;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.test(text)
+    ? text.replace(' ', 'T')
+    : text;
+  const ms = Date.parse(normalized);
+  return Number.isNaN(ms) ? Number.NaN : ms;
+}
+
+function isTaskCenterTimeLater(nextValue, currentValue) {
+  if (!nextValue) return false;
+  if (!currentValue) return true;
+  const nextMs = getTaskCenterRecordTimeMs(nextValue);
+  const currentMs = getTaskCenterRecordTimeMs(currentValue);
+  if (!Number.isNaN(nextMs) && !Number.isNaN(currentMs)) return nextMs > currentMs;
+  return String(nextValue) > String(currentValue);
+}
+
+function isTaskCenterTimeEarlier(nextValue, currentValue) {
+  if (!nextValue) return false;
+  if (!currentValue) return true;
+  const nextMs = getTaskCenterRecordTimeMs(nextValue);
+  const currentMs = getTaskCenterRecordTimeMs(currentValue);
+  if (!Number.isNaN(nextMs) && !Number.isNaN(currentMs)) return nextMs < currentMs;
+  return String(nextValue) < String(currentValue);
+}
+
+function formatTaskCenterStatsDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function buildTaskCenterStatsDateKeys(startDate, endDate) {
+  const keys = [];
+  const cursor = new Date(startDate);
+  while (cursor <= endDate) {
+    keys.push(formatTaskCenterStatsDate(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return keys;
+}
+
+function createMobileTaskCenterSummary(daysInput) {
+  const days = Math.min(Math.max(Number(daysInput) || 30, 1), 365);
+  const endDate = new Date();
+  endDate.setHours(0, 0, 0, 0);
+  const startDate = new Date(endDate);
+  startDate.setDate(startDate.getDate() - days + 1);
+  const startDateKey = formatTaskCenterStatsDate(startDate);
+  const endDateKey = formatTaskCenterStatsDate(endDate);
+  const effectiveStatuses = new Set(['matched', 'unknown']);
+
+  const rows = db.prepare(`
+    SELECT r.*, c.name as company_name, ce.name as entity_name, ce.reg_name as entity_reg_name, cp.name as product_name
+    FROM mobile_task_records r
+    LEFT JOIN companies c ON r.company_id = c.id
+    LEFT JOIN company_entities ce ON r.entity_id = ce.id
+    LEFT JOIN company_products cp ON r.product_id = cp.id
+    ORDER BY r.created_at DESC, r.id DESC
+  `).all().map(row => {
+    const recordAt = getTaskCenterRecordTimeValue(row);
+    return {
+      ...row,
+      company_name: row.company_name ? decrypt(row.company_name) : null,
+      record_at: recordAt,
+      record_date: getTaskCenterRecordDateKey(recordAt),
+    };
+  }).filter(row => row.record_date && row.record_date >= startDateKey && row.record_date <= endDateKey);
+
+  const firstSeenByProductId = new Map();
+  db.prepare(`
+    SELECT id, product_id, source_app, company_id, entity_id, collected_at, created_at
+    FROM mobile_task_records
+    WHERE product_id IS NOT NULL AND status IN ('matched', 'unknown')
+    ORDER BY id ASC
+  `).all().forEach(row => {
+    const productId = Number(row.product_id);
+    if (!productId) return;
+    const recordAt = getTaskCenterRecordTimeValue(row);
+    const existing = firstSeenByProductId.get(productId);
+    if (!existing || isTaskCenterTimeEarlier(recordAt, existing.record_at)) {
+      firstSeenByProductId.set(productId, {
+        product_id: productId,
+        source_app: normalizeTaskCenterSource(row.source_app),
+        company_id: row.company_id || null,
+        entity_id: row.entity_id || null,
+        record_at: recordAt,
+        record_date: getTaskCenterRecordDateKey(recordAt),
+      });
+    }
+  });
+
+  const overview = {
+    total_records: rows.length,
+    effective_records: 0,
+    matched_records: 0,
+    unknown_records: 0,
+    skipped_records: 0,
+    failed_records: 0,
+    pending_review_records: 0,
+    reviewed_records: 0,
+    apps_covered: 0,
+    companies_covered: 0,
+    products_covered: 0,
+    new_products: 0,
+    records_with_link: 0,
+    last_collected_at: null,
+  };
+
+  const appSet = new Set();
+  const companySet = new Set();
+  const productSet = new Set();
+  const newProductSet = new Set();
+  const dailyStatsMap = new Map(
+    buildTaskCenterStatsDateKeys(startDate, endDate).map(date => [date, {
+      date,
+      total_records: 0,
+      effective_records: 0,
+      matched_records: 0,
+      unknown_records: 0,
+      skipped_records: 0,
+      failed_records: 0,
+      pending_review_count: 0,
+      new_product_count: 0,
+    }])
+  );
+  const appStatsMap = new Map();
+  const companyStatsMap = new Map();
+  const captureMethodMap = new Map();
+  const issueMap = new Map();
+
+  rows.forEach(row => {
+    const dateKey = row.record_date;
+    const isEffective = effectiveStatuses.has(row.status);
+    const sourceApp = normalizeTaskCenterSource(row.source_app) || '未命名来源';
+    const daily = dailyStatsMap.get(dateKey);
+    if (daily) {
+      daily.total_records += 1;
+      if (row.review_status === 'pending') daily.pending_review_count += 1;
+      if (row.status === 'matched') daily.matched_records += 1;
+      if (row.status === 'unknown') daily.unknown_records += 1;
+      if (row.status === 'skipped') daily.skipped_records += 1;
+      if (row.status === 'failed') daily.failed_records += 1;
+      if (isEffective) daily.effective_records += 1;
+    }
+
+    appSet.add(sourceApp);
+    if (row.company_id) companySet.add(Number(row.company_id));
+    if (row.product_id) productSet.add(Number(row.product_id));
+    if (row.product_link) overview.records_with_link += 1;
+    if (row.review_status === 'pending') overview.pending_review_records += 1;
+    if (row.review_status === 'reviewed') overview.reviewed_records += 1;
+    if (row.status === 'matched') overview.matched_records += 1;
+    if (row.status === 'unknown') overview.unknown_records += 1;
+    if (row.status === 'skipped') overview.skipped_records += 1;
+    if (row.status === 'failed') overview.failed_records += 1;
+    if (isEffective) overview.effective_records += 1;
+    if (isTaskCenterTimeLater(row.record_at, overview.last_collected_at)) overview.last_collected_at = row.record_at;
+
+    if (!appStatsMap.has(sourceApp)) {
+      appStatsMap.set(sourceApp, {
+        source_app: sourceApp,
+        total_records: 0,
+        effective_records: 0,
+        skipped_records: 0,
+        failed_records: 0,
+        pending_review_count: 0,
+        new_product_count: 0,
+        product_ids: new Set(),
+        company_ids: new Set(),
+        last_collected_at: null,
+      });
+    }
+    const appStats = appStatsMap.get(sourceApp);
+    appStats.total_records += 1;
+    if (isEffective) appStats.effective_records += 1;
+    if (row.status === 'skipped') appStats.skipped_records += 1;
+    if (row.status === 'failed') appStats.failed_records += 1;
+    if (row.review_status === 'pending') appStats.pending_review_count += 1;
+    if (row.product_id) appStats.product_ids.add(Number(row.product_id));
+    if (row.company_id) appStats.company_ids.add(Number(row.company_id));
+    if (isTaskCenterTimeLater(row.record_at, appStats.last_collected_at)) appStats.last_collected_at = row.record_at;
+
+    if (isEffective) {
+      const companyKey = `${row.company_id || 0}:${row.entity_id || 0}`;
+      if (!companyStatsMap.has(companyKey)) {
+        companyStatsMap.set(companyKey, {
+          key: companyKey,
+          company_id: row.company_id || null,
+          company_name: row.company_name || '未匹配公司',
+          entity_id: row.entity_id || null,
+          entity_name: row.entity_name || row.entity_reg_name || '待识别主体',
+          record_count: 0,
+          new_product_count: 0,
+          product_ids: new Set(),
+          source_apps: new Set(),
+          last_collected_at: null,
+        });
+      }
+      const companyStats = companyStatsMap.get(companyKey);
+      companyStats.record_count += 1;
+      if (row.product_id) companyStats.product_ids.add(Number(row.product_id));
+      companyStats.source_apps.add(sourceApp);
+      if (isTaskCenterTimeLater(row.record_at, companyStats.last_collected_at)) companyStats.last_collected_at = row.record_at;
+
+      const captureMethod = normalizeTaskCenterText(row.product_link_capture_method) || '未记录';
+      captureMethodMap.set(captureMethod, (captureMethodMap.get(captureMethod) || 0) + 1);
+    }
+
+    if (row.status === 'skipped' || row.status === 'failed') {
+      const reason = normalizeTaskCenterText(row.skip_reason || row.error_message) || '未记录原因';
+      const issueKey = `${row.status}:${reason}`;
+      if (!issueMap.has(issueKey)) {
+        issueMap.set(issueKey, {
+          type: row.status,
+          reason,
+          count: 0,
+        });
+      }
+      issueMap.get(issueKey).count += 1;
+    }
+  });
+
+  firstSeenByProductId.forEach(item => {
+    if (!item.record_date || item.record_date < startDateKey || item.record_date > endDateKey) return;
+    newProductSet.add(item.product_id);
+    const daily = dailyStatsMap.get(item.record_date);
+    if (daily) daily.new_product_count += 1;
+
+    const appStats = appStatsMap.get(item.source_app);
+    if (appStats) appStats.new_product_count += 1;
+
+    const companyKey = `${item.company_id || 0}:${item.entity_id || 0}`;
+    const companyStats = companyStatsMap.get(companyKey);
+    if (companyStats) companyStats.new_product_count += 1;
+  });
+
+  overview.apps_covered = appSet.size;
+  overview.companies_covered = companySet.size;
+  overview.products_covered = productSet.size;
+  overview.new_products = newProductSet.size;
+
+  return {
+    days,
+    date_range: {
+      start_date: startDateKey,
+      end_date: endDateKey,
+    },
+    overview,
+    daily_stats: [...dailyStatsMap.values()],
+    app_stats: [...appStatsMap.values()]
+      .map(({ product_ids, company_ids, ...item }) => ({
+        ...item,
+        product_count: product_ids.size,
+        company_count: company_ids.size,
+      }))
+      .sort((a, b) =>
+        b.effective_records - a.effective_records
+        || b.new_product_count - a.new_product_count
+        || b.total_records - a.total_records
+        || a.source_app.localeCompare(b.source_app, 'zh-CN')),
+    company_stats: [...companyStatsMap.values()]
+      .map(({ product_ids, source_apps, ...item }) => ({
+        ...item,
+        product_count: product_ids.size,
+        source_app_count: source_apps.size,
+      }))
+      .sort((a, b) =>
+        b.product_count - a.product_count
+        || b.record_count - a.record_count
+        || (a.company_name || '').localeCompare(b.company_name || '', 'zh-CN')),
+    capture_method_stats: [...captureMethodMap.entries()]
+      .map(([capture_method, count]) => ({ capture_method, count }))
+      .sort((a, b) => b.count - a.count || a.capture_method.localeCompare(b.capture_method, 'zh-CN')),
+    issue_stats: [...issueMap.values()]
+      .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason, 'zh-CN')),
+  };
+}
+
 function saveMobileTaskCenterRecord(payload, user) {
   const sourceApp = normalizeTaskCenterSource(payload.source_app);
   const miniProgramName = normalizeTaskCenterText(payload.mini_program_name);
@@ -5873,6 +6162,15 @@ app.delete('/api/mobile-task-center/apps/:id', canWrite, (req, res) => {
   if (!existing) return res.status(404).json({ error: '采集 App 不存在' });
   db.prepare('DELETE FROM mobile_task_apps WHERE id = ?').run(req.params.id);
   res.json({ success: true });
+});
+
+app.get('/api/mobile-task-center/summary', (req, res) => {
+  try {
+    res.json(createMobileTaskCenterSummary(req.query.days));
+  } catch (err) {
+    console.error('加载手机任务中心统计失败:', err);
+    res.status(500).json({ error: '加载手机任务中心统计失败' });
+  }
 });
 
 app.get('/api/mobile-task-center/records', (req, res) => {
