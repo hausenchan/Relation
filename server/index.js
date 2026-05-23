@@ -322,7 +322,15 @@ if (process.env.NODE_ENV === 'production') {
 }
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-const db = new Database(path.join(__dirname, 'data.db'));
+const DB_PATH = process.env.RELATION_DB_PATH || path.join(__dirname, 'data.db');
+const db = new Database(DB_PATH);
+
+function addColumnIfMissing(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (cols.length > 0 && !cols.includes(column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
 
 // =========== 用户表 ===========
 db.exec(`
@@ -712,6 +720,64 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_notifications_created
     ON notifications(created_at);
 `);
+
+// =========== 手机端任务中心采集表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS mobile_task_apps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_name TEXT NOT NULL,
+    package_name TEXT,
+    task_center_entry TEXT,
+    collector_config TEXT,
+    enabled INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    remark TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS mobile_task_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_app TEXT NOT NULL,
+    mini_program_name TEXT,
+    company_entity_name TEXT,
+    product_link TEXT,
+    product_link_capture_method TEXT,
+    matched_asset_subject_id INTEGER,
+    matched_asset_subject_name TEXT,
+    company_id INTEGER,
+    entity_id INTEGER,
+    product_id INTEGER,
+    task_title TEXT,
+    task_description TEXT,
+    screenshot_attachment_ids TEXT,
+    confidence REAL,
+    status TEXT NOT NULL DEFAULT 'matched',
+    skip_reason TEXT,
+    error_message TEXT,
+    review_status TEXT DEFAULT 'none',
+    review_note TEXT,
+    reviewed_by INTEGER,
+    reviewed_at DATETIME,
+    raw_payload TEXT,
+    collected_at DATETIME,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_mobile_task_records_product
+    ON mobile_task_records(product_id);
+  CREATE INDEX IF NOT EXISTS idx_mobile_task_records_status
+    ON mobile_task_records(status);
+  CREATE INDEX IF NOT EXISTS idx_mobile_task_records_collected
+    ON mobile_task_records(collected_at);
+`);
+addColumnIfMissing('mobile_task_apps', 'collector_config', 'TEXT DEFAULT NULL');
+addColumnIfMissing('mobile_task_records', 'review_status', "TEXT DEFAULT 'none'");
+addColumnIfMissing('mobile_task_records', 'review_note', 'TEXT DEFAULT NULL');
+addColumnIfMissing('mobile_task_records', 'reviewed_by', 'INTEGER DEFAULT NULL');
+addColumnIfMissing('mobile_task_records', 'reviewed_at', 'DATETIME DEFAULT NULL');
 
 // =========== 待跟进任务表 ===========
 db.exec(`
@@ -1465,6 +1531,7 @@ const OPERATION_LOG_BUSINESS_MAP = {
   attachments: '附件',
   'cross-team-access': '跨团队权限',
   'boss-watcher': '招聘雷达',
+  'mobile-task-center': '手机任务中心采集',
 };
 
 const OPERATION_LOG_TABLE_MAP = {
@@ -1505,6 +1572,7 @@ const OPERATION_LOG_TABLE_MAP = {
   notifications: 'notifications',
   attachments: 'attachments',
   'cross-team-access': 'cross_team_access',
+  'mobile-task-center': 'mobile_task_records',
 };
 
 const OPERATION_LOG_ROUTE_CONFIGS = [
@@ -1529,6 +1597,11 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/product-assets\/import$/, businessType: '产品资产', table: 'product_assets', action: '导入' },
   { pattern: /^\/product-assets\/import\/preview$/, businessType: '产品资产', table: 'product_assets', action: '导入预览', skipSuccessLog: true },
   { pattern: /^\/product-assets\/(\d+)\/reductions$/, businessType: '产品核减', table: 'product_asset_reductions', responseId: true },
+  { pattern: /^\/company_products\/(\d+)\/task-center-notification$/, businessType: '公司产品', table: 'company_products', idGroup: 1, action: '发送任务中心采集通知' },
+  { pattern: /^\/mobile-task-center\/records$/, businessType: '手机任务中心采集', table: 'mobile_task_records', responseId: true, action: '采集入库' },
+  { pattern: /^\/mobile-task-center\/records\/(\d+)\/review$/, businessType: '手机任务中心采集', table: 'mobile_task_records', idGroup: 1, action: '复核采集记录' },
+  { pattern: /^\/mobile-task-center\/apps$/, businessType: '手机任务中心采集', table: 'mobile_task_apps', responseId: true, action: '保存采集 App' },
+  { pattern: /^\/mobile-task-center\/apps\/(\d+)$/, businessType: '手机任务中心采集', table: 'mobile_task_apps', idGroup: 1 },
   { pattern: /^\/strategies\/(\d+)\/execution-logs$/, businessType: '策略执行', table: 'strategy_execution_logs', responseId: true },
   { pattern: /^\/strategies\/(\d+)\/review$/, businessType: '策略复盘', table: 'strategy_reviews', idGroup: 1, action: '保存复盘' },
   { pattern: /^\/company-subjects\/(\d+)\/attachments$/, businessType: '主体附件', table: 'company_subject_attachments', responseId: true, action: '上传附件' },
@@ -4893,6 +4966,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS company_products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id INTEGER NOT NULL,
+    entity_id INTEGER DEFAULT NULL,
     name TEXT NOT NULL,
     category TEXT,
     status TEXT DEFAULT 'active',
@@ -4922,6 +4996,15 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+addColumnIfMissing('companies', 'created_by', 'INTEGER DEFAULT NULL');
+addColumnIfMissing('companies', 'shared_with', 'TEXT DEFAULT NULL');
+addColumnIfMissing('companies', 'project_group_ids', 'TEXT DEFAULT NULL');
+addColumnIfMissing('company_personnel', 'manager_id', 'INTEGER DEFAULT NULL');
+addColumnIfMissing('company_personnel', 'entity_id', 'INTEGER DEFAULT NULL');
+addColumnIfMissing('company_products', 'entity_id', 'INTEGER DEFAULT NULL');
+addColumnIfMissing('company_products', 'product_link', 'TEXT DEFAULT NULL');
+addColumnIfMissing('company_products', 'discovery_source', 'TEXT DEFAULT NULL');
 
 // =========== 公司研究 API ===========
 
@@ -5260,6 +5343,452 @@ app.put('/api/company_products/:id', (req, res) => {
   res.json({ success: true });
 });
 
+function normalizeTaskCenterText(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeTaskCenterJsonObjectText(value, fieldLabel) {
+  const text = normalizeTaskCenterText(value);
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      const err = new Error(`${fieldLabel} 必须是 JSON 对象`);
+      err.statusCode = 400;
+      throw err;
+    }
+    return JSON.stringify(parsed);
+  } catch (err) {
+    if (err.statusCode) throw err;
+    const invalid = new Error(`${fieldLabel} 不是有效 JSON`);
+    invalid.statusCode = 400;
+    throw invalid;
+  }
+}
+
+function normalizeTaskCenterSource(value) {
+  return normalizeTaskCenterText(value)
+    .replace(/[，,、;；]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getTaskCenterSourceKey(value) {
+  return normalizeTaskCenterSource(value).toLowerCase().replace(/\s/g, '');
+}
+
+function splitDiscoverySources(value) {
+  return String(value || '')
+    .split(/[，,、;；]/)
+    .map(normalizeTaskCenterSource)
+    .filter(Boolean);
+}
+
+function appendDiscoverySource(existing, sourceApp) {
+  const source = normalizeTaskCenterSource(sourceApp);
+  const sources = splitDiscoverySources(existing);
+  const keys = new Set(sources.map(getTaskCenterSourceKey).filter(Boolean));
+  const sourceKey = getTaskCenterSourceKey(source);
+  if (source && sourceKey && !keys.has(sourceKey)) sources.push(source);
+  return sources.length ? sources.join('，') : null;
+}
+
+function getTaskCenterNameKey(value) {
+  return normalizeTaskCenterText(value).toLowerCase().replace(/\s+/g, '');
+}
+
+function isCompanyLikeNameMatch(inputName, existingName) {
+  const input = normalizeTaskCenterText(inputName);
+  const existing = normalizeTaskCenterText(existingName);
+  if (!input || !existing) return false;
+  if (input === existing) return true;
+  return Boolean(getCompanyNameDuplicateReason(input, existing));
+}
+
+function parseTaskCenterAttachmentIds(value) {
+  let raw = value;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(text);
+        raw = Array.isArray(parsed) ? parsed : text;
+      } catch {
+        raw = text;
+      }
+    }
+  }
+  raw = Array.isArray(raw)
+    ? raw
+    : String(raw || '')
+      .split(',')
+      .map(item => item.trim())
+      .filter(Boolean);
+  return [...new Set(raw.map(id => Number(id)).filter(Boolean))];
+}
+
+function safeJsonStringify(value) {
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return null;
+  }
+}
+
+function insertMobileTaskRecord(record) {
+  const result = db.prepare(`
+    INSERT INTO mobile_task_records (
+      source_app, mini_program_name, company_entity_name, product_link, product_link_capture_method,
+      matched_asset_subject_id, matched_asset_subject_name, company_id, entity_id, product_id,
+      task_title, task_description, screenshot_attachment_ids, confidence, status, skip_reason,
+      error_message, review_status, review_note, raw_payload, collected_at, created_by
+    )
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    record.source_app,
+    record.mini_program_name || null,
+    record.company_entity_name || null,
+    record.product_link || null,
+    record.product_link_capture_method || null,
+    record.matched_asset_subject_id || null,
+    record.matched_asset_subject_name || null,
+    record.company_id || null,
+    record.entity_id || null,
+    record.product_id || null,
+    record.task_title || null,
+    record.task_description || null,
+    safeJsonStringify(record.screenshot_attachment_ids || []),
+    record.confidence ?? null,
+    record.status,
+    record.skip_reason || null,
+    record.error_message || null,
+    record.review_status || 'none',
+    record.review_note || null,
+    safeJsonStringify(record.raw_payload || null),
+    record.collected_at || null,
+    record.created_by || null
+  );
+  return result.lastInsertRowid;
+}
+
+function findMatchedAssetSubject(companyEntityName) {
+  const input = normalizeTaskCenterText(companyEntityName);
+  if (!input) return null;
+  const rows = decryptRows('company_subjects', db.prepare(`
+    SELECT id, group_name, company_entity, status
+    FROM company_subjects
+  `).all());
+  return rows.find(row => {
+    if (row.status && row.status !== 'active') return false;
+    return isCompanyLikeNameMatch(input, row.company_entity);
+  }) || null;
+}
+
+function getCompanyDisplayName(companyId) {
+  const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(companyId);
+  return company ? decrypt(company.name) : null;
+}
+
+function findCompanyByName(name) {
+  const input = normalizeTaskCenterText(name);
+  if (!input) return null;
+  const rows = decryptRows('companies', db.prepare('SELECT * FROM companies').all());
+  return rows.find(company => isCompanyLikeNameMatch(input, company.name)) || null;
+}
+
+function findResearchEntityBySubject(companyEntityName) {
+  const input = normalizeTaskCenterText(companyEntityName);
+  if (!input) return null;
+  const rows = db.prepare(`
+    SELECT ce.*, c.name as company_name
+    FROM company_entities ce
+    LEFT JOIN companies c ON ce.company_id = c.id
+  `).all();
+  return rows.find(row =>
+    isCompanyLikeNameMatch(input, row.name) || isCompanyLikeNameMatch(input, row.reg_name)
+  ) || null;
+}
+
+function findOrCreateUnknownCompany(userId) {
+  const existing = findCompanyByName('竞品未知公司');
+  if (existing) return { ...existing, created: false };
+
+  const enc = encryptRow('companies', {
+    name: '竞品未知公司',
+    business: '手机任务中心采集到的未知主体竞品',
+  });
+  const result = db.prepare(`
+    INSERT INTO companies (name, category, industry, business, created_by)
+    VALUES (?, 'competitor', '待识别', ?, ?)
+  `).run(enc.name, enc.business, userId || null);
+  return { id: result.lastInsertRowid, name: '竞品未知公司', created: true };
+}
+
+function findOrCreateResearchEntity(companyId, companyEntityName) {
+  const entityName = normalizeTaskCenterText(companyEntityName) || '待识别主体';
+  const rows = db.prepare('SELECT * FROM company_entities WHERE company_id = ?').all(companyId);
+  const existing = rows.find(row =>
+    isCompanyLikeNameMatch(entityName, row.name) || isCompanyLikeNameMatch(entityName, row.reg_name)
+  );
+  if (existing) return { ...existing, created: false };
+
+  const result = db.prepare(`
+    INSERT INTO company_entities (company_id, name, reg_name, sort_order)
+    VALUES (?, ?, ?, 0)
+  `).run(companyId, entityName, companyEntityName ? entityName : null);
+  return { id: result.lastInsertRowid, company_id: companyId, name: entityName, reg_name: companyEntityName ? entityName : null, created: true };
+}
+
+function findExistingTaskCenterProduct(companyId, entityId, productName) {
+  const productKey = getTaskCenterNameKey(productName);
+  if (!productKey) return null;
+  const rows = db.prepare(`
+    SELECT *
+    FROM company_products
+    WHERE company_id = ?
+      AND ((? IS NULL AND entity_id IS NULL) OR entity_id = ?)
+  `).all(companyId, entityId || null, entityId || null);
+  return rows.find(row => getTaskCenterNameKey(row.name) === productKey) || null;
+}
+
+function findExistingTaskCenterProductByName(productName) {
+  const productKey = getTaskCenterNameKey(productName);
+  if (!productKey) return null;
+  const rows = db.prepare(`
+    SELECT *
+    FROM company_products
+    ORDER BY updated_at DESC, created_at DESC, id DESC
+  `).all();
+  return rows.find(row => getTaskCenterNameKey(row.name) === productKey) || null;
+}
+
+function getResearchEntityById(entityId) {
+  return entityId
+    ? db.prepare('SELECT * FROM company_entities WHERE id = ?').get(entityId)
+    : null;
+}
+
+function buildTaskCenterProductNote(payload) {
+  const parts = [];
+  if (payload.source_app) parts.push(`来源App：${payload.source_app}`);
+  if (payload.task_title) parts.push(`任务标题：${payload.task_title}`);
+  if (payload.collected_at) parts.push(`采集时间：${payload.collected_at}`);
+  if (payload.confidence !== undefined && payload.confidence !== null && payload.confidence !== '') {
+    parts.push(`采集置信度：${payload.confidence}`);
+  }
+  if (payload.product_link) parts.push(`本次捕获链接：${payload.product_link}`);
+  return parts.join('；');
+}
+
+function appendProductNotes(existingNotes, newNote) {
+  const existing = normalizeTaskCenterText(existingNotes);
+  const note = normalizeTaskCenterText(newNote);
+  if (!note) return existing || null;
+  if (existing && existing.includes(note)) return existing;
+  return [existing, note].filter(Boolean).join('\n');
+}
+
+function bindTaskCenterAttachmentsToProduct(attachmentIds, productId) {
+  if (!attachmentIds.length || !productId) return 0;
+  const update = db.prepare(`
+    UPDATE attachments
+    SET source_type = 'company_product', source_id = ?
+    WHERE id = ?
+  `);
+  let count = 0;
+  attachmentIds.forEach(id => {
+    const result = update.run(productId, id);
+    count += result.changes;
+  });
+  return count;
+}
+
+function getMobileTaskRecordAttachments(row) {
+  const ids = parseTaskCenterAttachmentIds(row.screenshot_attachment_ids);
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT id, filename, mimetype, size, created_at
+    FROM attachments
+    WHERE id IN (${placeholders})
+  `).all(...ids).map(normalizeGenericAttachmentRow);
+  const byId = new Map(rows.map(item => [Number(item.id), item]));
+  return ids.map(id => byId.get(id)).filter(Boolean);
+}
+
+function saveMobileTaskCenterRecord(payload, user) {
+  const sourceApp = normalizeTaskCenterSource(payload.source_app);
+  const miniProgramName = normalizeTaskCenterText(payload.mini_program_name);
+  const companyEntityName = normalizeTaskCenterText(payload.company_entity_name);
+  const productLink = normalizeTaskCenterText(payload.product_link);
+  const attachmentIds = parseTaskCenterAttachmentIds(payload.screenshot_attachment_ids || payload.screenshot_paths);
+  const baseRecord = {
+    source_app: sourceApp,
+    mini_program_name: miniProgramName,
+    company_entity_name: companyEntityName,
+    product_link: productLink,
+    product_link_capture_method: normalizeTaskCenterText(payload.product_link_capture_method),
+    task_title: normalizeTaskCenterText(payload.task_title),
+    task_description: normalizeTaskCenterText(payload.task_description),
+    screenshot_attachment_ids: attachmentIds,
+    confidence: payload.confidence,
+    collected_at: normalizeTaskCenterText(payload.collected_at) || new Date().toISOString(),
+    created_by: user?.id,
+    raw_payload: payload,
+  };
+
+  if (!sourceApp) {
+    const err = new Error('来源 App 必填');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (!miniProgramName) {
+    const id = insertMobileTaskRecord({
+      ...baseRecord,
+      status: 'failed',
+      error_message: '未抓到小程序名',
+      review_status: 'pending',
+      review_note: '未抓到小程序名，需人工复核任务页面或采集规则',
+    });
+    return { id, record_id: id, status: 'failed', review_status: 'pending', error: '未抓到小程序名' };
+  }
+
+  const assetSubject = findMatchedAssetSubject(companyEntityName);
+  if (assetSubject) {
+    const id = insertMobileTaskRecord({
+      ...baseRecord,
+      status: 'skipped',
+      skip_reason: '命中资产管理主体，跳过入库',
+      matched_asset_subject_id: assetSubject.id,
+      matched_asset_subject_name: assetSubject.company_entity,
+    });
+    return {
+      id,
+      record_id: id,
+      status: 'skipped',
+      review_status: 'none',
+      skip_reason: '命中资产管理主体，跳过入库',
+      matched_asset_subject_id: assetSubject.id,
+      matched_asset_subject_name: assetSubject.company_entity,
+    };
+  }
+
+  let matchStatus = 'matched';
+  let entity = findResearchEntityBySubject(companyEntityName);
+  let companyId = entity?.company_id || null;
+  let productMatchedByName = null;
+
+  if (!companyId) {
+    const matchedCompany = findCompanyByName(companyEntityName);
+    if (matchedCompany) {
+      companyId = matchedCompany.id;
+    } else {
+      productMatchedByName = findExistingTaskCenterProductByName(miniProgramName);
+      if (productMatchedByName) {
+        companyId = productMatchedByName.company_id;
+        entity = getResearchEntityById(productMatchedByName.entity_id);
+      } else {
+        const unknownCompany = findOrCreateUnknownCompany(user?.id);
+        companyId = unknownCompany.id;
+        matchStatus = 'unknown';
+      }
+    }
+    if (!entity) {
+      entity = findOrCreateResearchEntity(companyId, companyEntityName);
+    }
+  }
+
+  const existingProduct = productMatchedByName || findExistingTaskCenterProduct(companyId, entity?.id || null, miniProgramName);
+  const productNote = buildTaskCenterProductNote(baseRecord);
+  let productId;
+  let productCreated = false;
+  let productLinkConflict = null;
+  let storedProductLink = null;
+
+  if (existingProduct) {
+    productId = existingProduct.id;
+    const nextDiscoverySource = appendDiscoverySource(existingProduct.discovery_source, sourceApp);
+    const existingLink = normalizeTaskCenterText(existingProduct.product_link);
+    const nextLink = existingLink || productLink || null;
+    storedProductLink = nextLink;
+    if (existingLink && productLink && existingLink !== productLink) {
+      productLinkConflict = { existing: existingLink, captured: productLink };
+    }
+    db.prepare(`
+      UPDATE company_products
+      SET entity_id = COALESCE(entity_id, ?),
+        product_link = ?, discovery_source = ?,
+        description = COALESCE(NULLIF(description, ''), ?),
+        notes = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      entity?.id || null,
+      nextLink,
+      nextDiscoverySource,
+      baseRecord.task_description || null,
+      appendProductNotes(existingProduct.notes, productNote),
+      productId
+    );
+  } else {
+    const result = db.prepare(`
+      INSERT INTO company_products (
+        company_id, name, category, status, product_link, discovery_source,
+        description, notes, entity_id
+      )
+      VALUES (?, ?, '支付宝小程序', 'active', ?, ?, ?, ?, ?)
+    `).run(
+      companyId,
+      miniProgramName,
+      productLink || null,
+      appendDiscoverySource(null, sourceApp),
+      baseRecord.task_description || null,
+      productNote || null,
+      entity?.id || null
+    );
+    productId = result.lastInsertRowid;
+    productCreated = true;
+    storedProductLink = productLink || null;
+  }
+
+  const boundAttachmentCount = bindTaskCenterAttachmentsToProduct(attachmentIds, productId);
+  const id = insertMobileTaskRecord({
+    ...baseRecord,
+    status: matchStatus,
+    company_id: companyId,
+    entity_id: entity?.id || null,
+    product_id: productId,
+    error_message: productLinkConflict ? `本次抓取链接与已有产品链接不一致：${productLinkConflict.captured}` : null,
+    review_status: productLinkConflict ? 'pending' : 'none',
+    review_note: productLinkConflict ? `已有链接：${productLinkConflict.existing}\n本次链接：${productLinkConflict.captured}` : null,
+  });
+
+  return {
+    id,
+    record_id: id,
+    status: matchStatus,
+    company_id: companyId,
+    company_name: getCompanyDisplayName(companyId),
+    entity_id: entity?.id || null,
+    entity_name: entity?.name || null,
+    product_id: productId,
+    product_created: productCreated,
+    review_status: productLinkConflict ? 'pending' : 'none',
+    discovery_source: appendDiscoverySource(existingProduct?.discovery_source, sourceApp),
+    product_link: storedProductLink,
+    captured_product_link: productLink || null,
+    product_link_conflict: productLinkConflict,
+    bound_attachment_count: boundAttachmentCount,
+    should_notify: true,
+  };
+}
+
+app.post('/api/company_products/:id/task-center-notification', canWrite, (req, res) => {
+  const result = notifyTaskCenterProductRecord(req.params.id, req.body || {});
+  if (!result) return res.status(404).json({ error: '产品不存在' });
+  res.json({ success: true, notified_count: result.recipients.length });
+});
+
 app.delete('/api/company_products/:id', (req, res) => {
   const product = db.prepare('SELECT id FROM company_products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: '产品不存在' });
@@ -5274,6 +5803,143 @@ app.delete('/api/company_products/:id', (req, res) => {
     try { fs.unlinkSync(path.join(UPLOADS_DIR, att.filepath)); } catch {}
   });
   res.json({ success: true });
+});
+
+app.get('/api/mobile-task-center/apps', (req, res) => {
+  const rows = db.prepare(`
+    SELECT *
+    FROM mobile_task_apps
+    ORDER BY sort_order ASC, id ASC
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/mobile-task-center/apps', canWrite, (req, res) => {
+  const { app_name, package_name, task_center_entry, collector_config, enabled = 1, sort_order = 0, remark } = req.body;
+  const name = normalizeTaskCenterText(app_name);
+  if (!name) return res.status(400).json({ error: 'App 名称必填' });
+  try {
+    const result = db.prepare(`
+      INSERT INTO mobile_task_apps (
+        app_name, package_name, task_center_entry, collector_config, enabled, sort_order, remark, created_by
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      name,
+      normalizeTaskCenterText(package_name) || null,
+      normalizeTaskCenterText(task_center_entry) || null,
+      normalizeTaskCenterJsonObjectText(collector_config, '高级采集配置'),
+      enabled ? 1 : 0,
+      Number(sort_order) || 0,
+      normalizeTaskCenterText(remark) || null,
+      req.user.id
+    );
+    res.json({ id: result.lastInsertRowid });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : '保存采集 App 失败' });
+  }
+});
+
+app.put('/api/mobile-task-center/apps/:id', canWrite, (req, res) => {
+  const existing = db.prepare('SELECT id FROM mobile_task_apps WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: '采集 App 不存在' });
+  const { app_name, package_name, task_center_entry, collector_config, enabled = 1, sort_order = 0, remark } = req.body;
+  const name = normalizeTaskCenterText(app_name);
+  if (!name) return res.status(400).json({ error: 'App 名称必填' });
+  try {
+    db.prepare(`
+      UPDATE mobile_task_apps
+      SET app_name = ?, package_name = ?, task_center_entry = ?, collector_config = ?, enabled = ?,
+        sort_order = ?, remark = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      name,
+      normalizeTaskCenterText(package_name) || null,
+      normalizeTaskCenterText(task_center_entry) || null,
+      normalizeTaskCenterJsonObjectText(collector_config, '高级采集配置'),
+      enabled ? 1 : 0,
+      Number(sort_order) || 0,
+      normalizeTaskCenterText(remark) || null,
+      req.params.id
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : '保存采集 App 失败' });
+  }
+});
+
+app.delete('/api/mobile-task-center/apps/:id', canWrite, (req, res) => {
+  const existing = db.prepare('SELECT id FROM mobile_task_apps WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: '采集 App 不存在' });
+  db.prepare('DELETE FROM mobile_task_apps WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+app.get('/api/mobile-task-center/records', (req, res) => {
+  const { status, source_app, product_id, review_status, limit = 100 } = req.query;
+  let q = `
+    SELECT r.*, cp.name as product_name, c.name as company_name, ce.name as entity_name,
+      COALESCE(u.display_name, u.username) as reviewed_by_name
+    FROM mobile_task_records r
+    LEFT JOIN company_products cp ON r.product_id = cp.id
+    LEFT JOIN companies c ON r.company_id = c.id
+    LEFT JOIN company_entities ce ON r.entity_id = ce.id
+    LEFT JOIN users u ON r.reviewed_by = u.id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (status) { q += ' AND r.status = ?'; params.push(status); }
+  if (source_app) { q += ' AND r.source_app = ?'; params.push(source_app); }
+  if (product_id) { q += ' AND r.product_id = ?'; params.push(product_id); }
+  if (review_status) { q += ' AND r.review_status = ?'; params.push(review_status); }
+  q += ' ORDER BY r.created_at DESC LIMIT ?';
+  params.push(Math.min(Math.max(Number(limit) || 100, 1), 500));
+  const rows = db.prepare(q).all(...params).map(row => ({
+    ...row,
+    company_name: decrypt(row.company_name),
+    screenshot_attachments: getMobileTaskRecordAttachments(row),
+  }));
+  res.json(rows);
+});
+
+app.put('/api/mobile-task-center/records/:id/review', canWrite, (req, res) => {
+  const id = Number(req.params.id);
+  const existing = db.prepare('SELECT id FROM mobile_task_records WHERE id = ?').get(id);
+  if (!existing) return res.status(404).json({ error: '采集记录不存在' });
+  const allowed = new Set(['none', 'pending', 'reviewed']);
+  const reviewStatus = normalizeTaskCenterText(req.body.review_status || 'reviewed');
+  if (!allowed.has(reviewStatus)) return res.status(400).json({ error: '无效的复核状态' });
+  const reviewNote = normalizeTaskCenterText(req.body.review_note) || null;
+  db.prepare(`
+    UPDATE mobile_task_records
+    SET review_status = ?, review_note = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(reviewStatus, reviewNote, req.user.id, id);
+  res.json({ success: true });
+});
+
+app.post('/api/mobile-task-center/records', canWrite, (req, res) => {
+  try {
+    const saveRecord = db.transaction((payload, user) => saveMobileTaskCenterRecord(payload, user));
+    const result = saveRecord(req.body || {}, req.user);
+
+    if (result.should_notify && result.product_id) {
+      const notification = notifyTaskCenterProductRecord(result.product_id, {
+        source_app: req.body.source_app,
+        mini_program_name: req.body.mini_program_name,
+        company_name: result.company_name,
+        entity_name: result.entity_name,
+        screenshot_count: parseTaskCenterAttachmentIds(req.body.screenshot_attachment_ids || req.body.screenshot_paths).length,
+      });
+      result.notified_count = notification?.recipients?.length || 0;
+    }
+
+    delete result.should_notify;
+    res.json(result);
+  } catch (err) {
+    console.error('手机任务中心采集入库失败:', err);
+    res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : '手机任务中心采集入库失败' });
+  }
 });
 
 // 动向
@@ -8045,6 +8711,60 @@ function createNotification(userId, type, title, content, link) {
     INSERT INTO notifications (user_id, type, title, content, link)
     VALUES (?, ?, ?, ?, ?)
   `).run(userId, type, title, content, link);
+}
+
+function getTaskCenterNotificationUserIds() {
+  const ids = new Set();
+  const executiveRoles = ['ceo', 'cto', 'coo', 'cmo'];
+  db.prepare(`
+    SELECT id FROM users
+    WHERE department = 'operation'
+      OR LOWER(IFNULL(role, '')) IN (${executiveRoles.map(() => '?').join(',')})
+      OR LOWER(IFNULL(executive_role, '')) IN (${executiveRoles.map(() => '?').join(',')})
+  `).all(...executiveRoles, ...executiveRoles).forEach(row => ids.add(row.id));
+
+  const operationTeamIds = db.prepare("SELECT id FROM teams WHERE department = 'operation'").all().map(row => row.id);
+  getUsersByTeamIds(operationTeamIds).forEach(id => ids.add(id));
+
+  const commercialTeamIds = db.prepare(`
+    SELECT id FROM teams
+    WHERE department = 'commercial' AND TRIM(name) IN ('商务流量组', '商务预算组')
+  `).all().map(row => row.id);
+  getUsersByTeamIds(commercialTeamIds).forEach(id => ids.add(id));
+
+  return [...ids].filter(Boolean);
+}
+
+function notifyTaskCenterProductRecord(productId, options = {}) {
+  const product = db.prepare(`
+    SELECT cp.*, c.name as company_name, ce.name as entity_name, ce.reg_name as entity_reg_name
+    FROM company_products cp
+    LEFT JOIN companies c ON cp.company_id = c.id
+    LEFT JOIN company_entities ce ON cp.entity_id = ce.id
+    WHERE cp.id = ?
+  `).get(productId);
+  if (!product) return null;
+
+  const productName = options.mini_program_name || product.name || '未知小程序';
+  const companyName = options.company_name || decrypt(product.company_name) || '竞品未知公司';
+  const entityName = options.entity_name || product.entity_name || product.entity_reg_name || '未关联主体';
+  const sourceApp = options.source_app ? `来源App：${options.source_app}；` : '';
+  const screenshotText = options.screenshot_count ? `截图：${options.screenshot_count}张；` : '';
+  const title = `发现支付宝小程序任务：${productName}`;
+  const content = `${sourceApp}公司：${companyName}；主体：${entityName}；${screenshotText}已记录到公司研究全部产品。`;
+  const recipients = getTaskCenterNotificationUserIds();
+
+  recipients.forEach(userId => {
+    createNotification(
+      userId,
+      'task_center_product_found',
+      title,
+      content,
+      '/companies'
+    );
+  });
+
+  return { recipients, productName, companyName, entityName };
 }
 
 // 获取当前用户的通知列表

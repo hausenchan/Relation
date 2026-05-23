@@ -125,6 +125,7 @@ export default function NotificationBell() {
       lead_assigned: { label: '线索', color: 'blue' },
       dev_task_assigned: { label: '任务', color: 'orange' },
       dev_task_completed: { label: '完成', color: 'green' },
+      task_center_product_found: { label: '采集', color: 'cyan' },
       reminder: { label: '提醒', color: 'purple' },
     };
     const cfg = map[type] || { label: '通知', color: 'default' };

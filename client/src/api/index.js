@@ -127,7 +127,19 @@ export const companyProductsApi = {
   list: (params) => api.get('/company_products', { params }).then(r => r.data),
   create: (data) => api.post('/company_products', data).then(r => r.data),
   update: (id, data) => api.put(`/company_products/${id}`, data).then(r => r.data),
+  notifyTaskCenter: (id, data) => api.post(`/company_products/${id}/task-center-notification`, data).then(r => r.data),
   delete: (id) => api.delete(`/company_products/${id}`).then(r => r.data),
+};
+
+export const mobileTaskCenterApi = {
+  listApps: () => api.get('/mobile-task-center/apps').then(r => r.data),
+  createApp: (data) => api.post('/mobile-task-center/apps', data).then(r => r.data),
+  updateApp: (id, data) => api.put(`/mobile-task-center/apps/${id}`, data).then(r => r.data),
+  deleteApp: (id) => api.delete(`/mobile-task-center/apps/${id}`).then(r => r.data),
+  listRecords: (params) => api.get('/mobile-task-center/records', { params }).then(r => r.data),
+  createRecord: (data) => api.post('/mobile-task-center/records', data).then(r => r.data),
+  updateRecordReview: (id, data) => api.put(`/mobile-task-center/records/${id}/review`, data).then(r => r.data),
+  downloadAttachment: (id, filename) => attachmentsApi.download(id, filename),
 };
 
 export const giftsApi = {

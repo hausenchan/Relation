@@ -1,0 +1,52 @@
+{
+  "apps": [
+    {
+      "app_name": "趣头条",
+      "package_name": "com.jifen.qukan",
+      "enabled": true,
+      "sort_order": 1,
+      "task_center_entry": [
+        { "type": "wait", "wait_ms": 3000 },
+        { "type": "tap", "x": 760, "y": 2220, "wait_ms": 2000 }
+      ],
+      "task_button_texts": ["去完成", "去支付宝", "打开", "立即打开", "立即体验", "去体验", "去看看", "开始任务", "做任务"],
+      "task_button_patterns": ["^(去|立即|打开|开始).{0,10}$", "^(做任务|试玩|体验).{0,10}$"],
+      "max_scan_pages": 3,
+      "max_tasks_per_page": 10,
+      "capture_skipped_screenshots": false,
+      "jump_timeout_ms": 8000,
+      "after_task_tap_wait_ms": 2500,
+      "after_alipay_open_wait_ms": 3500,
+      "alipay_package_names": ["com.eg.android.AlipayGphone"],
+      "alipay_more_menu_steps": [
+        { "type": "tap", "x": 1000, "y": 90, "wait_ms": 1200 }
+      ],
+      "alipay_about_texts": ["关于", "小程序详情", "小程序信息", "关于此小程序", "主体信息"],
+      "mini_program_name_patterns": [
+        "小程序名称[:：\\s]+([^\\n，。；;]{2,30})",
+        "打开(.+?)支付宝小程序",
+        "体验(.+?)支付宝小程序",
+        "试玩(.+?)支付宝小程序",
+        "进入(.+?)小程序"
+      ],
+      "company_entity_patterns": [
+        "主体[:：]\\s*([^\\s，。；;]+(?:有限公司|股份有限公司|有限责任公司|公司))",
+        "开发者[:：]\\s*([^\\s，。；;]+(?:有限公司|股份有限公司|有限责任公司|公司))"
+      ]
+    },
+    {
+      "app_name": "中青看点",
+      "package_name": "cn.youth.news",
+      "enabled": false,
+      "sort_order": 2,
+      "task_center_entry": [
+        { "type": "text", "value": "我的", "match": "contains", "optional": true, "wait_ms": 1500 },
+        { "type": "text", "value": "任务", "match": "contains", "wait_ms": 2000 }
+      ],
+      "task_button_texts": ["去完成", "去支付宝", "打开", "立即体验", "去看看", "做任务"],
+      "max_scan_pages": 2,
+      "capture_skipped_screenshots": false,
+      "alipay_package_names": ["com.eg.android.AlipayGphone"]
+    }
+  ]
+}

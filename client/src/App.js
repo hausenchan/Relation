@@ -88,6 +88,7 @@ import Budgets from './pages/Budgets';
 import MenuPerms from './pages/MenuPerms';
 import CrossTeamAccess from './pages/CrossTeamAccess';
 import OperationLogs from './pages/OperationLogs';
+import MobileTaskCenter from './pages/MobileTaskCenter';
 import FollowUpTasks from './pages/FollowUpTasks';
 import MyTasks from './pages/MyTasks';
 import TaskBoard from './pages/TaskBoard';
@@ -358,6 +359,7 @@ function AppLayout() {
     '/menu-perms': '菜单权限管理',
     '/cross-team-access': '跨团队权限',
     '/operation-logs': '操作日志',
+    '/mobile-task-center': '手机采集',
   };
   const currentPageTitle = pageTitleMap[location.pathname] || '';
 
@@ -510,6 +512,7 @@ function AppLayout() {
         { key: '/project-groups', icon: <ApartmentOutlined />, label: <Link to="/project-groups">项目组管理</Link> },
         { key: '/menu-perms', icon: <MenuOutlined />, label: <Link to="/menu-perms">菜单权限管理</Link> },
         { key: '/cross-team-access', icon: <TeamOutlined />, label: <Link to="/cross-team-access">跨团队权限</Link> },
+        { key: '/mobile-task-center', icon: <AppstoreOutlined />, label: <Link to="/mobile-task-center">手机采集</Link> },
         user?.role === 'admin' && { key: '/operation-logs', icon: <HistoryOutlined />, label: <Link to="/operation-logs">操作日志</Link> },
       ].filter(Boolean),
     },
@@ -804,6 +807,7 @@ function AppLayout() {
             <Route path="/budgets" element={<PrivateRoute><Budgets /></PrivateRoute>} />
             <Route path="/menu-perms" element={<PrivateRoute><MenuPerms /></PrivateRoute>} />
             <Route path="/cross-team-access" element={<PrivateRoute><CrossTeamAccess /></PrivateRoute>} />
+            <Route path="/mobile-task-center" element={<PrivateRoute adminOnly><MobileTaskCenter /></PrivateRoute>} />
             <Route path="/operation-logs" element={<PrivateRoute adminOnly><OperationLogs /></PrivateRoute>} />
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
             <Route path="/my-tasks" element={<PrivateRoute><MyTasks /></PrivateRoute>} />

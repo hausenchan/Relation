@@ -7,6 +7,8 @@
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "node server/index.js",
     "client": "cd client && npm start",
+    "mobile-task:collect": "node scripts/mobile-task-center-collector.js",
+    "mobile-task:validate": "node scripts/mobile-task-center-collector.js --validate-config",
     "install:all": "npm install && cd client && npm install"
   },
   "dependencies": {

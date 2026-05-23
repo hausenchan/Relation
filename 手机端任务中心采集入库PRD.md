@@ -55,6 +55,8 @@
 | sort_order | 执行顺序 |
 | remark | 备注 |
 
+采集脚本需要提供配置校验能力。上线或调整 App 规则前，先执行 `npm run mobile-task:validate` 或 `node scripts/mobile-task-center-collector.js --validate-config` 检查 App 名称、包名、入口步骤、按钮规则、支付宝菜单步骤和正则表达式，避免规则错误到实机运行时才暴露。
+
 ### 5.2 手机端自动打开
 
 第一版建议基于安卓设备实现：
@@ -63,18 +65,19 @@
 2. 按 App 清单逐个打开 App。
 3. 进入任务中心页面。
 4. 等待页面稳定。
-5. 截图并进行 OCR 识别。
-6. 对疑似支付宝小程序任务进入详情页或任务卡片区域截图。
-7. 对疑似支付宝小程序任务尝试捕获打开链路，包括任务按钮跳转、系统 Intent、WebView 跳转 URL、剪贴板或页面文本中出现的支付宝小程序 deeplink。
+5. 读取任务中心 UI 节点并定位“去完成、去支付宝、立即体验、打开、做任务”等任务按钮。
+6. 逐个点击任务按钮，观察是否真实跳转到支付宝；没有跳转到支付宝的任务只记录跳过，不按支付宝小程序入库。
+7. 跳转到支付宝小程序后，打开支付宝小程序右上角菜单或详情页，抓取小程序名称、主体名称和页面证据截图。
+8. 同步尝试捕获打开链路，包括任务按钮触发的系统 Intent、ADB logcat、当前 Activity 参数、WebView URL 或页面文本中出现的支付宝小程序 deeplink。
 
 ### 5.3 支付宝小程序识别
 
 命中条件包括但不限于：
 
-1. 页面文字包含“支付宝小程序”。
-2. 页面文字包含“支付宝”“小程序”“去支付宝”等组合。
-3. 任务按钮或任务说明指向支付宝小程序打开链路。
-4. OCR 识别到小程序名称、主体名称或相关推广描述。
+1. 点击任务按钮后，当前前台包名或 Activity 确认进入支付宝。
+2. 支付宝小程序页面或右上角菜单可抓取到小程序名称。
+3. 支付宝小程序菜单、详情页或页面信息可抓取主体名称。
+4. 能从系统 Intent、logcat、Activity 参数或页面文本捕获支付宝小程序 deeplink 时，写入产品链接；抓不到不影响产品入库。
 
 识别结果字段：
 
@@ -86,15 +89,15 @@
 | task_title | 任务标题 |
 | task_description | 任务说明 |
 | product_link | 支付宝小程序 deeplink，能抓取则填，抓不到可为空 |
-| product_link_capture_method | 链接捕获方式，如 button_intent、logcat、webview_url、ocr_text、manual |
+| product_link_capture_method | 链接捕获方式，如 button_intent、activity_intent、logcat、webview_url、alipay_menu_text、manual |
 | screenshot_paths | 截图文件 |
-| confidence | 识别置信度 |
+| confidence | 采集置信度 |
 | collected_at | 采集时间 |
 
 支付宝小程序 deeplink 抓取原则：
 
 1. 优先捕获可直接唤起支付宝小程序的链接，例如 `alipays://platformapi/startapp?...`。
-2. 可通过 ADB logcat、系统 Intent、WebView URL、任务按钮跳转参数、页面文本或 OCR 结果提取。
+2. 可通过 ADB logcat、系统 Intent、当前 Activity 参数、WebView URL、任务按钮跳转参数或页面文本提取。
 3. 抓取动作只用于记录链路，不自动完成任务、不领取奖励、不绕过 App 风控。
 4. 第三方 App 隐藏、加密或服务端动态生成链路时，允许抓取失败；失败不影响产品入库。
 5. 抓取失败时 `product_link` 留空，并在采集日志记录失败原因或捕获方式为空。
@@ -123,7 +126,7 @@
 | skip_reason | 命中资产管理主体，跳过入库 |
 | source_app | 来源 App |
 | mini_program_name | 小程序名称 |
-| company_entity_name | OCR 识别到的主体名称 |
+| company_entity_name | 支付宝小程序菜单或详情页抓到的主体名称 |
 | matched_asset_subject_id | 命中的资产管理主体 ID |
 | matched_asset_subject_name | 命中的资产管理主体名称 |
 | collected_at | 采集时间 |
@@ -160,8 +163,8 @@
 
 1. 在目标公司下查找同名主体。
 2. 若不存在，新增管理主体。
-3. 主体名称可先使用 OCR 识别结果。
-4. 注册名称同样使用 OCR 识别结果；若缺失则为空。
+3. 主体名称可先使用支付宝小程序菜单或详情页抓取结果。
+4. 注册名称同样使用支付宝小程序菜单或详情页抓取结果；若缺失则为空。
 
 若未识别到主体名：
 
@@ -185,7 +188,7 @@
 | 核心功能 | 可为空或按任务内容提取 |
 | 产品链接 | product_link，支付宝小程序 deeplink，能抓取则写入 |
 | 产品发现出处 | source_app，表示在哪个外部 App 发现该产品 |
-| 备注 | 来源 App、任务标题、采集时间、OCR 置信度 |
+| 备注 | 来源 App、任务标题、采集时间、采集置信度 |
 | 所属主体 | 管理主体 ID |
 
 去重规则：
@@ -219,6 +222,8 @@
 附件命名建议：
 
 `来源App_小程序名_YYYYMMDD_HHmmss.png`
+
+每次采集运行还需要在本地输出一份 `run_report` JSON，记录每个被点击任务按钮的标题、按钮文案、是否跳转支付宝、当前包名、截图路径、API 入库结果和失败原因。未跳转支付宝的按钮默认只进入本地报告，不进入公司研究；如配置 `capture_skipped_screenshots`，可额外保存跳过截图便于排查 UI 规则。
 
 ### 5.8 通知中心
 
@@ -257,10 +262,10 @@ flowchart TD
   A["每日定时任务启动"] --> B["读取启用的 App 清单"]
   B --> C["打开手机端 App"]
   C --> D["进入任务中心"]
-  D --> E["截图并 OCR 识别"]
-  E --> F{"是否命中支付宝小程序任务"}
+  D --> E["逐个定位并点击任务按钮"]
+  E --> F{"是否真实跳转到支付宝小程序"}
   F -- "否" --> G["记录跳过原因"]
-  F -- "是" --> H["提取小程序名、主体名和 deeplink"]
+  F -- "是" --> H["打开支付宝右上角菜单抓名称、主体和 deeplink"]
   H --> I{"是否命中资产管理主体"}
   I -- "是" --> J["记录 skipped 日志，不入库不通知"]
   I -- "否" --> K{"是否匹配已有公司"}
@@ -367,10 +372,14 @@ flowchart TD
 | product_id | INTEGER | 匹配产品 |
 | task_title | TEXT | 任务标题 |
 | task_description | TEXT | 任务描述 |
-| confidence | REAL | OCR 置信度 |
+| confidence | REAL | 采集置信度 |
 | status | TEXT | matched / unknown / skipped / failed |
 | skip_reason | TEXT | 跳过原因 |
 | error_message | TEXT | 失败原因 |
+| review_status | TEXT | none / pending / reviewed |
+| review_note | TEXT | 人工复核备注 |
+| reviewed_by | INTEGER | 复核人 |
+| reviewed_at | DATETIME | 复核时间 |
 | collected_at | DATETIME | 采集时间 |
 | created_at | DATETIME | 创建时间 |
 
@@ -397,7 +406,7 @@ flowchart TD
 | --- | --- |
 | App 未登录 | 截图记录失败原因，通知采集管理员 |
 | App 弹窗遮挡 | 尝试关闭一次，仍失败则记录 |
-| OCR 未识别到小程序名 | 记录为待复核，不创建产品 |
+| 未抓到小程序名 | 记录为待复核，不创建产品 |
 | 主体命中资产管理主体 | 记录 skipped 日志，不入库，不上传公司研究附件，不发通知 |
 | 未识别主体 | 归入“待识别主体” |
 | 未匹配公司 | 归入“竞品未知公司” |
@@ -405,6 +414,8 @@ flowchart TD
 | 已有产品链接与本次抓取链接不一致 | 不自动覆盖已有链接，记录差异供人工复核 |
 | 上传截图失败 | 产品仍可入库，记录失败日志 |
 | 通知发送失败 | 不影响产品入库，记录错误 |
+
+后台采集日志需要支持按复核状态筛选，并允许管理员将待复核记录标记为已复核或重新标记为待复核。当前列表支持导出 CSV，便于离线检查采集失败、链接冲突和新来源追加情况。
 
 ## 10. 权限与风控
 
@@ -420,8 +431,8 @@ flowchart TD
 
 1. 配置 1 台安卓测试机。
 2. 接入 2 个 App。
-3. 实现任务中心打开、截图、OCR。
-4. 识别支付宝小程序任务。
+3. 实现任务中心打开、任务按钮遍历、跳转验证和截图。
+4. 跳转到支付宝小程序后，从右上角菜单或详情页抓取小程序名和主体名。
 5. 先检查资产管理主体，命中则跳过。
 6. 未命中时写入“竞品未知公司”或已存在公司。
 7. 写入产品发现出处，支持同一产品多来源追加去重。
@@ -433,7 +444,7 @@ flowchart TD
 
 1. 增加 App 规则配置页面。
 2. 增加采集日志页面。
-3. 增加失败截图和人工复核。
+3. 增加失败截图、人工复核和日志导出。
 4. 增加小程序名和主体名规则库。
 5. 增加 deeplink 捕获方式配置和失败原因统计。
 6. 支持更多 App。
