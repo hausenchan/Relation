@@ -924,6 +924,7 @@ db.exec(`
     budget_group_type TEXT,
     description TEXT,
     owner_id INTEGER,
+    shared_with TEXT,
     status TEXT DEFAULT 'not_started',
     source_type TEXT,
     source_id INTEGER,
@@ -1119,7 +1120,7 @@ db.exec(`
 `);
 
 // 迁移：为已存在的表添加新字段
-['media', 'access_method'].forEach(col => {
+['media', 'access_method', 'shared_with'].forEach(col => {
   try { db.exec(`ALTER TABLE strategies ADD COLUMN ${col} TEXT`); } catch (e) {}
 });
 
@@ -1138,6 +1139,7 @@ try {
         budget_group_type TEXT,
         description TEXT,
         owner_id INTEGER,
+        shared_with TEXT,
         status TEXT DEFAULT 'not_started',
         source_type TEXT,
         source_id INTEGER,
@@ -1146,8 +1148,8 @@ try {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-      INSERT INTO strategies_new (id,title,dimension,role_type,budget_group_type,description,owner_id,status,source_type,source_id,media,access_method,created_at,updated_at)
-        SELECT id,title,dimension,role_type,budget_group_type,description,owner_id,status,source_type,source_id,media,access_method,created_at,updated_at FROM strategies;
+      INSERT INTO strategies_new (id,title,dimension,role_type,budget_group_type,description,owner_id,shared_with,status,source_type,source_id,media,access_method,created_at,updated_at)
+        SELECT id,title,dimension,role_type,budget_group_type,description,owner_id,shared_with,status,source_type,source_id,media,access_method,created_at,updated_at FROM strategies;
       DROP TABLE strategies;
       ALTER TABLE strategies_new RENAME TO strategies;
       CREATE INDEX IF NOT EXISTS idx_strategies_owner_id ON strategies(owner_id);
@@ -8336,11 +8338,69 @@ app.get('/api/product-asset-reductions/simple', (req, res) => {
 });
 
 // =========== 策略管理 API ===========
+function normalizeSharedUserIds(value) {
+  const raw = Array.isArray(value) ? value : String(value || '').split(',');
+  const ids = [...new Set(raw.map(id => Number(id)).filter(Boolean))];
+  return ids.length ? ids.join(',') : null;
+}
+
+function getStrategySharedUserIds(strategy) {
+  return String(strategy?.shared_with || '').split(',').map(id => Number(id)).filter(Boolean);
+}
+
+function canAccessStrategy(user, strategy) {
+  if (isAdmin(user.role)) return true;
+  if (getStrategySharedUserIds(strategy).includes(Number(user.id))) return true;
+
+  const ownerId = Number(strategy.owner_id || 0);
+  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(user.id);
+
+  if (user.role === 'member' && currentUser?.department === 'operation') {
+    const teamIds = getUserTeamIds(user.id);
+    if (teamIds.length > 0) {
+      return getUsersByTeamIds(teamIds).map(Number).includes(ownerId);
+    }
+    return ownerId === Number(user.id) || !ownerId;
+  }
+
+  if (user.role === 'member') {
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(user.id, 'strategies').map(r => r.target_team_id);
+    if (crossTeams.length > 0) {
+      const crossMembers = getUsersByTeamIds(crossTeams).map(Number);
+      return ownerId === Number(user.id) || !ownerId || crossMembers.includes(ownerId);
+    }
+    return ownerId === Number(user.id) || !ownerId;
+  }
+
+  if (user.role === 'leader') {
+    const managedTeamIds = getManagedTeamIds(user.id, user.role);
+    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(user.id, 'strategies').map(r => r.target_team_id);
+    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
+    if (allTeamIds.length > 0) {
+      return getUsersByTeamIds(allTeamIds).map(Number).includes(ownerId);
+    }
+    return ownerId === Number(user.id);
+  }
+
+  if (user.role === 'sales_director') {
+    const managedTeamIds = getManagedTeamIds(user.id, user.role);
+    if (managedTeamIds?.length) {
+      return getUsersByTeamIds(managedTeamIds).map(Number).includes(ownerId);
+    }
+  }
+
+  return true;
+}
+
 // 获取策略列表
 app.get('/api/strategies', (req, res) => {
   const { id, dimension, role_type, budget_group_type, status, media, access_method } = req.query;
   const { id: userId, role } = req.user;
   const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(userId);
+  const sharedFilterSql = "(',' || IFNULL(s.shared_with,'') || ',') LIKE ?";
+  const sharedFilterParam = `%,${userId},%`;
 
   let q = `
     SELECT s.*, u.display_name as owner_name,
@@ -8377,11 +8437,16 @@ app.get('/api/strategies', (req, res) => {
     const teamIds = getUserTeamIds(userId);
     if (teamIds.length > 0) {
       const members = getUsersByTeamIds(teamIds);
-      q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
+      if (members.length > 0) {
+        q += ` AND (s.owner_id IN (${members.map(() => '?').join(',')}) OR ${sharedFilterSql})`;
+        params.push(...members, sharedFilterParam);
+      } else {
+        q += ` AND ${sharedFilterSql}`;
+        params.push(sharedFilterParam);
+      }
     } else {
-      q += ' AND (s.owner_id = ? OR s.owner_id IS NULL)';
-      params.push(userId);
+      q += ` AND (s.owner_id = ? OR s.owner_id IS NULL OR ${sharedFilterSql})`;
+      params.push(userId, sharedFilterParam);
     }
   } else if (role === 'member') {
     // 获取跨团队访问权限
@@ -8390,11 +8455,16 @@ app.get('/api/strategies', (req, res) => {
 
     if (crossTeams.length > 0) {
       const crossMembers = getUsersByTeamIds(crossTeams);
-      q += ' AND (s.owner_id = ? OR s.owner_id IS NULL OR s.owner_id IN (' + crossMembers.map(() => '?').join(',') + '))';
-      params.push(userId, ...crossMembers);
+      if (crossMembers.length > 0) {
+        q += ' AND (s.owner_id = ? OR s.owner_id IS NULL OR s.owner_id IN (' + crossMembers.map(() => '?').join(',') + `) OR ${sharedFilterSql})`;
+        params.push(userId, ...crossMembers, sharedFilterParam);
+      } else {
+        q += ` AND (s.owner_id = ? OR s.owner_id IS NULL OR ${sharedFilterSql})`;
+        params.push(userId, sharedFilterParam);
+      }
     } else {
-      q += ' AND (s.owner_id = ? OR s.owner_id IS NULL)';
-      params.push(userId);
+      q += ` AND (s.owner_id = ? OR s.owner_id IS NULL OR ${sharedFilterSql})`;
+      params.push(userId, sharedFilterParam);
     }
   } else if (role === 'leader') {
     const managedTeamIds = getManagedTeamIds(userId, role);
@@ -8406,18 +8476,28 @@ app.get('/api/strategies', (req, res) => {
 
     if (allTeamIds.length) {
       const members = getUsersByTeamIds(allTeamIds);
-      q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
+      if (members.length > 0) {
+        q += ` AND (s.owner_id IN (${members.map(() => '?').join(',')}) OR ${sharedFilterSql})`;
+        params.push(...members, sharedFilterParam);
+      } else {
+        q += ` AND ${sharedFilterSql}`;
+        params.push(sharedFilterParam);
+      }
     } else {
-      q += ' AND s.owner_id = ?';
-      params.push(userId);
+      q += ` AND (s.owner_id = ? OR ${sharedFilterSql})`;
+      params.push(userId, sharedFilterParam);
     }
   } else if (role === 'sales_director') {
     const managedTeamIds = getManagedTeamIds(userId, role);
     if (managedTeamIds?.length) {
       const members = getUsersByTeamIds(managedTeamIds);
-      q += ` AND s.owner_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
+      if (members.length > 0) {
+        q += ` AND (s.owner_id IN (${members.map(() => '?').join(',')}) OR ${sharedFilterSql})`;
+        params.push(...members, sharedFilterParam);
+      } else {
+        q += ` AND ${sharedFilterSql}`;
+        params.push(sharedFilterParam);
+      }
     }
   }
 
@@ -8472,6 +8552,9 @@ app.get('/api/strategies/:id', (req, res) => {
   `).get(id);
 
   if (!strategy) return res.status(404).json({ error: '策略不存在' });
+  if (!canAccessStrategy(req.user, strategy)) {
+    return res.status(403).json({ error: '无权访问该策略' });
+  }
   strategy.source_title = strategy.source_type === 'lead'
     ? decrypt(strategy.source_title)
     : strategy.source_type === 'asset_reduction'
@@ -8693,14 +8776,15 @@ app.post('/api/strategies/:id/review', (req, res) => {
 
 // 创建策略
 app.post('/api/strategies', (req, res) => {
-  const { title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method } = req.body;
+  const { title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method, shared_with } = req.body;
   if (!title || !dimension) return res.status(400).json({ error: '标题和维度必填' });
   if (!owner_id) return res.status(400).json({ error: '负责人必填' });
+  const sharedCsv = normalizeSharedUserIds(shared_with);
 
   const result = db.prepare(`
-    INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, source_type, source_id, media, access_method, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_started')
-  `).run(title, dimension, role_type ?? null, budget_group_type ?? null, description ?? null, owner_id ?? null, source_type ?? null, source_id ?? null, media ?? null, access_method ?? null);
+    INSERT INTO strategies (title, dimension, role_type, budget_group_type, description, owner_id, shared_with, source_type, source_id, media, access_method, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'not_started')
+  `).run(title, dimension, role_type ?? null, budget_group_type ?? null, description ?? null, owner_id ?? null, sharedCsv, source_type ?? null, source_id ?? null, media ?? null, access_method ?? null);
 
   res.json({ id: result.lastInsertRowid });
 });
@@ -8708,7 +8792,9 @@ app.post('/api/strategies', (req, res) => {
 // 更新策略
 app.put('/api/strategies/:id', (req, res) => {
   const { id } = req.params;
-  const { title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id, media, access_method } = req.body;
+  const { title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id, media, access_method, shared_with } = req.body;
+  const hasSharedWith = Object.prototype.hasOwnProperty.call(req.body, 'shared_with');
+  const sharedCsv = hasSharedWith ? normalizeSharedUserIds(shared_with) : null;
 
   db.prepare(`
     UPDATE strategies SET
@@ -8718,6 +8804,7 @@ app.put('/api/strategies/:id', (req, res) => {
       budget_group_type = COALESCE(?, budget_group_type),
       description = COALESCE(?, description),
       owner_id = COALESCE(?, owner_id),
+      shared_with = CASE WHEN ? THEN ? ELSE shared_with END,
       status = COALESCE(?, status),
       source_type = ?,
       source_id = ?,
@@ -8725,7 +8812,7 @@ app.put('/api/strategies/:id', (req, res) => {
       access_method = ?,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(title, dimension, role_type, budget_group_type, description, owner_id, status, source_type, source_id, media, access_method, id);
+  `).run(title, dimension, role_type, budget_group_type, description, owner_id, hasSharedWith ? 1 : 0, sharedCsv, status, source_type, source_id, media, access_method, id);
 
   res.json({ success: true });
 });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List, Upload } from 'antd';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List, Upload, Tooltip } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined, UploadOutlined } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
@@ -77,6 +77,11 @@ const actionTypeMap = {
   other: '其他',
 };
 
+function parseIdList(value) {
+  if (Array.isArray(value)) return value.map(Number).filter(Boolean);
+  return String(value || '').split(',').map(Number).filter(Boolean);
+}
+
 export default function Strategies() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -140,6 +145,7 @@ export default function Strategies() {
         source_type: sourceType,
         source_id: String(sourceId),
         status: 'not_started',
+        shared_with: [],
       });
       setModalVisible(true);
       setHandledPrefillKey(prefillKey);
@@ -227,7 +233,7 @@ export default function Strategies() {
   const handleAdd = () => {
     setEditingStrategy(null);
     form.resetFields();
-    form.setFieldsValue({ source_type: null, source_id: null });
+    form.setFieldsValue({ source_type: null, source_id: null, shared_with: [] });
     setModalVisible(true);
   };
 
@@ -236,6 +242,7 @@ export default function Strategies() {
     form.setFieldsValue({
       ...record,
       source_id: record.source_id ? String(record.source_id) : null,
+      shared_with: parseIdList(record.shared_with),
     });
     setModalVisible(true);
   };
@@ -276,6 +283,7 @@ export default function Strategies() {
         },
         body: JSON.stringify({
           ...values,
+          shared_with: values.shared_with || [],
           source_type: values.source_type && values.source_id ? values.source_type : null,
           source_id: values.source_type && values.source_id ? Number(values.source_id) : null,
         }),
@@ -440,6 +448,29 @@ export default function Strategies() {
     }
   };
 
+  const getUserName = (id) => {
+    const userInfo = users.find(u => Number(u.id) === Number(id));
+    return userInfo ? (userInfo.display_name || userInfo.username) : `#${id}`;
+  };
+
+  const renderSharedUsers = (value, limit = 2) => {
+    const ids = parseIdList(value);
+    if (ids.length === 0) return '-';
+    const names = ids.map(getUserName);
+    const visible = names.slice(0, limit);
+    const extra = names.slice(limit);
+    return (
+      <Space size={4} wrap>
+        {visible.map(name => <Tag key={name} style={{ margin: 0 }}>{name}</Tag>)}
+        {extra.length > 0 && (
+          <Tooltip title={extra.join('、')}>
+            <Tag style={{ margin: 0 }}>+{extra.length}</Tag>
+          </Tooltip>
+        )}
+      </Space>
+    );
+  };
+
   const columns = [
     {
       title: '策略ID',
@@ -516,6 +547,13 @@ export default function Strategies() {
       key: 'owner_name',
       width: 100,
       render: (text) => text || '-',
+    },
+    {
+      title: '共享人',
+      dataIndex: 'shared_with',
+      key: 'shared_with',
+      width: 160,
+      render: (value) => renderSharedUsers(value),
     },
     {
       title: '来源对象',
@@ -663,6 +701,13 @@ export default function Strategies() {
             <Typography.Text type="secondary">媒体：{record.media || '-'}</Typography.Text>
             <Typography.Text type="secondary">对接：{record.access_method || '-'}</Typography.Text>
           </div>
+
+          {parseIdList(record.shared_with).length > 0 && (
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>共享：</Text>
+              {renderSharedUsers(record.shared_with, 3)}
+            </div>
+          )}
 
           {(record.role_type || record.budget_group_type) && (
             <Space wrap size={[6, 6]}>
@@ -928,6 +973,21 @@ export default function Strategies() {
                 value: u.id,
                 label: u.display_name || u.username || `用户${u.id}`,
               }))}
+              />
+            </Form.Item>
+          <Form.Item name="shared_with" label="共享人" tooltip="被共享的用户可查看此策略">
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              placeholder="选择可查看此策略的用户"
+              filterOption={(input, option) =>
+                (option?.label ?? '').toLowerCase().includes(input.toLowerCase())
+              }
+              options={users.map(u => ({
+                value: u.id,
+                label: u.display_name || u.username,
+              }))}
             />
           </Form.Item>
           <Row gutter={16}>
@@ -1032,6 +1092,7 @@ export default function Strategies() {
                       <Descriptions.Item label="媒体">{selectedStrategy.media || '-'}</Descriptions.Item>
                       <Descriptions.Item label="对接方式">{selectedStrategy.access_method || '-'}</Descriptions.Item>
                       <Descriptions.Item label="负责人">{selectedStrategy.owner_name || '-'}</Descriptions.Item>
+                      <Descriptions.Item label="共享人">{renderSharedUsers(selectedStrategy.shared_with, 4)}</Descriptions.Item>
                       <Descriptions.Item label="状态">
                         <Tag color={statusMap[selectedStrategy.status]?.color}>
                           {statusMap[selectedStrategy.status]?.label}
