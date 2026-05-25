@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List, Upload, Tooltip } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined, UploadOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined, UploadOutlined, PaperClipOutlined } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
@@ -80,6 +80,10 @@ const actionTypeMap = {
 function parseIdList(value) {
   if (Array.isArray(value)) return value.map(Number).filter(Boolean);
   return String(value || '').split(',').map(Number).filter(Boolean);
+}
+
+function cleanDisplayText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
 export default function Strategies() {
@@ -471,6 +475,52 @@ export default function Strategies() {
     );
   };
 
+  const renderContinueTag = (value) => (
+    value ? <Tag color="green" style={{ margin: 0 }}>继续</Tag> : <Tag color="orange" style={{ margin: 0 }}>暂停</Tag>
+  );
+
+  const renderAttachmentMark = (record) => {
+    const count = Number(record.attachment_count || 0);
+    if (count <= 0) return null;
+    return (
+      <Tag icon={<PaperClipOutlined />} color="blue" style={{ margin: 0 }}>
+        {count}
+      </Tag>
+    );
+  };
+
+  const renderExecutionSummary = (record, compact = false) => {
+    const actionDesc = cleanDisplayText(record.action_desc);
+    const observation = cleanDisplayText(record.observation);
+    const title = [
+      actionDesc ? `动作：${actionDesc}` : '',
+      observation ? `结果：${observation}` : '',
+    ].filter(Boolean).join('\n');
+
+    return (
+      <Tooltip title={title || null} placement="topLeft">
+        <div className="execution-summary">
+          <Typography.Paragraph
+            ellipsis={{ rows: compact ? 1 : 2, expandable: false }}
+            style={{ marginBottom: observation ? 4 : 0, color: '#1f2937', fontWeight: 500, lineHeight: 1.5 }}
+          >
+            <Text type="secondary" style={{ fontSize: 12, marginRight: 4 }}>动作</Text>
+            {actionDesc || '-'}
+          </Typography.Paragraph>
+          {observation && (
+            <Typography.Paragraph
+              ellipsis={{ rows: 1, expandable: false }}
+              style={{ marginBottom: 0, color: '#6b7280', fontSize: 13, lineHeight: 1.5 }}
+            >
+              <Text type="secondary" style={{ fontSize: 12, marginRight: 4 }}>结果</Text>
+              {observation}
+            </Typography.Paragraph>
+          )}
+        </div>
+      </Tooltip>
+    );
+  };
+
   const columns = [
     {
       title: '策略ID',
@@ -771,7 +821,15 @@ export default function Strategies() {
     <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
       <div
         onDoubleClick={() => openLogDetail(record)}
-        style={{ width: '100%', padding: 12, border: '1px solid #f0f0f0', borderRadius: 10, background: '#fff', cursor: 'pointer' }}
+        style={{
+          width: '100%',
+          padding: 12,
+          border: '1px solid #d9e8ff',
+          borderLeft: '4px solid #1677ff',
+          borderRadius: 10,
+          background: '#f8fbff',
+          cursor: 'pointer',
+        }}
       >
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
@@ -781,19 +839,14 @@ export default function Strategies() {
                 {record.execute_date || '-'} · {record.executor_name || '-'}
               </div>
             </div>
-            {record.continue_flag ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag>}
+            <Space size={6}>
+              {renderAttachmentMark(record)}
+              {renderContinueTag(record.continue_flag)}
+            </Space>
           </div>
-          {record.action_desc && (
-            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-              动作说明：{record.action_desc}
-            </Typography.Paragraph>
-          )}
-          {record.observation && (
-            <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-              观察结果：{record.observation}
-            </Typography.Paragraph>
-          )}
+          {renderExecutionSummary(record)}
           <Space size="small" wrap>
+            <Button type="link" size="small" icon={<FileSearchOutlined />} onClick={(event) => { event.stopPropagation(); openLogDetail(record); }}>查看</Button>
             <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditLog(record); }}>编辑</Button>
             <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDeleteLog(record.id); }}>删除</Button>
           </Space>
@@ -804,6 +857,30 @@ export default function Strategies() {
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
+      <style>{`
+        .strategy-execution-log-table .ant-table-tbody > tr.strategy-execution-log-row > td {
+          transition: background 0.18s ease, border-color 0.18s ease;
+        }
+        .strategy-execution-log-table .ant-table-tbody > tr.strategy-execution-log-row > td:first-child {
+          border-left: 3px solid transparent;
+        }
+        .strategy-execution-log-table .ant-table-tbody > tr.strategy-execution-log-row:hover > td {
+          background: #f3f8ff !important;
+        }
+        .strategy-execution-log-table .ant-table-tbody > tr.strategy-execution-log-row:hover > td:first-child {
+          border-left-color: #1677ff;
+        }
+        .strategy-execution-log-table .execution-inline-actions {
+          opacity: 0.72;
+          transition: opacity 0.18s ease;
+        }
+        .strategy-execution-log-table .ant-table-tbody > tr.strategy-execution-log-row:hover .execution-inline-actions {
+          opacity: 1;
+        }
+        .strategy-execution-log-table .execution-summary {
+          padding: 2px 0;
+        }
+      `}</style>
       {/* 统计卡片 */}
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         {[
@@ -1195,29 +1272,42 @@ export default function Strategies() {
                         />
                       ) : (
                         <Table
+                          className="strategy-execution-log-table"
                           dataSource={selectedStrategy.executionLogs || []}
                           rowKey="id"
                           size="small"
                           pagination={false}
                           columns={[
-                            { title: '执行日期', dataIndex: 'execute_date', key: 'execute_date', width: 110 },
-                            { title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 100 },
-                            { title: '动作类型', dataIndex: 'action_type', key: 'action_type', width: 120, render: (val) => actionTypeMap[val] || val },
-                            { title: '动作说明', dataIndex: 'action_desc', key: 'action_desc', ellipsis: true },
-                            { title: '观察结果', dataIndex: 'observation', key: 'observation', ellipsis: true },
-                            { title: '是否继续', dataIndex: 'continue_flag', key: 'continue_flag', width: 90, render: (val) => val ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag> },
+                            { title: '执行日期', dataIndex: 'execute_date', key: 'execute_date', width: 108 },
+                            { title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 96 },
+                            { title: '动作类型', dataIndex: 'action_type', key: 'action_type', width: 116, render: (val) => actionTypeMap[val] || val },
+                            {
+                              title: '执行摘要',
+                              key: 'summary',
+                              render: (_, record) => renderExecutionSummary(record),
+                            },
+                            {
+                              title: '附件',
+                              key: 'attachments',
+                              width: 70,
+                              align: 'center',
+                              render: (_, record) => renderAttachmentMark(record) || <Text type="secondary">-</Text>,
+                            },
+                            { title: '状态', dataIndex: 'continue_flag', key: 'continue_flag', width: 76, render: renderContinueTag },
                             {
                               title: '操作',
                               key: 'action',
-                              width: 120,
+                              width: 156,
                               render: (_, record) => (
-                                <Space size="small" onDoubleClick={(event) => event.stopPropagation()}>
+                                <Space size="small" className="execution-inline-actions" onDoubleClick={(event) => event.stopPropagation()}>
+                                  <Button type="link" size="small" icon={<FileSearchOutlined />} onClick={(event) => { event.stopPropagation(); openLogDetail(record); }}>查看</Button>
                                   <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditLog(record); }}>编辑</Button>
                                   <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDeleteLog(record.id); }}>删除</Button>
                                 </Space>
                               ),
                             },
                           ]}
+                          rowClassName={() => 'strategy-execution-log-row'}
                           onRow={(record) => ({
                             onDoubleClick: () => openLogDetail(record),
                             style: { cursor: 'pointer' },

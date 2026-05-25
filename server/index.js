@@ -8587,7 +8587,8 @@ app.get('/api/strategies/:id', (req, res) => {
   `).all(id);
 
   const executionLogs = db.prepare(`
-    SELECT l.*, u.display_name as executor_name
+    SELECT l.*, u.display_name as executor_name,
+      (SELECT COUNT(*) FROM attachments a WHERE a.source_type = 'strategy_execution_log' AND a.source_id = l.id) as attachment_count
     FROM strategy_execution_logs l
     LEFT JOIN users u ON l.executor_id = u.id
     WHERE l.strategy_id = ?
@@ -8607,7 +8608,8 @@ app.get('/api/strategies/:id', (req, res) => {
 app.get('/api/strategies/:id/execution-logs', (req, res) => {
   const { id } = req.params;
   const rows = db.prepare(`
-    SELECT l.*, u.display_name as executor_name
+    SELECT l.*, u.display_name as executor_name,
+      (SELECT COUNT(*) FROM attachments a WHERE a.source_type = 'strategy_execution_log' AND a.source_id = l.id) as attachment_count
     FROM strategy_execution_logs l
     LEFT JOIN users u ON l.executor_id = u.id
     WHERE l.strategy_id = ?
