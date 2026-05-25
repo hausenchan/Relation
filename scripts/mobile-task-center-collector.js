@@ -81,6 +81,8 @@ function printHelp() {
 采集逻辑：
   进入任务中心后逐个点击任务按钮，只有实际跳转到支付宝小程序后才采集。
   跳转后会尝试打开支付宝小程序右上角菜单或详情页，抓取小程序名称、主体和 deeplink。
+  若支付宝页面未暴露小程序名，会回退解析任务中心卡片文案，如“打开/体验 XX 支付宝小程序”。
+  deeplink 支持明文 alipays://、URL 编码链接和 Android intent://...#Intent;scheme=alipays 格式。
   每个 App 会在输出目录生成 run_report JSON，记录每个按钮的跳转、跳过和入库结果。
 
 配置模板：
@@ -182,11 +184,13 @@ function validateConfig(config, selectedApp = '') {
     assertArrayField(app, 'alipay_more_menu_steps', errors);
     assertArrayField(app, 'alipay_about_texts', errors);
     assertArrayField(app, 'mini_program_name_patterns', errors);
+    assertArrayField(app, 'task_context_name_patterns', errors);
     assertArrayField(app, 'company_entity_patterns', errors);
     (app.task_center_entry || []).forEach((step, stepIndex) => validateStep(step, appName, stepIndex, errors));
     (app.alipay_more_menu_steps || []).forEach((step, stepIndex) => validateStep(step, `${appName} alipay_more_menu_steps`, stepIndex, errors));
     validateRegexList(app, 'task_button_patterns', errors);
     validateRegexList(app, 'mini_program_name_patterns', errors);
+    validateRegexList(app, 'task_context_name_patterns', errors);
     validateRegexList(app, 'company_entity_patterns', errors);
   });
 
@@ -422,9 +426,52 @@ function extractMiniProgramName(text, app) {
   return cleanMiniProgramName(candidate || '');
 }
 
+function decodePossibleUriText(value) {
+  const text = String(value || '');
+  const candidates = [text];
+  let current = text;
+  for (let i = 0; i < 2; i += 1) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (!decoded || decoded === current) break;
+      candidates.push(decoded);
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return candidates;
+}
+
+function cleanDeeplinkCandidate(value) {
+  return decodeXmlEntities(value)
+    .replace(/[，,。；;]+$/g, '')
+    .replace(/\\+$/g, '')
+    .trim();
+}
+
+function extractIntentDeeplink(text) {
+  const intentRegex = /\bintent:\/\/([^\s"'<>#]+)(?:#Intent;([^\s"'<>]+?);end)?/ig;
+  let match;
+  while ((match = intentRegex.exec(text))) {
+    const pathPart = cleanDeeplinkCandidate(match[1]);
+    const intentPart = match[2] || '';
+    const scheme = (intentPart.match(/(?:^|;)scheme=([^;]+)/i)?.[1] || '').trim();
+    if (/^alipays?$/i.test(scheme) && pathPart) {
+      return `${scheme.toLowerCase()}://${pathPart}`;
+    }
+  }
+  return '';
+}
+
 function extractDeeplink(text) {
-  const match = String(text || '').match(/\b(?:alipays|alipay):\/\/[^\s"'<>）)]+/i);
-  return match ? match[0].trim() : '';
+  for (const candidate of decodePossibleUriText(text)) {
+    const directMatch = String(candidate || '').match(/\b(?:alipays|alipay):\/\/[^\s"'<>）)，。；;]+/i);
+    if (directMatch) return cleanDeeplinkCandidate(directMatch[0]);
+    const intentLink = extractIntentDeeplink(candidate);
+    if (intentLink) return intentLink;
+  }
+  return '';
 }
 
 function readLogcatForDeeplink(adb) {
@@ -650,30 +697,72 @@ function extractMiniProgramNameFromAlipay(nodes, text, app) {
   return uniqueTexts(titleCandidates)[0] || '';
 }
 
+function buildTaskContextSourceText(taskContext) {
+  return [
+    taskContext?.title,
+    taskContext?.description,
+  ].filter(Boolean).join('\n');
+}
+
+function extractMiniProgramNameFromTaskContext(taskContext, app) {
+  const contextText = buildTaskContextSourceText(taskContext);
+  if (!contextText) return '';
+  const contextApp = {
+    ...app,
+    alipay_mini_program_name_patterns: [
+      ...(app.task_context_name_patterns || []),
+      ...(app.alipay_mini_program_name_patterns || []),
+    ],
+  };
+  const name = extractMiniProgramName(contextText, contextApp);
+  return name && !['支付宝', '小程序'].includes(name) ? name : '';
+}
+
+function pickDeeplink(candidates) {
+  for (const item of candidates) {
+    const value = extractDeeplink(item.value);
+    if (value) return { value, method: item.method };
+  }
+  return { value: '', method: '' };
+}
+
 function captureAlipayMiniProgramInfo(adb, app, taskContext) {
   sleep(Number(app.after_alipay_open_wait_ms) || 3500);
   const beforeMenu = dumpUi(adb);
   const beforeTexts = nodeTextList(beforeMenu.nodes);
-  const linkFromActivity = readActivityForDeeplink(adb);
-  const linkFromLogs = readLogcatForDeeplink(adb);
+  const activityBeforeMenu = readActivityForDeeplink(adb);
+  const logsBeforeMenu = readLogcatForDeeplink(adb);
 
   openAlipayMiniProgramMenu(adb, app);
   const menuDump = dumpUi(adb);
   tryOpenAlipayAboutPage(adb, app);
   const detailDump = dumpUi(adb);
+  const activityAfterDetail = readActivityForDeeplink(adb);
+  const logsAfterDetail = readLogcatForDeeplink(adb);
   const allTexts = uniqueTexts([
     ...beforeTexts,
     ...nodeTextList(menuDump.nodes),
     ...nodeTextList(detailDump.nodes),
   ]);
   const allText = allTexts.join('\n');
-  const productLink = linkFromActivity || linkFromLogs || extractDeeplink(allText);
+  const taskContextText = buildTaskContextSourceText(taskContext);
+  const miniProgramNameFromAlipay = extractMiniProgramNameFromAlipay([...beforeMenu.nodes, ...menuDump.nodes, ...detailDump.nodes], allText, app);
+  const miniProgramNameFromTaskContext = extractMiniProgramNameFromTaskContext(taskContext, app);
+  const productLink = pickDeeplink([
+    { value: activityBeforeMenu, method: 'activity_intent' },
+    { value: logsBeforeMenu, method: 'logcat' },
+    { value: activityAfterDetail, method: 'activity_intent' },
+    { value: logsAfterDetail, method: 'logcat' },
+    { value: allText, method: 'alipay_menu_text' },
+    { value: taskContextText, method: 'task_context' },
+  ]);
 
   return {
-    miniProgramName: extractMiniProgramNameFromAlipay([...beforeMenu.nodes, ...menuDump.nodes, ...detailDump.nodes], allText, app),
+    miniProgramName: miniProgramNameFromAlipay || miniProgramNameFromTaskContext,
+    miniProgramNameCaptureMethod: miniProgramNameFromAlipay ? 'alipay_page' : miniProgramNameFromTaskContext ? 'task_context' : '',
     companyEntityName: extractCompanyName(allText, app),
-    productLink,
-    captureMethod: productLink ? (linkFromActivity ? 'activity_intent' : linkFromLogs ? 'logcat' : 'alipay_menu_text') : '',
+    productLink: productLink.value,
+    captureMethod: productLink.method,
     taskDescription: [taskContext.description, allText].filter(Boolean).join('\n--- 支付宝小程序信息 ---\n').slice(0, 2000),
   };
 }
@@ -842,7 +931,13 @@ async function collectTaskButton({ adb, app, args, token, button, taskContext, p
       task_description: info.taskDescription,
       product_link: info.productLink,
       product_link_capture_method: info.captureMethod,
-      confidence: info.miniProgramName ? (info.companyEntityName ? 0.92 : 0.82) : 0.45,
+      mini_program_name_capture_method: info.miniProgramNameCaptureMethod,
+      focus_package: jump.focus.packageName || '',
+      focus_activity: jump.focus.activity || '',
+      observed_focus: jump.observed,
+      confidence: info.miniProgramName
+        ? (info.companyEntityName ? 0.92 : info.miniProgramNameCaptureMethod === 'task_context' ? 0.72 : 0.82)
+        : 0.45,
       collected_at: new Date().toISOString().replace('T', ' ').slice(0, 19),
     };
     const result = await submitCollectedPayload({ args, token, payload, screenshot });
@@ -853,6 +948,7 @@ async function collectTaskButton({ adb, app, args, token, button, taskContext, p
       focus_activity: jump.focus.activity || '',
       observed_focus: jump.observed,
       mini_program_name: info.miniProgramName,
+      mini_program_name_capture_method: info.miniProgramNameCaptureMethod,
       company_entity_name: info.companyEntityName,
       product_link: info.productLink,
       product_link_capture_method: info.captureMethod,

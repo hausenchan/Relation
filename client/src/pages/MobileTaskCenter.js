@@ -6,7 +6,7 @@ import {
 } from 'antd';
 import {
   CheckOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined,
-  PaperClipOutlined,
+  ImportOutlined, PaperClipOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { mobileTaskCenterApi } from '../api';
@@ -15,6 +15,52 @@ const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
+
+const qutoutiaoTemplate = {
+  app_name: '趣头条',
+  package_name: 'com.jifen.qukan',
+  enabled: true,
+  sort_order: 1,
+  task_center_entry: [
+    { type: 'wait', wait_ms: 3000 },
+    { type: 'tap', x: 760, y: 2220, wait_ms: 2000 },
+  ],
+  collector_config: {
+    task_button_texts: ['去完成', '去支付宝', '打开', '立即打开', '立即体验', '去体验', '去看看', '开始任务', '做任务'],
+    task_button_patterns: ['^(去|立即|打开|开始).{0,10}$', '^(做任务|试玩|体验).{0,10}$'],
+    alipay_button_texts: ['去支付宝', '打开支付宝', '支付宝', '去完成', '立即体验', '继续完成'],
+    max_scan_pages: 3,
+    max_tasks_per_page: 10,
+    capture_skipped_screenshots: false,
+    jump_timeout_ms: 8000,
+    after_task_tap_wait_ms: 2500,
+    after_alipay_open_wait_ms: 3500,
+    alipay_package_names: ['com.eg.android.AlipayGphone'],
+    alipay_more_menu_steps: [
+      { type: 'tap', x: 1000, y: 90, wait_ms: 1200 },
+    ],
+    alipay_about_texts: ['关于', '小程序详情', '小程序信息', '关于此小程序', '主体信息'],
+    mini_program_name_patterns: [
+      '小程序名称[:：\\s]+([^\\n，。；;]{2,30})',
+      '打开(.+?)支付宝小程序',
+      '体验(.+?)支付宝小程序',
+      '试玩(.+?)支付宝小程序',
+      '进入(.+?)小程序',
+    ],
+    task_context_name_patterns: [
+      '打开(.+?)支付宝小程序',
+      '体验(.+?)支付宝小程序',
+      '试玩(.+?)支付宝小程序',
+      '进入(.+?)小程序',
+      '搜索(.+?)小程序',
+    ],
+    company_entity_patterns: [
+      '主体[:：]\\s*([^\\s，。；;]+(?:有限公司|股份有限公司|有限责任公司|公司))',
+      '开发者[:：]\\s*([^\\s，。；;]+(?:有限公司|股份有限公司|有限责任公司|公司))',
+    ],
+  },
+  remark: '趣头条任务中心支付宝小程序采集模板，可按实机坐标调整入口和菜单步骤。',
+};
 
 const statusMap = {
   matched: { label: '已匹配', color: 'green' },
@@ -190,6 +236,22 @@ export default function MobileTaskCenter() {
       sort_order: (apps[apps.length - 1]?.sort_order || 0) + 1,
       task_center_entry: '[]',
       collector_config: '{}',
+    });
+    setAppModalOpen(true);
+  };
+
+  const openQutoutiaoTemplate = () => {
+    const existing = apps.find(item => item.app_name === qutoutiaoTemplate.app_name);
+    setEditingApp(existing || null);
+    appForm.setFieldsValue({
+      ...(existing || {}),
+      app_name: qutoutiaoTemplate.app_name,
+      package_name: qutoutiaoTemplate.package_name,
+      enabled: true,
+      sort_order: existing?.sort_order ?? qutoutiaoTemplate.sort_order,
+      task_center_entry: JSON.stringify(qutoutiaoTemplate.task_center_entry, null, 2),
+      collector_config: JSON.stringify(qutoutiaoTemplate.collector_config, null, 2),
+      remark: existing?.remark || qutoutiaoTemplate.remark,
     });
     setAppModalOpen(true);
   };
@@ -654,6 +716,7 @@ export default function MobileTaskCenter() {
                   <Text type="secondary">入口规则保存为 JSON 数组；后台配置可用 `npm run mobile-task:collect -- --config-source api` 直接读取。</Text>
                   <Space>
                     <Button icon={<ReloadOutlined />} onClick={loadApps} loading={appsLoading}>刷新</Button>
+                    <Button icon={<ImportOutlined />} onClick={openQutoutiaoTemplate}>趣头条模板</Button>
                     <Button type="primary" icon={<PlusOutlined />} onClick={openAddApp}>新增 App</Button>
                   </Space>
                 </Space>
