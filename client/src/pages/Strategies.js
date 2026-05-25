@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List, Upload } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined, UploadOutlined } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
+import AttachmentList from '../components/AttachmentList';
 import { RichTextEditor, RichTextView } from '../components/RichText';
 import { productAssetsApi } from '../api';
+import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -96,6 +98,7 @@ export default function Strategies() {
   const [logModalVisible, setLogModalVisible] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
   const [logDetailRecord, setLogDetailRecord] = useState(null);
+  const [logFileList, setLogFileList] = useState([]);
   const [reviewSaving, setReviewSaving] = useState(false);
   const [handledPrefillKey, setHandledPrefillKey] = useState('');
   const selectedSourceType = Form.useWatch('source_type', form);
@@ -324,6 +327,7 @@ export default function Strategies() {
 
   const openAddLog = () => {
     setEditingLog(null);
+    setLogFileList([]);
     logForm.resetFields();
     logForm.setFieldsValue({
       execute_date: dayjs(),
@@ -335,6 +339,7 @@ export default function Strategies() {
 
   const openEditLog = (record) => {
     setEditingLog(record);
+    setLogFileList([]);
     logForm.setFieldsValue({
       ...record,
       execute_date: record.execute_date ? dayjs(record.execute_date) : null,
@@ -372,8 +377,19 @@ export default function Strategies() {
         throw new Error(await getErrorMessage(res, editingLog ? '更新执行记录失败' : '新增执行记录失败'));
       }
 
+      const saved = await res.json();
+      const recordId = editingLog ? editingLog.id : saved.id;
+      if (logFileList.length > 0 && recordId) {
+        try {
+          await uploadAttachments('strategy_execution_log', recordId, logFileList);
+        } catch {
+          message.warning('附件上传失败，但执行记录已保存');
+        }
+      }
+
       message.success(editingLog ? '执行记录已更新' : '执行记录已新增');
       setLogModalVisible(false);
+      setLogFileList([]);
       fetchStrategyDetail(selectedStrategy.id);
       fetchStrategies();
     } catch (err) {
@@ -1229,7 +1245,11 @@ export default function Strategies() {
             <Descriptions.Item label="当次观察结果">
               <div style={{ whiteSpace: 'pre-wrap' }}>{logDetailRecord.observation || '-'}</div>
             </Descriptions.Item>
-            <Descriptions.Item label="附件">{logDetailRecord.attachments || '-'}</Descriptions.Item>
+            {logDetailRecord.attachments ? (
+              <Descriptions.Item label="附件备注">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{logDetailRecord.attachments}</div>
+              </Descriptions.Item>
+            ) : null}
             <Descriptions.Item label="是否继续">
               {logDetailRecord.continue_flag ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag>}
             </Descriptions.Item>
@@ -1241,13 +1261,21 @@ export default function Strategies() {
             </Descriptions.Item>
           </Descriptions>
         )}
+        {logDetailRecord && (
+          <div style={{ marginTop: 20 }}>
+            <AttachmentList sourceType="strategy_execution_log" sourceId={logDetailRecord.id} showPreview />
+          </div>
+        )}
       </Modal>
 
       <Modal
         title={editingLog ? '编辑执行记录' : '新增执行记录'}
         open={logModalVisible}
         onOk={handleSaveLog}
-        onCancel={() => setLogModalVisible(false)}
+        onCancel={() => {
+          setLogModalVisible(false);
+          setLogFileList([]);
+        }}
         width={isMobile ? '100%' : 640}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
@@ -1277,9 +1305,24 @@ export default function Strategies() {
           <Form.Item name="observation" label="当次观察结果">
             <TextArea rows={3} placeholder="填写本次执行后的观察结果" />
           </Form.Item>
-          <Form.Item name="attachments" label="附件（第一版先手动填）">
-            <Input placeholder='可先填写 JSON 数组，如 ["report.xlsx","screenshot.png"]' />
+          <Form.Item label="附件">
+            <Upload
+              fileList={logFileList}
+              onChange={({ fileList: newFileList }) => setLogFileList(newFileList)}
+              beforeUpload={validateAttachment}
+              maxCount={10}
+              multiple
+              accept={ATTACHMENT_ACCEPT}
+            >
+              <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
+            </Upload>
           </Form.Item>
+          {editingLog && (
+            <>
+              <Divider style={{ margin: '8px 0 12px' }} />
+              <AttachmentList sourceType="strategy_execution_log" sourceId={editingLog.id} title="已上传附件" showPreview />
+            </>
+          )}
           <Form.Item name="continue_flag" label="是否继续" initialValue={1}>
             <Select>
               <Option value={1}>继续</Option>
