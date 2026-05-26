@@ -299,6 +299,7 @@ export const documentsApi = {
   createChangeLog: (id, data) => api.post(`/documents/${id}/change-logs`, data).then(r => r.data),
   updateChangeLog: (logId, data) => api.put(`/document-change-logs/${logId}`, data).then(r => r.data),
   deleteChangeLog: (logId) => api.delete(`/document-change-logs/${logId}`).then(r => r.data),
+  restoreEditRecord: (recordId) => api.post(`/document-edit-records/${recordId}/restore`).then(r => r.data),
 };
 
 export const attachmentsApi = {

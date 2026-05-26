@@ -1144,6 +1144,10 @@ db.exec(`
     action_type TEXT DEFAULT 'content_update',
     title_before TEXT,
     title_after TEXT,
+    content_before TEXT,
+    content_after TEXT,
+    content_text_before TEXT,
+    content_text_after TEXT,
     diff_json TEXT,
     diff_text TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -1174,6 +1178,10 @@ db.exec(`
 
 addColumnIfMissing('document_change_logs', 'detail', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_change_logs', 'detail_text', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_edit_records', 'content_before', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_edit_records', 'content_after', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_edit_records', 'content_text_before', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_edit_records', 'content_text_after', 'TEXT DEFAULT NULL');
 
 // =========== 跨团队访问权限表 ===========
 db.exec(`
@@ -1661,6 +1669,7 @@ const OPERATION_LOG_BUSINESS_MAP = {
   documents: '文档中心',
   'document-folders': '文档目录',
   'document-change-logs': '文档改动历史',
+  'document-edit-records': '页面编辑记录',
   strategies: '策略',
   'strategy-execution-logs': '策略执行',
   'dev-tasks': '需求',
@@ -1707,6 +1716,7 @@ const OPERATION_LOG_TABLE_MAP = {
   documents: 'documents',
   'document-folders': 'document_folders',
   'document-change-logs': 'document_change_logs',
+  'document-edit-records': 'document_edit_records',
   strategies: 'strategies',
   'strategy-execution-logs': 'strategy_execution_logs',
   'dev-tasks': 'dev_tasks',
@@ -1746,6 +1756,7 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/documents\/(\d+)\/change-logs$/, businessType: '文档改动历史', table: 'document_change_logs', responseId: true, action: '新增改动历史' },
   { pattern: /^\/documents\/(\d+)\/favorite$/, businessType: '文档收藏', table: 'document_favorites', idGroup: 1 },
   { pattern: /^\/document-change-logs\/(\d+)$/, businessType: '文档改动历史', table: 'document_change_logs', idGroup: 1 },
+  { pattern: /^\/document-edit-records\/(\d+)\/restore$/, businessType: '页面编辑记录', table: 'document_edit_records', idGroup: 1, action: '恢复页面版本' },
   { pattern: /^\/document-folders$/, businessType: '文档目录', table: 'document_folders', responseId: true, action: '保存目录' },
   { pattern: /^\/document-folders\/(\d+)$/, businessType: '文档目录', table: 'document_folders', idGroup: 1 },
   { pattern: /^\/document-folders\/apply-template$/, businessType: '文档目录', table: 'document_folders', action: '初始化目录模板' },
@@ -3383,15 +3394,29 @@ function buildDocumentEditDiff(before, after) {
 function insertDocumentEditRecord(documentId, userId, actionType, before, after) {
   const diff = buildDocumentEditDiff(before, after);
   if (!diff) return;
+  const beforeContent = before?.content === undefined || before?.content === null
+    ? null
+    : (typeof before.content === 'string' ? before.content : JSON.stringify(before.content));
+  const afterContent = after?.content === undefined || after?.content === null
+    ? null
+    : (typeof after.content === 'string' ? after.content : JSON.stringify(after.content));
   db.prepare(`
-    INSERT INTO document_edit_records (document_id, edited_by, action_type, title_before, title_after, diff_json, diff_text)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO document_edit_records (
+      document_id, edited_by, action_type, title_before, title_after,
+      content_before, content_after, content_text_before, content_text_after,
+      diff_json, diff_text
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     documentId,
     userId,
     actionType || 'content_update',
     before?.title || null,
     after?.title || null,
+    beforeContent,
+    afterContent,
+    before?.content_text || null,
+    after?.content_text || null,
     JSON.stringify(diff),
     diff.changed_text || null
   );
@@ -3621,8 +3646,16 @@ function serializeDocument(row, options = {}) {
 
 function serializeDocumentEditRecord(row) {
   if (!row) return null;
+  const {
+    content_before,
+    content_after,
+    content_text_before,
+    content_text_after,
+    ...rest
+  } = row;
   return {
-    ...row,
+    ...rest,
+    can_restore: Boolean(content_after),
     diff: parseMaybeJson(row.diff_json, { items: [] }),
   };
 }
@@ -3827,19 +3860,27 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档' });
-  const folder = req.body.folder_id ? db.prepare('SELECT * FROM document_folders WHERE id = ?').get(req.body.folder_id) : null;
-  const domain = normalizeDocumentDomain(req.body.domain ?? doc.domain);
-  const projectGroupId = req.body.project_group_id ?? doc.project_group_id ?? folder?.project_group_id ?? null;
-  const departmentKey = normalizeDocumentDepartment(req.body.department_key ?? doc.department_key ?? folder?.department_key);
-  const docType = normalizeDocumentType(req.body.doc_type ?? doc.doc_type ?? folder?.default_doc_type);
+  const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
+  const nextFolderId = hasBodyField('folder_id') ? (req.body.folder_id || null) : doc.folder_id;
+  const folder = nextFolderId ? db.prepare('SELECT * FROM document_folders WHERE id = ?').get(nextFolderId) : null;
+  if (nextFolderId && !folder) return res.status(400).json({ error: '目标目录不存在' });
+  const domain = normalizeDocumentDomain(hasBodyField('domain') ? req.body.domain : (folder?.domain ?? doc.domain));
+  const projectGroupId = hasBodyField('project_group_id')
+    ? (req.body.project_group_id || null)
+    : (folder ? (folder.project_group_id || null) : doc.project_group_id);
+  const departmentKey = normalizeDocumentDepartment(hasBodyField('department_key') ? req.body.department_key : (folder?.department_key ?? doc.department_key));
+  const docType = normalizeDocumentType(hasBodyField('doc_type') ? req.body.doc_type : (doc.doc_type ?? folder?.default_doc_type));
   const content = Object.prototype.hasOwnProperty.call(req.body, 'content') ? req.body.content : doc.content;
+  const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
   const contentText = extractDocumentText(content, req.body.content_text);
   const beforeSnapshot = {
     title: doc.title,
+    content: doc.content,
     content_text: doc.content_text,
   };
   const afterSnapshot = {
     title: req.body.title || doc.title,
+    content: storedContent,
     content_text: contentText,
   };
   const tags = Array.isArray(req.body.tags) ? JSON.stringify(req.body.tags) : (req.body.tags ?? doc.tags);
@@ -3851,7 +3892,7 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     WHERE id = ?
   `).run(
     req.body.title || doc.title,
-    typeof content === 'string' ? content : JSON.stringify(content),
+    storedContent,
     contentText,
     buildDocumentSummary(contentText),
     domain,
@@ -3860,7 +3901,7 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     departmentKey,
     docType,
     req.body.current_version || doc.current_version || 'V1.0',
-    req.body.folder_id ?? doc.folder_id,
+    nextFolderId,
     tags,
     req.user.id,
     doc.id
@@ -3874,20 +3915,23 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档' });
   const content = req.body.content ?? JSON.stringify({ blocks: [] });
+  const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
   const contentText = extractDocumentText(content, req.body.content_text);
   const beforeSnapshot = {
     title: doc.title,
+    content: doc.content,
     content_text: doc.content_text,
   };
   const afterSnapshot = {
     title: doc.title,
+    content: storedContent,
     content_text: contentText,
   };
   db.prepare(`
     UPDATE documents SET content = ?, content_text = ?, summary = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
-    typeof content === 'string' ? content : JSON.stringify(content),
+    storedContent,
     contentText,
     buildDocumentSummary(contentText),
     req.user.id,
@@ -3895,6 +3939,45 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
   );
   insertDocumentEditRecord(doc.id, req.user.id, 'content_update', beforeSnapshot, afterSnapshot);
   res.json({ success: true, summary: buildDocumentSummary(contentText), updated_at: new Date().toISOString() });
+});
+
+app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) => {
+  const record = db.prepare('SELECT * FROM document_edit_records WHERE id = ?').get(req.params.recordId);
+  if (!record) return res.status(404).json({ error: '页面编辑记录不存在' });
+  const doc = getVisibleDocument(record.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以恢复文档版本' });
+  if (!record.content_after) return res.status(400).json({ error: '该页面编辑记录缺少可恢复快照' });
+
+  const targetTitle = record.title_after || doc.title || '未命名文档';
+  const targetContent = record.content_after;
+  const targetContentText = record.content_text_after || extractDocumentText(targetContent);
+  const beforeSnapshot = {
+    title: doc.title,
+    content: doc.content,
+    content_text: doc.content_text,
+  };
+  const afterSnapshot = {
+    title: targetTitle,
+    content: targetContent,
+    content_text: targetContentText,
+  };
+
+  db.prepare(`
+    UPDATE documents SET
+      title = ?, content = ?, content_text = ?, summary = ?,
+      updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    targetTitle,
+    targetContent,
+    targetContentText,
+    buildDocumentSummary(targetContentText),
+    req.user.id,
+    doc.id
+  );
+  insertDocumentEditRecord(doc.id, req.user.id, 'restore_version', beforeSnapshot, afterSnapshot);
+  res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true }));
 });
 
 app.put('/api/documents/:id/page-options', canWrite, (req, res) => {

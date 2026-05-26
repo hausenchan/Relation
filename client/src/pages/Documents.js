@@ -20,6 +20,7 @@ import {
   Space,
   Spin,
   Switch,
+  Tabs,
   Tag,
   Tooltip,
   Tree,
@@ -35,6 +36,7 @@ import {
   DownOutlined,
   EditOutlined,
   FileTextOutlined,
+  FolderOpenOutlined,
   FolderOutlined,
   FullscreenExitOutlined,
   FundProjectionScreenOutlined,
@@ -48,11 +50,13 @@ import {
   PlusOutlined,
   ReloadOutlined,
   RightOutlined,
+  RollbackOutlined,
   SaveOutlined,
   ShareAltOutlined,
   StarFilled,
   StarOutlined,
   TeamOutlined,
+  UndoOutlined,
   UpOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -194,6 +198,9 @@ const blockTypeGroups = [
 ];
 
 const blockTypeOptions = blockTypeGroups.flatMap(group => group.children);
+const hierarchicalListTypes = new Set(['bullet', 'numbered', 'fold-list']);
+const listIndentWidth = 30;
+const maxListIndent = 6;
 
 const highlightOptions = [
   { value: '', label: '无色', color: '#ffffff', border: '#d9d9d9' },
@@ -309,10 +316,97 @@ function getDefaultBlockMeta(type) {
   if (type === 'progress') return { value: 30 };
   if (type === 'button') return { url: '' };
   if (type === 'metric') return { value: 0, unit: '' };
-  if (type === 'fold-list' || type?.startsWith('fold-')) return { collapsed: false, body: '' };
+  if (type === 'bullet' || type === 'numbered') return { indent: 0 };
+  if (type === 'fold-list') return { indent: 0, collapsed: false, body: '' };
+  if (type?.startsWith('fold-')) return { collapsed: false, body: '' };
   if (type === 'chart') return { chartType: 'bar' };
   if (getMediaKind(type) || type === 'external-link') return { url: '', filename: '', attachment_id: null };
   return {};
+}
+
+function isHierarchicalListBlock(block) {
+  return hierarchicalListTypes.has(block?.type);
+}
+
+function clampListIndent(value) {
+  const indent = Number(value);
+  if (!Number.isFinite(indent)) return 0;
+  return Math.max(0, Math.min(maxListIndent, Math.floor(indent)));
+}
+
+function getListIndent(block) {
+  return clampListIndent(block?.meta?.indent);
+}
+
+function formatAlphaNumber(value) {
+  let number = Math.max(1, Number(value) || 1);
+  let text = '';
+  while (number > 0) {
+    number -= 1;
+    text = String.fromCharCode(97 + (number % 26)) + text;
+    number = Math.floor(number / 26);
+  }
+  return text;
+}
+
+function formatRomanNumber(value) {
+  const pairs = [
+    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'],
+    [100, 'c'], [90, 'xc'], [50, 'l'], [40, 'xl'],
+    [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+  ];
+  let number = Math.max(1, Math.min(3999, Number(value) || 1));
+  let text = '';
+  pairs.forEach(([amount, roman]) => {
+    while (number >= amount) {
+      text += roman;
+      number -= amount;
+    }
+  });
+  return text;
+}
+
+function formatNumberedListMarker(value, indent) {
+  const mode = clampListIndent(indent) % 3;
+  if (mode === 1) return `${formatAlphaNumber(value)}.`;
+  if (mode === 2) return `${formatRomanNumber(value)}.`;
+  return `${Math.max(1, Number(value) || 1)}.`;
+}
+
+function getBulletListMarker(indent) {
+  const markers = ['•', '◦', '◆'];
+  return markers[clampListIndent(indent) % markers.length];
+}
+
+function buildNumberedListMarkers(blocks = []) {
+  const counters = [];
+  const markers = new Map();
+  blocks.forEach(block => {
+    if (block?.type !== 'numbered') {
+      counters.length = 0;
+      return;
+    }
+    const indent = getListIndent(block);
+    counters.length = indent + 1;
+    counters[indent] = (counters[indent] || 0) + 1;
+    markers.set(block.id, formatNumberedListMarker(counters[indent], indent));
+  });
+  return markers;
+}
+
+function buildCollapsedListHiddenIds(blocks = []) {
+  const hidden = new Set();
+  let collapsedAncestors = [];
+  blocks.forEach(block => {
+    const indent = isHierarchicalListBlock(block) ? getListIndent(block) : 0;
+    collapsedAncestors = collapsedAncestors.filter(item => indent > item.indent);
+    const isHidden = collapsedAncestors.length > 0;
+    if (isHidden) hidden.add(block.id);
+    if (!isHidden && block?.type === 'fold-list' && block?.meta?.collapsed) {
+      collapsedAncestors.push({ id: block.id, indent });
+    }
+  });
+  return hidden;
 }
 
 function renderBlockMenuLabel(item) {
@@ -659,6 +753,23 @@ function getAccessUserSourceText(user) {
   return sources.map(type => accessSourceLabel[type] || type).join('、') || '可访问';
 }
 
+function cloneEditorBlocks(blocks = []) {
+  return blocks.map(block => ({
+    ...block,
+    meta: cloneMeta(block.meta),
+  }));
+}
+
+function getFolderPathLabel(folder) {
+  if (!folder) return '';
+  return [
+    domainLabel[folder.domain] || folder.domain,
+    folder.project_group_name || '未关联项目组',
+    departmentLabel[folder.department_key] || folder.department_key,
+    folder.name,
+  ].filter(Boolean).join(' / ');
+}
+
 function isDocumentAdminUser(user) {
   return documentAdminRoles.has(user?.role) || documentAdminRoles.has(user?.executive_role);
 }
@@ -733,18 +844,26 @@ export default function Documents() {
   const [shareSaving, setShareSaving] = useState(false);
   const [shareDraft, setShareDraft] = useState(emptyShareDraft());
   const [changeLogOpen, setChangeLogOpen] = useState(false);
+  const [activeChangeLogTab, setActiveChangeLogTab] = useState('version');
   const [changeLogSaving, setChangeLogSaving] = useState(false);
+  const [restoringEditRecordId, setRestoringEditRecordId] = useState(null);
   const [changeLogFormOpen, setChangeLogFormOpen] = useState(false);
   const [editingChangeLog, setEditingChangeLog] = useState(null);
   const [expandedChangeLogIds, setExpandedChangeLogIds] = useState([]);
   const [changeLogNotifyEnabled, setChangeLogNotifyEnabled] = useState(false);
   const [tocOpen, setTocOpen] = useState(true);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const [moveFolderOpen, setMoveFolderOpen] = useState(false);
+  const [moveFolderId, setMoveFolderId] = useState(null);
+  const [moveFolderSaving, setMoveFolderSaving] = useState(false);
+  const [editorUndoStack, setEditorUndoStack] = useState([]);
   const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(false);
   const [folderTreeExpandedKeys, setFolderTreeExpandedKeys] = useState([]);
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
   const presentationRef = useRef(null);
+  const editorUndoStackRef = useRef([]);
+  const applyingUndoRef = useRef(false);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -771,6 +890,8 @@ export default function Documents() {
     () => buildHeadingMeta(editorBlocks, asSwitchValue(selectedDoc?.title_numbering_enabled)),
     [editorBlocks, selectedDoc?.title_numbering_enabled]
   );
+  const numberedListMarkers = useMemo(() => buildNumberedListMarkers(editorBlocks), [editorBlocks]);
+  const hiddenListBlockIds = useMemo(() => buildCollapsedListHiddenIds(editorBlocks), [editorBlocks]);
   const presentationSections = useMemo(
     () => buildPresentationSections(editorBlocks, editorTitle || selectedDoc?.title),
     [editorBlocks, editorTitle, selectedDoc?.title]
@@ -788,6 +909,52 @@ export default function Documents() {
   const canManageDoc = (doc) => Boolean(
     currentUser && doc && (isDocumentAdminUser(currentUser) || Number(doc.created_by) === Number(currentUser.id))
   );
+
+  const resetEditorUndoStack = () => {
+    editorUndoStackRef.current = [];
+    setEditorUndoStack([]);
+  };
+
+  const pushEditorUndoSnapshot = () => {
+    if (applyingUndoRef.current || !selectedDoc?.id) return;
+    const snapshot = {
+      title: editorTitle,
+      blocks: cloneEditorBlocks(editorBlocks),
+      selectedBlockId,
+    };
+    setEditorUndoStack(prev => {
+      const last = prev[prev.length - 1];
+      if (last && last.title === snapshot.title && JSON.stringify(last.blocks) === JSON.stringify(snapshot.blocks)) {
+        return prev;
+      }
+      const next = [...prev, snapshot].slice(-80);
+      editorUndoStackRef.current = next;
+      return next;
+    });
+  };
+
+  const undoLastEditorAction = () => {
+    const stack = editorUndoStackRef.current;
+    const snapshot = stack[stack.length - 1];
+    if (!snapshot) {
+      message.info('没有可撤回的操作');
+      return;
+    }
+    const nextStack = stack.slice(0, -1);
+    editorUndoStackRef.current = nextStack;
+    setEditorUndoStack(nextStack);
+    applyingUndoRef.current = true;
+    setEditorTitle(snapshot.title || '');
+    setEditorBlocks(cloneEditorBlocks(snapshot.blocks?.length ? snapshot.blocks : [createBlock()]));
+    setSelectedBlockId(snapshot.selectedBlockId || snapshot.blocks?.[0]?.id || null);
+    setHoveredBlockId(null);
+    setOpenBlockMenuId(null);
+    window.setTimeout(() => {
+      applyingUndoRef.current = false;
+      if (snapshot.selectedBlockId) focusBlock(snapshot.selectedBlockId);
+    }, 0);
+    message.success('已撤回上一次操作');
+  };
 
   const getDocTabTitle = (doc, fallback = '未命名文档') => String(doc?.title || fallback || '未命名文档').trim() || '未命名文档';
 
@@ -821,9 +988,11 @@ export default function Documents() {
     setOpenBlockMenuId(null);
     setTocOpen(true);
     setPageMenuOpen(false);
+    setMoveFolderOpen(false);
     setShareOpen(false);
     setChangeLogOpen(false);
     setPresentationOpen(false);
+    resetEditorUndoStack();
   };
 
   const persistActiveDocTabState = () => {
@@ -859,6 +1028,7 @@ export default function Documents() {
     setOpenBlockMenuId(null);
     setTocOpen(tabState.tocOpen ?? asSwitchValue(doc.toc_enabled, true));
     upsertDocTab(doc);
+    resetEditorUndoStack();
     return true;
   };
 
@@ -956,6 +1126,7 @@ export default function Documents() {
       setHoveredBlockId(null);
       setOpenBlockMenuId(null);
       setTocOpen(asSwitchValue(detail.toc_enabled, true));
+      resetEditorUndoStack();
     } catch (err) {
       setOpenDocTabs(prev => prev.filter(tab => getDocTabId(tab.id) !== docId));
       setDocTabStates(prev => {
@@ -1139,6 +1310,18 @@ export default function Documents() {
     window.addEventListener('keydown', handlePresentationKeyDown);
     return () => window.removeEventListener('keydown', handlePresentationKeyDown);
   }, [presentationOpen, presentationSlideCount]);
+
+  useEffect(() => {
+    const handleUndoKeyDown = (event) => {
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      const key = String(event.key || '').toLowerCase();
+      if (key !== 'z' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      undoLastEditorAction();
+    };
+    window.addEventListener('keydown', handleUndoKeyDown);
+    return () => window.removeEventListener('keydown', handleUndoKeyDown);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
 
   const openCreate = () => {
     createForm.resetFields();
@@ -1341,6 +1524,7 @@ export default function Documents() {
     changeLogForm.resetFields();
     setEditingChangeLog(null);
     setChangeLogFormOpen(false);
+    setActiveChangeLogTab('version');
     setExpandedChangeLogIds(logs[0]?.id ? [logs[0].id] : []);
     setChangeLogOpen(true);
   };
@@ -1436,6 +1620,33 @@ export default function Documents() {
     }
   };
 
+  const restoreEditRecord = async (record) => {
+    if (!selectedDoc?.id || !record?.id) return;
+    setRestoringEditRecordId(record.id);
+    try {
+      await documentsApi.restoreEditRecord(record.id);
+      await loadDetail(selectedDoc.id, { force: true });
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      message.success('已恢复到此版本');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '恢复版本失败');
+    } finally {
+      setRestoringEditRecordId(null);
+    }
+  };
+
+  const confirmRestoreEditRecord = (record) => {
+    if (!record?.id) return;
+    Modal.confirm({
+      title: '恢复到此版本？',
+      content: '确认后，当前文档标题和正文会被该页面编辑记录对应的版本覆盖，并生成一条新的页面编辑记录。',
+      okText: '恢复',
+      cancelText: '取消',
+      onOk: () => restoreEditRecord(record),
+    });
+  };
+
   const handleDelete = async () => {
     if (!selectedDoc) return;
     const deletedDocId = getDocTabId(selectedDoc.id);
@@ -1447,6 +1658,47 @@ export default function Documents() {
       await loadFolderTreeDocuments();
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '删除失败');
+    }
+  };
+
+  const openMoveFolder = () => {
+    if (!selectedDoc) return;
+    setPageMenuOpen(false);
+    setMoveFolderId(selectedDoc.folder_id ? Number(selectedDoc.folder_id) : null);
+    setMoveFolderOpen(true);
+  };
+
+  const handleMoveFolder = async () => {
+    if (!selectedDoc || !moveFolderId) return;
+    const targetFolder = folders.find(folder => Number(folder.id) === Number(moveFolderId));
+    if (!targetFolder) {
+      message.error('请选择目标文件夹');
+      return;
+    }
+    setMoveFolderSaving(true);
+    try {
+      await documentsApi.update(selectedDoc.id, {
+        title: editorTitle || selectedDoc.title || '未命名文档',
+        content: blocksToContent(editorBlocks),
+        content_text: blocksToText(editorBlocks),
+        folder_id: targetFolder.id,
+        domain: targetFolder.domain || selectedDoc.domain,
+        project_group_id: targetFolder.project_group_id || 0,
+        department_key: targetFolder.department_key || selectedDoc.department_key,
+        doc_type: selectedDoc.doc_type || targetFolder.default_doc_type || 'TMP',
+      });
+      setMoveFolderOpen(false);
+      setSelectedFolderId(Number(targetFolder.id));
+      if (targetFolder.domain) setDomainFilter(targetFolder.domain);
+      setSopOnly(false);
+      await loadDetail(selectedDoc.id, { force: true });
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      message.success(`已移动到 ${targetFolder.name}`);
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '移动文档失败');
+    } finally {
+      setMoveFolderSaving(false);
     }
   };
 
@@ -1481,11 +1733,13 @@ export default function Documents() {
   };
 
   const updateBlock = (id, patch) => {
+    pushEditorUndoSnapshot();
     setEditorBlocks(prev => prev.map(block => (block.id === id ? { ...block, ...patch } : block)));
   };
 
   const addBlockAfter = (afterId, type = 'paragraph', extra = {}) => {
     const nextBlock = createEditorBlock(type, extra);
+    pushEditorUndoSnapshot();
     setEditorBlocks(prev => {
       const index = prev.findIndex(block => block.id === afterId);
       const next = [...prev];
@@ -1505,6 +1759,7 @@ export default function Documents() {
       checked: Boolean(source.checked),
       meta: cloneMeta(source.meta),
     });
+    pushEditorUndoSnapshot();
     setEditorBlocks(prev => {
       const index = prev.findIndex(block => block.id === id);
       const next = [...prev];
@@ -1516,6 +1771,7 @@ export default function Documents() {
   };
 
   const deleteBlock = (id) => {
+    pushEditorUndoSnapshot();
     if (editorBlocks.length <= 1) {
       const blank = createBlock();
       setEditorBlocks([blank]);
@@ -1532,6 +1788,7 @@ export default function Documents() {
   };
 
   const moveBlock = (id, direction) => {
+    pushEditorUndoSnapshot();
     setEditorBlocks(prev => {
       const index = prev.findIndex(block => block.id === id);
       const targetIndex = index + direction;
@@ -1549,11 +1806,17 @@ export default function Documents() {
     const content = type === 'divider'
       ? ''
       : (extra.content ?? (isBlankBlock(current) ? defaultContent : (current?.content || defaultContent)));
+    const currentIndent = isHierarchicalListBlock(current) ? getListIndent(current) : 0;
+    const nextMeta = {
+      ...getDefaultBlockMeta(type),
+      ...(isHierarchicalListBlock({ type }) ? { indent: currentIndent } : {}),
+      ...cloneMeta(extra.meta),
+    };
     updateBlock(id, {
       type,
       content,
       checked: Boolean(extra.checked),
-      meta: { ...getDefaultBlockMeta(type), ...cloneMeta(extra.meta) },
+      meta: nextMeta,
     });
     setSelectedBlockId(id);
     focusBlock(id);
@@ -1640,10 +1903,56 @@ export default function Documents() {
     { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除当前块' },
   ];
 
+  const updateListIndent = (block, index, direction) => {
+    if (!isHierarchicalListBlock(block)) return false;
+    const currentIndent = getListIndent(block);
+    const previousBlock = editorBlocks[index - 1];
+    const previousIndent = isHierarchicalListBlock(previousBlock) ? getListIndent(previousBlock) : -1;
+    const maxAllowedIndent = direction > 0
+      ? Math.min(maxListIndent, previousIndent + 1)
+      : maxListIndent;
+    const nextIndent = direction > 0
+      ? Math.min(currentIndent + 1, maxAllowedIndent)
+      : Math.max(0, currentIndent - 1);
+    if (nextIndent === currentIndent) return true;
+    updateBlock(block.id, {
+      meta: {
+        ...getBlockMeta(block),
+        indent: nextIndent,
+      },
+    });
+    setSelectedBlockId(block.id);
+    focusBlock(block.id);
+    return true;
+  };
+
+  const buildContinuationBlockExtra = (block) => {
+    if (!isHierarchicalListBlock(block)) return { content: '' };
+    return {
+      content: '',
+      meta: {
+        ...getDefaultBlockMeta(block.type),
+        indent: getListIndent(block),
+        ...(block.type === 'fold-list' ? { collapsed: false, body: '' } : {}),
+      },
+    };
+  };
+
   const handleBlockKeyDown = (event, block, index) => {
+    if (event.key === 'Tab' && isHierarchicalListBlock(block)) {
+      event.preventDefault();
+      updateListIndent(block, index, event.shiftKey ? -1 : 1);
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      addBlockAfter(block.id, block.type?.startsWith('heading') ? 'paragraph' : block.type, { content: '' });
+      const nextType = block.type?.startsWith('heading') ? 'paragraph' : block.type;
+      addBlockAfter(block.id, nextType, buildContinuationBlockExtra(block));
+      return;
+    }
+    if (event.key === 'Backspace' && !block.content && isHierarchicalListBlock(block) && getListIndent(block) > 0) {
+      event.preventDefault();
+      updateListIndent(block, index, -1);
       return;
     }
     if (event.key === 'Backspace' && !block.content && editorBlocks.length > 1) {
@@ -1791,6 +2100,45 @@ export default function Documents() {
   const renderPageMenu = () => (
     <div style={{ width: 280, padding: 14, background: '#fff', borderRadius: 8, boxShadow: '0 6px 24px rgba(15,23,42,0.16)' }}>
       <Space direction="vertical" size={14} style={{ width: '100%' }}>
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Button
+            type="text"
+            block
+            icon={<UndoOutlined />}
+            disabled={!editorUndoStack.length}
+            onClick={() => {
+              setPageMenuOpen(false);
+              undoLastEditorAction();
+            }}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px' }}
+          >
+            <span style={{ flex: 1, textAlign: 'left' }}>撤回</span>
+            <Text type="secondary" style={{ fontSize: 12 }}>⌘Z</Text>
+          </Button>
+          <Popconfirm
+            title="确认删除该页面？"
+            onConfirm={() => {
+              setPageMenuOpen(false);
+              handleDelete();
+            }}
+            okText="删除"
+            cancelText="取消"
+          >
+            <Button danger type="text" block icon={<DeleteOutlined />} aria-label="删除页面" style={{ justifyContent: 'flex-start', padding: '4px 8px' }}>
+              删除页面
+            </Button>
+          </Popconfirm>
+          <Button
+            type="text"
+            block
+            icon={<FolderOpenOutlined />}
+            onClick={openMoveFolder}
+            style={{ justifyContent: 'flex-start', padding: '4px 8px' }}
+          >
+            移动到...
+          </Button>
+        </Space>
+        <Divider style={{ margin: '0' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Text strong>目录抽屉</Text>
           <Switch
@@ -1845,18 +2193,6 @@ export default function Documents() {
             onChange={checked => savePageOptions({ title_numbering_enabled: checked })}
           />
         </div>
-        <Divider style={{ margin: '2px 0 0' }} />
-        <Popconfirm
-          title="确认删除该文档？"
-          onConfirm={() => {
-            setPageMenuOpen(false);
-            handleDelete();
-          }}
-          okText="删除"
-          cancelText="取消"
-        >
-          <Button danger block icon={<DeleteOutlined />} aria-label="删除文档">删除文档</Button>
-        </Popconfirm>
       </Space>
     </div>
   );
@@ -2173,7 +2509,25 @@ export default function Documents() {
                 </Space>
                 <Text type="secondary" style={{ fontSize: 12 }}>{formatChangeLogTime(item.edited_at || item.created_at)}</Text>
               </Space>
-              <ClockCircleOutlined style={{ color: '#94a3b8', marginTop: 2 }} />
+              <Space size={4}>
+                {canManageSelectedDoc && (
+                  <Tooltip title="恢复到此版本">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<RollbackOutlined />}
+                      loading={restoringEditRecordId === item.id}
+                      aria-label="恢复到此版本"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        confirmRestoreEditRecord(item);
+                      }}
+                      style={{ color: '#64748b' }}
+                    />
+                  </Tooltip>
+                )}
+                <ClockCircleOutlined style={{ color: '#94a3b8', marginTop: 5 }} />
+              </Space>
             </div>
             <Space direction="vertical" size={10} style={{ width: '100%', marginTop: 10 }}>
               {diffItems.length ? diffItems.map((diffItem, index) => (
@@ -2197,6 +2551,52 @@ export default function Documents() {
     const logs = selectedDoc?.change_logs || [];
     const editRecords = selectedDoc?.edit_records || [];
     const allExpanded = logs.length > 0 && logs.every(item => expandedChangeLogIds.includes(item.id));
+    const versionRecordPane = (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <Text type="secondary">人工维护的重要版本节点</Text>
+          <Space size={8} wrap>
+            {canManageSelectedDoc && (
+              <Button size="small" type="primary" icon={<PlusCircleOutlined />} onClick={openCreateChangeLog}>
+                新增记录
+              </Button>
+            )}
+            <Button size="small" disabled={!logs.length} icon={allExpanded ? <UpOutlined /> : <DownOutlined />} onClick={toggleAllChangeLogs}>
+              {allExpanded ? '收起全部' : '展开全部'}
+            </Button>
+          </Space>
+        </div>
+
+        {renderChangeLogEditor()}
+
+        <List
+          dataSource={logs}
+          rowKey="id"
+          split={false}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无版本记录" /> }}
+          renderItem={renderChangeLogItem}
+        />
+      </Space>
+    );
+    const editRecordPane = (
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <Space>
+            <Switch size="small" checked={changeLogNotifyEnabled} onChange={setChangeLogNotifyEnabled} />
+            <Text>接收页面变更通知</Text>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>自动记录每次页面保存</Text>
+        </div>
+
+        <List
+          dataSource={editRecords}
+          rowKey="id"
+          split={false}
+          locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无页面编辑记录" /> }}
+          renderItem={renderEditRecordItem}
+        />
+      </Space>
+    );
     return (
       <Drawer
         title="改动历史"
@@ -2217,49 +2617,31 @@ export default function Documents() {
             </Space>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-            <Space>
-              <Switch size="small" checked={changeLogNotifyEnabled} onChange={setChangeLogNotifyEnabled} />
-              <Text>接收页面变更通知</Text>
-            </Space>
-            <Space size={8} wrap>
-              {canManageSelectedDoc && (
-                <Button size="small" type="primary" icon={<PlusCircleOutlined />} onClick={openCreateChangeLog}>
-                  新增记录
-                </Button>
-              )}
-              <Button size="small" disabled={!logs.length} icon={allExpanded ? <UpOutlined /> : <DownOutlined />} onClick={toggleAllChangeLogs}>
-                {allExpanded ? '收起全部' : '展开全部'}
-              </Button>
-            </Space>
-          </div>
-
-          {renderChangeLogEditor()}
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <Text strong>历史记录</Text>
-            <Tag>{logs.length} 条</Tag>
-          </div>
-          <List
-            dataSource={logs}
-            rowKey="id"
-            split={false}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史记录" /> }}
-            renderItem={renderChangeLogItem}
-          />
-
-          <Divider style={{ margin: '2px 0' }} />
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <Text strong>页面编辑记录</Text>
-            <Tag color="green">{editRecords.length} 条</Tag>
-          </div>
-          <List
-            dataSource={editRecords}
-            rowKey="id"
-            split={false}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无页面编辑记录" /> }}
-            renderItem={renderEditRecordItem}
+          <Tabs
+            activeKey={activeChangeLogTab}
+            onChange={setActiveChangeLogTab}
+            items={[
+              {
+                key: 'version',
+                label: (
+                  <Space size={6}>
+                    <span>版本记录</span>
+                    <Tag>{logs.length} 条</Tag>
+                  </Space>
+                ),
+                children: versionRecordPane,
+              },
+              {
+                key: 'edits',
+                label: (
+                  <Space size={6}>
+                    <span>页面编辑记录</span>
+                    <Tag color="green">{editRecords.length} 条</Tag>
+                  </Space>
+                ),
+                children: editRecordPane,
+              },
+            ]}
           />
         </Space>
       </Drawer>
@@ -2312,6 +2694,7 @@ export default function Documents() {
   const getBlockMeta = (block) => ({ ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) });
 
   const updateBlockMeta = (id, patch) => {
+    pushEditorUndoSnapshot();
     setEditorBlocks(prev => prev.map(block => (
       block.id === id ? { ...block, meta: { ...getBlockMeta(block), ...patch } } : block
     )));
@@ -2346,6 +2729,75 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '媒体上传失败');
     }
     return Upload.LIST_IGNORE;
+  };
+
+  const renderListGuides = (indent, top = 0, bottom = 0) => (
+    Array.from({ length: indent }, (_, level) => (
+      <span
+        key={`guide-${level}`}
+        style={{
+          position: 'absolute',
+          left: level * listIndentWidth + 11,
+          top,
+          bottom,
+          width: 1,
+          background: '#edf2f7',
+          pointerEvents: 'none',
+        }}
+      />
+    ))
+  );
+
+  const renderHierarchicalListBlock = (block, commonProps) => {
+    const meta = getBlockMeta(block);
+    const indent = getListIndent(block);
+    const collapsed = Boolean(meta.collapsed);
+    const markerColor = block.type === 'fold-list' ? '#111827' : '#374151';
+    const marker = block.type === 'bullet'
+      ? getBulletListMarker(indent)
+      : numberedListMarkers.get(block.id);
+
+    const markerNode = block.type === 'fold-list' ? (
+      <Button
+        type="text"
+        size="small"
+        icon={collapsed ? <RightOutlined /> : <DownOutlined />}
+        onClick={(event) => {
+          event.stopPropagation();
+          updateBlockMeta(block.id, { collapsed: !collapsed });
+        }}
+        style={{ width: 24, minWidth: 24, height: 24, padding: 0, color: markerColor }}
+      />
+    ) : (
+      <Text style={{
+        width: 24,
+        minWidth: 24,
+        paddingTop: 1,
+        textAlign: block.type === 'numbered' ? 'right' : 'center',
+        color: markerColor,
+        fontWeight: block.type === 'numbered' ? 500 : 700,
+      }}>
+        {marker}
+      </Text>
+    );
+
+    return (
+      <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
+        {renderListGuides(indent)}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          {markerNode}
+          <TextArea
+            {...commonProps}
+            autoSize={{ minRows: 1 }}
+            placeholder={selectedBlockId === block.id ? (block.type === 'fold-list' ? '点击创建内容' : '输入列表项') : ''}
+            style={{
+              ...commonProps.style,
+              fontWeight: block.type === 'fold-list' ? 600 : commonProps.style.fontWeight,
+            }}
+          />
+        </div>
+      </div>
+    );
   };
 
   const renderFoldBlock = (block, commonProps) => {
@@ -2689,8 +3141,9 @@ export default function Documents() {
     );
   };
 
-  const renderPresentationBlock = (block, index) => {
+  const renderPresentationBlock = (block) => {
     const meta = getBlockMeta(block);
+    const indent = getListIndent(block);
     const blockStyle = {
       fontSize: isMobile ? 18 : 24,
       lineHeight: 1.7,
@@ -2717,11 +3170,17 @@ export default function Documents() {
       );
     }
     if (block.type === 'divider') return <Divider style={{ margin: '18px 0', borderColor: '#cbd5e1' }} />;
-    if (block.type === 'bullet' || block.type === 'numbered') {
+    if (block.type === 'bullet' || block.type === 'numbered' || block.type === 'fold-list') {
+      const marker = block.type === 'bullet'
+        ? getBulletListMarker(indent)
+        : block.type === 'numbered'
+          ? numberedListMarkers.get(block.id)
+          : meta.collapsed ? '▸' : '▾';
       return (
-        <div style={{ ...blockStyle, display: 'flex', gap: 14 }}>
-          <span style={{ minWidth: 28, textAlign: 'right', color: '#64748b' }}>{block.type === 'bullet' ? '•' : `${index + 1}.`}</span>
-          <span>{block.content}</span>
+        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * (isMobile ? 22 : 30), display: 'flex', gap: 14 }}>
+          {renderListGuides(indent, 4, 4)}
+          <span style={{ minWidth: 28, textAlign: block.type === 'bullet' ? 'center' : 'right', color: '#64748b', fontWeight: block.type === 'fold-list' ? 700 : 500 }}>{marker}</span>
+          <span style={{ fontWeight: block.type === 'fold-list' ? 700 : 400 }}>{block.content}</span>
         </div>
       );
     }
@@ -2742,7 +3201,7 @@ export default function Documents() {
     if (block.type === 'emphasis' || block.type === 'marquee') {
       return <div style={{ ...blockStyle, padding: '16px 18px', borderRadius: 8, background: '#fef3c7', color: '#92400e', fontWeight: 700 }}>{block.content}</div>;
     }
-    if (block.type === 'fold-list' || block.type?.startsWith('fold-heading') || block.type === 'meeting') {
+    if (block.type?.startsWith('fold-heading') || block.type === 'meeting') {
       return (
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <div style={{ ...blockStyle, fontWeight: 700 }}>{block.content}</div>
@@ -2881,7 +3340,7 @@ export default function Documents() {
                 <Space direction="vertical" size={18} style={{ width: '100%' }}>
                   {activePresentationSection.blocks.map((block, index) => (
                     <div key={block.id || `${block.type}-${index}`} style={{ background: block.highlight || 'transparent', borderRadius: 8 }}>
-                      {renderPresentationBlock(block, index)}
+                      {renderPresentationBlock(block)}
                     </div>
                   ))}
                 </Space>
@@ -2926,7 +3385,8 @@ export default function Documents() {
     if (block.type === 'progress') return renderProgressBlock(block);
     if (getColumnCount(block.type)) return renderColumnsBlock(block);
     if (getMediaKind(block.type) || block.type === 'external-link') return renderMediaBlock(block);
-    if (block.type === 'fold-list' || block.type?.startsWith('fold-')) return renderFoldBlock(block, commonProps);
+    if (isHierarchicalListBlock(block)) return renderHierarchicalListBlock(block, commonProps);
+    if (block.type?.startsWith('fold-')) return renderFoldBlock(block, commonProps);
 
     if (block.type === 'emphasis' || block.type === 'marquee') {
       return (
@@ -3008,15 +3468,6 @@ export default function Documents() {
       );
     }
 
-    if (block.type === 'bullet' || block.type === 'numbered') {
-      return (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-          <Text style={{ width: 22, paddingTop: 1, textAlign: 'right' }}>{block.type === 'bullet' ? '•' : `${index + 1}.`}</Text>
-          <TextArea {...commonProps} />
-        </div>
-      );
-    }
-
     if (block.type === 'todo') {
       return (
         <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
@@ -3087,6 +3538,7 @@ export default function Documents() {
   };
 
   const renderEditorBlock = (block, index) => {
+    if (hiddenListBlockIds.has(block.id)) return null;
     const menuOpen = openBlockMenuId === block.id;
     const active = menuOpen || hoveredBlockId === block.id;
     const heading = headingMeta.map.get(block.id);
@@ -3361,7 +3813,10 @@ export default function Documents() {
 
               <Input
                 value={editorTitle}
-                onChange={event => setEditorTitle(event.target.value)}
+                onChange={event => {
+                  pushEditorUndoSnapshot();
+                  setEditorTitle(event.target.value);
+                }}
                 placeholder="文档标题"
                 style={{
                   border: 'none',
@@ -3421,6 +3876,38 @@ export default function Documents() {
       {renderChangeLogDrawer()}
 
       {renderPresentationMode()}
+
+      <Modal
+        title="移动到"
+        open={moveFolderOpen}
+        onCancel={() => setMoveFolderOpen(false)}
+        onOk={handleMoveFolder}
+        okText="移动"
+        cancelText="取消"
+        confirmLoading={moveFolderSaving}
+        okButtonProps={{
+          disabled: !moveFolderId || Number(moveFolderId) === Number(selectedDoc?.folder_id),
+        }}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Text type="secondary">选择目标文件夹后，当前文档会移动到该目录下。</Text>
+          <Select
+            showSearch
+            placeholder="选择目标文件夹"
+            value={moveFolderId || undefined}
+            onChange={setMoveFolderId}
+            optionFilterProp="label"
+            options={folders.map(folder => ({
+              value: Number(folder.id),
+              label: getFolderPathLabel(folder),
+              disabled: Number(folder.id) === Number(selectedDoc?.folder_id),
+            }))}
+            style={{ width: '100%' }}
+            notFoundContent="暂无可移动的文件夹"
+          />
+        </Space>
+      </Modal>
 
       <Modal
         title="新建文档"
