@@ -34,6 +34,7 @@ const MENU_TREE = [
     children: [
       { title: '主体管理', key: '/company-subjects' },
       { title: '产品资产', key: '/product-assets' },
+      { title: '文档中心', key: '/documents' },
       { title: '预算管理', key: '/budgets' },
     ],
   },

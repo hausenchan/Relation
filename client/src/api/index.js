@@ -276,6 +276,31 @@ export const goalsApi = {
   delete: (id) => api.delete(`/goals/${id}`).then(r => r.data),
 };
 
+export const documentsApi = {
+  list: (params) => api.get('/documents', { params }).then(r => r.data),
+  get: (id) => api.get(`/documents/${id}`).then(r => r.data),
+  create: (data) => api.post('/documents', data).then(r => r.data),
+  update: (id, data) => api.put(`/documents/${id}`, data).then(r => r.data),
+  updateContent: (id, data) => api.put(`/documents/${id}/content`, data).then(r => r.data),
+  updatePageOptions: (id, data) => api.put(`/documents/${id}/page-options`, data).then(r => r.data),
+  renumber: (id, data) => api.post(`/documents/${id}/renumber`, data).then(r => r.data),
+  delete: (id) => api.delete(`/documents/${id}`).then(r => r.data),
+  listFolders: (params) => api.get('/document-folders', { params }).then(r => r.data),
+  createFolder: (data) => api.post('/document-folders', data).then(r => r.data),
+  updateFolder: (id, data) => api.put(`/document-folders/${id}`, data).then(r => r.data),
+  deleteFolder: (id) => api.delete(`/document-folders/${id}`).then(r => r.data),
+  applyFolderTemplate: (data) => api.post('/document-folders/apply-template', data).then(r => r.data),
+  listShares: (id) => api.get(`/documents/${id}/shares`).then(r => r.data),
+  saveShares: (id, shares) => api.put(`/documents/${id}/shares`, { shares }).then(r => r.data),
+  accessSummary: (id) => api.get(`/documents/${id}/access-summary`).then(r => r.data),
+  favorite: (id) => api.post(`/documents/${id}/favorite`).then(r => r.data),
+  unfavorite: (id) => api.delete(`/documents/${id}/favorite`).then(r => r.data),
+  listChangeLogs: (id) => api.get(`/documents/${id}/change-logs`).then(r => r.data),
+  createChangeLog: (id, data) => api.post(`/documents/${id}/change-logs`, data).then(r => r.data),
+  updateChangeLog: (logId, data) => api.put(`/document-change-logs/${logId}`, data).then(r => r.data),
+  deleteChangeLog: (logId) => api.delete(`/document-change-logs/${logId}`).then(r => r.data),
+};
+
 export const attachmentsApi = {
   upload: (formData) => api.post('/attachments/upload', formData).then(r => r.data),
   list: (params) => api.get('/attachments', { params }).then(r => r.data),

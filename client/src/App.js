@@ -332,6 +332,7 @@ function AppLayout() {
     '/dev-tasks': '需求',
     '/company-subjects': '主体管理',
     '/product-assets': '产品资产',
+    '/documents': '文档中心',
     '/persons': '人脉管理',
     '/interactions': '互动记录',
     '/reminders': '提醒事项',
@@ -383,6 +384,9 @@ function AppLayout() {
     },
     canAccessMenu('/product-assets') && {
       key: '/product-assets', icon: <AppstoreOutlined />, label: <Link to="/product-assets">产品资产</Link>,
+    },
+    canAccessMenu('/documents') && {
+      key: '/documents', icon: <FileTextOutlined />, label: <Link to="/documents">文档中心</Link>,
     },
     // 预算管理（高管或 menuPerms 配置的用户可见）
     (isAdmin(user) || canAccessMenu('/budgets')) && {
@@ -820,6 +824,7 @@ function AppLayout() {
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
             <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />
             <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
+            <Route path="/documents" element={<PrivateRoute><ComingSoon title="文档中心" /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
             <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />

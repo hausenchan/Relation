@@ -1042,6 +1042,119 @@ if (productAssetReductionCols.length > 0 && !productAssetReductionCols.includes(
   db.exec("ALTER TABLE product_asset_reductions ADD COLUMN punishment_object TEXT");
 }
 
+// =========== 文档中心表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_no TEXT NOT NULL UNIQUE,
+    global_seq INTEGER NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '未命名文档',
+    content TEXT,
+    content_text TEXT,
+    summary TEXT,
+    domain TEXT DEFAULT 'general',
+    project_group_id INTEGER,
+    project_code TEXT,
+    department_key TEXT DEFAULT 'ALL',
+    doc_type TEXT DEFAULT 'TMP',
+    current_version TEXT DEFAULT 'V1.0',
+    folder_id INTEGER,
+    tags TEXT,
+    toc_enabled INTEGER DEFAULT 0,
+    width_mode TEXT DEFAULT 'standard',
+    custom_width INTEGER,
+    small_font_enabled INTEGER DEFAULT 0,
+    title_numbering_enabled INTEGER DEFAULT 0,
+    created_by INTEGER,
+    updated_by INTEGER,
+    is_deleted INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_documents_no ON documents(document_no);
+  CREATE INDEX IF NOT EXISTS idx_documents_domain ON documents(domain);
+  CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_id);
+  CREATE INDEX IF NOT EXISTS idx_documents_project_group ON documents(project_group_id);
+  CREATE INDEX IF NOT EXISTS idx_documents_department ON documents(department_key);
+  CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
+  CREATE INDEX IF NOT EXISTS idx_documents_created_by ON documents(created_by);
+
+  CREATE TABLE IF NOT EXISTS document_folders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    parent_id INTEGER,
+    domain TEXT DEFAULT 'general',
+    project_group_id INTEGER,
+    department_key TEXT DEFAULT 'ALL',
+    default_doc_type TEXT DEFAULT 'TMP',
+    sort_order INTEGER DEFAULT 0,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_folders_parent ON document_folders(parent_id);
+  CREATE INDEX IF NOT EXISTS idx_document_folders_context ON document_folders(domain, project_group_id, department_key);
+
+  CREATE TABLE IF NOT EXISTS document_sequence_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_key TEXT NOT NULL UNIQUE,
+    next_seq INTEGER NOT NULL DEFAULT 1,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  INSERT OR IGNORE INTO document_sequence_state (scope_key, next_seq) VALUES ('global', 1);
+
+  CREATE TABLE IF NOT EXISTS document_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    target_key TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_shares_doc ON document_shares(document_id);
+  CREATE INDEX IF NOT EXISTS idx_document_shares_target ON document_shares(target_type, target_id, target_key);
+
+  CREATE TABLE IF NOT EXISTS document_change_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    version TEXT,
+    changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    changed_by INTEGER,
+    summary TEXT NOT NULL,
+    impact_scope TEXT,
+    remark TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_change_logs_doc ON document_change_logs(document_id);
+
+  CREATE TABLE IF NOT EXISTS document_favorites (
+    user_id INTEGER NOT NULL,
+    document_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, document_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS document_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    filepath TEXT NOT NULL,
+    mimetype TEXT,
+    size INTEGER,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_attachments_doc ON document_attachments(document_id);
+`);
+
 // =========== 跨团队访问权限表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS cross_team_access (
@@ -1525,6 +1638,9 @@ const OPERATION_LOG_BUSINESS_MAP = {
   'company-subject-attachments': '主体附件',
   'product-assets': '产品资产',
   'product-asset-reductions': '产品核减',
+  documents: '文档中心',
+  'document-folders': '文档目录',
+  'document-change-logs': '文档改动历史',
   strategies: '策略',
   'strategy-execution-logs': '策略执行',
   'dev-tasks': '需求',
@@ -1568,6 +1684,9 @@ const OPERATION_LOG_TABLE_MAP = {
   'company-subject-attachments': 'company_subject_attachments',
   'product-assets': 'product_assets',
   'product-asset-reductions': 'product_asset_reductions',
+  documents: 'documents',
+  'document-folders': 'document_folders',
+  'document-change-logs': 'document_change_logs',
   strategies: 'strategies',
   'strategy-execution-logs': 'strategy_execution_logs',
   'dev-tasks': 'dev_tasks',
@@ -1599,6 +1718,17 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/product-assets\/import$/, businessType: '产品资产', table: 'product_assets', action: '导入' },
   { pattern: /^\/product-assets\/import\/preview$/, businessType: '产品资产', table: 'product_assets', action: '导入预览', skipSuccessLog: true },
   { pattern: /^\/product-assets\/(\d+)\/reductions$/, businessType: '产品核减', table: 'product_asset_reductions', responseId: true },
+  { pattern: /^\/documents$/, businessType: '文档中心', table: 'documents', responseId: true, action: '创建文档' },
+  { pattern: /^\/documents\/(\d+)$/, businessType: '文档中心', table: 'documents', idGroup: 1 },
+  { pattern: /^\/documents\/(\d+)\/content$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存文档内容' },
+  { pattern: /^\/documents\/(\d+)\/page-options$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存页面选项' },
+  { pattern: /^\/documents\/(\d+)\/shares$/, businessType: '文档共享', table: 'document_shares', idGroup: 1, action: '保存共享范围' },
+  { pattern: /^\/documents\/(\d+)\/change-logs$/, businessType: '文档改动历史', table: 'document_change_logs', responseId: true, action: '新增改动历史' },
+  { pattern: /^\/documents\/(\d+)\/favorite$/, businessType: '文档收藏', table: 'document_favorites', idGroup: 1 },
+  { pattern: /^\/document-change-logs\/(\d+)$/, businessType: '文档改动历史', table: 'document_change_logs', idGroup: 1 },
+  { pattern: /^\/document-folders$/, businessType: '文档目录', table: 'document_folders', responseId: true, action: '保存目录' },
+  { pattern: /^\/document-folders\/(\d+)$/, businessType: '文档目录', table: 'document_folders', idGroup: 1 },
+  { pattern: /^\/document-folders\/apply-template$/, businessType: '文档目录', table: 'document_folders', action: '初始化目录模板' },
   { pattern: /^\/company_products\/(\d+)\/task-center-notification$/, businessType: '公司产品', table: 'company_products', idGroup: 1, action: '发送任务中心采集通知' },
   { pattern: /^\/mobile-task-center\/records$/, businessType: '手机任务中心采集', table: 'mobile_task_records', responseId: true, action: '采集入库' },
   { pattern: /^\/mobile-task-center\/records\/(\d+)\/review$/, businessType: '手机任务中心采集', table: 'mobile_task_records', idGroup: 1, action: '复核采集记录' },
@@ -2955,6 +3085,663 @@ app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_project_groups WHERE project_group_id = ?').run(req.params.id);
   db.prepare('UPDATE goals SET project_group_id = NULL WHERE project_group_id = ?').run(req.params.id);
   db.prepare('DELETE FROM project_groups WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+// =========== 文档中心基础 API ===========
+const DOCUMENT_DOMAIN_CODES = {
+  domestic_project: 'CN',
+  overseas_project: 'OS',
+  executive_management: 'MGT',
+  general: 'GEN',
+  cross_region: 'CR',
+};
+const DOCUMENT_DEPARTMENTS = [
+  { key: 'PM', name: '0_项目' },
+  { key: 'PD', name: '1_产研' },
+  { key: 'BD', name: '2_商务' },
+  { key: 'OPS', name: '3_产运' },
+  { key: 'ADS', name: '4_投放' },
+];
+const DOCUMENT_TEMPLATE_FOLDERS = [
+  { name: '01_SOP流程规范', type: 'SOP', order: 10 },
+  { name: '02_规则制度', type: 'RULE', order: 20 },
+  { name: '03_模板表单', type: 'TPL', order: 30 },
+  { name: '04_项目资料', type: 'SPEC', order: 40 },
+  { name: '05_复盘案例', type: 'REVIEW', order: 50 },
+  { name: '临时文档', type: 'TMP', order: 90 },
+];
+
+function normalizeDocumentCode(value, fallback = 'GEN', maxLength = 16) {
+  const code = String(value || fallback || 'GEN')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  return (code || fallback).slice(0, maxLength);
+}
+
+function normalizeDocumentDomain(value) {
+  return DOCUMENT_DOMAIN_CODES[value] ? value : 'general';
+}
+
+function normalizeDocumentDepartment(value) {
+  return normalizeDocumentCode(value, 'ALL', 8);
+}
+
+function normalizeDocumentType(value) {
+  return normalizeDocumentCode(value, 'TMP', 12);
+}
+
+function getProjectCodeForDocument(projectGroupId, domain, explicitCode) {
+  if (explicitCode) return normalizeDocumentCode(explicitCode, DOCUMENT_DOMAIN_CODES[normalizeDocumentDomain(domain)] || 'GEN');
+  if (projectGroupId) {
+    const group = db.prepare('SELECT id, code, name FROM project_groups WHERE id = ?').get(projectGroupId);
+    if (group?.code) return normalizeDocumentCode(group.code, `PG${group.id}`);
+    if (group?.id) return `PG${group.id}`;
+  }
+  return DOCUMENT_DOMAIN_CODES[normalizeDocumentDomain(domain)] || 'GEN';
+}
+
+function parseMaybeJson(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function collectTextFromValue(value, parts = []) {
+  if (value === null || value === undefined) return parts;
+  if (typeof value === 'string' || typeof value === 'number') {
+    const text = String(value).trim();
+    if (text) parts.push(text);
+    return parts;
+  }
+  if (Array.isArray(value)) {
+    value.forEach(item => collectTextFromValue(item, parts));
+    return parts;
+  }
+  if (typeof value === 'object') {
+    ['text', 'title', 'content', 'children', 'blocks', 'items'].forEach(key => {
+      if (Object.prototype.hasOwnProperty.call(value, key)) collectTextFromValue(value[key], parts);
+    });
+  }
+  return parts;
+}
+
+function extractDocumentText(content, explicitText) {
+  if (typeof explicitText === 'string' && explicitText.trim()) return explicitText.trim();
+  const parsed = typeof content === 'string' ? parseMaybeJson(content, content) : content;
+  return collectTextFromValue(parsed).join('\n').slice(0, 20000);
+}
+
+function buildDocumentSummary(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+}
+
+function formatDocumentNo(seq, projectCode, departmentKey, docType, year) {
+  const seqText = String(seq).padStart(6, '0');
+  return [
+    `D${seqText}`,
+    normalizeDocumentCode(projectCode, 'GEN'),
+    normalizeDocumentDepartment(departmentKey),
+    normalizeDocumentType(docType),
+    String(year || new Date().getFullYear()),
+  ].join('-');
+}
+
+function getNextDocumentSequence() {
+  const row = db.prepare('SELECT next_seq FROM document_sequence_state WHERE scope_key = ?').get('global');
+  if (!row) {
+    db.prepare('INSERT INTO document_sequence_state (scope_key, next_seq) VALUES (?, ?)').run('global', 2);
+    return 1;
+  }
+  db.prepare('UPDATE document_sequence_state SET next_seq = next_seq + 1, updated_at = CURRENT_TIMESTAMP WHERE scope_key = ?').run('global');
+  return row.next_seq;
+}
+
+function canManageDocument(user, document) {
+  if (!user || !document) return false;
+  return isAdmin(user.role) || isExecutiveIdentity(user) || Number(document.created_by) === Number(user.id);
+}
+
+function buildDocumentVisibilityFilter(user, alias = 'd') {
+  if (isAdmin(user.role) || isExecutiveIdentity(user)) return { sql: '', params: [] };
+
+  const clauses = [`${alias}.created_by = ?`];
+  const params = [user.id];
+
+  clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_user WHERE ds_user.document_id = ${alias}.id AND ds_user.target_type = 'user' AND ds_user.target_id = ?)`);
+  params.push(user.id);
+
+  if (user.department) {
+    clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_dept WHERE ds_dept.document_id = ${alias}.id AND ds_dept.target_type = 'department' AND ds_dept.target_key = ?)`);
+    params.push(user.department);
+  }
+
+  const teamIds = getUserTeamIds(user.id);
+  if (teamIds.length) {
+    clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_team WHERE ds_team.document_id = ${alias}.id AND ds_team.target_type = 'team' AND ds_team.target_id IN (${teamIds.map(() => '?').join(',')}))`);
+    params.push(...teamIds);
+  }
+
+  const projectGroupIds = getUserProjectGroupIds(user.id);
+  if (projectGroupIds.length) {
+    clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_pg WHERE ds_pg.document_id = ${alias}.id AND ds_pg.target_type = 'project_group' AND ds_pg.target_id IN (${projectGroupIds.map(() => '?').join(',')}))`);
+    params.push(...projectGroupIds);
+  }
+
+  return { sql: ` AND (${clauses.join(' OR ')})`, params };
+}
+
+function getVisibleDocument(id, user) {
+  const visibility = buildDocumentVisibilityFilter(user, 'd');
+  return db.prepare(`
+    SELECT d.*,
+      creator.display_name as created_by_name,
+      updater.display_name as updated_by_name,
+      pg.name as project_group_name,
+      f.name as folder_name,
+      CASE WHEN fav.user_id IS NULL THEN 0 ELSE 1 END as is_favorite
+    FROM documents d
+    LEFT JOIN users creator ON d.created_by = creator.id
+    LEFT JOIN users updater ON d.updated_by = updater.id
+    LEFT JOIN project_groups pg ON d.project_group_id = pg.id
+    LEFT JOIN document_folders f ON d.folder_id = f.id
+    LEFT JOIN document_favorites fav ON fav.document_id = d.id AND fav.user_id = ?
+    WHERE d.id = ? AND COALESCE(d.is_deleted, 0) = 0
+    ${visibility.sql}
+  `).get(user.id, id, ...visibility.params);
+}
+
+function normalizeDocumentShares(shares) {
+  if (!Array.isArray(shares)) return [];
+  const seen = new Set();
+  const rows = [];
+  for (const item of shares) {
+    const targetType = item?.target_type;
+    if (!['project_group', 'department', 'team', 'user'].includes(targetType)) continue;
+    const targetId = targetType === 'department' ? null : Number(item.target_id);
+    const targetKey = targetType === 'department' ? String(item.target_key || '').trim() : null;
+    if (targetType === 'department' && !targetKey) continue;
+    if (targetType !== 'department' && !targetId) continue;
+    const key = `${targetType}:${targetId || ''}:${targetKey || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ target_type: targetType, target_id: targetId, target_key: targetKey });
+  }
+  return rows;
+}
+
+function replaceDocumentShares(documentId, shares, userId) {
+  const normalized = normalizeDocumentShares(shares);
+  db.prepare('DELETE FROM document_shares WHERE document_id = ?').run(documentId);
+  const insert = db.prepare(`
+    INSERT INTO document_shares (document_id, target_type, target_id, target_key, created_by)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  normalized.forEach(share => insert.run(documentId, share.target_type, share.target_id, share.target_key, userId));
+  return normalized;
+}
+
+function getDocumentShares(documentId) {
+  return db.prepare(`
+    SELECT ds.*,
+      u.display_name as user_name,
+      t.name as team_name,
+      pg.name as project_group_name
+    FROM document_shares ds
+    LEFT JOIN users u ON ds.target_type = 'user' AND ds.target_id = u.id
+    LEFT JOIN teams t ON ds.target_type = 'team' AND ds.target_id = t.id
+    LEFT JOIN project_groups pg ON ds.target_type = 'project_group' AND ds.target_id = pg.id
+    WHERE ds.document_id = ?
+    ORDER BY ds.target_type, ds.id
+  `).all(documentId);
+}
+
+function getDocumentAccessUserIds(document) {
+  if (!document) return [];
+  const userIds = new Set();
+  if (document.created_by) userIds.add(Number(document.created_by));
+
+  db.prepare(`
+    SELECT id FROM users
+    WHERE role IN ('admin', 'ceo', 'coo', 'cto', 'cmo')
+       OR executive_role IN ('ceo', 'coo', 'cto', 'cmo')
+  `).all().forEach(row => userIds.add(Number(row.id)));
+
+  const shares = db.prepare('SELECT target_type, target_id, target_key FROM document_shares WHERE document_id = ?').all(document.id);
+  shares.forEach(share => {
+    if (share.target_type === 'user' && share.target_id) {
+      userIds.add(Number(share.target_id));
+    } else if (share.target_type === 'department' && share.target_key) {
+      db.prepare('SELECT id FROM users WHERE department = ?').all(share.target_key).forEach(row => userIds.add(Number(row.id)));
+    } else if (share.target_type === 'team' && share.target_id) {
+      getUsersByTeamIds([Number(share.target_id)]).forEach(id => userIds.add(Number(id)));
+    } else if (share.target_type === 'project_group' && share.target_id) {
+      db.prepare('SELECT user_id FROM user_project_groups WHERE project_group_id = ?').all(share.target_id)
+        .forEach(row => userIds.add(Number(row.user_id)));
+    }
+  });
+  return [...userIds].filter(Boolean);
+}
+
+function getDocumentAccessSummary(document) {
+  const userIds = getDocumentAccessUserIds(document);
+  return {
+    access_count: userIds.length,
+    label: userIds.length <= 1 ? '仅自己' : `共 ${userIds.length} 人`,
+  };
+}
+
+function serializeDocument(row, options = {}) {
+  if (!row) return null;
+  const result = {
+    ...row,
+    tags: parseMaybeJson(row.tags, []),
+    is_favorite: Number(row.is_favorite || 0),
+  };
+  if (options.withAccessSummary) result.access_summary = getDocumentAccessSummary(row);
+  return result;
+}
+
+function createDocumentRecord(body, user) {
+  const createDoc = db.transaction(() => {
+    const folder = body.folder_id ? db.prepare('SELECT * FROM document_folders WHERE id = ?').get(body.folder_id) : null;
+    const domain = normalizeDocumentDomain(body.domain || folder?.domain);
+    const projectGroupId = body.project_group_id ?? folder?.project_group_id ?? null;
+    const departmentKey = normalizeDocumentDepartment(body.department_key || folder?.department_key || 'ALL');
+    const docType = normalizeDocumentType(body.doc_type || folder?.default_doc_type || 'TMP');
+    const projectCode = getProjectCodeForDocument(projectGroupId, domain, body.project_code);
+    const globalSeq = getNextDocumentSequence();
+    const year = new Date().getFullYear();
+    const documentNo = formatDocumentNo(globalSeq, projectCode, departmentKey, docType, year);
+    const content = body.content ?? JSON.stringify({ blocks: [] });
+    const contentText = extractDocumentText(content, body.content_text);
+    const tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : (body.tags || null);
+    const result = db.prepare(`
+      INSERT INTO documents (
+        document_no, global_seq, title, content, content_text, summary, domain,
+        project_group_id, project_code, department_key, doc_type, current_version,
+        folder_id, tags, created_by, updated_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      documentNo,
+      globalSeq,
+      body.title || '未命名文档',
+      typeof content === 'string' ? content : JSON.stringify(content),
+      contentText,
+      buildDocumentSummary(contentText),
+      domain,
+      projectGroupId || null,
+      projectCode,
+      departmentKey,
+      docType,
+      body.current_version || 'V1.0',
+      body.folder_id || null,
+      tags,
+      user.id,
+      user.id
+    );
+    if (Array.isArray(body.shares)) replaceDocumentShares(result.lastInsertRowid, body.shares, user.id);
+    return result.lastInsertRowid;
+  });
+  return createDoc();
+}
+
+app.get('/api/document-folders', (req, res) => {
+  const rows = db.prepare(`
+    SELECT f.*, pg.name as project_group_name
+    FROM document_folders f
+    LEFT JOIN project_groups pg ON f.project_group_id = pg.id
+    ORDER BY f.domain, COALESCE(pg.name, ''), f.department_key, f.sort_order, f.name
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/document-folders', canWrite, (req, res) => {
+  const { name, parent_id, domain, project_group_id, department_key, default_doc_type, sort_order } = req.body;
+  if (!String(name || '').trim()) return res.status(400).json({ error: '目录名称必填' });
+  const result = db.prepare(`
+    INSERT INTO document_folders (name, parent_id, domain, project_group_id, department_key, default_doc_type, sort_order, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    String(name).trim(),
+    parent_id || null,
+    normalizeDocumentDomain(domain),
+    project_group_id || null,
+    normalizeDocumentDepartment(department_key || 'ALL'),
+    normalizeDocumentType(default_doc_type || 'TMP'),
+    Number(sort_order) || 0,
+    req.user.id
+  );
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/document-folders/:id', canWrite, (req, res) => {
+  const existing = db.prepare('SELECT id FROM document_folders WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: '目录不存在' });
+  const { name, parent_id, domain, project_group_id, department_key, default_doc_type, sort_order } = req.body;
+  if (!String(name || '').trim()) return res.status(400).json({ error: '目录名称必填' });
+  db.prepare(`
+    UPDATE document_folders SET
+      name = ?, parent_id = ?, domain = ?, project_group_id = ?, department_key = ?,
+      default_doc_type = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    String(name).trim(),
+    parent_id || null,
+    normalizeDocumentDomain(domain),
+    project_group_id || null,
+    normalizeDocumentDepartment(department_key || 'ALL'),
+    normalizeDocumentType(default_doc_type || 'TMP'),
+    Number(sort_order) || 0,
+    req.params.id
+  );
+  res.json({ success: true });
+});
+
+app.delete('/api/document-folders/:id', canWrite, (req, res) => {
+  const linked = db.prepare('SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND COALESCE(is_deleted, 0) = 0').get(req.params.id).count;
+  if (linked > 0) return res.status(400).json({ error: '目录下仍有文档，不能删除' });
+  db.prepare('DELETE FROM document_folders WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
+app.post('/api/document-folders/apply-template', canWrite, (req, res) => {
+  const domain = normalizeDocumentDomain(req.body.domain);
+  const projectGroupId = req.body.project_group_id || null;
+  const departments = Array.isArray(req.body.departments) && req.body.departments.length
+    ? req.body.departments.map(item => ({ key: normalizeDocumentDepartment(item.key || item), name: item.name || item.key || item }))
+    : DOCUMENT_DEPARTMENTS;
+  const insert = db.prepare(`
+    INSERT INTO document_folders (name, domain, project_group_id, department_key, default_doc_type, sort_order, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  let created = 0;
+  for (const department of departments) {
+    for (const folder of DOCUMENT_TEMPLATE_FOLDERS) {
+      const exists = db.prepare(`
+        SELECT id FROM document_folders
+        WHERE name = ? AND domain = ? AND COALESCE(project_group_id, 0) = COALESCE(?, 0) AND department_key = ?
+      `).get(folder.name, domain, projectGroupId, department.key);
+      if (exists) continue;
+      insert.run(folder.name, domain, projectGroupId, department.key, folder.type, folder.order, req.user.id);
+      created++;
+    }
+  }
+  res.json({ success: true, created });
+});
+
+app.get('/api/documents', (req, res) => {
+  const { search, domain, folder_id, project_group_id, department_key, doc_type, favorite, sop_only } = req.query;
+  const visibility = buildDocumentVisibilityFilter(req.user, 'd');
+  let q = `
+    SELECT d.id, d.document_no, d.global_seq, d.title, d.summary, d.domain, d.project_group_id,
+      d.project_code, d.department_key, d.doc_type, d.current_version, d.folder_id,
+      d.tags, d.created_by, d.updated_by, d.created_at, d.updated_at,
+      creator.display_name as created_by_name,
+      updater.display_name as updated_by_name,
+      pg.name as project_group_name,
+      f.name as folder_name,
+      CASE WHEN fav.user_id IS NULL THEN 0 ELSE 1 END as is_favorite
+    FROM documents d
+    LEFT JOIN users creator ON d.created_by = creator.id
+    LEFT JOIN users updater ON d.updated_by = updater.id
+    LEFT JOIN project_groups pg ON d.project_group_id = pg.id
+    LEFT JOIN document_folders f ON d.folder_id = f.id
+    LEFT JOIN document_favorites fav ON fav.document_id = d.id AND fav.user_id = ?
+    WHERE COALESCE(d.is_deleted, 0) = 0
+    ${visibility.sql}
+  `;
+  const params = [req.user.id, ...visibility.params];
+  if (search) {
+    const kw = `%${String(search).trim()}%`;
+    q += ' AND (d.title LIKE ? OR d.document_no LIKE ? OR d.content_text LIKE ? OR d.tags LIKE ?)';
+    params.push(kw, kw, kw, kw);
+  }
+  if (domain) { q += ' AND d.domain = ?'; params.push(domain); }
+  if (folder_id) { q += ' AND d.folder_id = ?'; params.push(folder_id); }
+  if (project_group_id) { q += ' AND d.project_group_id = ?'; params.push(project_group_id); }
+  if (department_key) { q += ' AND d.department_key = ?'; params.push(normalizeDocumentDepartment(department_key)); }
+  if (doc_type) { q += ' AND d.doc_type = ?'; params.push(normalizeDocumentType(doc_type)); }
+  if (sop_only === '1' || sop_only === 'true') { q += " AND d.doc_type = 'SOP'"; }
+  if (favorite === '1' || favorite === 'true') { q += ' AND fav.user_id IS NOT NULL'; }
+  q += ' ORDER BY d.updated_at DESC, d.id DESC';
+  res.json(db.prepare(q).all(...params).map(row => serializeDocument(row)));
+});
+
+app.post('/api/documents', canWrite, (req, res) => {
+  const id = createDocumentRecord(req.body || {}, req.user);
+  const row = getVisibleDocument(id, req.user);
+  res.json(serializeDocument(row, { withAccessSummary: true }));
+});
+
+app.get('/api/documents/:id', (req, res) => {
+  const row = getVisibleDocument(req.params.id, req.user);
+  if (!row) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  res.json({
+    ...serializeDocument(row, { withAccessSummary: true }),
+    shares: getDocumentShares(row.id),
+    change_logs: db.prepare(`
+      SELECT l.*, u.display_name as changed_by_name
+      FROM document_change_logs l
+      LEFT JOIN users u ON l.changed_by = u.id
+      WHERE l.document_id = ?
+      ORDER BY l.changed_at DESC, l.id DESC
+    `).all(row.id),
+  });
+});
+
+app.put('/api/documents/:id', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档' });
+  const folder = req.body.folder_id ? db.prepare('SELECT * FROM document_folders WHERE id = ?').get(req.body.folder_id) : null;
+  const domain = normalizeDocumentDomain(req.body.domain ?? doc.domain);
+  const projectGroupId = req.body.project_group_id ?? doc.project_group_id ?? folder?.project_group_id ?? null;
+  const departmentKey = normalizeDocumentDepartment(req.body.department_key ?? doc.department_key ?? folder?.department_key);
+  const docType = normalizeDocumentType(req.body.doc_type ?? doc.doc_type ?? folder?.default_doc_type);
+  const content = Object.prototype.hasOwnProperty.call(req.body, 'content') ? req.body.content : doc.content;
+  const contentText = extractDocumentText(content, req.body.content_text);
+  const tags = Array.isArray(req.body.tags) ? JSON.stringify(req.body.tags) : (req.body.tags ?? doc.tags);
+  db.prepare(`
+    UPDATE documents SET
+      title = ?, content = ?, content_text = ?, summary = ?, domain = ?, project_group_id = ?,
+      project_code = ?, department_key = ?, doc_type = ?, current_version = ?, folder_id = ?,
+      tags = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    req.body.title || doc.title,
+    typeof content === 'string' ? content : JSON.stringify(content),
+    contentText,
+    buildDocumentSummary(contentText),
+    domain,
+    projectGroupId || null,
+    getProjectCodeForDocument(projectGroupId, domain, req.body.project_code || doc.project_code),
+    departmentKey,
+    docType,
+    req.body.current_version || doc.current_version || 'V1.0',
+    req.body.folder_id ?? doc.folder_id,
+    tags,
+    req.user.id,
+    doc.id
+  );
+  res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true }));
+});
+
+app.put('/api/documents/:id/content', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档' });
+  const content = req.body.content ?? JSON.stringify({ blocks: [] });
+  const contentText = extractDocumentText(content, req.body.content_text);
+  db.prepare(`
+    UPDATE documents SET content = ?, content_text = ?, summary = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    typeof content === 'string' ? content : JSON.stringify(content),
+    contentText,
+    buildDocumentSummary(contentText),
+    req.user.id,
+    doc.id
+  );
+  res.json({ success: true, summary: buildDocumentSummary(contentText), updated_at: new Date().toISOString() });
+});
+
+app.put('/api/documents/:id/page-options', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档' });
+  db.prepare(`
+    UPDATE documents SET
+      toc_enabled = ?, width_mode = ?, custom_width = ?, small_font_enabled = ?,
+      title_numbering_enabled = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    req.body.toc_enabled ? 1 : 0,
+    req.body.width_mode || doc.width_mode || 'standard',
+    req.body.custom_width || null,
+    req.body.small_font_enabled ? 1 : 0,
+    req.body.title_numbering_enabled ? 1 : 0,
+    req.user.id,
+    doc.id
+  );
+  res.json({ success: true });
+});
+
+app.post('/api/documents/:id/renumber', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!(isAdmin(req.user.role) || isExecutiveIdentity(req.user))) {
+    return res.status(403).json({ error: '仅管理员或高管可以刷新文档编号业务字段' });
+  }
+  if (!String(req.body.reason || '').trim()) return res.status(400).json({ error: '请填写重新编号原因' });
+  const domain = normalizeDocumentDomain(req.body.domain || doc.domain);
+  const projectGroupId = req.body.project_group_id ?? doc.project_group_id;
+  const projectCode = getProjectCodeForDocument(projectGroupId, domain, req.body.project_code || doc.project_code);
+  const departmentKey = normalizeDocumentDepartment(req.body.department_key || doc.department_key);
+  const docType = normalizeDocumentType(req.body.doc_type || doc.doc_type);
+  const year = String(req.body.year || doc.created_at || '').slice(0, 4) || new Date().getFullYear();
+  const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, year);
+  db.prepare(`
+    UPDATE documents SET
+      document_no = ?, domain = ?, project_group_id = ?, project_code = ?,
+      department_key = ?, doc_type = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(documentNo, domain, projectGroupId || null, projectCode, departmentKey, docType, req.user.id, doc.id);
+  db.prepare(`
+    INSERT INTO document_change_logs (document_id, version, changed_by, summary, remark)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(doc.id, doc.current_version || 'V1.0', req.user.id, '刷新文档编号业务字段', String(req.body.reason).trim());
+  res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true }));
+});
+
+app.delete('/api/documents/:id', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以删除文档' });
+  db.prepare('UPDATE documents SET is_deleted = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.user.id, doc.id);
+  res.json({ success: true });
+});
+
+app.get('/api/documents/:id/shares', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  res.json(getDocumentShares(doc.id));
+});
+
+app.put('/api/documents/:id/shares', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以调整共享范围' });
+  const shares = replaceDocumentShares(doc.id, req.body.shares || [], req.user.id);
+  res.json({ success: true, shares, access_summary: getDocumentAccessSummary(doc) });
+});
+
+app.get('/api/documents/:id/access-summary', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  res.json(getDocumentAccessSummary(doc));
+});
+
+app.post('/api/documents/:id/favorite', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  db.prepare('INSERT OR IGNORE INTO document_favorites (user_id, document_id) VALUES (?, ?)').run(req.user.id, doc.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/documents/:id/favorite', (req, res) => {
+  db.prepare('DELETE FROM document_favorites WHERE user_id = ? AND document_id = ?').run(req.user.id, req.params.id);
+  res.json({ success: true });
+});
+
+app.get('/api/documents/:id/change-logs', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  res.json(db.prepare(`
+    SELECT l.*, u.display_name as changed_by_name
+    FROM document_change_logs l
+    LEFT JOIN users u ON l.changed_by = u.id
+    WHERE l.document_id = ?
+    ORDER BY l.changed_at DESC, l.id DESC
+  `).all(doc.id));
+});
+
+app.post('/api/documents/:id/change-logs', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
+  if (!String(req.body.summary || '').trim()) return res.status(400).json({ error: '改动摘要必填' });
+  const version = req.body.version || doc.current_version || 'V1.0';
+  const result = db.prepare(`
+    INSERT INTO document_change_logs (document_id, version, changed_at, changed_by, summary, impact_scope, remark)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    doc.id,
+    version,
+    req.body.changed_at || new Date().toISOString(),
+    req.user.id,
+    String(req.body.summary).trim(),
+    req.body.impact_scope || null,
+    req.body.remark || null
+  );
+  db.prepare('UPDATE documents SET current_version = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(version, req.user.id, doc.id);
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/document-change-logs/:logId', canWrite, (req, res) => {
+  const log = db.prepare('SELECT * FROM document_change_logs WHERE id = ?').get(req.params.logId);
+  if (!log) return res.status(404).json({ error: '改动历史不存在' });
+  const doc = getVisibleDocument(log.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
+  if (!String(req.body.summary || '').trim()) return res.status(400).json({ error: '改动摘要必填' });
+  db.prepare(`
+    UPDATE document_change_logs SET
+      version = ?, changed_at = ?, summary = ?, impact_scope = ?, remark = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    req.body.version || log.version,
+    req.body.changed_at || log.changed_at,
+    String(req.body.summary).trim(),
+    req.body.impact_scope || null,
+    req.body.remark || null,
+    log.id
+  );
+  res.json({ success: true });
+});
+
+app.delete('/api/document-change-logs/:logId', canWrite, (req, res) => {
+  const log = db.prepare('SELECT * FROM document_change_logs WHERE id = ?').get(req.params.logId);
+  if (!log) return res.status(404).json({ error: '改动历史不存在' });
+  const doc = getVisibleDocument(log.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
+  db.prepare('DELETE FROM document_change_logs WHERE id = ?').run(log.id);
   res.json({ success: true });
 });
 
