@@ -809,6 +809,38 @@ function getEditRecordDiffItems(record) {
   }] : [];
 }
 
+function getVersionNumberParts(version) {
+  const matches = String(version || '').match(/\d+/g);
+  return matches ? matches.map(item => Number(item) || 0) : [];
+}
+
+function compareVersionTextDesc(a, b) {
+  const left = getVersionNumberParts(a);
+  const right = getVersionNumberParts(b);
+  const length = Math.max(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const diff = (right[index] || 0) - (left[index] || 0);
+    if (diff !== 0) return diff;
+  }
+  return String(b || '').localeCompare(String(a || ''));
+}
+
+function getChangeLogSortTime(log) {
+  const rawTime = log?.changed_at || log?.updated_at || log?.created_at;
+  const timestamp = rawTime ? dayjs(rawTime).valueOf() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortChangeLogsLatestFirst(logs = []) {
+  return [...logs].sort((a, b) => {
+    const timeDiff = getChangeLogSortTime(b) - getChangeLogSortTime(a);
+    if (timeDiff !== 0) return timeDiff;
+    const versionDiff = compareVersionTextDesc(a?.version, b?.version);
+    if (versionDiff !== 0) return versionDiff;
+    return Number(b?.id || 0) - Number(a?.id || 0);
+  });
+}
+
 export default function Documents() {
   const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
@@ -1520,7 +1552,7 @@ export default function Documents() {
 
   const openChangeLogs = () => {
     if (!selectedDoc) return;
-    const logs = selectedDoc.change_logs || [];
+    const logs = sortChangeLogsLatestFirst(selectedDoc.change_logs || []);
     changeLogForm.resetFields();
     setEditingChangeLog(null);
     setChangeLogFormOpen(false);
@@ -1604,7 +1636,7 @@ export default function Documents() {
   };
 
   const toggleAllChangeLogs = () => {
-    const logs = selectedDoc?.change_logs || [];
+    const logs = sortChangeLogsLatestFirst(selectedDoc?.change_logs || []);
     const allExpanded = logs.length > 0 && logs.every(item => expandedChangeLogIds.includes(item.id));
     setExpandedChangeLogIds(allExpanded ? [] : logs.map(item => item.id));
   };
@@ -2548,7 +2580,7 @@ export default function Documents() {
   };
 
   const renderChangeLogDrawer = () => {
-    const logs = selectedDoc?.change_logs || [];
+    const logs = sortChangeLogsLatestFirst(selectedDoc?.change_logs || []);
     const editRecords = selectedDoc?.edit_records || [];
     const allExpanded = logs.length > 0 && logs.every(item => expandedChangeLogIds.includes(item.id));
     const versionRecordPane = (

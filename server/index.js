@@ -3843,7 +3843,7 @@ app.get('/api/documents/:id', (req, res) => {
       FROM document_change_logs l
       LEFT JOIN users u ON l.changed_by = u.id
       WHERE l.document_id = ?
-      ORDER BY l.changed_at DESC, l.id DESC
+      ORDER BY datetime(COALESCE(l.changed_at, l.created_at)) DESC, l.id DESC
     `).all(row.id),
     edit_records: db.prepare(`
       SELECT e.*, u.display_name as edited_by_name
@@ -4076,7 +4076,7 @@ app.get('/api/documents/:id/change-logs', (req, res) => {
     FROM document_change_logs l
     LEFT JOIN users u ON l.changed_by = u.id
     WHERE l.document_id = ?
-    ORDER BY l.changed_at DESC, l.id DESC
+    ORDER BY datetime(COALESCE(l.changed_at, l.created_at)) DESC, l.id DESC
   `).all(doc.id));
 });
 
