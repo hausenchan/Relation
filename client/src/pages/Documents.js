@@ -1668,6 +1668,10 @@ export default function Documents() {
 
   const restoreEditRecord = async (record) => {
     if (!selectedDoc?.id || !record?.id) return;
+    if (!record.can_restore) {
+      message.warning('该页面编辑记录缺少可恢复快照，无法恢复');
+      return;
+    }
     setRestoringEditRecordId(record.id);
     try {
       await documentsApi.restoreEditRecord(record.id);
@@ -1684,6 +1688,10 @@ export default function Documents() {
 
   const confirmRestoreEditRecord = (record) => {
     if (!record?.id) return;
+    if (!record.can_restore) {
+      message.warning('该页面编辑记录缺少可恢复快照，无法恢复');
+      return;
+    }
     Modal.confirm({
       title: '恢复到此版本？',
       content: '确认后，当前文档标题和正文会被该页面编辑记录对应的版本覆盖，并生成一条新的页面编辑记录。',
@@ -2536,6 +2544,7 @@ export default function Documents() {
     const actorName = item.edited_by_name || '未知用户';
     const diffItems = getEditRecordDiffItems(item);
     const pageTitle = item.title_after || selectedDoc?.title || '未命名文档';
+    const canRestoreRecord = Boolean(item.can_restore);
     return (
       <List.Item style={{ padding: 0, borderBlockEnd: 'none' }}>
         <div style={{ display: 'flex', gap: 10, width: '100%' }}>
@@ -2557,19 +2566,22 @@ export default function Documents() {
               </Space>
               <Space size={4}>
                 {canManageSelectedDoc && (
-                  <Tooltip title="恢复到此版本">
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<RollbackOutlined />}
-                      loading={restoringEditRecordId === item.id}
-                      aria-label="恢复到此版本"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        confirmRestoreEditRecord(item);
-                      }}
-                      style={{ color: '#64748b' }}
-                    />
+                  <Tooltip title={canRestoreRecord ? '恢复到此版本' : '该记录缺少可恢复快照'}>
+                    <span>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<RollbackOutlined />}
+                        loading={restoringEditRecordId === item.id}
+                        disabled={!canRestoreRecord}
+                        aria-label="恢复到此版本"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          confirmRestoreEditRecord(item);
+                        }}
+                        style={{ color: canRestoreRecord ? '#64748b' : undefined }}
+                      />
+                    </span>
                   </Tooltip>
                 )}
                 <ClockCircleOutlined style={{ color: '#94a3b8', marginTop: 5 }} />

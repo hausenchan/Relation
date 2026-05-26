@@ -3422,6 +3422,55 @@ function insertDocumentEditRecord(documentId, userId, actionType, before, after)
   );
 }
 
+function hasDocumentSnapshotContent(value) {
+  return value !== undefined && value !== null && String(value) !== '';
+}
+
+function resolveDocumentEditRecordRestoreSnapshot(record, documentRow) {
+  if (!record) return null;
+  if (hasDocumentSnapshotContent(record.content_after)) {
+    const content = record.content_after;
+    return {
+      title: record.title_after || documentRow?.title || '未命名文档',
+      content,
+      content_text: record.content_text_after || extractDocumentText(content),
+    };
+  }
+
+  const nextRecord = db.prepare(`
+    SELECT title_before, content_before, content_text_before
+    FROM document_edit_records
+    WHERE document_id = ? AND id > ?
+      AND content_before IS NOT NULL AND content_before <> ''
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(record.document_id, record.id);
+  if (hasDocumentSnapshotContent(nextRecord?.content_before)) {
+    const content = nextRecord.content_before;
+    return {
+      title: nextRecord.title_before || record.title_after || documentRow?.title || '未命名文档',
+      content,
+      content_text: nextRecord.content_text_before || record.content_text_after || extractDocumentText(content),
+    };
+  }
+
+  const latestRecord = db.prepare(`
+    SELECT id FROM document_edit_records
+    WHERE document_id = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(record.document_id);
+  if (Number(latestRecord?.id) === Number(record.id) && hasDocumentSnapshotContent(documentRow?.content)) {
+    return {
+      title: record.title_after || documentRow.title || '未命名文档',
+      content: documentRow.content,
+      content_text: record.content_text_after || documentRow.content_text || extractDocumentText(documentRow.content),
+    };
+  }
+
+  return null;
+}
+
 function formatDocumentNo(seq, projectCode, departmentKey, docType, year) {
   const seqText = String(seq).padStart(6, '0');
   return [
@@ -3644,7 +3693,7 @@ function serializeDocument(row, options = {}) {
   return result;
 }
 
-function serializeDocumentEditRecord(row) {
+function serializeDocumentEditRecord(row, options = {}) {
   if (!row) return null;
   const {
     content_before,
@@ -3655,7 +3704,7 @@ function serializeDocumentEditRecord(row) {
   } = row;
   return {
     ...rest,
-    can_restore: Boolean(content_after),
+    can_restore: Boolean(resolveDocumentEditRecordRestoreSnapshot(row, options.document)),
     diff: parseMaybeJson(row.diff_json, { items: [] }),
   };
 }
@@ -3852,7 +3901,7 @@ app.get('/api/documents/:id', (req, res) => {
       WHERE e.document_id = ?
       ORDER BY datetime(COALESCE(e.edited_at, e.created_at)) DESC, e.id DESC
       LIMIT 80
-    `).all(row.id).map(serializeDocumentEditRecord),
+    `).all(row.id).map(editRecord => serializeDocumentEditRecord(editRecord, { document: row })),
   });
 });
 
@@ -3947,11 +3996,12 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
   const doc = getVisibleDocument(record.document_id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以恢复文档版本' });
-  if (!record.content_after) return res.status(400).json({ error: '该页面编辑记录缺少可恢复快照' });
+  const restoreSnapshot = resolveDocumentEditRecordRestoreSnapshot(record, doc);
+  if (!restoreSnapshot) return res.status(400).json({ error: '该页面编辑记录缺少可恢复快照，无法恢复' });
 
-  const targetTitle = record.title_after || doc.title || '未命名文档';
-  const targetContent = record.content_after;
-  const targetContentText = record.content_text_after || extractDocumentText(targetContent);
+  const targetTitle = restoreSnapshot.title;
+  const targetContent = restoreSnapshot.content;
+  const targetContentText = restoreSnapshot.content_text;
   const beforeSnapshot = {
     title: doc.title,
     content: doc.content,
