@@ -2904,9 +2904,9 @@ export default function Documents() {
                     expandedKeys={folderTreeExpandedKeys}
                     selectedKeys={selectedTreeKeys}
                     treeData={folderTree}
-                    switcherIcon={({ expanded, isLeaf }) => {
+                    switcherIcon={({ isLeaf }) => {
                       if (isLeaf) return null;
-                      return expanded ? <DownOutlined /> : <RightOutlined />;
+                      return <DownOutlined />;
                     }}
                     onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
                     onSelect={(keys, info) => {
@@ -2975,39 +2975,53 @@ export default function Documents() {
                     创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {selectedDoc.updated_at?.slice(0, 16) || '-'}
                   </Text>
                 </Space>
-                <Space wrap>
-                  <Button
-                    icon={<MenuOutlined />}
-                    disabled={!asSwitchValue(selectedDoc?.toc_enabled, true)}
-                    onClick={() => setTocOpen(prev => !prev)}
-                  >
-                    目录
-                  </Button>
-                  <Dropdown
-                    trigger={['click']}
-                    open={pageMenuOpen}
-                    onOpenChange={setPageMenuOpen}
-                    dropdownRender={renderPageMenu}
-                  >
-                    <Button icon={<MoreOutlined />}>页面</Button>
-                  </Dropdown>
+                <Space wrap size={6}>
+                  <Tooltip title="目录">
+                    <span>
+                      <Button
+                        icon={<MenuOutlined />}
+                        disabled={!asSwitchValue(selectedDoc?.toc_enabled, true)}
+                        onClick={() => setTocOpen(prev => !prev)}
+                        aria-label="目录"
+                      />
+                    </span>
+                  </Tooltip>
+                  <Tooltip title="页面">
+                    <span>
+                      <Dropdown
+                        trigger={['click']}
+                        open={pageMenuOpen}
+                        onOpenChange={setPageMenuOpen}
+                        dropdownRender={renderPageMenu}
+                      >
+                        <Button icon={<MoreOutlined />} aria-label="页面" />
+                      </Dropdown>
+                    </span>
+                  </Tooltip>
                   <Tooltip title="演示模式">
                     <Button icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode} aria-label="演示模式" />
                   </Tooltip>
-                  <Button icon={<ShareAltOutlined />} onClick={openShare}>
-                    共享 · {selectedDoc.access_summary?.label || '仅自己'}
-                  </Button>
+                  <Tooltip title={`共享 · ${selectedDoc.access_summary?.label || '仅自己'}`}>
+                    <Button icon={<ShareAltOutlined />} onClick={openShare} aria-label={`共享 · ${selectedDoc.access_summary?.label || '仅自己'}`} />
+                  </Tooltip>
                   <Tooltip title="改动历史">
                     <Button icon={<HistoryOutlined />} onClick={openChangeLogs} aria-label="改动历史" />
                   </Tooltip>
-                  <Button
-                    icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
-                    onClick={() => toggleFavorite(selectedDoc)}
-                  />
-                  <Popconfirm title="确认删除该文档？" onConfirm={handleDelete} okText="删除" cancelText="取消">
-                    <Button danger icon={<DeleteOutlined />} />
-                  </Popconfirm>
-                  <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave}>保存</Button>
+                  <Tooltip title={selectedDoc.is_favorite ? '取消收藏' : '收藏'}>
+                    <Button
+                      icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
+                      onClick={() => toggleFavorite(selectedDoc)}
+                      aria-label={selectedDoc.is_favorite ? '取消收藏' : '收藏'}
+                    />
+                  </Tooltip>
+                  <Tooltip title="删除">
+                    <Popconfirm title="确认删除该文档？" onConfirm={handleDelete} okText="删除" cancelText="取消">
+                      <Button danger icon={<DeleteOutlined />} aria-label="删除" />
+                    </Popconfirm>
+                  </Tooltip>
+                  <Tooltip title="保存">
+                    <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" />
+                  </Tooltip>
                 </Space>
               </div>
 
