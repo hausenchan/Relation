@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Checkbox,
+  Descriptions,
   Divider,
   Drawer,
   Dropdown,
@@ -31,8 +32,12 @@ import {
   DownOutlined,
   FileTextOutlined,
   FolderOutlined,
+  HistoryOutlined,
+  MenuFoldOutlined,
   MenuOutlined,
+  MenuUnfoldOutlined,
   MoreOutlined,
+  PlusCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
@@ -351,10 +356,14 @@ export default function Documents() {
   const [shareLoading, setShareLoading] = useState(false);
   const [shareSaving, setShareSaving] = useState(false);
   const [shareDraft, setShareDraft] = useState(emptyShareDraft());
+  const [changeLogOpen, setChangeLogOpen] = useState(false);
+  const [changeLogSaving, setChangeLogSaving] = useState(false);
   const [tocOpen, setTocOpen] = useState(false);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(false);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
+  const [changeLogForm] = Form.useForm();
 
   const selectedFolder = useMemo(
     () => folders.find(folder => Number(folder.id) === Number(selectedFolderId)),
@@ -370,6 +379,7 @@ export default function Documents() {
     () => editorBlocks.find(block => block.id === selectedBlockId) || editorBlocks[0],
     [editorBlocks, selectedBlockId]
   );
+  const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
 
   const focusBlock = (id) => {
     window.setTimeout(() => {
@@ -433,6 +443,12 @@ export default function Documents() {
     } finally {
       setDetailLoading(false);
     }
+  };
+
+  const refreshSelectedDocMeta = async () => {
+    if (!selectedDoc?.id) return;
+    const detail = await documentsApi.get(selectedDoc.id);
+    setSelectedDoc(prev => ({ ...prev, ...detail }));
   };
 
   useEffect(() => {
@@ -558,6 +574,44 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '保存共享范围失败');
     } finally {
       setShareSaving(false);
+    }
+  };
+
+  const openChangeLogs = () => {
+    if (!selectedDoc) return;
+    changeLogForm.resetFields();
+    changeLogForm.setFieldsValue({
+      version: selectedDoc.current_version || 'V1.0',
+    });
+    setChangeLogOpen(true);
+  };
+
+  const createChangeLog = async () => {
+    if (!selectedDoc) return;
+    try {
+      const values = await changeLogForm.validateFields();
+      setChangeLogSaving(true);
+      await documentsApi.createChangeLog(selectedDoc.id, values);
+      changeLogForm.resetFields();
+      changeLogForm.setFieldsValue({ version: values.version || selectedDoc.current_version || 'V1.0' });
+      await refreshSelectedDocMeta();
+      await loadDocuments();
+      message.success('改动历史已添加');
+    } catch (err) {
+      if (err?.errorFields) return;
+      message.error(err.response?.data?.error || err.message || '添加改动历史失败');
+    } finally {
+      setChangeLogSaving(false);
+    }
+  };
+
+  const deleteChangeLog = async (logId) => {
+    try {
+      await documentsApi.deleteChangeLog(logId);
+      await refreshSelectedDocMeta();
+      message.success('改动历史已删除');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '删除改动历史失败');
     }
   };
 
@@ -891,6 +945,90 @@ export default function Documents() {
     </Spin>
   );
 
+  const renderChangeLogDrawer = () => (
+    <Drawer
+      title="改动历史"
+      placement="right"
+      open={changeLogOpen}
+      onClose={() => setChangeLogOpen(false)}
+      width={isMobile ? '92vw' : 520}
+    >
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Descriptions bordered size="small" column={1}>
+          <Descriptions.Item label="文档编号">{selectedDoc?.document_no || '-'}</Descriptions.Item>
+          <Descriptions.Item label="当前版本">{selectedDoc?.current_version || 'V1.0'}</Descriptions.Item>
+          <Descriptions.Item label="创建人">{selectedDoc?.created_by_name || '-'}</Descriptions.Item>
+          <Descriptions.Item label="最后编辑">{selectedDoc?.updated_by_name || selectedDoc?.created_by_name || '-'}</Descriptions.Item>
+        </Descriptions>
+
+        <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 8 }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <Text strong>新增改动记录</Text>
+            <Form form={changeLogForm} layout="vertical">
+              <Form.Item name="version" label="版本号" rules={[{ required: true, message: '请输入版本号' }]}>
+                <Input placeholder="例如 V1.1" />
+              </Form.Item>
+              <Form.Item name="summary" label="改动摘要" rules={[{ required: true, message: '请输入改动摘要' }]}>
+                <Input placeholder="例如 更新 SOP 操作步骤" />
+              </Form.Item>
+              <Form.Item name="impact_scope" label="影响范围">
+                <Input placeholder="例如 产运部/商务部/全部项目组" />
+              </Form.Item>
+              <Form.Item name="remark" label="备注">
+                <TextArea autoSize={{ minRows: 2 }} placeholder="补充变更原因、注意事项或回滚说明" />
+              </Form.Item>
+            </Form>
+            <Button type="primary" icon={<PlusCircleOutlined />} loading={changeLogSaving} onClick={createChangeLog}>
+              添加记录
+            </Button>
+          </Space>
+        </div>
+
+        <div>
+          <Text strong>历史记录</Text>
+          <List
+            dataSource={selectedDoc?.change_logs || []}
+            style={{ marginTop: 8 }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无改动历史" /> }}
+            renderItem={item => (
+              <List.Item
+                actions={[
+                  <Popconfirm
+                    key="delete"
+                    title="删除这条改动历史？"
+                    onConfirm={() => deleteChangeLog(item.id)}
+                    okText="删除"
+                    cancelText="取消"
+                  >
+                    <Button type="link" size="small" danger>删除</Button>
+                  </Popconfirm>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={
+                    <Space size={8} wrap>
+                      <Tag color="blue">{item.version || 'V1.0'}</Tag>
+                      <Text strong>{item.summary}</Text>
+                    </Space>
+                  }
+                  description={
+                    <Space direction="vertical" size={2}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {item.changed_by_name || '-'} · {String(item.changed_at || item.created_at || '').slice(0, 16) || '-'}
+                      </Text>
+                      {item.impact_scope && <Text type="secondary">影响范围：{item.impact_scope}</Text>}
+                      {item.remark && <Text>{item.remark}</Text>}
+                    </Space>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        </div>
+      </Space>
+    </Drawer>
+  );
+
   const renderBlockToolbar = () => {
     if (!selectedDoc || !selectedBlock) return null;
     const selectedIndex = editorBlocks.findIndex(block => block.id === selectedBlock.id);
@@ -1095,89 +1233,119 @@ export default function Documents() {
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 120px)', minHeight: 640, flexDirection: isMobile ? 'column' : 'row' }}>
       <aside style={{
-        width: isMobile ? '100%' : 340,
-        minWidth: isMobile ? '100%' : 320,
+        width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 40 : 340),
+        minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 40 : 320),
         borderRight: isMobile ? 'none' : '1px solid #f0f0f0',
-        paddingRight: isMobile ? 0 : 16,
-        overflow: 'auto',
+        paddingRight: isMobile ? 0 : (isFolderSidebarCollapsed ? 8 : 16),
+        overflow: isFolderSidebarCollapsed ? 'hidden' : 'auto',
+        transition: 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease',
       }}>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-            <Title level={4} style={{ margin: 0 }}>文档中心</Title>
-            <Space size={6}>
-              <Tooltip title="刷新">
-                <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); }} />
-              </Tooltip>
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建</Button>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <Space size={8} align="center" style={{ minWidth: 0 }}>
+              {!isMobile && (
+                <Tooltip title={isFolderSidebarCollapsed ? '展开文档目录' : '收起文档目录'}>
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label={isFolderSidebarCollapsed ? '展开文档目录' : '收起文档目录'}
+                    aria-expanded={!isFolderSidebarCollapsed}
+                    icon={isFolderSidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                    onClick={() => setFolderSidebarCollapsed(prev => !prev)}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      color: '#6b7280',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flex: '0 0 auto',
+                    }}
+                  />
+                </Tooltip>
+              )}
+              {!isFolderSidebarCollapsed && <Title level={4} style={{ margin: 0 }}>文档中心</Title>}
             </Space>
-          </div>
-
-          <Select
-            value={domainFilter}
-            options={domainOptions}
-            onChange={(value) => {
-              setDomainFilter(value);
-              setSelectedFolderId(null);
-              setSopOnly(false);
-            }}
-            style={{ width: '100%' }}
-          />
-
-          <Input.Search
-            allowClear
-            placeholder="搜索标题、编号、正文"
-            value={keyword}
-            onChange={event => setKeyword(event.target.value)}
-          />
-
-          <Space size={8} wrap>
-            <Button
-              type={sopOnly ? 'primary' : 'default'}
-              size="small"
-              icon={<FileTextOutlined />}
-              onClick={() => {
-                setSopOnly(!sopOnly);
-                setSelectedFolderId(null);
-              }}
-            >
-              SOP 总库
-            </Button>
-            <Button size="small" icon={<FolderOutlined />} onClick={() => setTemplateOpen(true)}>初始化目录</Button>
-          </Space>
-
-          <div>
-            <Text type="secondary" style={{ fontSize: 12 }}>目录</Text>
-            {folderTree.length ? (
-              <Tree
-                showIcon
-                defaultExpandAll
-                selectedKeys={selectedFolderId ? [`folder-${selectedFolderId}`] : []}
-                treeData={folderTree}
-                onSelect={(keys) => {
-                  const key = keys[0];
-                  if (typeof key === 'string' && key.startsWith('folder-')) {
-                    setSelectedFolderId(Number(key.replace('folder-', '')));
-                    setSopOnly(false);
-                  }
-                }}
-                style={{ marginTop: 8, background: 'transparent' }}
-              />
-            ) : (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无目录" />
+            {!isFolderSidebarCollapsed && (
+              <Space size={6}>
+                <Tooltip title="刷新">
+                  <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); }} />
+                </Tooltip>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建</Button>
+              </Space>
             )}
           </div>
 
-          <div>
-            <Text type="secondary" style={{ fontSize: 12 }}>文档</Text>
-            <Spin spinning={loading}>
-              <List
-                dataSource={documents}
-                renderItem={renderDocItem}
-                locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文档" /> }}
-                style={{ marginTop: 8 }}
+          {!isFolderSidebarCollapsed && (
+            <>
+              <Select
+                value={domainFilter}
+                options={domainOptions}
+                onChange={(value) => {
+                  setDomainFilter(value);
+                  setSelectedFolderId(null);
+                  setSopOnly(false);
+                }}
+                style={{ width: '100%' }}
               />
-            </Spin>
-          </div>
+
+              <Input.Search
+                allowClear
+                placeholder="搜索标题、编号、正文"
+                value={keyword}
+                onChange={event => setKeyword(event.target.value)}
+              />
+
+              <Space size={8} wrap>
+                <Button
+                  type={sopOnly ? 'primary' : 'default'}
+                  size="small"
+                  icon={<FileTextOutlined />}
+                  onClick={() => {
+                    setSopOnly(!sopOnly);
+                    setSelectedFolderId(null);
+                  }}
+                >
+                  SOP 总库
+                </Button>
+                <Button size="small" icon={<FolderOutlined />} onClick={() => setTemplateOpen(true)}>初始化目录</Button>
+              </Space>
+
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>目录</Text>
+                {folderTree.length ? (
+                  <Tree
+                    showIcon
+                    defaultExpandAll
+                    selectedKeys={selectedFolderId ? [`folder-${selectedFolderId}`] : []}
+                    treeData={folderTree}
+                    onSelect={(keys) => {
+                      const key = keys[0];
+                      if (typeof key === 'string' && key.startsWith('folder-')) {
+                        setSelectedFolderId(Number(key.replace('folder-', '')));
+                        setSopOnly(false);
+                      }
+                    }}
+                    style={{ marginTop: 8, background: 'transparent' }}
+                  />
+                ) : (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无目录" />
+                )}
+              </div>
+
+              <div>
+                <Text type="secondary" style={{ fontSize: 12 }}>文档</Text>
+                <Spin spinning={loading}>
+                  <List
+                    dataSource={documents}
+                    renderItem={renderDocItem}
+                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文档" /> }}
+                    style={{ marginTop: 8 }}
+                  />
+                </Spin>
+              </div>
+            </>
+          )}
         </Space>
       </aside>
 
@@ -1220,6 +1388,9 @@ export default function Documents() {
                   </Dropdown>
                   <Button icon={<ShareAltOutlined />} onClick={openShare}>
                     共享 · {selectedDoc.access_summary?.label || '仅自己'}
+                  </Button>
+                  <Button icon={<HistoryOutlined />} onClick={openChangeLogs}>
+                    改动历史
                   </Button>
                   <Button
                     icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
@@ -1313,6 +1484,8 @@ export default function Documents() {
       >
         {renderShareSelector()}
       </Modal>
+
+      {renderChangeLogDrawer()}
 
       <Modal
         title="新建文档"
