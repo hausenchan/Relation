@@ -489,10 +489,13 @@ export default function Strategies() {
     );
   };
 
-  const renderExecutionSummary = (record, compact = false) => {
+  const renderExecutionSummary = (record, options = {}) => {
+    const { compact = false, showType = false } = options;
     const actionDesc = cleanDisplayText(record.action_desc);
     const observation = cleanDisplayText(record.observation);
+    const actionType = actionTypeMap[record.action_type] || record.action_type || '-';
     const title = [
+      showType ? `类型：${actionType}` : '',
       actionDesc ? `动作：${actionDesc}` : '',
       observation ? `结果：${observation}` : '',
     ].filter(Boolean).join('\n');
@@ -500,6 +503,12 @@ export default function Strategies() {
     return (
       <Tooltip title={title || null} placement="topLeft">
         <div className="execution-summary">
+          {showType && (
+            <Space size={6} wrap style={{ marginBottom: 3 }}>
+              <Tag color="blue" style={{ margin: 0 }}>{actionType}</Tag>
+              {renderAttachmentMark(record)}
+            </Space>
+          )}
           <Typography.Paragraph
             ellipsis={{ rows: compact ? 1 : 2, expandable: false }}
             style={{ marginBottom: observation ? 4 : 0, color: '#1f2937', fontWeight: 500, lineHeight: 1.5 }}
@@ -1276,33 +1285,33 @@ export default function Strategies() {
                           dataSource={selectedStrategy.executionLogs || []}
                           rowKey="id"
                           size="small"
+                          tableLayout="fixed"
                           pagination={false}
                           columns={[
-                            { title: '执行日期', dataIndex: 'execute_date', key: 'execute_date', width: 108 },
-                            { title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 96 },
-                            { title: '动作类型', dataIndex: 'action_type', key: 'action_type', width: 116, render: (val) => actionTypeMap[val] || val },
+                            { title: '执行日期', dataIndex: 'execute_date', key: 'execute_date', width: 96 },
+                            { title: '执行人', dataIndex: 'executor_name', key: 'executor_name', width: 78, ellipsis: true },
                             {
                               title: '执行摘要',
                               key: 'summary',
-                              render: (_, record) => renderExecutionSummary(record),
+                              render: (_, record) => renderExecutionSummary(record, { compact: true, showType: true }),
                             },
-                            {
-                              title: '附件',
-                              key: 'attachments',
-                              width: 70,
-                              align: 'center',
-                              render: (_, record) => renderAttachmentMark(record) || <Text type="secondary">-</Text>,
-                            },
-                            { title: '状态', dataIndex: 'continue_flag', key: 'continue_flag', width: 76, render: renderContinueTag },
+                            { title: '状态', dataIndex: 'continue_flag', key: 'continue_flag', width: 58, align: 'center', render: renderContinueTag },
                             {
                               title: '操作',
                               key: 'action',
-                              width: 156,
+                              width: 98,
+                              align: 'center',
                               render: (_, record) => (
-                                <Space size="small" className="execution-inline-actions" onDoubleClick={(event) => event.stopPropagation()}>
-                                  <Button type="link" size="small" icon={<FileSearchOutlined />} onClick={(event) => { event.stopPropagation(); openLogDetail(record); }}>查看</Button>
-                                  <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditLog(record); }}>编辑</Button>
-                                  <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDeleteLog(record.id); }}>删除</Button>
+                                <Space size={0} className="execution-inline-actions" onDoubleClick={(event) => event.stopPropagation()}>
+                                  <Tooltip title="查看详情">
+                                    <Button type="text" size="small" icon={<FileSearchOutlined />} onClick={(event) => { event.stopPropagation(); openLogDetail(record); }} />
+                                  </Tooltip>
+                                  <Tooltip title="编辑">
+                                    <Button type="text" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditLog(record); }} />
+                                  </Tooltip>
+                                  <Tooltip title="删除">
+                                    <Button type="text" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDeleteLog(record.id); }} />
+                                  </Tooltip>
                                 </Space>
                               ),
                             },

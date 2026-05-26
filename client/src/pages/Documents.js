@@ -4,7 +4,6 @@ import {
   Avatar,
   Checkbox,
   DatePicker,
-  Descriptions,
   Divider,
   Drawer,
   Dropdown,
@@ -399,6 +398,7 @@ export default function Documents() {
   const [editorBlocks, setEditorBlocks] = useState([createBlock()]);
   const [selectedBlockId, setSelectedBlockId] = useState(null);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
+  const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
   const [domainFilter, setDomainFilter] = useState('all');
   const [keyword, setKeyword] = useState('');
   const [selectedFolderId, setSelectedFolderId] = useState(null);
@@ -437,6 +437,9 @@ export default function Documents() {
     [editorBlocks, selectedDoc?.title_numbering_enabled]
   );
   const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
+  const canManageSelectedDoc = Boolean(
+    currentUser && selectedDoc && (isDocumentAdminUser(currentUser) || Number(selectedDoc.created_by) === Number(currentUser.id))
+  );
 
   const focusBlock = (id) => {
     window.setTimeout(() => {
@@ -648,39 +651,102 @@ export default function Documents() {
 
   const openChangeLogs = () => {
     if (!selectedDoc) return;
+    const logs = selectedDoc.change_logs || [];
     changeLogForm.resetFields();
-    changeLogForm.setFieldsValue({
-      version: selectedDoc.current_version || 'V1.0',
-    });
+    setEditingChangeLog(null);
+    setChangeLogFormOpen(false);
+    setExpandedChangeLogIds(logs[0]?.id ? [logs[0].id] : []);
     setChangeLogOpen(true);
   };
 
-  const createChangeLog = async () => {
+  const openCreateChangeLog = () => {
+    if (!selectedDoc) return;
+    setEditingChangeLog(null);
+    changeLogForm.resetFields();
+    changeLogForm.setFieldsValue({
+      version: selectedDoc.current_version || 'V1.0',
+      changed_at: dayjs(),
+    });
+    setChangeLogFormOpen(true);
+  };
+
+  const openEditChangeLog = (log) => {
+    setEditingChangeLog(log);
+    changeLogForm.resetFields();
+    changeLogForm.setFieldsValue({
+      version: log.version || selectedDoc?.current_version || 'V1.0',
+      changed_at: log.changed_at ? dayjs(log.changed_at) : dayjs(),
+      summary: log.summary || '',
+      detail: log.detail || '',
+      impact_scope: log.impact_scope || '',
+      remark: log.remark || '',
+    });
+    setExpandedChangeLogIds(prev => (prev.includes(log.id) ? prev : [...prev, log.id]));
+    setChangeLogFormOpen(true);
+  };
+
+  const closeChangeLogEditor = () => {
+    setEditingChangeLog(null);
+    setChangeLogFormOpen(false);
+    changeLogForm.resetFields();
+  };
+
+  const serializeChangeLogPayload = (values) => ({
+    ...values,
+    changed_at: values.changed_at ? values.changed_at.format('YYYY-MM-DD HH:mm:ss') : undefined,
+    detail_text: values.detail ? String(values.detail).trim() : '',
+  });
+
+  const saveChangeLog = async () => {
     if (!selectedDoc) return;
     try {
       const values = await changeLogForm.validateFields();
       setChangeLogSaving(true);
-      await documentsApi.createChangeLog(selectedDoc.id, values);
-      changeLogForm.resetFields();
-      changeLogForm.setFieldsValue({ version: values.version || selectedDoc.current_version || 'V1.0' });
+      const payload = serializeChangeLogPayload(values);
+      const result = editingChangeLog
+        ? await documentsApi.updateChangeLog(editingChangeLog.id, payload)
+        : await documentsApi.createChangeLog(selectedDoc.id, payload);
+      if (!editingChangeLog && result?.id) {
+        setExpandedChangeLogIds(prev => [result.id, ...prev.filter(id => id !== result.id)]);
+      }
+      closeChangeLogEditor();
       await refreshSelectedDocMeta();
       await loadDocuments();
-      message.success('改动历史已添加');
+      message.success(editingChangeLog ? '页面编辑记录已更新' : '页面编辑记录已添加');
     } catch (err) {
       if (err?.errorFields) return;
-      message.error(err.response?.data?.error || err.message || '添加改动历史失败');
+      message.error(err.response?.data?.error || err.message || '保存页面编辑记录失败');
     } finally {
       setChangeLogSaving(false);
     }
   };
 
+  const canEditChangeLog = (log) => (
+    canManageSelectedDoc || (currentUser && Number(log?.changed_by) === Number(currentUser.id))
+  );
+
+  const canDeleteChangeLog = () => canManageSelectedDoc;
+
+  const toggleChangeLogExpanded = (logId) => {
+    setExpandedChangeLogIds(prev => (
+      prev.includes(logId) ? prev.filter(id => id !== logId) : [...prev, logId]
+    ));
+  };
+
+  const toggleAllChangeLogs = () => {
+    const logs = selectedDoc?.change_logs || [];
+    const allExpanded = logs.length > 0 && logs.every(item => expandedChangeLogIds.includes(item.id));
+    setExpandedChangeLogIds(allExpanded ? [] : logs.map(item => item.id));
+  };
+
   const deleteChangeLog = async (logId) => {
     try {
       await documentsApi.deleteChangeLog(logId);
+      setExpandedChangeLogIds(prev => prev.filter(id => id !== logId));
       await refreshSelectedDocMeta();
-      message.success('改动历史已删除');
+      message.success('页面编辑记录已删除');
     } catch (err) {
-      message.error(err.response?.data?.error || err.message || '删除改动历史失败');
+      message.error(err.response?.data?.error || err.message || '删除页面编辑记录失败');
     }
   };
 
@@ -1093,89 +1159,190 @@ export default function Documents() {
     );
   };
 
-  const renderChangeLogDrawer = () => (
-    <Drawer
-      title="改动历史"
-      placement="right"
-      open={changeLogOpen}
-      onClose={() => setChangeLogOpen(false)}
-      width={isMobile ? '92vw' : 520}
-    >
-      <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Descriptions bordered size="small" column={1}>
-          <Descriptions.Item label="文档编号">{selectedDoc?.document_no || '-'}</Descriptions.Item>
-          <Descriptions.Item label="当前版本">{selectedDoc?.current_version || 'V1.0'}</Descriptions.Item>
-          <Descriptions.Item label="创建人">{selectedDoc?.created_by_name || '-'}</Descriptions.Item>
-          <Descriptions.Item label="最后编辑">{selectedDoc?.updated_by_name || selectedDoc?.created_by_name || '-'}</Descriptions.Item>
-        </Descriptions>
-
-        <div style={{ padding: 12, border: '1px solid #f0f0f0', borderRadius: 8 }}>
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <Text strong>新增改动记录</Text>
-            <Form form={changeLogForm} layout="vertical">
-              <Form.Item name="version" label="版本号" rules={[{ required: true, message: '请输入版本号' }]}>
-                <Input placeholder="例如 V1.1" />
-              </Form.Item>
-              <Form.Item name="summary" label="改动摘要" rules={[{ required: true, message: '请输入改动摘要' }]}>
-                <Input placeholder="例如 更新 SOP 操作步骤" />
-              </Form.Item>
-              <Form.Item name="impact_scope" label="影响范围">
-                <Input placeholder="例如 产运部/商务部/全部项目组" />
-              </Form.Item>
-              <Form.Item name="remark" label="备注">
-                <TextArea autoSize={{ minRows: 2 }} placeholder="补充变更原因、注意事项或回滚说明" />
-              </Form.Item>
-            </Form>
-            <Button type="primary" icon={<PlusCircleOutlined />} loading={changeLogSaving} onClick={createChangeLog}>
-              添加记录
+  const renderChangeLogEditor = () => {
+    if (!changeLogFormOpen) return null;
+    return (
+      <div style={{ padding: 14, border: '1px solid #dbeafe', background: '#f8fbff', borderRadius: 8 }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Text strong>{editingChangeLog ? '编辑页面编辑记录' : '新增页面编辑记录'}</Text>
+          <Form form={changeLogForm} layout="vertical">
+            <Form.Item name="version" label="版本号" rules={[{ required: true, message: '请输入版本号' }]}>
+              <Input placeholder="例如 V1.1" />
+            </Form.Item>
+            <Form.Item name="changed_at" label="更新时间">
+              <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item name="summary" label="改动摘要" rules={[{ required: true, message: '请输入改动摘要' }]}>
+              <Input placeholder="例如 调整开户 SOP 的审核步骤" />
+            </Form.Item>
+            <Form.Item name="detail" label="详细改动内容">
+              <TextArea autoSize={{ minRows: 3 }} placeholder="逐条写清本次新增、删除或调整的内容" />
+            </Form.Item>
+            <Form.Item name="impact_scope" label="影响范围">
+              <Input placeholder="例如 投放流程 / 开户 SOP / 全部项目组" />
+            </Form.Item>
+            <Form.Item name="remark" label="备注">
+              <TextArea autoSize={{ minRows: 2 }} placeholder="补充变更原因、注意事项或回滚说明" />
+            </Form.Item>
+          </Form>
+          <Space>
+            <Button type="primary" icon={<PlusCircleOutlined />} loading={changeLogSaving} onClick={saveChangeLog}>
+              {editingChangeLog ? '保存记录' : '添加记录'}
             </Button>
+            <Button onClick={closeChangeLogEditor}>取消</Button>
           </Space>
-        </div>
+        </Space>
+      </div>
+    );
+  };
 
-        <div>
-          <Text strong>历史记录</Text>
-          <List
-            dataSource={selectedDoc?.change_logs || []}
-            style={{ marginTop: 8 }}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无改动历史" /> }}
-            renderItem={item => (
-              <List.Item
-                actions={[
-                  <Popconfirm
-                    key="delete"
-                    title="删除这条改动历史？"
-                    onConfirm={() => deleteChangeLog(item.id)}
-                    okText="删除"
-                    cancelText="取消"
-                  >
-                    <Button type="link" size="small" danger>删除</Button>
-                  </Popconfirm>,
-                ]}
-              >
-                <List.Item.Meta
-                  title={
-                    <Space size={8} wrap>
-                      <Tag color="blue">{item.version || 'V1.0'}</Tag>
-                      <Text strong>{item.summary}</Text>
-                    </Space>
-                  }
-                  description={
-                    <Space direction="vertical" size={2}>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        {item.changed_by_name || '-'} · {String(item.changed_at || item.created_at || '').slice(0, 16) || '-'}
-                      </Text>
-                      {item.impact_scope && <Text type="secondary">影响范围：{item.impact_scope}</Text>}
-                      {item.remark && <Text>{item.remark}</Text>}
-                    </Space>
-                  }
-                />
-              </List.Item>
+  const renderChangeLogItem = (item) => {
+    const expanded = expandedChangeLogIds.includes(item.id);
+    const actorName = item.changed_by_name || '未知用户';
+    const canEdit = canEditChangeLog(item);
+    const canDelete = canDeleteChangeLog(item);
+    return (
+      <List.Item style={{ padding: 0, borderBlockEnd: 'none' }}>
+        <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+          <div style={{ position: 'relative', width: 34, display: 'flex', justifyContent: 'center' }}>
+            <div style={{ position: 'absolute', top: 34, bottom: -16, width: 1, background: '#e5e7eb' }} />
+            <Avatar size={32} style={{ background: '#1677ff', zIndex: 1 }}>
+              {actorName.slice(0, 1).toUpperCase()}
+            </Avatar>
+          </div>
+          <div style={{ flex: 1, minWidth: 0, border: '1px solid #eef2f7', borderRadius: 8, padding: 12, background: '#fff' }}>
+            <div
+              onClick={() => toggleChangeLogExpanded(item.id)}
+              style={{ display: 'flex', gap: 8, justifyContent: 'space-between', cursor: 'pointer' }}
+            >
+              <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
+                <Space size={8} wrap>
+                  <Text strong>{actorName}</Text>
+                  <Text type="secondary">编辑了页面</Text>
+                  <Tag color="blue">{item.version || 'V1.0'}</Tag>
+                </Space>
+                <Text strong ellipsis={{ tooltip: item.summary }}>{item.summary || '未填写摘要'}</Text>
+                <Space size={6} wrap>
+                  <ClockCircleOutlined style={{ color: '#94a3b8' }} />
+                  <Text type="secondary" style={{ fontSize: 12 }}>{formatChangeLogTime(item.changed_at || item.created_at)}</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{selectedDoc?.title || '-'}</Text>
+                </Space>
+              </Space>
+              <Button
+                type="text"
+                size="small"
+                icon={expanded ? <UpOutlined /> : <DownOutlined />}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleChangeLogExpanded(item.id);
+                }}
+              />
+            </div>
+
+            {expanded && (
+              <Space direction="vertical" size={10} style={{ width: '100%', marginTop: 12 }}>
+                <div>
+                  <Text type="secondary" style={{ fontSize: 12 }}>改动摘要</Text>
+                  <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{item.summary || '-'}</div>
+                </div>
+                {item.detail && (
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>详细改动内容</Text>
+                    <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{item.detail}</div>
+                  </div>
+                )}
+                {item.impact_scope && (
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>影响范围</Text>
+                    <div style={{ marginTop: 4 }}>{item.impact_scope}</div>
+                  </div>
+                )}
+                {item.remark && (
+                  <div>
+                    <Text type="secondary" style={{ fontSize: 12 }}>备注</Text>
+                    <div style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>{item.remark}</div>
+                  </div>
+                )}
+                {(canEdit || canDelete) && (
+                  <Space size={6}>
+                    {canEdit && (
+                      <Button size="small" icon={<EditOutlined />} onClick={() => openEditChangeLog(item)}>
+                        编辑
+                      </Button>
+                    )}
+                    {canDelete && (
+                      <Popconfirm
+                        title="删除这条页面编辑记录？"
+                        onConfirm={() => deleteChangeLog(item.id)}
+                        okText="删除"
+                        cancelText="取消"
+                      >
+                        <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                      </Popconfirm>
+                    )}
+                  </Space>
+                )}
+              </Space>
             )}
-          />
+          </div>
         </div>
-      </Space>
-    </Drawer>
-  );
+      </List.Item>
+    );
+  };
+
+  const renderChangeLogDrawer = () => {
+    const logs = selectedDoc?.change_logs || [];
+    const allExpanded = logs.length > 0 && logs.every(item => expandedChangeLogIds.includes(item.id));
+    return (
+      <Drawer
+        title="页面编辑记录"
+        placement="right"
+        open={changeLogOpen}
+        onClose={() => setChangeLogOpen(false)}
+        width={isMobile ? '92vw' : 520}
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div style={{ padding: 12, border: '1px solid #eef2f7', borderRadius: 8, background: '#fafafa' }}>
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              <Space size={8} wrap>
+                <Tag>{selectedDoc?.document_no || '-'}</Tag>
+                <Tag color="blue">{selectedDoc?.current_version || 'V1.0'}</Tag>
+                <Text type="secondary">最后编辑：{selectedDoc?.updated_by_name || selectedDoc?.created_by_name || '-'}</Text>
+              </Space>
+              <Text strong>{selectedDoc?.title || '未命名文档'}</Text>
+            </Space>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+            <Space>
+              <Switch size="small" checked={changeLogNotifyEnabled} onChange={setChangeLogNotifyEnabled} />
+              <Text>接收页面变更通知</Text>
+            </Space>
+            <Space size={8} wrap>
+              {canManageSelectedDoc && (
+                <Button size="small" type="primary" icon={<PlusCircleOutlined />} onClick={openCreateChangeLog}>
+                  新增记录
+                </Button>
+              )}
+              <Button size="small" disabled={!logs.length} icon={allExpanded ? <UpOutlined /> : <DownOutlined />} onClick={toggleAllChangeLogs}>
+                {allExpanded ? '收起全部' : '展开全部'}
+              </Button>
+            </Space>
+          </div>
+
+          {renderChangeLogEditor()}
+
+          <List
+            dataSource={logs}
+            rowKey="id"
+            split={false}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无页面编辑记录" /> }}
+            renderItem={renderChangeLogItem}
+          />
+        </Space>
+      </Drawer>
+    );
+  };
 
   const renderTocPanel = () => {
     if (!asSwitchValue(selectedDoc?.toc_enabled, true) || !tocOpen) return null;
@@ -1342,8 +1509,8 @@ export default function Documents() {
   };
 
   const renderEditorBlock = (block, index) => {
-    const selected = selectedBlockId === block.id;
-    const active = selected || hoveredBlockId === block.id;
+    const menuOpen = openBlockMenuId === block.id;
+    const active = menuOpen || hoveredBlockId === block.id;
     const heading = headingMeta.map.get(block.id);
     return (
       <div
@@ -1356,8 +1523,8 @@ export default function Documents() {
           display: 'grid',
           gridTemplateColumns: isMobile ? '24px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
           gap: 4,
-          border: selected ? '1px solid #c7d2fe' : '1px solid transparent',
-          background: block.highlight || (active ? '#fafafa' : 'transparent'),
+          border: menuOpen ? '1px solid #c7d2fe' : '1px solid transparent',
+          background: block.highlight || (menuOpen ? '#fafafa' : 'transparent'),
           borderRadius: 6,
           padding: '3px 8px 3px 0',
           marginBottom: 2,
@@ -1367,10 +1534,15 @@ export default function Documents() {
         <div style={{ display: 'flex', justifyContent: 'center', paddingTop: block.type?.startsWith('heading') ? 5 : 3 }}>
           <Dropdown
             trigger={['click']}
+            open={menuOpen}
+            onOpenChange={(open) => {
+              setOpenBlockMenuId(open ? block.id : (prev => (prev === block.id ? null : prev)));
+            }}
             menu={{
               items: buildBlockMenuItems(block),
               onClick: ({ key, domEvent }) => {
                 domEvent.stopPropagation();
+                setOpenBlockMenuId(null);
                 handleBlockMenuAction(block, key);
               },
             }}
@@ -1565,9 +1737,9 @@ export default function Documents() {
                   <Button icon={<ShareAltOutlined />} onClick={openShare}>
                     共享 · {selectedDoc.access_summary?.label || '仅自己'}
                   </Button>
-                  <Button icon={<HistoryOutlined />} onClick={openChangeLogs}>
-                    改动历史
-                  </Button>
+                  <Tooltip title="页面编辑记录">
+                    <Button icon={<HistoryOutlined />} onClick={openChangeLogs} aria-label="页面编辑记录" />
+                  </Tooltip>
                   <Button
                     icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
                     onClick={() => toggleFavorite(selectedDoc)}

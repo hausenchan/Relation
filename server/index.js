@@ -1126,6 +1126,8 @@ db.exec(`
     changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     changed_by INTEGER,
     summary TEXT NOT NULL,
+    detail TEXT,
+    detail_text TEXT,
     impact_scope TEXT,
     remark TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -1154,6 +1156,9 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_document_attachments_doc ON document_attachments(document_id);
 `);
+
+addColumnIfMissing('document_change_logs', 'detail', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_change_logs', 'detail_text', 'TEXT DEFAULT NULL');
 
 // =========== 跨团队访问权限表 ===========
 db.exec(`
@@ -3181,6 +3186,20 @@ function buildDocumentSummary(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 100);
 }
 
+function normalizeDocumentChangeLogDetail(body = {}, fallbackDetail = null, fallbackDetailText = null) {
+  const hasDetail = Object.prototype.hasOwnProperty.call(body, 'detail');
+  const rawDetail = hasDetail ? body.detail : fallbackDetail;
+  const detail = rawDetail === null || rawDetail === undefined || rawDetail === ''
+    ? null
+    : (typeof rawDetail === 'string' ? rawDetail : JSON.stringify(rawDetail));
+  const explicitText = Object.prototype.hasOwnProperty.call(body, 'detail_text') ? body.detail_text : fallbackDetailText;
+  const detailText = detail ? extractDocumentText(detail, explicitText) : '';
+  return {
+    detail,
+    detail_text: detailText || null,
+  };
+}
+
 function formatDocumentNo(seq, projectCode, departmentKey, docType, year) {
   const seqText = String(seq).padStart(6, '0');
   return [
@@ -3749,15 +3768,18 @@ app.post('/api/documents/:id/change-logs', canWrite, (req, res) => {
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
   if (!String(req.body.summary || '').trim()) return res.status(400).json({ error: '改动摘要必填' });
   const version = req.body.version || doc.current_version || 'V1.0';
+  const changeDetail = normalizeDocumentChangeLogDetail(req.body);
   const result = db.prepare(`
-    INSERT INTO document_change_logs (document_id, version, changed_at, changed_by, summary, impact_scope, remark)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO document_change_logs (document_id, version, changed_at, changed_by, summary, detail, detail_text, impact_scope, remark)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     doc.id,
     version,
     req.body.changed_at || new Date().toISOString(),
     req.user.id,
     String(req.body.summary).trim(),
+    changeDetail.detail,
+    changeDetail.detail_text,
     req.body.impact_scope || null,
     req.body.remark || null
   );
@@ -3770,16 +3792,21 @@ app.put('/api/document-change-logs/:logId', canWrite, (req, res) => {
   if (!log) return res.status(404).json({ error: '改动历史不存在' });
   const doc = getVisibleDocument(log.document_id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
+  if (!(canManageDocument(req.user, doc) || Number(log.changed_by) === Number(req.user.id))) {
+    return res.status(403).json({ error: '只有创建人、管理员、高管或记录创建人可以维护改动历史' });
+  }
   if (!String(req.body.summary || '').trim()) return res.status(400).json({ error: '改动摘要必填' });
+  const changeDetail = normalizeDocumentChangeLogDetail(req.body, log.detail, log.detail_text);
   db.prepare(`
     UPDATE document_change_logs SET
-      version = ?, changed_at = ?, summary = ?, impact_scope = ?, remark = ?, updated_at = CURRENT_TIMESTAMP
+      version = ?, changed_at = ?, summary = ?, detail = ?, detail_text = ?, impact_scope = ?, remark = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
     req.body.version || log.version,
     req.body.changed_at || log.changed_at,
     String(req.body.summary).trim(),
+    changeDetail.detail,
+    changeDetail.detail_text,
     req.body.impact_scope || null,
     req.body.remark || null,
     log.id
