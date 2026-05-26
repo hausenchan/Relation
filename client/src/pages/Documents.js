@@ -28,6 +28,7 @@ import {
   message,
 } from 'antd';
 import {
+  CloseOutlined,
   CopyOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
@@ -709,6 +710,9 @@ export default function Documents() {
   const [folderTreeDocuments, setFolderTreeDocuments] = useState([]);
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const [openDocTabs, setOpenDocTabs] = useState([]);
+  const [docTabStates, setDocTabStates] = useState({});
+  const [closingTabIds, setClosingTabIds] = useState([]);
   const [editorTitle, setEditorTitle] = useState('');
   const [editorBlocks, setEditorBlocks] = useState([createBlock()]);
   const [selectedBlockId, setSelectedBlockId] = useState(null);
@@ -779,6 +783,93 @@ export default function Documents() {
     currentUser && selectedDoc && (isDocumentAdminUser(currentUser) || Number(selectedDoc.created_by) === Number(currentUser.id))
   );
 
+  const getDocTabId = (id) => Number(id);
+
+  const canManageDoc = (doc) => Boolean(
+    currentUser && doc && (isDocumentAdminUser(currentUser) || Number(doc.created_by) === Number(currentUser.id))
+  );
+
+  const getDocTabTitle = (doc, fallback = '未命名文档') => String(doc?.title || fallback || '未命名文档').trim() || '未命名文档';
+
+  const makeDocTab = (doc) => ({
+    id: doc.id,
+    title: getDocTabTitle(doc),
+    document_no: doc.document_no,
+    current_version: doc.current_version,
+    access_label: doc.access_summary?.label,
+  });
+
+  const upsertDocTab = (doc) => {
+    if (!doc?.id) return;
+    const docId = getDocTabId(doc.id);
+    setOpenDocTabs(prev => {
+      const nextTab = makeDocTab(doc);
+      if (prev.some(tab => getDocTabId(tab.id) === docId)) {
+        return prev.map(tab => (getDocTabId(tab.id) === docId ? { ...tab, ...nextTab } : tab));
+      }
+      return [...prev, nextTab];
+    });
+  };
+
+  const clearActiveDocument = () => {
+    setSelectedDocId(null);
+    setSelectedDoc(null);
+    setEditorTitle('');
+    setEditorBlocks([createBlock()]);
+    setSelectedBlockId(null);
+    setHoveredBlockId(null);
+    setOpenBlockMenuId(null);
+    setTocOpen(true);
+    setPageMenuOpen(false);
+    setShareOpen(false);
+    setChangeLogOpen(false);
+    setPresentationOpen(false);
+  };
+
+  const persistActiveDocTabState = () => {
+    if (!selectedDoc?.id || !selectedDocId) return;
+    const docId = getDocTabId(selectedDocId);
+    const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
+    setDocTabStates(prev => ({
+      ...prev,
+      [docId]: {
+        ...(prev[docId] || {}),
+        doc: docSnapshot,
+        editorTitle,
+        editorBlocks,
+        selectedBlockId,
+        tocOpen,
+      },
+    }));
+    upsertDocTab(docSnapshot);
+  };
+
+  const applyDocTabState = (tabState) => {
+    const doc = tabState?.doc;
+    if (!doc?.id) return false;
+    const blocks = Array.isArray(tabState.editorBlocks) && tabState.editorBlocks.length
+      ? tabState.editorBlocks
+      : contentToBlocks(doc.content);
+    const isBlankPage = blocks.length === 1 && blocks[0].type === 'paragraph' && isBlankBlock(blocks[0]);
+    setSelectedDoc(doc);
+    setEditorTitle(tabState.editorTitle ?? doc.title ?? '');
+    setEditorBlocks(blocks);
+    setSelectedBlockId(tabState.selectedBlockId ?? (isBlankPage ? null : (blocks[0]?.id || null)));
+    setHoveredBlockId(null);
+    setOpenBlockMenuId(null);
+    setTocOpen(tabState.tocOpen ?? asSwitchValue(doc.toc_enabled, true));
+    upsertDocTab(doc);
+    return true;
+  };
+
+  const getDocumentSummaryById = (id) => {
+    const docId = getDocTabId(id);
+    return documents.find(item => getDocTabId(item.id) === docId)
+      || folderTreeDocuments.find(item => getDocTabId(item.id) === docId)
+      || openDocTabs.find(item => getDocTabId(item.id) === docId)
+      || docTabStates[docId]?.doc;
+  };
+
   const focusBlock = (id) => {
     window.setTimeout(() => {
       const input = document.getElementById(`doc-block-input-${id}`);
@@ -829,10 +920,6 @@ export default function Documents() {
       const params = buildDocumentQueryParams();
       const rows = await documentsApi.list(params);
       setDocuments(rows);
-      if (selectedDocId && !rows.some(item => item.id === selectedDocId)) {
-        setSelectedDocId(null);
-        setSelectedDoc(null);
-      }
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '加载文档失败');
     } finally {
@@ -840,23 +927,68 @@ export default function Documents() {
     }
   };
 
-  const loadDetail = async (id) => {
+  const loadDetail = async (id, options = {}) => {
     if (!id) return;
+    const docId = getDocTabId(id);
+    const cachedTabState = docTabStates[docId];
+    if (!options.force && cachedTabState?.doc && Array.isArray(cachedTabState.editorBlocks)) {
+      applyDocTabState(cachedTabState);
+      return;
+    }
     setDetailLoading(true);
     try {
       const detail = await documentsApi.get(id);
       const blocks = contentToBlocks(detail.content);
       const isBlankPage = blocks.length === 1 && blocks[0].type === 'paragraph' && isBlankBlock(blocks[0]);
+      const nextTabState = {
+        doc: detail,
+        editorTitle: detail.title || '',
+        editorBlocks: blocks,
+        selectedBlockId: isBlankPage ? null : (blocks[0]?.id || null),
+        tocOpen: asSwitchValue(detail.toc_enabled, true),
+      };
+      setDocTabStates(prev => ({ ...prev, [docId]: { ...(prev[docId] || {}), ...nextTabState } }));
+      upsertDocTab(detail);
       setSelectedDoc(detail);
       setEditorTitle(detail.title || '');
       setEditorBlocks(blocks);
       setSelectedBlockId(isBlankPage ? null : (blocks[0]?.id || null));
       setHoveredBlockId(null);
+      setOpenBlockMenuId(null);
       setTocOpen(asSwitchValue(detail.toc_enabled, true));
     } catch (err) {
+      setOpenDocTabs(prev => prev.filter(tab => getDocTabId(tab.id) !== docId));
+      setDocTabStates(prev => {
+        const next = { ...prev };
+        delete next[docId];
+        return next;
+      });
+      if (getDocTabId(selectedDocId) === docId) clearActiveDocument();
       message.error(err.response?.data?.error || err.message || '加载文档详情失败');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const openDocumentTab = (docOrId) => {
+    const docId = getDocTabId(typeof docOrId === 'object' ? docOrId?.id : docOrId);
+    if (!docId) return;
+    persistActiveDocTabState();
+    const docSummary = typeof docOrId === 'object' ? docOrId : getDocumentSummaryById(docId);
+    if (docSummary?.id) {
+      upsertDocTab(docSummary);
+      setDocTabStates(prev => ({
+        ...prev,
+        [docId]: {
+          ...(prev[docId] || {}),
+          doc: prev[docId]?.doc || docSummary,
+        },
+      }));
+    }
+    if (getDocTabId(selectedDocId) !== docId) {
+      setSelectedDocId(docId);
+    } else if (!selectedDoc) {
+      loadDetail(docId);
     }
   };
 
@@ -864,6 +996,14 @@ export default function Documents() {
     if (!selectedDoc?.id) return;
     const detail = await documentsApi.get(selectedDoc.id);
     setSelectedDoc(prev => ({ ...prev, ...detail }));
+    upsertDocTab(detail);
+    setDocTabStates(prev => ({
+      ...prev,
+      [getDocTabId(detail.id)]: {
+        ...(prev[getDocTabId(detail.id)] || {}),
+        doc: { ...(prev[getDocTabId(detail.id)]?.doc || {}), ...detail },
+      },
+    }));
   };
 
   const openPresentationMode = () => {
@@ -911,6 +1051,34 @@ export default function Documents() {
   useEffect(() => {
     if (selectedDocId) loadDetail(selectedDocId);
   }, [selectedDocId]);
+
+  useEffect(() => {
+    if (!selectedDoc?.id || !selectedDocId) return;
+    const docId = getDocTabId(selectedDocId);
+    const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
+    setDocTabStates(prev => ({
+      ...prev,
+      [docId]: {
+        ...(prev[docId] || {}),
+        doc: docSnapshot,
+        editorTitle,
+        editorBlocks,
+        selectedBlockId,
+        tocOpen,
+      },
+    }));
+    setOpenDocTabs(prev => prev.map(tab => (
+      getDocTabId(tab.id) === docId
+        ? {
+            ...tab,
+            title: getDocTabTitle(docSnapshot),
+            document_no: docSnapshot.document_no,
+            current_version: docSnapshot.current_version,
+            access_label: docSnapshot.access_summary?.label,
+          }
+        : tab
+    )));
+  }, [selectedDocId, selectedDoc, editorTitle, editorBlocks, selectedBlockId, tocOpen]);
 
   useEffect(() => {
     setFolderTreeExpandedKeys(prev => {
@@ -995,7 +1163,7 @@ export default function Documents() {
       });
       message.success(`已创建 ${doc.document_no}`);
       setCreateOpen(false);
-      setSelectedDocId(doc.id);
+      openDocumentTab(doc);
       await loadDocuments();
       await loadFolderTreeDocuments();
     } catch (err) {
@@ -1014,7 +1182,7 @@ export default function Documents() {
         content_text: blocksToText(editorBlocks),
       };
       const updated = await documentsApi.update(selectedDoc.id, payload);
-      await loadDetail(selectedDoc.id);
+      await loadDetail(selectedDoc.id, { force: true });
       await loadDocuments();
       await loadFolderTreeDocuments();
       message.success(`已保存 ${updated.document_no}`);
@@ -1022,6 +1190,81 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '保存失败');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const getDocTabSnapshot = async (docId) => {
+    const normalizedId = getDocTabId(docId);
+    if (getDocTabId(selectedDocId) === normalizedId && selectedDoc) {
+      return {
+        doc: selectedDoc,
+        editorTitle,
+        editorBlocks,
+      };
+    }
+    const cached = docTabStates[normalizedId];
+    if (cached?.doc && Array.isArray(cached.editorBlocks)) {
+      return cached;
+    }
+    const detail = await documentsApi.get(normalizedId);
+    return {
+      doc: detail,
+      editorTitle: detail.title || '',
+      editorBlocks: contentToBlocks(detail.content),
+    };
+  };
+
+  const saveDocTabSnapshot = async (docId) => {
+    const snapshot = await getDocTabSnapshot(docId);
+    const doc = snapshot?.doc;
+    if (!doc?.id || !canManageDoc(doc)) return null;
+    const blocks = Array.isArray(snapshot.editorBlocks) && snapshot.editorBlocks.length
+      ? snapshot.editorBlocks
+      : contentToBlocks(doc.content);
+    const payload = {
+      title: snapshot.editorTitle || doc.title || '未命名文档',
+      content: blocksToContent(blocks),
+      content_text: blocksToText(blocks),
+    };
+    return documentsApi.update(doc.id, payload);
+  };
+
+  const removeDocTab = (docId) => {
+    const normalizedId = getDocTabId(docId);
+    const closingIndex = openDocTabs.findIndex(tab => getDocTabId(tab.id) === normalizedId);
+    const nextTabs = openDocTabs.filter(tab => getDocTabId(tab.id) !== normalizedId);
+    setOpenDocTabs(nextTabs);
+    setDocTabStates(prev => {
+      const next = { ...prev };
+      delete next[normalizedId];
+      return next;
+    });
+
+    if (getDocTabId(selectedDocId) !== normalizedId) return;
+    const nextActiveTab = nextTabs[closingIndex] || nextTabs[closingIndex - 1] || null;
+    if (nextActiveTab) {
+      setSelectedDocId(getDocTabId(nextActiveTab.id));
+    } else {
+      clearActiveDocument();
+    }
+  };
+
+  const handleCloseDocTab = async (event, docId) => {
+    event.stopPropagation();
+    const normalizedId = getDocTabId(docId);
+    if (!normalizedId || closingTabIds.includes(normalizedId)) return;
+    persistActiveDocTabState();
+    setClosingTabIds(prev => [...prev, normalizedId]);
+    try {
+      await saveDocTabSnapshot(normalizedId);
+      removeDocTab(normalizedId);
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      message.success('已保存并关闭文档');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '关闭前自动保存失败');
+    } finally {
+      setClosingTabIds(prev => prev.filter(id => id !== normalizedId));
     }
   };
 
@@ -1195,11 +1438,11 @@ export default function Documents() {
 
   const handleDelete = async () => {
     if (!selectedDoc) return;
+    const deletedDocId = getDocTabId(selectedDoc.id);
     try {
       await documentsApi.delete(selectedDoc.id);
       message.success('文档已删除');
-      setSelectedDoc(null);
-      setSelectedDocId(null);
+      removeDocTab(deletedDocId);
       await loadDocuments();
       await loadFolderTreeDocuments();
     } catch (err) {
@@ -1216,7 +1459,7 @@ export default function Documents() {
       }
       await loadDocuments();
       await loadFolderTreeDocuments();
-      if (selectedDoc?.id === doc.id) await loadDetail(doc.id);
+      if (selectedDoc?.id === doc.id) await loadDetail(doc.id, { force: true });
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '收藏操作失败');
     }
@@ -1421,7 +1664,7 @@ export default function Documents() {
   const renderDocItem = (item) => (
     <List.Item
       key={item.id}
-      onClick={() => setSelectedDocId(item.id)}
+      onClick={() => openDocumentTab(item)}
       style={{
         cursor: 'pointer',
         padding: '10px 8px',
@@ -1461,6 +1704,89 @@ export default function Documents() {
       />
     </List.Item>
   );
+
+  const renderDocTabs = () => {
+    if (!openDocTabs.length) return null;
+    return (
+      <div
+        role="tablist"
+        style={{
+          display: 'flex',
+          gap: 4,
+          alignItems: 'center',
+          overflowX: 'auto',
+          overflowY: 'hidden',
+          padding: '0 2px 8px',
+          marginBottom: 10,
+          borderBottom: '1px solid #edf0f5',
+        }}
+      >
+        {openDocTabs.map(tab => {
+          const docId = getDocTabId(tab.id);
+          const active = getDocTabId(selectedDocId) === docId;
+          const closing = closingTabIds.includes(docId);
+          const title = tab.title || '未命名文档';
+          return (
+            <div
+              key={docId}
+              role="tab"
+              aria-selected={active}
+              onClick={() => openDocumentTab(tab)}
+              style={{
+                height: 34,
+                minWidth: 128,
+                maxWidth: isMobile ? 180 : 240,
+                flex: '0 0 auto',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '0 4px 0 10px',
+                borderRadius: 6,
+                border: active ? '1px solid #c7d2fe' : '1px solid #e5e7eb',
+                background: active ? '#eef2ff' : '#fff',
+                color: active ? '#3730a3' : '#374151',
+                cursor: 'pointer',
+                boxShadow: active ? '0 2px 8px rgba(79, 70, 229, 0.12)' : 'none',
+              }}
+            >
+              <FileTextOutlined style={{ flex: '0 0 auto', fontSize: 13 }} />
+              <Tooltip title={title}>
+                <Text
+                  ellipsis
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    maxWidth: isMobile ? 110 : 168,
+                    fontSize: 13,
+                    color: 'inherit',
+                    lineHeight: '32px',
+                  }}
+                >
+                  {title}
+                </Text>
+              </Tooltip>
+              <Tooltip title="关闭">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CloseOutlined />}
+                  loading={closing}
+                  aria-label={`关闭 ${title}`}
+                  onClick={(event) => handleCloseDocTab(event, docId)}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    minWidth: 24,
+                    color: active ? '#4338ca' : '#6b7280',
+                  }}
+                />
+              </Tooltip>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   const renderPageMenu = () => (
     <div style={{ width: 280, padding: 14, background: '#fff', borderRadius: 8, boxShadow: '0 6px 24px rgba(15,23,42,0.16)' }}>
@@ -1519,6 +1845,18 @@ export default function Documents() {
             onChange={checked => savePageOptions({ title_numbering_enabled: checked })}
           />
         </div>
+        <Divider style={{ margin: '2px 0 0' }} />
+        <Popconfirm
+          title="确认删除该文档？"
+          onConfirm={() => {
+            setPageMenuOpen(false);
+            handleDelete();
+          }}
+          okText="删除"
+          cancelText="取消"
+        >
+          <Button danger block icon={<DeleteOutlined />} aria-label="删除文档">删除文档</Button>
+        </Popconfirm>
       </Space>
     </div>
   );
@@ -2924,7 +3262,7 @@ export default function Documents() {
                           setFolderTreeExpandedKeys(prev => (prev.includes(folderKey) ? prev : [...prev, folderKey]));
                           setSopOnly(false);
                         }
-                        setSelectedDocId(documentId);
+                        openDocumentTab(getDocumentSummaryById(documentId) || documentId);
                       }
                     }}
                     style={{ marginTop: 8, background: 'transparent' }}
@@ -2951,6 +3289,7 @@ export default function Documents() {
       </aside>
 
       <main style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
+        {renderDocTabs()}
         {!selectedDoc ? (
           <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed #d9d9d9', borderRadius: 8 }}>
             <Empty description="选择或新建一篇文档">
@@ -3013,11 +3352,6 @@ export default function Documents() {
                       onClick={() => toggleFavorite(selectedDoc)}
                       aria-label={selectedDoc.is_favorite ? '取消收藏' : '收藏'}
                     />
-                  </Tooltip>
-                  <Tooltip title="删除">
-                    <Popconfirm title="确认删除该文档？" onConfirm={handleDelete} okText="删除" cancelText="取消">
-                      <Button danger icon={<DeleteOutlined />} aria-label="删除" />
-                    </Popconfirm>
                   </Tooltip>
                   <Tooltip title="保存">
                     <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" />
