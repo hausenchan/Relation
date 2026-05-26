@@ -3301,38 +3301,90 @@ function getDocumentShares(documentId) {
   `).all(documentId);
 }
 
-function getDocumentAccessUserIds(document) {
-  if (!document) return [];
-  const userIds = new Set();
-  if (document.created_by) userIds.add(Number(document.created_by));
+function addDocumentAccessUser(accessMap, userId, source) {
+  const id = Number(userId);
+  if (!id) return;
+  if (!accessMap.has(id)) {
+    accessMap.set(id, new Set());
+  }
+  accessMap.get(id).add(source);
+}
+
+function getDocumentAccessMap(document) {
+  const accessMap = new Map();
+  if (!document) return accessMap;
+  if (document.created_by) addDocumentAccessUser(accessMap, document.created_by, 'creator');
 
   db.prepare(`
     SELECT id FROM users
     WHERE role IN ('admin', 'ceo', 'coo', 'cto', 'cmo')
        OR executive_role IN ('ceo', 'coo', 'cto', 'cmo')
-  `).all().forEach(row => userIds.add(Number(row.id)));
+  `).all().forEach(row => addDocumentAccessUser(accessMap, row.id, 'default'));
 
   const shares = db.prepare('SELECT target_type, target_id, target_key FROM document_shares WHERE document_id = ?').all(document.id);
   shares.forEach(share => {
     if (share.target_type === 'user' && share.target_id) {
-      userIds.add(Number(share.target_id));
+      addDocumentAccessUser(accessMap, share.target_id, 'user');
     } else if (share.target_type === 'department' && share.target_key) {
-      db.prepare('SELECT id FROM users WHERE department = ?').all(share.target_key).forEach(row => userIds.add(Number(row.id)));
+      db.prepare('SELECT id FROM users WHERE department = ?').all(share.target_key)
+        .forEach(row => addDocumentAccessUser(accessMap, row.id, 'department'));
     } else if (share.target_type === 'team' && share.target_id) {
-      getUsersByTeamIds([Number(share.target_id)]).forEach(id => userIds.add(Number(id)));
+      getUsersByTeamIds([Number(share.target_id)]).forEach(id => addDocumentAccessUser(accessMap, id, 'team'));
     } else if (share.target_type === 'project_group' && share.target_id) {
       db.prepare('SELECT user_id FROM user_project_groups WHERE project_group_id = ?').all(share.target_id)
-        .forEach(row => userIds.add(Number(row.user_id)));
+        .forEach(row => addDocumentAccessUser(accessMap, row.user_id, 'project_group'));
     }
   });
-  return [...userIds].filter(Boolean);
+  return accessMap;
+}
+
+function getDocumentAccessUserIds(document) {
+  return [...getDocumentAccessMap(document).keys()];
+}
+
+function getDocumentAccessUsers(document) {
+  const accessMap = getDocumentAccessMap(document);
+  const ids = [...accessMap.keys()];
+  if (!ids.length) return [];
+  const rows = db.prepare(`
+    SELECT id, username, display_name, role, executive_role, department, team_id
+    FROM users
+    WHERE id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids);
+  const usersById = new Map(rows.map(row => [Number(row.id), row]));
+  return ids
+    .map(id => {
+      const row = usersById.get(id);
+      if (!row) return null;
+      const sourceTypes = [...accessMap.get(id)];
+      return {
+        id,
+        name: row.display_name || row.username || `用户${id}`,
+        username: row.username,
+        role: row.role,
+        executive_role: row.executive_role,
+        department: row.department,
+        team_id: row.team_id,
+        source_types: sourceTypes,
+        is_creator: sourceTypes.includes('creator') ? 1 : 0,
+        is_default: sourceTypes.includes('default') ? 1 : 0,
+        is_shared: sourceTypes.some(type => !['creator', 'default'].includes(type)) ? 1 : 0,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => (
+      Number(b.is_creator) - Number(a.is_creator)
+      || Number(b.is_default) - Number(a.is_default)
+      || String(a.name).localeCompare(String(b.name), 'zh-Hans-CN')
+    ));
 }
 
 function getDocumentAccessSummary(document) {
-  const userIds = getDocumentAccessUserIds(document);
+  const users = getDocumentAccessUsers(document);
   return {
-    access_count: userIds.length,
-    label: userIds.length <= 1 ? '仅自己' : `共 ${userIds.length} 人`,
+    access_count: users.length,
+    label: users.length <= 1 ? '仅自己' : `共 ${users.length} 人`,
+    users,
   };
 }
 
