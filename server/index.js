@@ -42,7 +42,7 @@ const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|mp4|mov|avi)$/i;
+    const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|mp4|mov|avi|mp3|wav|m4a|aac|ogg)$/i;
     if (!allowed.test(normalizeUploadedFilename(file.originalname))) {
       cb(new Error('不支持的文件类型'));
       return;

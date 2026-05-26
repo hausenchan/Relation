@@ -4,10 +4,10 @@ import { attachmentsApi } from '../api';
 export const ALLOWED_ATTACHMENT_EXT = [
   'jpg', 'jpeg', 'png', 'gif', 'webp',
   'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt',
-  'mp4', 'mov', 'avi',
+  'mp4', 'mov', 'avi', 'mp3', 'wav', 'm4a', 'aac', 'ogg',
 ];
 
-export const ATTACHMENT_ACCEPT = '.jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.mp4,.mov,.avi';
+export const ATTACHMENT_ACCEPT = '.jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.mp4,.mov,.avi,.mp3,.wav,.m4a,.aac,.ogg';
 
 export const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
 

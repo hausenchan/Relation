@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Avatar,
@@ -24,6 +24,7 @@ import {
   Tooltip,
   Tree,
   Typography,
+  Upload,
   message,
 } from 'antd';
 import {
@@ -34,7 +35,10 @@ import {
   EditOutlined,
   FileTextOutlined,
   FolderOutlined,
+  FullscreenExitOutlined,
+  FundProjectionScreenOutlined,
   HistoryOutlined,
+  LeftOutlined,
   MenuFoldOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
@@ -52,7 +56,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
+import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 
 const { Text, Title } = Typography;
@@ -98,20 +102,97 @@ const docTypeOptions = [
   { value: 'TMP', label: '临时文档' },
 ];
 
-const blockTypeOptions = [
-  { value: 'paragraph', label: '文本' },
-  { value: 'todo', label: '待办列表' },
-  { value: 'heading1', label: '主标题' },
-  { value: 'heading2', label: '大标题' },
-  { value: 'heading3', label: '中标题' },
-  { value: 'heading4', label: '小标题' },
-  { value: 'page', label: '页面' },
-  { value: 'bullet', label: '列表' },
-  { value: 'numbered', label: '数字列表' },
-  { value: 'quote', label: '引用' },
-  { value: 'code', label: '代码块' },
-  { value: 'divider', label: '分割线' },
+const blockIconStyle = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 20,
+  height: 20,
+  borderRadius: 5,
+  color: '#64748b',
+  fontSize: 12,
+  fontWeight: 700,
+  lineHeight: 1,
+};
+
+function blockIcon(text, style = {}) {
+  return <span style={{ ...blockIconStyle, ...style }}>{text}</span>;
+}
+
+const blockTypeGroups = [
+  {
+    label: '基础块',
+    children: [
+      { value: 'paragraph', label: '文本', icon: blockIcon('T') },
+      { value: 'heading1', label: '主标题', icon: blockIcon('H1') },
+      { value: 'heading2', label: '大标题', icon: blockIcon('H2') },
+      { value: 'heading3', label: '中标题', icon: blockIcon('H3') },
+      { value: 'heading4', label: '小标题', icon: blockIcon('H4') },
+      { value: 'page', label: '页面', icon: <FileTextOutlined /> },
+      { value: 'bullet', label: '列表', icon: blockIcon('•') },
+      { value: 'numbered', label: '数字列表', icon: blockIcon('1') },
+      { value: 'fold-list', label: '折叠列表', icon: <MenuOutlined /> },
+      { value: 'quote', label: '引述文字', icon: blockIcon('“') },
+      { value: 'emphasis', label: '着重文字', icon: blockIcon('Aa') },
+      { value: 'marquee', label: '着重文字 - 跑马灯', icon: blockIcon('T') },
+      { value: 'code', label: '代码块', icon: blockIcon('{ }') },
+      { value: 'divider', label: '分割线', icon: blockIcon('—') },
+    ],
+  },
+  {
+    label: '折叠与任务',
+    children: [
+      { value: 'fold-heading2', label: '折叠大标题', icon: blockIcon('H2') },
+      { value: 'fold-heading3', label: '折叠中标题', icon: blockIcon('H3') },
+      { value: 'fold-heading4', label: '折叠小标题', icon: blockIcon('H4') },
+      { value: 'todo', label: '待办列表', icon: blockIcon('☑') },
+      { value: 'fold-todo', label: '折叠待办列表', icon: blockIcon('☑') },
+      { value: 'fold-advanced-todo', label: '折叠高级待办列表', icon: blockIcon('◎') },
+    ],
+  },
+  {
+    label: '页面组件',
+    children: [
+      { value: 'toc', label: '页面目录', icon: <MenuOutlined /> },
+      { value: 'button', label: '按钮', icon: blockIcon('↗') },
+      { value: 'table-simple', label: '简单表格', icon: blockIcon('▦') },
+      { value: 'progress', label: '进度条', icon: blockIcon('%') },
+      { value: 'database-embed', label: '数据表格 - 嵌入', icon: blockIcon('DB') },
+      { value: 'database-subpage', label: '数据表格 - 子页面', icon: blockIcon('DB') },
+      { value: 'database-kanban', label: '数据表格 - 看板视图', icon: blockIcon('KB') },
+      { value: 'database-form', label: '数据表格 - 表单', icon: blockIcon('FM') },
+      { value: 'chart', label: '统计图表', icon: blockIcon('▥') },
+      { value: 'mermaid', label: 'Mermaid 绘图', icon: blockIcon('M') },
+      { value: 'metric', label: '仪表数字', icon: blockIcon('#') },
+      { value: 'meeting', label: '会议', icon: blockIcon('会') },
+      { value: 'mindmap', label: '思维导图', icon: blockIcon('⌘') },
+    ],
+  },
+  {
+    label: '软硬分栏',
+    children: [
+      { value: 'columns-2', label: '二列分栏', icon: blockIcon('2') },
+      { value: 'columns-3', label: '三列分栏', icon: blockIcon('3') },
+      { value: 'columns-4', label: '四列分栏', icon: blockIcon('4') },
+      { value: 'columns-5', label: '五列分栏', icon: blockIcon('5') },
+    ],
+  },
+  {
+    label: '媒体与附件',
+    children: [
+      { value: 'image', label: '图片', icon: blockIcon('图') },
+      { value: 'recent-image', label: '最近上传图片', icon: blockIcon('近') },
+      { value: 'video', label: '视频', icon: blockIcon('▶') },
+      { value: 'audio', label: '音频', icon: blockIcon('♫') },
+      { value: 'netease-music', label: '网易云音乐', icon: blockIcon('云', { color: '#dc2626' }) },
+      { value: 'bilibili-video', label: '哔哩哔哩视频', icon: blockIcon('B', { color: '#0891b2' }) },
+      { value: 'tencent-video', label: '腾讯视频', icon: blockIcon('腾', { color: '#16a34a' }) },
+      { value: 'external-link', label: '外部链接', icon: blockIcon('↗') },
+    ],
+  },
 ];
+
+const blockTypeOptions = blockTypeGroups.flatMap(group => group.children);
 
 const highlightOptions = [
   { value: '', label: '无色', color: '#ffffff', border: '#d9d9d9' },
@@ -127,7 +208,33 @@ const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.v
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
+const blockTypeMap = Object.fromEntries(blockTypeOptions.map(item => [item.value, item]));
 const documentAdminRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+const mediaAcceptMap = {
+  image: '.jpg,.jpeg,.png,.gif,.webp',
+  video: '.mp4,.mov,.avi',
+  audio: '.mp3,.wav,.m4a,.aac,.ogg',
+};
+
+function getFileExt(filename = '') {
+  return String(filename || '').split('.').pop().toLowerCase();
+}
+
+function isImageAttachment(attachment) {
+  const mime = String(attachment?.mimetype || '');
+  return mime.startsWith('image/') || imageExts.includes(getFileExt(attachment?.filename));
+}
+
+function attachmentToMediaMeta(attachment) {
+  if (!attachment) return {};
+  return {
+    attachment_id: attachment.id || null,
+    filename: attachment.filename || '',
+    url: attachment.filepath ? `/uploads/${attachment.filepath}` : '',
+    mimetype: attachment.mimetype || '',
+  };
+}
 
 function createBlock(type = 'paragraph', content = '', extra = {}) {
   return {
@@ -136,6 +243,94 @@ function createBlock(type = 'paragraph', content = '', extra = {}) {
     content,
     ...extra,
   };
+}
+
+function cloneMeta(meta) {
+  if (!meta || typeof meta !== 'object') return {};
+  try {
+    return JSON.parse(JSON.stringify(meta));
+  } catch {
+    return { ...meta };
+  }
+}
+
+function getColumnCount(type) {
+  const match = String(type || '').match(/^columns-(\d)$/);
+  return match ? Number(match[1]) : 0;
+}
+
+function getMediaKind(type) {
+  if (type === 'image' || type === 'recent-image') return 'image';
+  if (type === 'video' || type === 'bilibili-video' || type === 'tencent-video') return 'video';
+  if (type === 'audio' || type === 'netease-music') return 'audio';
+  return null;
+}
+
+function getDefaultBlockContent(type) {
+  if (type === 'heading1') return '主标题';
+  if (type === 'heading2') return '大标题';
+  if (type === 'heading3') return '中标题';
+  if (type === 'heading4') return '小标题';
+  if (type === 'page') return '页面标题';
+  if (type === 'bullet') return '列表项';
+  if (type === 'numbered') return '数字列表项';
+  if (type === 'fold-list') return '折叠列表标题';
+  if (type === 'quote') return '引述文字';
+  if (type === 'emphasis') return '着重文字';
+  if (type === 'marquee') return '重点提示';
+  if (type === 'todo') return '待办事项';
+  if (type === 'fold-todo') return '折叠待办事项';
+  if (type === 'fold-advanced-todo') return '高级待办事项';
+  if (type === 'fold-heading2') return '折叠大标题';
+  if (type === 'fold-heading3') return '折叠中标题';
+  if (type === 'fold-heading4') return '折叠小标题';
+  if (type === 'button') return '按钮';
+  if (type === 'progress') return '任务进度';
+  if (type === 'chart') return '指标,数值\n访问量,120\n转化量,36';
+  if (type === 'mermaid') return 'graph TD\n  A[开始] --> B[完成]';
+  if (type === 'metric') return '核心指标';
+  if (type === 'meeting') return '会议主题\n参会人：\n议题：';
+  if (type === 'mindmap') return '- 中心主题\n  - 分支一\n  - 分支二';
+  if (type === 'database-embed') return '嵌入数据表格';
+  if (type === 'database-subpage') return '子页面数据表格';
+  if (type === 'database-kanban') return '看板视图';
+  if (type === 'database-form') return '表单视图';
+  if (type === 'external-link') return '外部链接';
+  if (getMediaKind(type)) return '';
+  return '';
+}
+
+function getDefaultBlockMeta(type) {
+  const columnCount = getColumnCount(type);
+  if (columnCount) return { cells: Array.from({ length: columnCount }, (_, index) => `分栏 ${index + 1}`) };
+  if (type === 'table-simple') return { columns: ['名称', '说明'], rows: [['', '']] };
+  if (type?.startsWith('database-')) return { columns: ['字段', '内容'], rows: [['', '']], view: type.replace('database-', '') };
+  if (type === 'progress') return { value: 30 };
+  if (type === 'button') return { url: '' };
+  if (type === 'metric') return { value: 0, unit: '' };
+  if (type === 'fold-list' || type?.startsWith('fold-')) return { collapsed: false, body: '' };
+  if (type === 'chart') return { chartType: 'bar' };
+  if (getMediaKind(type) || type === 'external-link') return { url: '', filename: '', attachment_id: null };
+  return {};
+}
+
+function renderBlockMenuLabel(item) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      <span>{item.label}</span>
+    </span>
+  );
+}
+
+function createEditorBlock(type = 'paragraph', extra = {}) {
+  const defaultMeta = getDefaultBlockMeta(type);
+  const meta = { ...defaultMeta, ...cloneMeta(extra.meta) };
+  return createBlock(type, extra.content ?? getDefaultBlockContent(type), {
+    checked: Boolean(extra.checked),
+    highlight: extra.highlight || '',
+    ...extra,
+    meta,
+  });
 }
 
 function collectText(value, parts = []) {
@@ -166,18 +361,24 @@ function plainTextToBlocks(text) {
 function normalizeBlock(block) {
   if (!block || typeof block !== 'object') return createBlock();
   const type = validBlockTypes.has(block.type) ? block.type : 'paragraph';
+  const meta = { ...getDefaultBlockMeta(type), ...cloneMeta(block.meta) };
   return {
     id: block.id || createBlock().id,
     type,
     content: type === 'divider' ? '' : String(block.content ?? block.text ?? block.title ?? ''),
     highlight: block.highlight || '',
     checked: Boolean(block.checked),
+    meta,
   };
 }
 
 function isBlankBlock(block) {
   if (!block) return true;
   if (block.type === 'divider') return false;
+  const meta = block.meta || {};
+  if (meta.url || meta.filename || meta.body || meta.value) return false;
+  if (Array.isArray(meta.cells) && meta.cells.some(cell => String(cell || '').trim())) return false;
+  if (Array.isArray(meta.rows) && meta.rows.some(row => row.some(cell => String(cell || '').trim()))) return false;
   return !String(block.content || '').trim();
 }
 
@@ -209,8 +410,24 @@ function blocksToContent(blocks) {
       content: block.type === 'divider' ? '' : block.content || '',
       highlight: block.highlight || '',
       checked: Boolean(block.checked),
+      meta: cloneMeta(block.meta),
     })),
   };
+}
+
+function blockMetaToText(meta = {}) {
+  const parts = [];
+  if (meta.url) parts.push(meta.url);
+  if (meta.filename) parts.push(meta.filename);
+  if (meta.body) parts.push(meta.body);
+  if (meta.value !== undefined && meta.value !== null && meta.value !== '') parts.push(`${meta.value}`);
+  if (Array.isArray(meta.cells)) parts.push(...meta.cells);
+  if (Array.isArray(meta.columns)) parts.push(meta.columns.join(' / '));
+  if (Array.isArray(meta.rows)) parts.push(...meta.rows.map(row => row.join(' / ')));
+  return parts
+    .map(item => String(item || '').trim())
+    .filter(Boolean)
+    .join('\n');
 }
 
 function blocksToText(blocks) {
@@ -218,10 +435,33 @@ function blocksToText(blocks) {
     .map(block => {
       if (block.type === 'divider') return '';
       if (block.type === 'todo') return `${block.checked ? '[x]' : '[ ]'} ${block.content || ''}`.trim();
-      return block.content || '';
+      return [block.content || '', blockMetaToText(block.meta)].filter(Boolean).join('\n');
     })
     .filter(Boolean)
     .join('\n');
+}
+
+function buildPresentationSections(blocks, fallbackTitle) {
+  const docTitle = String(fallbackTitle || '').trim() || '未命名文档';
+  const sections = [];
+  let current = { title: docTitle, blocks: [] };
+
+  (blocks || []).forEach(block => {
+    if (block?.type === 'page') {
+      if (current.blocks.length) sections.push(current);
+      current = {
+        title: String(block.content || '').trim() || docTitle,
+        blocks: [],
+      };
+      return;
+    }
+    if (block?.type === 'divider' || !isBlankBlock(block)) {
+      current.blocks.push(block);
+    }
+  });
+
+  if (current.blocks.length || sections.length === 0) sections.push(current);
+  return sections;
 }
 
 function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
@@ -498,6 +738,9 @@ export default function Documents() {
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(false);
   const [folderTreeExpandedKeys, setFolderTreeExpandedKeys] = useState([]);
+  const [presentationOpen, setPresentationOpen] = useState(false);
+  const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
+  const presentationRef = useRef(null);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -524,6 +767,13 @@ export default function Documents() {
     () => buildHeadingMeta(editorBlocks, asSwitchValue(selectedDoc?.title_numbering_enabled)),
     [editorBlocks, selectedDoc?.title_numbering_enabled]
   );
+  const presentationSections = useMemo(
+    () => buildPresentationSections(editorBlocks, editorTitle || selectedDoc?.title),
+    [editorBlocks, editorTitle, selectedDoc?.title]
+  );
+  const presentationSlideCount = presentationSections.length || 1;
+  const activePresentationSlideIndex = Math.min(presentationSlideIndex, presentationSlideCount - 1);
+  const activePresentationSection = presentationSections[activePresentationSlideIndex] || presentationSections[0];
   const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
   const canManageSelectedDoc = Boolean(
     currentUser && selectedDoc && (isDocumentAdminUser(currentUser) || Number(selectedDoc.created_by) === Number(currentUser.id))
@@ -616,6 +866,27 @@ export default function Documents() {
     setSelectedDoc(prev => ({ ...prev, ...detail }));
   };
 
+  const openPresentationMode = () => {
+    if (!selectedDoc) return;
+    setPageMenuOpen(false);
+    setPresentationSlideIndex(0);
+    setPresentationOpen(true);
+  };
+
+  const closePresentationMode = () => {
+    setPresentationOpen(false);
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    }
+  };
+
+  const movePresentationSlide = (step) => {
+    setPresentationSlideIndex(prev => {
+      const next = prev + step;
+      return Math.max(0, Math.min(next, presentationSlideCount - 1));
+    });
+  };
+
   useEffect(() => {
     loadFolders().catch(err => message.error(err.response?.data?.error || err.message || '加载目录失败'));
     loadProjectGroups().catch(err => message.error(err.response?.data?.error || err.message || '加载项目组失败'));
@@ -656,6 +927,50 @@ export default function Documents() {
       prev.includes(folderKey) ? prev : [...prev, folderKey]
     ));
   }, [selectedDoc?.folder_id]);
+
+  useEffect(() => {
+    setPresentationSlideIndex(prev => Math.min(prev, presentationSlideCount - 1));
+  }, [presentationSlideCount]);
+
+  useEffect(() => {
+    if (!presentationOpen) return undefined;
+    const node = presentationRef.current;
+    if (node?.requestFullscreen && document.fullscreenElement !== node) {
+      node.requestFullscreen().catch(() => {});
+    }
+    return undefined;
+  }, [presentationOpen]);
+
+  useEffect(() => {
+    if (!presentationOpen) return undefined;
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement) setPresentationOpen(false);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [presentationOpen]);
+
+  useEffect(() => {
+    if (!presentationOpen) return undefined;
+    const handlePresentationKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closePresentationMode();
+        return;
+      }
+      if (['ArrowRight', 'PageDown', ' '].includes(event.key)) {
+        event.preventDefault();
+        movePresentationSlide(1);
+        return;
+      }
+      if (['ArrowLeft', 'PageUp'].includes(event.key)) {
+        event.preventDefault();
+        movePresentationSlide(-1);
+      }
+    };
+    window.addEventListener('keydown', handlePresentationKeyDown);
+    return () => window.removeEventListener('keydown', handlePresentationKeyDown);
+  }, [presentationOpen, presentationSlideCount]);
 
   const openCreate = () => {
     createForm.resetFields();
@@ -926,8 +1241,8 @@ export default function Documents() {
     setEditorBlocks(prev => prev.map(block => (block.id === id ? { ...block, ...patch } : block)));
   };
 
-  const addBlockAfter = (afterId, type = 'paragraph') => {
-    const nextBlock = createBlock(type);
+  const addBlockAfter = (afterId, type = 'paragraph', extra = {}) => {
+    const nextBlock = createEditorBlock(type, extra);
     setEditorBlocks(prev => {
       const index = prev.findIndex(block => block.id === afterId);
       const next = [...prev];
@@ -941,9 +1256,11 @@ export default function Documents() {
   const duplicateBlock = (id) => {
     const source = editorBlocks.find(block => block.id === id);
     if (!source) return;
-    const nextBlock = createBlock(source.type, source.content, {
+    const nextBlock = createEditorBlock(source.type, {
+      content: source.content,
       highlight: source.highlight || '',
       checked: Boolean(source.checked),
+      meta: cloneMeta(source.meta),
     });
     setEditorBlocks(prev => {
       const index = prev.findIndex(block => block.id === id);
@@ -983,26 +1300,64 @@ export default function Documents() {
     });
   };
 
-  const changeBlockType = (id, type) => {
-    updateBlock(id, { type, content: type === 'divider' ? '' : editorBlocks.find(block => block.id === id)?.content || '' });
+  const changeBlockType = (id, type, extra = {}) => {
+    const current = editorBlocks.find(block => block.id === id);
+    const defaultContent = getDefaultBlockContent(type);
+    const content = type === 'divider'
+      ? ''
+      : (extra.content ?? (isBlankBlock(current) ? defaultContent : (current?.content || defaultContent)));
+    updateBlock(id, {
+      type,
+      content,
+      checked: Boolean(extra.checked),
+      meta: { ...getDefaultBlockMeta(type), ...cloneMeta(extra.meta) },
+    });
     setSelectedBlockId(id);
     focusBlock(id);
   };
 
-  const addOrTransformBlock = (id, type) => {
+  const addOrTransformBlock = (id, type, extra = {}) => {
     const current = editorBlocks.find(block => block.id === id);
     if (!current) return;
     if (isBlankBlock(current)) {
-      changeBlockType(id, type);
+      changeBlockType(id, type, extra);
       return;
     }
-    addBlockAfter(id, type);
+    addBlockAfter(id, type, extra);
   };
 
-  const handleBlockMenuAction = (block, key) => {
+  const insertRecentImageBlock = async (block) => {
+    if (!selectedDoc?.id) {
+      addOrTransformBlock(block.id, 'recent-image');
+      message.info('请先保存文档，再使用最近上传图片');
+      return;
+    }
+    try {
+      const rows = await attachmentsApi.list({ source_type: 'document', source_id: selectedDoc.id });
+      const image = [...rows].reverse().find(isImageAttachment);
+      if (!image) {
+        addOrTransformBlock(block.id, 'recent-image');
+        message.info('当前文档还没有最近上传图片，已插入图片上传块');
+        return;
+      }
+      addOrTransformBlock(block.id, 'recent-image', {
+        content: image.filename || '',
+        meta: attachmentToMediaMeta(image),
+      });
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '读取最近上传图片失败');
+    }
+  };
+
+  const handleBlockMenuAction = async (block, key) => {
     if (!block) return;
     if (key.startsWith('type:')) {
-      addOrTransformBlock(block.id, key.replace('type:', ''));
+      const type = key.replace('type:', '');
+      if (type === 'recent-image') {
+        await insertRecentImageBlock(block);
+        return;
+      }
+      addOrTransformBlock(block.id, type);
       return;
     }
     if (key.startsWith('highlight:')) {
@@ -1017,7 +1372,15 @@ export default function Documents() {
   };
 
   const buildBlockMenuItems = (block) => [
-    { type: 'group', label: '基础块', children: blockTypeOptions.map(item => ({ key: `type:${item.value}`, label: item.label })) },
+    ...blockTypeGroups.map(group => ({
+      type: 'group',
+      label: group.label,
+      children: group.children.map(item => ({
+        key: `type:${item.value}`,
+        label: renderBlockMenuLabel(item),
+        icon: item.icon,
+      })),
+    })),
     {
       type: 'group',
       label: '高亮',
@@ -1037,7 +1400,7 @@ export default function Documents() {
   const handleBlockKeyDown = (event, block, index) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      addBlockAfter(block.id, block.type?.startsWith('heading') ? 'paragraph' : block.type);
+      addBlockAfter(block.id, block.type?.startsWith('heading') ? 'paragraph' : block.type, { content: '' });
       return;
     }
     if (event.key === 'Backspace' && !block.content && editorBlocks.length > 1) {
@@ -1608,6 +1971,592 @@ export default function Documents() {
     );
   };
 
+  const getBlockMeta = (block) => ({ ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) });
+
+  const updateBlockMeta = (id, patch) => {
+    setEditorBlocks(prev => prev.map(block => (
+      block.id === id ? { ...block, meta: { ...getBlockMeta(block), ...patch } } : block
+    )));
+  };
+
+  const handleMediaUpload = async (block, file, kind) => {
+    const acceptText = mediaAcceptMap[kind] || '';
+    const allowedExts = acceptText.split(',').map(item => item.replace('.', '').trim()).filter(Boolean);
+    if (allowedExts.length && !allowedExts.includes(getFileExt(file.name))) {
+      message.error(kind === 'image' ? '请选择图片文件' : kind === 'video' ? '请选择视频文件' : '请选择音频文件');
+      return Upload.LIST_IGNORE;
+    }
+    if (!selectedDoc?.id) {
+      message.warning('请先保存文档，再上传媒体文件');
+      return Upload.LIST_IGNORE;
+    }
+    try {
+      const formData = new FormData();
+      formData.append('source_type', 'document');
+      formData.append('source_id', selectedDoc.id);
+      formData.append('files', file);
+      const rows = await attachmentsApi.upload(formData);
+      const uploaded = rows?.[0];
+      if (uploaded) {
+        updateBlock(block.id, {
+          content: uploaded.filename || block.content || '',
+          meta: { ...getBlockMeta(block), ...attachmentToMediaMeta(uploaded) },
+        });
+        message.success('媒体已上传');
+      }
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '媒体上传失败');
+    }
+    return Upload.LIST_IGNORE;
+  };
+
+  const renderFoldBlock = (block, commonProps) => {
+    const meta = getBlockMeta(block);
+    const collapsed = Boolean(meta.collapsed);
+    const headingLevel = block.type === 'fold-heading2' ? 2 : block.type === 'fold-heading3' ? 3 : block.type === 'fold-heading4' ? 4 : 0;
+    const isTodo = block.type === 'fold-todo' || block.type === 'fold-advanced-todo';
+    return (
+      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+          <Button
+            type="text"
+            size="small"
+            icon={collapsed ? <RightOutlined /> : <DownOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              updateBlockMeta(block.id, { collapsed: !collapsed });
+            }}
+            style={{ width: 24, minWidth: 24, padding: 0, marginTop: 2 }}
+          />
+          {isTodo && (
+            <Checkbox
+              checked={Boolean(block.checked)}
+              onChange={event => updateBlock(block.id, { checked: event.target.checked })}
+              style={{ paddingTop: 4 }}
+            />
+          )}
+          <TextArea
+            {...commonProps}
+            autoSize={{ minRows: 1 }}
+            style={{
+              ...commonProps.style,
+              fontSize: headingLevel === 2 ? 24 : headingLevel === 3 ? 19 : headingLevel === 4 ? 16 : commonProps.style.fontSize,
+              fontWeight: headingLevel ? 700 : 600,
+            }}
+          />
+          {block.type === 'fold-advanced-todo' && <Tag color="gold" style={{ marginTop: 2 }}>高级</Tag>}
+        </div>
+        {!collapsed && (
+          <TextArea
+            value={meta.body || ''}
+            bordered={false}
+            autoSize={{ minRows: 2 }}
+            placeholder="折叠内容"
+            onFocus={() => setSelectedBlockId(block.id)}
+            onChange={event => updateBlockMeta(block.id, { body: event.target.value })}
+            style={{
+              marginLeft: isTodo ? 68 : 32,
+              width: `calc(100% - ${isTodo ? 68 : 32}px)`,
+              resize: 'none',
+              lineHeight: 1.7,
+              fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
+              background: '#f8fafc',
+              borderRadius: 6,
+              padding: '6px 8px',
+            }}
+          />
+        )}
+      </Space>
+    );
+  };
+
+  const renderTocBlock = () => (
+    <div style={{ borderLeft: '3px solid #dbeafe', padding: '8px 10px', background: '#f8fbff', borderRadius: 6 }}>
+      <Text strong>页面目录</Text>
+      <Space direction="vertical" size={2} style={{ display: 'flex', marginTop: 6 }}>
+        {headingMeta.toc.length ? headingMeta.toc.map(item => (
+          <Text key={item.id} type="secondary" style={{ paddingLeft: (item.level - 1) * 12 }}>
+            {item.number ? `${item.number} ` : ''}{item.title}
+          </Text>
+        )) : <Text type="secondary">正文添加标题后自动生成目录</Text>}
+      </Space>
+    </div>
+  );
+
+  const renderButtonBlock = (block, commonProps) => {
+    const meta = getBlockMeta(block);
+    return (
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        <TextArea {...commonProps} autoSize={{ minRows: 1 }} placeholder="按钮文案" style={{ ...commonProps.style, fontWeight: 600 }} />
+        <Input
+          value={meta.url || ''}
+          placeholder="按钮链接，可填写 https:// 或站内路径"
+          onChange={event => updateBlockMeta(block.id, { url: event.target.value })}
+        />
+        <Button type="primary" href={meta.url || undefined} target={meta.url ? '_blank' : undefined}>
+          {block.content || '按钮'}
+        </Button>
+      </Space>
+    );
+  };
+
+  const renderTableBlock = (block, label) => {
+    const meta = getBlockMeta(block);
+    const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
+    const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
+    const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
+    const updateColumn = (index, value) => {
+      const nextColumns = columns.map((item, columnIndex) => (columnIndex === index ? value : item));
+      updateBlockMeta(block.id, { columns: nextColumns, rows: normalizedRows });
+    };
+    const updateCell = (rowIndex, columnIndex, value) => {
+      const nextRows = normalizedRows.map((row, currentRowIndex) => (
+        currentRowIndex === rowIndex
+          ? row.map((cell, currentColumnIndex) => (currentColumnIndex === columnIndex ? value : cell))
+          : row
+      ));
+      updateBlockMeta(block.id, { columns, rows: nextRows });
+    };
+    const addRow = () => updateBlockMeta(block.id, { columns, rows: [...normalizedRows, columns.map(() => '')] });
+    const addColumn = () => updateBlockMeta(block.id, {
+      columns: [...columns, `字段 ${columns.length + 1}`],
+      rows: normalizedRows.map(row => [...row, '']),
+    });
+    return (
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        <Input
+          value={block.content}
+          placeholder={label}
+          onChange={event => updateBlock(block.id, { content: event.target.value })}
+          style={{ fontWeight: 600 }}
+        />
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 360 }}>
+            <thead>
+              <tr>
+                {columns.map((column, columnIndex) => (
+                  <th key={`col-${columnIndex}`} style={{ border: '1px solid #e5e7eb', background: '#f8fafc', padding: 4 }}>
+                    <Input value={column} bordered={false} onChange={event => updateColumn(columnIndex, event.target.value)} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {normalizedRows.map((row, rowIndex) => (
+                <tr key={`row-${rowIndex}`}>
+                  {row.map((cell, columnIndex) => (
+                    <td key={`cell-${rowIndex}-${columnIndex}`} style={{ border: '1px solid #e5e7eb', padding: 4, verticalAlign: 'top' }}>
+                      <TextArea
+                        value={cell}
+                        bordered={false}
+                        autoSize={{ minRows: 1 }}
+                        onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
+                        style={{ resize: 'none' }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Space size={8}>
+          <Button size="small" onClick={addRow}>添加行</Button>
+          <Button size="small" onClick={addColumn}>添加列</Button>
+        </Space>
+      </Space>
+    );
+  };
+
+  const renderProgressBlock = (block) => {
+    const meta = getBlockMeta(block);
+    const value = Math.max(0, Math.min(100, Number(meta.value || 0)));
+    return (
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        <Input
+          value={block.content}
+          placeholder="进度名称"
+          onChange={event => updateBlock(block.id, { content: event.target.value })}
+          style={{ fontWeight: 600 }}
+        />
+        <Space size={8} style={{ width: '100%' }}>
+          <InputNumber min={0} max={100} value={value} onChange={next => updateBlockMeta(block.id, { value: next || 0 })} />
+          <div style={{ flex: 1, height: 10, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
+            <div style={{ width: `${value}%`, height: '100%', background: '#2563eb' }} />
+          </div>
+          <Text type="secondary">{value}%</Text>
+        </Space>
+      </Space>
+    );
+  };
+
+  const renderColumnsBlock = (block) => {
+    const count = getColumnCount(block.type) || 2;
+    const meta = getBlockMeta(block);
+    const cells = Array.from({ length: count }, (_, index) => meta.cells?.[index] || '');
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))`, gap: 10 }}>
+        {cells.map((cell, index) => (
+          <TextArea
+            key={`column-${index}`}
+            value={cell}
+            bordered={false}
+            autoSize={{ minRows: 4 }}
+            placeholder={`分栏 ${index + 1}`}
+            onFocus={() => setSelectedBlockId(block.id)}
+            onChange={event => {
+              const nextCells = [...cells];
+              nextCells[index] = event.target.value;
+              updateBlockMeta(block.id, { cells: nextCells });
+            }}
+            style={{ resize: 'none', background: '#f8fafc', borderRadius: 6, padding: 8, lineHeight: 1.7 }}
+          />
+        ))}
+      </div>
+    );
+  };
+
+  const renderChartPreview = (content) => {
+    const rows = String(content || '').split('\n').slice(1, 6).map(line => {
+      const [name, value] = line.split(',');
+      return { name: name?.trim(), value: Number(value) || 0 };
+    }).filter(item => item.name);
+    const max = Math.max(...rows.map(item => item.value), 1);
+    return (
+      <Space direction="vertical" size={5} style={{ width: '100%' }}>
+        {rows.map(item => (
+          <div key={item.name} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 44px', gap: 8, alignItems: 'center' }}>
+            <Text ellipsis>{item.name}</Text>
+            <div style={{ height: 8, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
+              <div style={{ width: `${Math.round((item.value / max) * 100)}%`, height: '100%', background: '#10b981' }} />
+            </div>
+            <Text type="secondary">{item.value}</Text>
+          </div>
+        ))}
+      </Space>
+    );
+  };
+
+  const renderMediaBlock = (block) => {
+    const meta = getBlockMeta(block);
+    const kind = getMediaKind(block.type);
+    const url = meta.url || block.content || '';
+    const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
+    return (
+      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        <Input
+          value={url}
+          placeholder={isExternalMedia ? '输入外部链接' : '输入链接，或上传本地文件'}
+          onChange={event => {
+            const nextUrl = event.target.value;
+            updateBlock(block.id, { content: nextUrl, meta: { ...meta, url: nextUrl } });
+          }}
+        />
+        {!isExternalMedia && (
+          <Upload
+            showUploadList={false}
+            accept={mediaAcceptMap[kind] || undefined}
+            beforeUpload={(file) => handleMediaUpload(block, file, kind)}
+          >
+            <Button size="small" icon={<PlusOutlined />}>上传{kind === 'image' ? '图片' : kind === 'video' ? '视频' : '音频'}</Button>
+          </Upload>
+        )}
+        {meta.filename && <Text type="secondary">{meta.filename}</Text>}
+        {kind === 'image' && url && (
+          <img src={url} alt={meta.filename || block.content || '图片'} style={{ maxWidth: '100%', maxHeight: 320, borderRadius: 6, border: '1px solid #e5e7eb' }} />
+        )}
+        {kind === 'video' && url && !isExternalMedia && (
+          <video src={url} controls style={{ width: '100%', maxHeight: 360, borderRadius: 6, background: '#111827' }} />
+        )}
+        {kind === 'audio' && url && !isExternalMedia && (
+          <audio src={url} controls style={{ width: '100%' }} />
+        )}
+        {isExternalMedia && url && (
+          <Button href={url} target="_blank" icon={<FileTextOutlined />}>
+            打开{blockTypeMap[block.type]?.label || '链接'}
+          </Button>
+        )}
+      </Space>
+    );
+  };
+
+  const renderPresentationTableBlock = (block) => {
+    const meta = getBlockMeta(block);
+    const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : [];
+    const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [];
+    if (!columns.length && !rows.length) {
+      return <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{block.content}</div>;
+    }
+    return (
+      <div style={{ overflowX: 'auto' }}>
+        {block.content && <Text strong style={{ display: 'block', marginBottom: 10, fontSize: isMobile ? 18 : 22 }}>{block.content}</Text>}
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: isMobile ? 16 : 20 }}>
+          {columns.length > 0 && (
+            <thead>
+              <tr>
+                {columns.map((column, index) => (
+                  <th key={`${column}-${index}`} style={{ borderBottom: '2px solid #d1d5db', padding: '10px 12px', textAlign: 'left' }}>
+                    {column}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={`row-${rowIndex}`}>
+                {(row || []).map((cell, cellIndex) => (
+                  <td key={`cell-${rowIndex}-${cellIndex}`} style={{ borderBottom: '1px solid #e5e7eb', padding: '10px 12px', verticalAlign: 'top' }}>
+                    {cell}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const renderPresentationMediaBlock = (block) => {
+    const meta = getBlockMeta(block);
+    const kind = getMediaKind(block.type);
+    const url = meta.url || block.content || '';
+    const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
+    const label = block.content || meta.filename || blockTypeMap[block.type]?.label || '媒体';
+    if (kind === 'image' && url) {
+      return (
+        <div>
+          <img src={url} alt={label} style={{ display: 'block', maxWidth: '100%', maxHeight: isMobile ? 320 : 520, objectFit: 'contain', borderRadius: 8 }} />
+          {meta.filename && <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>{meta.filename}</Text>}
+        </div>
+      );
+    }
+    if (kind === 'video' && url && !isExternalMedia) {
+      return <video src={url} controls style={{ display: 'block', width: '100%', maxHeight: isMobile ? 320 : 520, borderRadius: 8, background: '#111827' }} />;
+    }
+    if (kind === 'audio' && url && !isExternalMedia) {
+      return (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Text strong>{label}</Text>
+          <audio src={url} controls style={{ width: '100%' }} />
+        </Space>
+      );
+    }
+    return (
+      <Space direction="vertical" size={4}>
+        <Text strong>{label}</Text>
+        {url && <a href={url} target="_blank" rel="noreferrer">{url}</a>}
+      </Space>
+    );
+  };
+
+  const renderPresentationBlock = (block, index) => {
+    const meta = getBlockMeta(block);
+    const blockStyle = {
+      fontSize: isMobile ? 18 : 24,
+      lineHeight: 1.7,
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+    };
+    const headingMatch = String(block.type || '').match(/heading(\d)/);
+    if (headingMatch) {
+      const level = Number(headingMatch[1]);
+      const heading = headingMeta.map.get(block.id);
+      return (
+        <div style={{
+          display: 'flex',
+          gap: 12,
+          alignItems: 'flex-start',
+          fontSize: isMobile ? (level === 1 ? 32 : level === 2 ? 26 : 22) : (level === 1 ? 46 : level === 2 ? 36 : level === 3 ? 28 : 24),
+          lineHeight: 1.2,
+          fontWeight: 800,
+          color: '#0f172a',
+        }}>
+          {heading?.number && <span style={{ color: '#64748b', minWidth: isMobile ? 36 : 52 }}>{heading.number}</span>}
+          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{block.content || blockTypeMap[block.type]?.label}</span>
+        </div>
+      );
+    }
+    if (block.type === 'divider') return <Divider style={{ margin: '18px 0', borderColor: '#cbd5e1' }} />;
+    if (block.type === 'bullet' || block.type === 'numbered') {
+      return (
+        <div style={{ ...blockStyle, display: 'flex', gap: 14 }}>
+          <span style={{ minWidth: 28, textAlign: 'right', color: '#64748b' }}>{block.type === 'bullet' ? '•' : `${index + 1}.`}</span>
+          <span>{block.content}</span>
+        </div>
+      );
+    }
+    if (block.type === 'todo' || block.type === 'fold-todo' || block.type === 'fold-advanced-todo') {
+      return (
+        <div style={{ ...blockStyle, display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+          <Checkbox checked={Boolean(block.checked)} disabled style={{ paddingTop: 5 }} />
+          <span>{block.content}</span>
+        </div>
+      );
+    }
+    if (block.type === 'quote') {
+      return <div style={{ ...blockStyle, borderLeft: '5px solid #94a3b8', paddingLeft: 18, color: '#475569', fontStyle: 'italic' }}>{block.content}</div>;
+    }
+    if (block.type === 'code' || block.type === 'mermaid' || block.type === 'mindmap') {
+      return <pre style={{ margin: 0, padding: 18, borderRadius: 8, background: '#0f172a', color: '#e2e8f0', overflowX: 'auto', fontSize: isMobile ? 14 : 18, lineHeight: 1.7 }}>{block.content}</pre>;
+    }
+    if (block.type === 'emphasis' || block.type === 'marquee') {
+      return <div style={{ ...blockStyle, padding: '16px 18px', borderRadius: 8, background: '#fef3c7', color: '#92400e', fontWeight: 700 }}>{block.content}</div>;
+    }
+    if (block.type === 'fold-list' || block.type?.startsWith('fold-heading') || block.type === 'meeting') {
+      return (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ ...blockStyle, fontWeight: 700 }}>{block.content}</div>
+          {meta.body && <div style={{ ...blockStyle, color: '#475569' }}>{meta.body}</div>}
+        </Space>
+      );
+    }
+    if (getColumnCount(block.type)) {
+      const count = getColumnCount(block.type);
+      const cells = Array.from({ length: count }, (_, cellIndex) => meta.cells?.[cellIndex] || '');
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : `repeat(${count}, minmax(0, 1fr))`, gap: 14 }}>
+          {cells.map((cell, cellIndex) => (
+            <div key={`column-${cellIndex}`} style={{ ...blockStyle, padding: 16, border: '1px solid #e5e7eb', borderRadius: 8, background: '#f8fafc' }}>{cell}</div>
+          ))}
+        </div>
+      );
+    }
+    if (block.type === 'table-simple' || block.type?.startsWith('database-')) return renderPresentationTableBlock(block);
+    if (block.type === 'chart') {
+      return (
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          {block.content && <Text strong style={{ fontSize: isMobile ? 18 : 22 }}>{block.content.split('\n')[0]}</Text>}
+          {renderChartPreview(block.content)}
+        </Space>
+      );
+    }
+    if (block.type === 'progress') {
+      const value = Math.max(0, Math.min(Number(meta.value) || 0, 100));
+      return (
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Text style={{ fontSize: isMobile ? 18 : 24 }}>{block.content}</Text>
+          <div style={{ height: 14, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
+            <div style={{ width: `${value}%`, height: '100%', background: '#2563eb' }} />
+          </div>
+          <Text strong>{value}%</Text>
+        </Space>
+      );
+    }
+    if (block.type === 'metric') {
+      return (
+        <Space direction="vertical" size={6}>
+          <Text type="secondary" style={{ fontSize: isMobile ? 16 : 18 }}>{block.content}</Text>
+          <Text strong style={{ fontSize: isMobile ? 42 : 64, lineHeight: 1 }}>{meta.value ?? 0}{meta.unit || ''}</Text>
+        </Space>
+      );
+    }
+    if (block.type === 'button' || block.type === 'external-link') {
+      return (
+        <Button size="large" href={meta.url || block.content || undefined} target={(meta.url || block.content) ? '_blank' : undefined} icon={<RightOutlined />}>
+          {block.content || meta.url || blockTypeMap[block.type]?.label}
+        </Button>
+      );
+    }
+    if (getMediaKind(block.type)) return renderPresentationMediaBlock(block);
+    if (block.type === 'toc') {
+      return (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          {headingMeta.toc.map(item => (
+            <div key={item.id} style={{ fontSize: isMobile ? 17 : 22, paddingLeft: (item.level - 1) * 24, color: '#334155' }}>
+              {item.number ? `${item.number} ` : ''}{item.title}
+            </div>
+          ))}
+        </Space>
+      );
+    }
+    return <div style={blockStyle}>{block.content}</div>;
+  };
+
+  const renderPresentationMode = () => {
+    if (!presentationOpen || !selectedDoc) return null;
+    return (
+      <div
+        id="document-presentation-mode"
+        ref={presentationRef}
+        role="dialog"
+        aria-modal="true"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 2000,
+          display: 'flex',
+          flexDirection: 'column',
+          background: '#0b1120',
+          color: '#0f172a',
+        }}
+      >
+        <div style={{
+          minHeight: 56,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+          padding: isMobile ? '10px 12px' : '12px 24px',
+          borderBottom: '1px solid rgba(148, 163, 184, 0.24)',
+        }}>
+          <Space size={10} style={{ minWidth: 0 }}>
+            <FundProjectionScreenOutlined style={{ color: '#bfdbfe', fontSize: 18 }} />
+            <Text ellipsis style={{ color: '#f8fafc', maxWidth: isMobile ? 170 : 520 }}>{editorTitle || selectedDoc.title || '未命名文档'}</Text>
+            {!isMobile && <Tag color="blue">{selectedDoc.document_no}</Tag>}
+          </Space>
+          <Space size={8}>
+            <Tooltip title="上一页">
+              <Button type="text" aria-label="上一页" disabled={activePresentationSlideIndex <= 0} icon={<LeftOutlined />} onClick={() => movePresentationSlide(-1)} style={{ color: '#e5e7eb' }} />
+            </Tooltip>
+            <Tag>{activePresentationSlideIndex + 1} / {presentationSlideCount}</Tag>
+            <Tooltip title="下一页">
+              <Button type="text" aria-label="下一页" disabled={activePresentationSlideIndex >= presentationSlideCount - 1} icon={<RightOutlined />} onClick={() => movePresentationSlide(1)} style={{ color: '#e5e7eb' }} />
+            </Tooltip>
+            <Tooltip title="退出演示">
+              <Button type="text" aria-label="退出演示" icon={<FullscreenExitOutlined />} onClick={closePresentationMode} style={{ color: '#e5e7eb' }} />
+            </Tooltip>
+          </Space>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: isMobile ? 12 : 28 }}>
+          <section style={{
+            height: '100%',
+            maxWidth: 1180,
+            margin: '0 auto',
+            overflow: 'auto',
+            background: '#ffffff',
+            borderRadius: 8,
+            padding: isMobile ? 24 : 54,
+          }}>
+            <Space direction="vertical" size={22} style={{ width: '100%' }}>
+              <Space size={8} wrap>
+                <Tag color="geekblue">{selectedDoc.current_version || 'V1.0'}</Tag>
+                <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
+                {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
+              </Space>
+              <Title level={1} style={{ margin: 0, fontSize: isMobile ? 34 : 52, lineHeight: 1.12 }}>
+                {activePresentationSection?.title || editorTitle || selectedDoc.title || '未命名文档'}
+              </Title>
+              <Divider style={{ margin: '0 0 4px', borderColor: '#e5e7eb' }} />
+              {activePresentationSection?.blocks?.length ? (
+                <Space direction="vertical" size={18} style={{ width: '100%' }}>
+                  {activePresentationSection.blocks.map((block, index) => (
+                    <div key={block.id || `${block.type}-${index}`} style={{ background: block.highlight || 'transparent', borderRadius: 8 }}>
+                      {renderPresentationBlock(block, index)}
+                    </div>
+                  ))}
+                </Space>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无内容" />
+              )}
+            </Space>
+          </section>
+        </div>
+      </div>
+    );
+  };
+
   const renderBlockInput = (block, index, heading) => {
     const active = selectedBlockId === block.id;
     const commonProps = {
@@ -1630,6 +2579,76 @@ export default function Documents() {
 
     if (block.type === 'divider') {
       return <Divider style={{ margin: '10px 0' }} />;
+    }
+
+    if (block.type === 'toc') return renderTocBlock();
+    if (block.type === 'button') return renderButtonBlock(block, commonProps);
+    if (block.type === 'table-simple') return renderTableBlock(block, '简单表格');
+    if (block.type?.startsWith('database-')) return renderTableBlock(block, blockTypeMap[block.type]?.label || '数据表格');
+    if (block.type === 'progress') return renderProgressBlock(block);
+    if (getColumnCount(block.type)) return renderColumnsBlock(block);
+    if (getMediaKind(block.type) || block.type === 'external-link') return renderMediaBlock(block);
+    if (block.type === 'fold-list' || block.type?.startsWith('fold-')) return renderFoldBlock(block, commonProps);
+
+    if (block.type === 'emphasis' || block.type === 'marquee') {
+      return (
+        <TextArea
+          {...commonProps}
+          autoSize={{ minRows: 1 }}
+          style={{
+            ...commonProps.style,
+            fontWeight: 700,
+            color: block.type === 'marquee' ? '#b91c1c' : '#111827',
+            background: block.type === 'marquee' ? '#fff1f2' : '#f8fafc',
+            borderRadius: 6,
+            padding: '6px 8px',
+          }}
+        />
+      );
+    }
+
+    if (block.type === 'chart') {
+      return (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <TextArea
+            {...commonProps}
+            autoSize={{ minRows: 4 }}
+            placeholder="按 CSV 输入：指标,数值"
+            style={{ ...commonProps.style, background: '#f8fafc', borderRadius: 6, padding: 8 }}
+          />
+          {renderChartPreview(block.content)}
+        </Space>
+      );
+    }
+
+    if (block.type === 'mermaid' || block.type === 'mindmap' || block.type === 'meeting') {
+      return (
+        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+          <Text type="secondary">{blockTypeMap[block.type]?.label}</Text>
+          <TextArea
+            {...commonProps}
+            autoSize={{ minRows: block.type === 'meeting' ? 3 : 4 }}
+            style={{
+              ...commonProps.style,
+              fontFamily: block.type === 'mermaid' ? "'SFMono-Regular', Consolas, monospace" : undefined,
+              background: '#f8fafc',
+              borderRadius: 6,
+              padding: 8,
+            }}
+          />
+        </Space>
+      );
+    }
+
+    if (block.type === 'metric') {
+      const meta = getBlockMeta(block);
+      return (
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px 80px', gap: 8, alignItems: 'center' }}>
+          <Input value={block.content} placeholder="指标名称" onChange={event => updateBlock(block.id, { content: event.target.value })} />
+          <InputNumber value={Number(meta.value || 0)} onChange={value => updateBlockMeta(block.id, { value: value || 0 })} style={{ width: '100%' }} />
+          <Input value={meta.unit || ''} placeholder="单位" onChange={event => updateBlockMeta(block.id, { unit: event.target.value })} />
+        </div>
+      );
     }
 
     if (block.type?.startsWith('heading')) {
@@ -1756,6 +2775,7 @@ export default function Documents() {
           <Dropdown
             trigger={['click']}
             open={menuOpen}
+            overlayStyle={{ width: 320, maxHeight: 560, overflowY: 'auto' }}
             onOpenChange={(open) => {
               setOpenBlockMenuId(open ? block.id : (prev => (prev === block.id ? null : prev)));
             }}
@@ -1971,6 +2991,9 @@ export default function Documents() {
                   >
                     <Button icon={<MoreOutlined />}>页面</Button>
                   </Dropdown>
+                  <Tooltip title="演示模式">
+                    <Button icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode} aria-label="演示模式" />
+                  </Tooltip>
                   <Button icon={<ShareAltOutlined />} onClick={openShare}>
                     共享 · {selectedDoc.access_summary?.label || '仅自己'}
                   </Button>
@@ -2048,6 +3071,8 @@ export default function Documents() {
       </Modal>
 
       {renderChangeLogDrawer()}
+
+      {renderPresentationMode()}
 
       <Modal
         title="新建文档"
