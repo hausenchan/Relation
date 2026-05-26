@@ -1136,6 +1136,21 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_document_change_logs_doc ON document_change_logs(document_id);
 
+  CREATE TABLE IF NOT EXISTS document_edit_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    edited_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    edited_by INTEGER,
+    action_type TEXT DEFAULT 'content_update',
+    title_before TEXT,
+    title_after TEXT,
+    diff_json TEXT,
+    diff_text TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_edit_records_doc ON document_edit_records(document_id);
+
   CREATE TABLE IF NOT EXISTS document_favorites (
     user_id INTEGER NOT NULL,
     document_id INTEGER NOT NULL,
@@ -3200,6 +3215,188 @@ function normalizeDocumentChangeLogDetail(body = {}, fallbackDetail = null, fall
   };
 }
 
+function splitDocumentDiffLines(value) {
+  return String(value || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 300);
+}
+
+function getDocumentLineMatches(oldLines, newLines) {
+  const oldCount = oldLines.length;
+  const newCount = newLines.length;
+  if (!oldCount || !newCount || oldCount * newCount > 40000) {
+    return { matchedNewIndexes: new Set(), matchedOldByNew: new Map() };
+  }
+
+  const dp = Array.from({ length: oldCount + 1 }, () => Array(newCount + 1).fill(0));
+  for (let i = oldCount - 1; i >= 0; i -= 1) {
+    for (let j = newCount - 1; j >= 0; j -= 1) {
+      dp[i][j] = oldLines[i] === newLines[j]
+        ? dp[i + 1][j + 1] + 1
+        : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+
+  const matchedNewIndexes = new Set();
+  const matchedOldByNew = new Map();
+  let oldIndex = 0;
+  let newIndex = 0;
+  while (oldIndex < oldCount && newIndex < newCount) {
+    if (oldLines[oldIndex] === newLines[newIndex]) {
+      matchedNewIndexes.add(newIndex);
+      matchedOldByNew.set(newIndex, oldIndex);
+      oldIndex += 1;
+      newIndex += 1;
+    } else if (dp[oldIndex + 1][newIndex] >= dp[oldIndex][newIndex + 1]) {
+      oldIndex += 1;
+    } else {
+      newIndex += 1;
+    }
+  }
+  return { matchedNewIndexes, matchedOldByNew };
+}
+
+function buildInlineDocumentDiffParts(oldText, newText) {
+  const before = String(oldText || '');
+  const after = String(newText || '');
+  if (!after) return [];
+  if (!before || before === after) return [{ text: after, changed: before !== after }];
+
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) {
+    start += 1;
+  }
+
+  let beforeEnd = before.length - 1;
+  let afterEnd = after.length - 1;
+  while (beforeEnd >= start && afterEnd >= start && before[beforeEnd] === after[afterEnd]) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
+  }
+
+  const parts = [];
+  if (start > 0) parts.push({ text: after.slice(0, start), changed: false });
+  if (afterEnd >= start) parts.push({ text: after.slice(start, afterEnd + 1), changed: true });
+  if (afterEnd + 1 < after.length) parts.push({ text: after.slice(afterEnd + 1), changed: false });
+  return parts.filter(part => part.text);
+}
+
+function buildDocumentContentDiffItems(beforeText, afterText) {
+  const oldLines = splitDocumentDiffLines(beforeText);
+  const newLines = splitDocumentDiffLines(afterText);
+  const oldFlat = oldLines.join('\n');
+  const newFlat = newLines.join('\n');
+  if (oldFlat === newFlat) return [];
+
+  if (!newLines.length && oldLines.length) {
+    return [{
+      label: '删除内容',
+      lines: oldLines.slice(0, 8).map(line => ({
+        text: `删除：${line}`,
+        changed: true,
+        parts: [{ text: `删除：${line}`, changed: true }],
+      })),
+    }];
+  }
+
+  const { matchedNewIndexes, matchedOldByNew } = getDocumentLineMatches(oldLines, newLines);
+  const changedIndexes = newLines
+    .map((_, index) => index)
+    .filter(index => !matchedNewIndexes.has(index));
+
+  if (!changedIndexes.length) {
+    const removed = oldLines.filter(line => !newLines.includes(line));
+    return removed.length ? [{
+      label: '删除内容',
+      lines: removed.slice(0, 8).map(line => ({
+        text: `删除：${line}`,
+        changed: true,
+        parts: [{ text: `删除：${line}`, changed: true }],
+      })),
+    }] : [];
+  }
+
+  const groups = [];
+  changedIndexes.forEach(index => {
+    const lastGroup = groups[groups.length - 1];
+    if (lastGroup && index <= lastGroup.end + 1) {
+      lastGroup.end = index;
+    } else {
+      groups.push({ start: index, end: index });
+    }
+  });
+
+  return groups.slice(0, 8).map(group => {
+    const start = Math.max(0, group.start - 1);
+    const end = Math.min(newLines.length - 1, group.end + 1);
+    const lines = [];
+    for (let index = start; index <= end; index += 1) {
+      const changed = index >= group.start && index <= group.end;
+      const oldIndex = matchedOldByNew.has(index) ? matchedOldByNew.get(index) : index;
+      lines.push({
+        text: newLines[index],
+        changed,
+        parts: changed
+          ? buildInlineDocumentDiffParts(oldLines[oldIndex], newLines[index])
+          : [{ text: newLines[index], changed: false }],
+      });
+    }
+    return { label: '更新内容', lines };
+  });
+}
+
+function buildDocumentEditDiff(before, after) {
+  const beforeTitle = String(before?.title || '').trim();
+  const afterTitle = String(after?.title || '').trim();
+  const beforeText = String(before?.content_text || '').trim();
+  const afterText = String(after?.content_text || '').trim();
+  const items = [];
+
+  if (beforeTitle !== afterTitle) {
+    items.push({
+      label: '标题',
+      lines: [
+        ...(beforeTitle ? [{ text: `原标题：${beforeTitle}`, changed: false, parts: [{ text: `原标题：${beforeTitle}`, changed: false }] }] : []),
+        {
+          text: `新标题：${afterTitle || '未命名文档'}`,
+          changed: true,
+          parts: buildInlineDocumentDiffParts(beforeTitle ? `新标题：${beforeTitle}` : '', `新标题：${afterTitle || '未命名文档'}`),
+        },
+      ],
+    });
+  }
+
+  items.push(...buildDocumentContentDiffItems(beforeText, afterText));
+  const changedText = items
+    .flatMap(item => item.lines || [])
+    .filter(line => line.changed)
+    .map(line => line.text)
+    .join('\n')
+    .slice(0, 2000);
+
+  return items.length ? { items, changed_text: changedText } : null;
+}
+
+function insertDocumentEditRecord(documentId, userId, actionType, before, after) {
+  const diff = buildDocumentEditDiff(before, after);
+  if (!diff) return;
+  db.prepare(`
+    INSERT INTO document_edit_records (document_id, edited_by, action_type, title_before, title_after, diff_json, diff_text)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    documentId,
+    userId,
+    actionType || 'content_update',
+    before?.title || null,
+    after?.title || null,
+    JSON.stringify(diff),
+    diff.changed_text || null
+  );
+}
+
 function formatDocumentNo(seq, projectCode, departmentKey, docType, year) {
   const seqText = String(seq).padStart(6, '0');
   return [
@@ -3361,6 +3558,10 @@ function getDocumentAccessUserIds(document) {
   return [...getDocumentAccessMap(document).keys()];
 }
 
+function shouldShowDocumentAccessUser(user) {
+  return user?.role !== 'admin';
+}
+
 function getDocumentAccessUsers(document) {
   const accessMap = getDocumentAccessMap(document);
   const ids = [...accessMap.keys()];
@@ -3399,7 +3600,7 @@ function getDocumentAccessUsers(document) {
 }
 
 function getDocumentAccessSummary(document) {
-  const users = getDocumentAccessUsers(document);
+  const users = getDocumentAccessUsers(document).filter(shouldShowDocumentAccessUser);
   return {
     access_count: users.length,
     label: users.length <= 1 ? '仅自己' : `共 ${users.length} 人`,
@@ -3416,6 +3617,14 @@ function serializeDocument(row, options = {}) {
   };
   if (options.withAccessSummary) result.access_summary = getDocumentAccessSummary(row);
   return result;
+}
+
+function serializeDocumentEditRecord(row) {
+  if (!row) return null;
+  return {
+    ...row,
+    diff: parseMaybeJson(row.diff_json, { items: [] }),
+  };
 }
 
 function createDocumentRecord(body, user) {
@@ -3603,6 +3812,14 @@ app.get('/api/documents/:id', (req, res) => {
       WHERE l.document_id = ?
       ORDER BY l.changed_at DESC, l.id DESC
     `).all(row.id),
+    edit_records: db.prepare(`
+      SELECT e.*, u.display_name as edited_by_name
+      FROM document_edit_records e
+      LEFT JOIN users u ON e.edited_by = u.id
+      WHERE e.document_id = ?
+      ORDER BY e.edited_at DESC, e.id DESC
+      LIMIT 80
+    `).all(row.id).map(serializeDocumentEditRecord),
   });
 });
 
@@ -3617,6 +3834,14 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   const docType = normalizeDocumentType(req.body.doc_type ?? doc.doc_type ?? folder?.default_doc_type);
   const content = Object.prototype.hasOwnProperty.call(req.body, 'content') ? req.body.content : doc.content;
   const contentText = extractDocumentText(content, req.body.content_text);
+  const beforeSnapshot = {
+    title: doc.title,
+    content_text: doc.content_text,
+  };
+  const afterSnapshot = {
+    title: req.body.title || doc.title,
+    content_text: contentText,
+  };
   const tags = Array.isArray(req.body.tags) ? JSON.stringify(req.body.tags) : (req.body.tags ?? doc.tags);
   db.prepare(`
     UPDATE documents SET
@@ -3640,6 +3865,7 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     req.user.id,
     doc.id
   );
+  insertDocumentEditRecord(doc.id, req.user.id, 'page_update', beforeSnapshot, afterSnapshot);
   res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true }));
 });
 
@@ -3649,6 +3875,14 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档' });
   const content = req.body.content ?? JSON.stringify({ blocks: [] });
   const contentText = extractDocumentText(content, req.body.content_text);
+  const beforeSnapshot = {
+    title: doc.title,
+    content_text: doc.content_text,
+  };
+  const afterSnapshot = {
+    title: doc.title,
+    content_text: contentText,
+  };
   db.prepare(`
     UPDATE documents SET content = ?, content_text = ?, summary = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
@@ -3659,6 +3893,7 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
     req.user.id,
     doc.id
   );
+  insertDocumentEditRecord(doc.id, req.user.id, 'content_update', beforeSnapshot, afterSnapshot);
   res.json({ success: true, summary: buildDocumentSummary(contentText), updated_at: new Date().toISOString() });
 });
 

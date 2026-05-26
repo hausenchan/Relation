@@ -42,6 +42,7 @@ import {
   PlusCircleOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RightOutlined,
   SaveOutlined,
   ShareAltOutlined,
   StarFilled,
@@ -223,11 +224,19 @@ function blocksToText(blocks) {
     .join('\n');
 }
 
-function buildFolderTree(folders, activeDomain) {
+function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
   const scopedFolders = activeDomain === 'all'
     ? folders
     : folders.filter(folder => folder.domain === activeDomain);
   const domainMap = new Map();
+  const documentsByFolder = new Map();
+
+  visibleDocuments.forEach(doc => {
+    if (!doc.folder_id) return;
+    const folderKey = Number(doc.folder_id);
+    if (!documentsByFolder.has(folderKey)) documentsByFolder.set(folderKey, []);
+    documentsByFolder.get(folderKey).push(doc);
+  });
 
   scopedFolders.forEach(folder => {
     const domainKey = folder.domain || 'general';
@@ -265,10 +274,23 @@ function buildFolderTree(folders, activeDomain) {
       projectNode.deptMap.set(deptKey, deptNode);
       projectNode.children.push(deptNode);
     }
+    const folderDocuments = documentsByFolder.get(Number(folder.id)) || [];
+    const documentChildren = folderDocuments.map(doc => ({
+      title: doc.title || '未命名文档',
+      key: `document-${doc.id}`,
+      icon: <FileTextOutlined />,
+      isLeaf: true,
+      nodeType: 'document',
+      documentId: doc.id,
+      folderId: folder.id,
+    }));
     projectNode.deptMap.get(deptKey).children.push({
       title: folder.name,
       key: `folder-${folder.id}`,
       icon: <FolderOutlined />,
+      nodeType: 'folder',
+      folderId: folder.id,
+      ...(documentChildren.length ? { children: documentChildren } : {}),
     });
   });
 
@@ -280,6 +302,33 @@ function buildFolderTree(folders, activeDomain) {
     });
     return domainRest;
   });
+}
+
+function collectDefaultFolderExpandedKeys(nodes = []) {
+  const keys = [];
+  nodes.forEach(node => {
+    if (!node.children?.length) return;
+    if (node.nodeType !== 'folder') {
+      keys.push(node.key);
+      keys.push(...collectDefaultFolderExpandedKeys(node.children));
+    }
+  });
+  return keys;
+}
+
+function collectTreeKeys(nodes = [], keys = new Set()) {
+  nodes.forEach(node => {
+    keys.add(node.key);
+    if (node.children?.length) collectTreeKeys(node.children, keys);
+  });
+  return keys;
+}
+
+function areTreeKeysSame(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((key, index) => key === right[index]);
 }
 
 function buildHeadingMeta(blocks, numberingEnabled) {
@@ -364,10 +413,6 @@ function getAccessUserName(user) {
   return user?.name || user?.display_name || user?.username || `用户 ${user?.id || ''}`;
 }
 
-function getAccessUserInitial(user) {
-  return String(getAccessUserName(user)).trim().slice(0, 1).toUpperCase() || '用';
-}
-
 function getAccessUserSourceText(user) {
   const sources = Array.isArray(user?.source_types) ? user.source_types : [];
   return sources.map(type => accessSourceLabel[type] || type).join('、') || '可访问';
@@ -383,6 +428,35 @@ function formatChangeLogTime(value) {
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : String(value).slice(0, 16);
 }
 
+function parseEditRecordDiff(record) {
+  if (record?.diff && typeof record.diff === 'object') return record.diff;
+  if (typeof record?.diff_json === 'string' && record.diff_json.trim()) {
+    try {
+      return JSON.parse(record.diff_json);
+    } catch {
+      return { items: [] };
+    }
+  }
+  return { items: [] };
+}
+
+function getEditRecordDiffItems(record) {
+  const diff = parseEditRecordDiff(record);
+  if (Array.isArray(diff?.items) && diff.items.length) return diff.items;
+  const fallbackLines = String(record?.diff_text || '')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  return fallbackLines.length ? [{
+    label: '更新内容',
+    lines: fallbackLines.map(line => ({
+      text: line,
+      changed: true,
+      parts: [{ text: line, changed: true }],
+    })),
+  }] : [];
+}
+
 export default function Documents() {
   const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
@@ -392,6 +466,7 @@ export default function Documents() {
   const [teams, setTeams] = useState([]);
   const [users, setUsers] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [folderTreeDocuments, setFolderTreeDocuments] = useState([]);
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [editorTitle, setEditorTitle] = useState('');
@@ -422,6 +497,7 @@ export default function Documents() {
   const [tocOpen, setTocOpen] = useState(true);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(false);
+  const [folderTreeExpandedKeys, setFolderTreeExpandedKeys] = useState([]);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -431,7 +507,19 @@ export default function Documents() {
     [folders, selectedFolderId]
   );
 
-  const folderTree = useMemo(() => buildFolderTree(folders, domainFilter), [folders, domainFilter]);
+  const folderTree = useMemo(
+    () => buildFolderTree(folders, domainFilter, folderTreeDocuments),
+    [folders, domainFilter, folderTreeDocuments]
+  );
+  const defaultFolderTreeExpandedKeys = useMemo(() => collectDefaultFolderExpandedKeys(folderTree), [folderTree]);
+  const folderTreeKeySet = useMemo(() => collectTreeKeys(folderTree), [folderTree]);
+  const selectedTreeKeys = useMemo(() => {
+    const selectedTreeDoc = selectedDocId
+      ? folderTreeDocuments.find(item => Number(item.id) === Number(selectedDocId) && item.folder_id)
+      : null;
+    if (selectedTreeDoc) return [`document-${selectedDocId}`];
+    return selectedFolderId ? [`folder-${selectedFolderId}`] : [];
+  }, [folderTreeDocuments, selectedDocId, selectedFolderId]);
   const headingMeta = useMemo(
     () => buildHeadingMeta(editorBlocks, asSwitchValue(selectedDoc?.title_numbering_enabled)),
     [editorBlocks, selectedDoc?.title_numbering_enabled]
@@ -467,14 +555,28 @@ export default function Documents() {
     setUsers(userRows);
   };
 
+  const buildDocumentQueryParams = ({ includeFolder = true } = {}) => {
+    const params = {};
+    if (domainFilter !== 'all') params.domain = domainFilter;
+    if (keyword.trim()) params.search = keyword.trim();
+    if (includeFolder && selectedFolderId) params.folder_id = selectedFolderId;
+    if (sopOnly) params.sop_only = true;
+    return params;
+  };
+
+  const loadFolderTreeDocuments = async () => {
+    try {
+      const rows = await documentsApi.list(buildDocumentQueryParams({ includeFolder: false }));
+      setFolderTreeDocuments(rows);
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '加载目录文档失败');
+    }
+  };
+
   const loadDocuments = async () => {
     setLoading(true);
     try {
-      const params = {};
-      if (domainFilter !== 'all') params.domain = domainFilter;
-      if (keyword.trim()) params.search = keyword.trim();
-      if (selectedFolderId) params.folder_id = selectedFolderId;
-      if (sopOnly) params.sop_only = true;
+      const params = buildDocumentQueryParams();
       const rows = await documentsApi.list(params);
       setDocuments(rows);
       if (selectedDocId && !rows.some(item => item.id === selectedDocId)) {
@@ -524,13 +626,36 @@ export default function Documents() {
   }, [domainFilter, selectedFolderId, sopOnly]);
 
   useEffect(() => {
-    const timer = setTimeout(() => loadDocuments(), 300);
+    loadFolderTreeDocuments();
+  }, [domainFilter, sopOnly]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadDocuments();
+      loadFolderTreeDocuments();
+    }, 300);
     return () => clearTimeout(timer);
   }, [keyword]);
 
   useEffect(() => {
     if (selectedDocId) loadDetail(selectedDocId);
   }, [selectedDocId]);
+
+  useEffect(() => {
+    setFolderTreeExpandedKeys(prev => {
+      const keptFolderKeys = prev.filter(key => String(key).startsWith('folder-') && folderTreeKeySet.has(key));
+      const next = Array.from(new Set([...defaultFolderTreeExpandedKeys, ...keptFolderKeys]));
+      return areTreeKeysSame(prev, next) ? prev : next;
+    });
+  }, [defaultFolderTreeExpandedKeys, folderTreeKeySet]);
+
+  useEffect(() => {
+    if (!selectedDoc?.folder_id) return;
+    const folderKey = `folder-${selectedDoc.folder_id}`;
+    setFolderTreeExpandedKeys(prev => (
+      prev.includes(folderKey) ? prev : [...prev, folderKey]
+    ));
+  }, [selectedDoc?.folder_id]);
 
   const openCreate = () => {
     createForm.resetFields();
@@ -557,6 +682,7 @@ export default function Documents() {
       setCreateOpen(false);
       setSelectedDocId(doc.id);
       await loadDocuments();
+      await loadFolderTreeDocuments();
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '创建文档失败');
     }
@@ -575,6 +701,7 @@ export default function Documents() {
       const updated = await documentsApi.update(selectedDoc.id, payload);
       await loadDetail(selectedDoc.id);
       await loadDocuments();
+      await loadFolderTreeDocuments();
       message.success(`已保存 ${updated.document_no}`);
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '保存失败');
@@ -640,6 +767,7 @@ export default function Documents() {
         access_summary: data.access_summary,
       }));
       await loadDocuments();
+      await loadFolderTreeDocuments();
       setShareOpen(false);
       message.success('共享范围已保存');
     } catch (err) {
@@ -712,7 +840,7 @@ export default function Documents() {
       closeChangeLogEditor();
       await refreshSelectedDocMeta();
       await loadDocuments();
-      message.success(editingChangeLog ? '页面编辑记录已更新' : '页面编辑记录已添加');
+      message.success(editingChangeLog ? '改动记录已更新' : '改动记录已添加');
     } catch (err) {
       if (err?.errorFields) return;
       message.error(err.response?.data?.error || err.message || '保存页面编辑记录失败');
@@ -744,7 +872,7 @@ export default function Documents() {
       await documentsApi.deleteChangeLog(logId);
       setExpandedChangeLogIds(prev => prev.filter(id => id !== logId));
       await refreshSelectedDocMeta();
-      message.success('页面编辑记录已删除');
+      message.success('改动记录已删除');
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '删除页面编辑记录失败');
     }
@@ -758,6 +886,7 @@ export default function Documents() {
       setSelectedDoc(null);
       setSelectedDocId(null);
       await loadDocuments();
+      await loadFolderTreeDocuments();
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '删除失败');
     }
@@ -771,6 +900,7 @@ export default function Documents() {
         await documentsApi.favorite(doc.id);
       }
       await loadDocuments();
+      await loadFolderTreeDocuments();
       if (selectedDoc?.id === doc.id) await loadDetail(doc.id);
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '收藏操作失败');
@@ -1058,10 +1188,7 @@ export default function Documents() {
                       const color = item.is_creator ? 'geekblue' : item.is_default ? 'purple' : 'blue';
                       return (
                         <Tooltip key={item.id} title={sourceText}>
-                          <Tag color={color} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, margin: 0, padding: '2px 8px 2px 4px' }}>
-                            <Avatar size={18} style={{ background: 'rgba(255,255,255,0.35)', color: 'inherit', fontSize: 11 }}>
-                              {getAccessUserInitial(item)}
-                            </Avatar>
+                          <Tag color={color} style={{ display: 'inline-flex', alignItems: 'center', margin: 0, padding: '2px 8px' }}>
                             <span>{getAccessUserName(item)}</span>
                           </Tag>
                         </Tooltip>
@@ -1164,7 +1291,7 @@ export default function Documents() {
     return (
       <div style={{ padding: 14, border: '1px solid #dbeafe', background: '#f8fbff', borderRadius: 8 }}>
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <Text strong>{editingChangeLog ? '编辑页面编辑记录' : '新增页面编辑记录'}</Text>
+          <Text strong>{editingChangeLog ? '编辑改动记录' : '新增改动记录'}</Text>
           <Form form={changeLogForm} layout="vertical">
             <Form.Item name="version" label="版本号" rules={[{ required: true, message: '请输入版本号' }]}>
               <Input placeholder="例如 V1.1" />
@@ -1218,7 +1345,7 @@ export default function Documents() {
               <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
                 <Space size={8} wrap>
                   <Text strong>{actorName}</Text>
-                  <Text type="secondary">编辑了页面</Text>
+                  <Text type="secondary">记录了改动</Text>
                   <Tag color="blue">{item.version || 'V1.0'}</Tag>
                 </Space>
                 <Text strong ellipsis={{ tooltip: item.summary }}>{item.summary || '未填写摘要'}</Text>
@@ -1290,12 +1417,88 @@ export default function Documents() {
     );
   };
 
+  const renderEditRecordLine = (line, index) => {
+    const parts = Array.isArray(line?.parts) && line.parts.length
+      ? line.parts
+      : [{ text: line?.text || '', changed: Boolean(line?.changed) }];
+    return (
+      <div
+        key={`${line?.text || 'line'}-${index}`}
+        style={{
+          lineHeight: 1.8,
+          padding: line?.changed ? '2px 4px' : '0 4px',
+          background: line?.changed ? '#f0fdf4' : 'transparent',
+          color: '#111827',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+        }}
+      >
+        {parts.map((part, partIndex) => (
+          <span
+            key={`${part?.text || 'part'}-${partIndex}`}
+            style={{
+              color: part?.changed ? '#10b981' : '#111827',
+              fontWeight: part?.changed ? 600 : 400,
+              background: part?.changed ? '#dcfce7' : 'transparent',
+            }}
+          >
+            {part?.text || ''}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
+  const renderEditRecordItem = (item) => {
+    const actorName = item.edited_by_name || '未知用户';
+    const diffItems = getEditRecordDiffItems(item);
+    const pageTitle = item.title_after || selectedDoc?.title || '未命名文档';
+    return (
+      <List.Item style={{ padding: 0, borderBlockEnd: 'none' }}>
+        <div style={{ display: 'flex', gap: 10, width: '100%' }}>
+          <div style={{ position: 'relative', width: 34, display: 'flex', justifyContent: 'center' }}>
+            <div style={{ position: 'absolute', top: 34, bottom: -16, width: 1, background: '#e5e7eb' }} />
+            <Avatar size={32} style={{ background: '#dbeafe', color: '#2563eb', zIndex: 1 }}>
+              {actorName.slice(0, 1).toUpperCase()}
+            </Avatar>
+          </div>
+          <div style={{ flex: 1, minWidth: 0, border: '1px solid #eef2f7', borderRadius: 8, padding: 12, background: '#fff' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+              <Space direction="vertical" size={4} style={{ flex: 1, minWidth: 0 }}>
+                <Space size={6} wrap>
+                  <Text strong>{actorName}</Text>
+                  <Text type="secondary">编辑了页面</Text>
+                  <Text strong ellipsis={{ tooltip: pageTitle }}>{pageTitle}</Text>
+                </Space>
+                <Text type="secondary" style={{ fontSize: 12 }}>{formatChangeLogTime(item.edited_at || item.created_at)}</Text>
+              </Space>
+              <ClockCircleOutlined style={{ color: '#94a3b8', marginTop: 2 }} />
+            </div>
+            <Space direction="vertical" size={10} style={{ width: '100%', marginTop: 10 }}>
+              {diffItems.length ? diffItems.map((diffItem, index) => (
+                <div key={`${diffItem?.label || 'diff'}-${index}`}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{diffItem?.label || '更新内容'}</Text>
+                  <div style={{ marginTop: 4 }}>
+                    {(diffItem?.lines || []).map(renderEditRecordLine)}
+                  </div>
+                </div>
+              )) : (
+                <Text type="secondary">本次保存未生成可展示的内容差异</Text>
+              )}
+            </Space>
+          </div>
+        </div>
+      </List.Item>
+    );
+  };
+
   const renderChangeLogDrawer = () => {
     const logs = selectedDoc?.change_logs || [];
+    const editRecords = selectedDoc?.edit_records || [];
     const allExpanded = logs.length > 0 && logs.every(item => expandedChangeLogIds.includes(item.id));
     return (
       <Drawer
-        title="页面编辑记录"
+        title="改动历史"
         placement="right"
         open={changeLogOpen}
         onClose={() => setChangeLogOpen(false)}
@@ -1613,7 +1816,7 @@ export default function Documents() {
             {!isFolderSidebarCollapsed && (
               <Space size={6}>
                 <Tooltip title="刷新">
-                  <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); }} />
+                  <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); loadFolderTreeDocuments(); }} />
                 </Tooltip>
                 <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建</Button>
               </Space>
@@ -1660,14 +1863,30 @@ export default function Documents() {
                 {folderTree.length ? (
                   <Tree
                     showIcon
-                    defaultExpandAll
-                    selectedKeys={selectedFolderId ? [`folder-${selectedFolderId}`] : []}
+                    expandedKeys={folderTreeExpandedKeys}
+                    selectedKeys={selectedTreeKeys}
                     treeData={folderTree}
-                    onSelect={(keys) => {
-                      const key = keys[0];
+                    switcherIcon={({ expanded, isLeaf }) => {
+                      if (isLeaf) return null;
+                      return expanded ? <DownOutlined /> : <RightOutlined />;
+                    }}
+                    onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
+                    onSelect={(keys, info) => {
+                      const key = keys[0] || info?.node?.key;
                       if (typeof key === 'string' && key.startsWith('folder-')) {
                         setSelectedFolderId(Number(key.replace('folder-', '')));
                         setSopOnly(false);
+                        setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev : [...prev, key]));
+                      } else if (typeof key === 'string' && key.startsWith('document-')) {
+                        const documentId = Number(key.replace('document-', ''));
+                        const folderId = info?.node?.folderId;
+                        if (folderId) {
+                          const folderKey = `folder-${folderId}`;
+                          setSelectedFolderId(Number(folderId));
+                          setFolderTreeExpandedKeys(prev => (prev.includes(folderKey) ? prev : [...prev, folderKey]));
+                          setSopOnly(false);
+                        }
+                        setSelectedDocId(documentId);
                       }
                     }}
                     style={{ marginTop: 8, background: 'transparent' }}
