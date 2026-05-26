@@ -3850,7 +3850,7 @@ app.get('/api/documents/:id', (req, res) => {
       FROM document_edit_records e
       LEFT JOIN users u ON e.edited_by = u.id
       WHERE e.document_id = ?
-      ORDER BY e.edited_at DESC, e.id DESC
+      ORDER BY datetime(COALESCE(e.edited_at, e.created_at)) DESC, e.id DESC
       LIMIT 80
     `).all(row.id).map(serializeDocumentEditRecord),
   });

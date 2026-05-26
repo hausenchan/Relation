@@ -841,6 +841,20 @@ function sortChangeLogsLatestFirst(logs = []) {
   });
 }
 
+function getEditRecordSortTime(record) {
+  const rawTime = record?.edited_at || record?.created_at;
+  const timestamp = rawTime ? dayjs(rawTime).valueOf() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortEditRecordsLatestFirst(records = []) {
+  return [...records].sort((a, b) => {
+    const timeDiff = getEditRecordSortTime(b) - getEditRecordSortTime(a);
+    if (timeDiff !== 0) return timeDiff;
+    return Number(b?.id || 0) - Number(a?.id || 0);
+  });
+}
+
 export default function Documents() {
   const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
@@ -2581,7 +2595,7 @@ export default function Documents() {
 
   const renderChangeLogDrawer = () => {
     const logs = sortChangeLogsLatestFirst(selectedDoc?.change_logs || []);
-    const editRecords = selectedDoc?.edit_records || [];
+    const editRecords = sortEditRecordsLatestFirst(selectedDoc?.edit_records || []);
     const allExpanded = logs.length > 0 && logs.every(item => expandedChangeLogIds.includes(item.id));
     const versionRecordPane = (
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
