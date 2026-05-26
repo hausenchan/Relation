@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Button,
+  Avatar,
   Checkbox,
+  DatePicker,
   Descriptions,
   Divider,
   Drawer,
@@ -26,10 +28,11 @@ import {
   message,
 } from 'antd';
 import {
-  BgColorsOutlined,
   CopyOutlined,
+  ClockCircleOutlined,
   DeleteOutlined,
   DownOutlined,
+  EditOutlined,
   FileTextOutlined,
   FolderOutlined,
   HistoryOutlined,
@@ -48,7 +51,9 @@ import {
   UpOutlined,
   UserOutlined,
 } from '@ant-design/icons';
+import dayjs from 'dayjs';
 import { documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
+import { useAuth } from '../AuthContext';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -94,13 +99,15 @@ const docTypeOptions = [
 ];
 
 const blockTypeOptions = [
-  { value: 'paragraph', label: '正文' },
-  { value: 'heading1', label: '一级标题' },
-  { value: 'heading2', label: '二级标题' },
-  { value: 'heading3', label: '三级标题' },
-  { value: 'bullet', label: '无序列表' },
-  { value: 'numbered', label: '有序列表' },
-  { value: 'todo', label: '待办事项' },
+  { value: 'paragraph', label: '文本' },
+  { value: 'todo', label: '待办列表' },
+  { value: 'heading1', label: '主标题' },
+  { value: 'heading2', label: '大标题' },
+  { value: 'heading3', label: '中标题' },
+  { value: 'heading4', label: '小标题' },
+  { value: 'page', label: '页面' },
+  { value: 'bullet', label: '列表' },
+  { value: 'numbered', label: '数字列表' },
   { value: 'quote', label: '引用' },
   { value: 'code', label: '代码块' },
   { value: 'divider', label: '分割线' },
@@ -119,8 +126,8 @@ const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, it
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
-const blockTypeLabel = Object.fromEntries(blockTypeOptions.map(item => [item.value, item.label]));
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
+const documentAdminRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 
 function createBlock(type = 'paragraph', content = '', extra = {}) {
   return {
@@ -166,6 +173,12 @@ function normalizeBlock(block) {
     highlight: block.highlight || '',
     checked: Boolean(block.checked),
   };
+}
+
+function isBlankBlock(block) {
+  if (!block) return true;
+  if (block.type === 'divider') return false;
+  return !String(block.content || '').trim();
 }
 
 function contentToBlocks(content) {
@@ -271,11 +284,15 @@ function buildFolderTree(folders, activeDomain) {
 }
 
 function buildHeadingMeta(blocks, numberingEnabled) {
-  const counters = [0, 0, 0];
+  const counters = [0, 0, 0, 0];
   const map = new Map();
   const toc = [];
   blocks.forEach(block => {
-    const level = block.type === 'heading1' ? 1 : block.type === 'heading2' ? 2 : block.type === 'heading3' ? 3 : 0;
+    const level = block.type === 'heading1' ? 1
+      : block.type === 'heading2' ? 2
+        : block.type === 'heading3' ? 3
+          : block.type === 'heading4' ? 4
+            : 0;
     const title = String(block.content || '').trim();
     if (!level || !title) return;
     counters[level - 1] += 1;
@@ -294,6 +311,12 @@ function getEditorMaxWidth(doc) {
   if (doc.width_mode === 'wide') return 1120;
   if (doc.width_mode === 'custom') return Number(doc.custom_width) || 960;
   return 860;
+}
+
+function getEditorShellMaxWidth(doc, tocVisible) {
+  const contentWidth = getEditorMaxWidth(doc);
+  if (!tocVisible || typeof contentWidth !== 'number') return contentWidth;
+  return contentWidth + 300;
 }
 
 function asSwitchValue(value, defaultValue = false) {
@@ -329,7 +352,40 @@ function draftToShares(draft) {
   ];
 }
 
+const accessSourceLabel = {
+  creator: '创建人',
+  default: '管理员/高管默认可访问',
+  project_group: '项目组共享',
+  department: '部门共享',
+  team: '小组共享',
+  user: '个人共享',
+};
+
+function getAccessUserName(user) {
+  return user?.name || user?.display_name || user?.username || `用户 ${user?.id || ''}`;
+}
+
+function getAccessUserInitial(user) {
+  return String(getAccessUserName(user)).trim().slice(0, 1).toUpperCase() || '用';
+}
+
+function getAccessUserSourceText(user) {
+  const sources = Array.isArray(user?.source_types) ? user.source_types : [];
+  return sources.map(type => accessSourceLabel[type] || type).join('、') || '可访问';
+}
+
+function isDocumentAdminUser(user) {
+  return documentAdminRoles.has(user?.role) || documentAdminRoles.has(user?.executive_role);
+}
+
+function formatChangeLogTime(value) {
+  if (!value) return '-';
+  const parsed = dayjs(value);
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : String(value).slice(0, 16);
+}
+
 export default function Documents() {
+  const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [folders, setFolders] = useState([]);
@@ -342,6 +398,7 @@ export default function Documents() {
   const [editorTitle, setEditorTitle] = useState('');
   const [editorBlocks, setEditorBlocks] = useState([createBlock()]);
   const [selectedBlockId, setSelectedBlockId] = useState(null);
+  const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [domainFilter, setDomainFilter] = useState('all');
   const [keyword, setKeyword] = useState('');
   const [selectedFolderId, setSelectedFolderId] = useState(null);
@@ -358,7 +415,11 @@ export default function Documents() {
   const [shareDraft, setShareDraft] = useState(emptyShareDraft());
   const [changeLogOpen, setChangeLogOpen] = useState(false);
   const [changeLogSaving, setChangeLogSaving] = useState(false);
-  const [tocOpen, setTocOpen] = useState(false);
+  const [changeLogFormOpen, setChangeLogFormOpen] = useState(false);
+  const [editingChangeLog, setEditingChangeLog] = useState(null);
+  const [expandedChangeLogIds, setExpandedChangeLogIds] = useState([]);
+  const [changeLogNotifyEnabled, setChangeLogNotifyEnabled] = useState(false);
+  const [tocOpen, setTocOpen] = useState(true);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(false);
   const [createForm] = Form.useForm();
@@ -374,10 +435,6 @@ export default function Documents() {
   const headingMeta = useMemo(
     () => buildHeadingMeta(editorBlocks, asSwitchValue(selectedDoc?.title_numbering_enabled)),
     [editorBlocks, selectedDoc?.title_numbering_enabled]
-  );
-  const selectedBlock = useMemo(
-    () => editorBlocks.find(block => block.id === selectedBlockId) || editorBlocks[0],
-    [editorBlocks, selectedBlockId]
   );
   const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
 
@@ -434,10 +491,13 @@ export default function Documents() {
     try {
       const detail = await documentsApi.get(id);
       const blocks = contentToBlocks(detail.content);
+      const isBlankPage = blocks.length === 1 && blocks[0].type === 'paragraph' && isBlankBlock(blocks[0]);
       setSelectedDoc(detail);
       setEditorTitle(detail.title || '');
       setEditorBlocks(blocks);
-      setSelectedBlockId(blocks[0]?.id || null);
+      setSelectedBlockId(isBlankPage ? null : (blocks[0]?.id || null));
+      setHoveredBlockId(null);
+      setTocOpen(asSwitchValue(detail.toc_enabled, true));
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '加载文档详情失败');
     } finally {
@@ -472,7 +532,7 @@ export default function Documents() {
   const openCreate = () => {
     createForm.resetFields();
     createForm.setFieldsValue({
-      title: '未命名文档',
+      title: '新页面',
       domain: selectedFolder?.domain || (domainFilter === 'all' ? 'general' : domainFilter),
       project_group_id: selectedFolder?.project_group_id || undefined,
       department_key: selectedFolder?.department_key || 'ALL',
@@ -485,7 +545,11 @@ export default function Documents() {
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
-      const doc = await documentsApi.create(values);
+      const doc = await documentsApi.create({
+        ...values,
+        content: { blocks: [] },
+        content_text: '',
+      });
       message.success(`已创建 ${doc.document_no}`);
       setCreateOpen(false);
       setSelectedDocId(doc.id);
@@ -528,6 +592,9 @@ export default function Documents() {
   const savePageOptions = async (patch) => {
     if (!selectedDoc) return;
     const payload = buildPageOptionsPayload(patch);
+    if (Object.prototype.hasOwnProperty.call(patch, 'toc_enabled')) {
+      setTocOpen(Boolean(patch.toc_enabled));
+    }
     setOptionsSaving(true);
     try {
       await documentsApi.updatePageOptions(selectedDoc.id, payload);
@@ -545,11 +612,13 @@ export default function Documents() {
     setShareOpen(true);
     setShareLoading(true);
     try {
-      const [shares] = await Promise.all([
+      const [shares, accessSummary] = await Promise.all([
         documentsApi.listShares(selectedDoc.id),
+        documentsApi.accessSummary(selectedDoc.id),
         loadShareOptions(),
       ]);
       setShareDraft(sharesToDraft(shares));
+      setSelectedDoc(prev => ({ ...prev, access_summary: accessSummary }));
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '加载共享范围失败');
     } finally {
@@ -724,6 +793,51 @@ export default function Documents() {
     focusBlock(id);
   };
 
+  const addOrTransformBlock = (id, type) => {
+    const current = editorBlocks.find(block => block.id === id);
+    if (!current) return;
+    if (isBlankBlock(current)) {
+      changeBlockType(id, type);
+      return;
+    }
+    addBlockAfter(id, type);
+  };
+
+  const handleBlockMenuAction = (block, key) => {
+    if (!block) return;
+    if (key.startsWith('type:')) {
+      addOrTransformBlock(block.id, key.replace('type:', ''));
+      return;
+    }
+    if (key.startsWith('highlight:')) {
+      updateBlock(block.id, { highlight: key.replace('highlight:', '') });
+      setSelectedBlockId(block.id);
+      return;
+    }
+    if (key === 'duplicate') duplicateBlock(block.id);
+    if (key === 'delete') deleteBlock(block.id);
+    if (key === 'move-up') moveBlock(block.id, -1);
+    if (key === 'move-down') moveBlock(block.id, 1);
+  };
+
+  const buildBlockMenuItems = (block) => [
+    { type: 'group', label: '基础块', children: blockTypeOptions.map(item => ({ key: `type:${item.value}`, label: item.label })) },
+    {
+      type: 'group',
+      label: '高亮',
+      children: highlightOptions.map(item => ({
+        key: `highlight:${item.value}`,
+        label: item.value ? item.label : '清除高亮',
+        icon: <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: item.color, border: `1px solid ${item.border || item.color}` }} />,
+      })),
+    },
+    { type: 'divider' },
+    { key: 'duplicate', icon: <CopyOutlined />, label: '复制当前块' },
+    { key: 'move-up', icon: <UpOutlined />, label: '上移', disabled: editorBlocks.findIndex(item => item.id === block?.id) <= 0 },
+    { key: 'move-down', icon: <DownOutlined />, label: '下移', disabled: editorBlocks.findIndex(item => item.id === block?.id) >= editorBlocks.length - 1 },
+    { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除当前块' },
+  ];
+
   const handleBlockKeyDown = (event, block, index) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -850,15 +964,48 @@ export default function Documents() {
     </div>
   );
 
-  const renderShareSelector = () => (
-    <Spin spinning={shareLoading}>
-      <Space direction="vertical" size={14} style={{ width: '100%' }}>
-        <div style={{ padding: 12, background: '#f8fafc', borderRadius: 8 }}>
-          <Space size={8} wrap>
-            <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
-            <Text type="secondary">创建人、管理员和高管默认可访问；下方用于追加共享范围。</Text>
-          </Space>
-        </div>
+  const renderShareSelector = () => {
+    const accessUsers = selectedDoc?.access_summary?.users || [];
+    return (
+      <Spin spinning={shareLoading}>
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <div style={{ padding: 12, background: '#f8fafc', borderRadius: 8 }}>
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              <Space size={8} wrap>
+                <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
+                <Text type="secondary">创建人、管理员和高管默认可访问；下方用于追加共享范围。</Text>
+              </Space>
+              {accessUsers.length > 0 && (
+                <div>
+                  <Text type="secondary" style={{ fontSize: 12 }}>有权限成员</Text>
+                  <div style={{
+                    display: 'flex',
+                    gap: 6,
+                    flexWrap: 'wrap',
+                    maxHeight: 96,
+                    overflowY: 'auto',
+                    marginTop: 8,
+                    paddingRight: 4,
+                  }}>
+                    {accessUsers.map(item => {
+                      const sourceText = getAccessUserSourceText(item);
+                      const color = item.is_creator ? 'geekblue' : item.is_default ? 'purple' : 'blue';
+                      return (
+                        <Tooltip key={item.id} title={sourceText}>
+                          <Tag color={color} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, margin: 0, padding: '2px 8px 2px 4px' }}>
+                            <Avatar size={18} style={{ background: 'rgba(255,255,255,0.35)', color: 'inherit', fontSize: 11 }}>
+                              {getAccessUserInitial(item)}
+                            </Avatar>
+                            <span>{getAccessUserName(item)}</span>
+                          </Tag>
+                        </Tooltip>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </Space>
+          </div>
         <div>
           <Text strong>项目组</Text>
           <Select
@@ -941,9 +1088,10 @@ export default function Documents() {
           })}
           {draftToShares(shareDraft).length === 0 && <Text type="secondary">尚未追加共享对象</Text>}
         </Space>
-      </Space>
-    </Spin>
-  );
+        </Space>
+      </Spin>
+    );
+  };
 
   const renderChangeLogDrawer = () => (
     <Drawer
@@ -1029,79 +1177,57 @@ export default function Documents() {
     </Drawer>
   );
 
-  const renderBlockToolbar = () => {
-    if (!selectedDoc || !selectedBlock) return null;
-    const selectedIndex = editorBlocks.findIndex(block => block.id === selectedBlock.id);
+  const renderTocPanel = () => {
+    if (!asSwitchValue(selectedDoc?.toc_enabled, true) || !tocOpen) return null;
     return (
-      <div style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 2,
-        background: '#fff',
-        border: '1px solid #e5e7eb',
-        borderRadius: 8,
-        padding: 8,
-        marginBottom: 12,
-        boxShadow: '0 4px 12px rgba(15,23,42,0.06)',
+      <aside style={{
+        width: isMobile ? '100%' : 260,
+        flex: '0 0 auto',
+        borderLeft: '1px solid #e5e7eb',
+        paddingLeft: isMobile ? 0 : 20,
+        color: '#64748b',
       }}>
-        <Space size={8} wrap>
-          <Select
-            size="small"
-            value={selectedBlock.type}
-            options={blockTypeOptions}
-            style={{ width: 128 }}
-            onChange={value => changeBlockType(selectedBlock.id, value)}
-          />
-          <Space size={4}>
-            <Tooltip title="高亮颜色">
-              <Button size="small" icon={<BgColorsOutlined />} />
-            </Tooltip>
-            {highlightOptions.map(option => (
-              <Tooltip title={option.label} key={option.value || 'none'}>
-                <button
-                  type="button"
-                  onClick={() => updateBlock(selectedBlock.id, { highlight: option.value })}
-                  style={{
-                    width: 22,
-                    height: 22,
-                    borderRadius: 6,
-                    border: selectedBlock.highlight === option.value ? '2px solid #4f46e5' : `1px solid ${option.border || '#cbd5e1'}`,
-                    background: option.color,
-                    cursor: 'pointer',
-                  }}
-                  aria-label={option.label}
-                />
-              </Tooltip>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <Text strong style={{ color: '#64748b' }}>标题目录</Text>
+          <Button type="text" size="small" icon={<MoreOutlined />} onClick={() => setTocOpen(false)} />
+        </div>
+        {headingMeta.toc.length ? (
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            {headingMeta.toc.map(item => (
+              <Button
+                key={item.id}
+                type="text"
+                block
+                onClick={() => scrollToBlock(item.id)}
+                style={{
+                  justifyContent: 'flex-start',
+                  paddingLeft: (item.level - 1) * 14,
+                  height: 'auto',
+                  minHeight: 28,
+                  whiteSpace: 'normal',
+                  textAlign: 'left',
+                  color: '#64748b',
+                }}
+              >
+                <span>{item.number ? `${item.number} ` : ''}{item.title}</span>
+              </Button>
             ))}
           </Space>
-          <Divider type="vertical" />
-          <Tooltip title="上移">
-            <Button size="small" icon={<UpOutlined />} disabled={selectedIndex <= 0} onClick={() => moveBlock(selectedBlock.id, -1)} />
-          </Tooltip>
-          <Tooltip title="下移">
-            <Button size="small" icon={<DownOutlined />} disabled={selectedIndex >= editorBlocks.length - 1} onClick={() => moveBlock(selectedBlock.id, 1)} />
-          </Tooltip>
-          <Tooltip title="复制块">
-            <Button size="small" icon={<CopyOutlined />} onClick={() => duplicateBlock(selectedBlock.id)} />
-          </Tooltip>
-          <Tooltip title="下方插入">
-            <Button size="small" icon={<PlusOutlined />} onClick={() => addBlockAfter(selectedBlock.id)} />
-          </Tooltip>
-          <Popconfirm title="删除该块？" onConfirm={() => deleteBlock(selectedBlock.id)} okText="删除" cancelText="取消">
-            <Button size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
-        </Space>
-      </div>
+        ) : (
+          <Text type="secondary">请在正文添加标题</Text>
+        )}
+      </aside>
     );
   };
 
   const renderBlockInput = (block, index, heading) => {
+    const active = selectedBlockId === block.id;
     const commonProps = {
       id: `doc-block-input-${block.id}`,
       value: block.content,
       bordered: false,
       autoSize: { minRows: block.type === 'code' ? 3 : 1 },
-      placeholder: block.type?.startsWith('heading') ? '输入标题' : '输入内容',
+      placeholder: active ? (block.type?.startsWith('heading') ? '输入标题' : '输入内容') : '',
       onFocus: () => setSelectedBlockId(block.id),
       onChange: event => updateBlock(block.id, { content: event.target.value }),
       onKeyDown: event => handleBlockKeyDown(event, block, index),
@@ -1128,7 +1254,7 @@ export default function Documents() {
             autoSize={{ minRows: 1 }}
             style={{
               ...commonProps.style,
-              fontSize: level === 1 ? 28 : level === 2 ? 22 : 18,
+              fontSize: level === 1 ? 30 : level === 2 ? 24 : level === 3 ? 19 : 16,
               fontWeight: 700,
               lineHeight: 1.35,
             }}
@@ -1190,39 +1316,85 @@ export default function Documents() {
       );
     }
 
+    if (block.type === 'page') {
+      return (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          border: '1px solid #e5e7eb',
+          borderRadius: 6,
+          padding: '8px 10px',
+          background: '#f8fafc',
+        }}>
+          <FileTextOutlined style={{ color: '#64748b' }} />
+          <TextArea
+            {...commonProps}
+            autoSize={{ minRows: 1 }}
+            placeholder={active ? '页面标题' : ''}
+            style={{ ...commonProps.style, fontWeight: 600 }}
+          />
+        </div>
+      );
+    }
+
     return <TextArea {...commonProps} />;
   };
 
   const renderEditorBlock = (block, index) => {
     const selected = selectedBlockId === block.id;
+    const active = selected || hoveredBlockId === block.id;
     const heading = headingMeta.map.get(block.id);
     return (
       <div
         id={`doc-block-${block.id}`}
         key={block.id}
         onClick={() => setSelectedBlockId(block.id)}
+        onMouseEnter={() => setHoveredBlockId(block.id)}
+        onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
         style={{
           display: 'grid',
-          gridTemplateColumns: '28px minmax(0, 1fr)',
-          gap: 8,
-          border: selected ? '1px solid #4f46e5' : '1px solid transparent',
-          background: block.highlight || (selected ? '#f8fafc' : 'transparent'),
-          borderRadius: 8,
-          padding: '8px 10px 8px 4px',
-          marginBottom: 6,
+          gridTemplateColumns: isMobile ? '24px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
+          gap: 4,
+          border: selected ? '1px solid #c7d2fe' : '1px solid transparent',
+          background: block.highlight || (active ? '#fafafa' : 'transparent'),
+          borderRadius: 6,
+          padding: '3px 8px 3px 0',
+          marginBottom: 2,
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
       >
-        <Space direction="vertical" size={2} style={{ alignItems: 'center', paddingTop: 2 }}>
-          <Tooltip title={blockTypeLabel[block.type] || '块'}>
-            <MenuOutlined style={{ color: selected ? '#4f46e5' : '#cbd5e1', cursor: 'grab' }} />
-          </Tooltip>
-          {selected && (
-            <Tooltip title="下方插入">
-              <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => addBlockAfter(block.id)} />
-            </Tooltip>
-          )}
-        </Space>
+        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: block.type?.startsWith('heading') ? 5 : 3 }}>
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: buildBlockMenuItems(block),
+              onClick: ({ key, domEvent }) => {
+                domEvent.stopPropagation();
+                handleBlockMenuAction(block, key);
+              },
+            }}
+          >
+            <Button
+              type="text"
+              size="small"
+              icon={<PlusOutlined />}
+              aria-label="添加块"
+              onClick={event => {
+                event.stopPropagation();
+                setSelectedBlockId(block.id);
+              }}
+              style={{
+                width: 24,
+                height: 24,
+                minWidth: 24,
+                opacity: active ? 1 : 0,
+                pointerEvents: active ? 'auto' : 'none',
+                color: '#6b7280',
+              }}
+            />
+          </Dropdown>
+        </div>
         <div style={{ minWidth: 0 }}>
           {renderBlockInput(block, index, heading)}
         </div>
@@ -1358,7 +1530,11 @@ export default function Documents() {
           </div>
         ) : (
           <Spin spinning={detailLoading}>
-            <div style={{ maxWidth: getEditorMaxWidth(selectedDoc), margin: '0 auto', padding: isMobile ? 0 : '4px 12px' }}>
+            <div style={{
+              maxWidth: getEditorShellMaxWidth(selectedDoc, asSwitchValue(selectedDoc?.toc_enabled, true) && tocOpen),
+              margin: '0 auto',
+              padding: isMobile ? 0 : '4px 12px',
+            }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
                 <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
                   <Space size={8} wrap>
@@ -1374,7 +1550,7 @@ export default function Documents() {
                   <Button
                     icon={<MenuOutlined />}
                     disabled={!asSwitchValue(selectedDoc?.toc_enabled, true)}
-                    onClick={() => setTocOpen(true)}
+                    onClick={() => setTocOpen(prev => !prev)}
                   >
                     目录
                   </Button>
@@ -1425,51 +1601,28 @@ export default function Documents() {
                 {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
               </Space>
 
-              {renderBlockToolbar()}
-
-              <div style={{ paddingBottom: 96 }}>
-                {editorBlocks.map((block, index) => renderEditorBlock(block, index))}
+              <div style={{
+                display: 'flex',
+                gap: isMobile ? 16 : 32,
+                alignItems: 'flex-start',
+                flexDirection: isMobile ? 'column' : 'row',
+              }}>
+                <section style={{
+                  flex: 1,
+                  minWidth: 0,
+                  maxWidth: getEditorMaxWidth(selectedDoc),
+                  width: '100%',
+                  paddingBottom: 96,
+                  minHeight: 420,
+                }}>
+                  {editorBlocks.map((block, index) => renderEditorBlock(block, index))}
+                </section>
+                {renderTocPanel()}
               </div>
             </div>
           </Spin>
         )}
       </main>
-
-      <Drawer
-        title="文档目录"
-        placement="right"
-        open={tocOpen}
-        onClose={() => setTocOpen(false)}
-        width={isMobile ? '86vw' : 340}
-      >
-        {headingMeta.toc.length ? (
-          <Space direction="vertical" size={4} style={{ width: '100%' }}>
-            {headingMeta.toc.map(item => (
-              <Button
-                key={item.id}
-                type="text"
-                block
-                onClick={() => {
-                  setTocOpen(false);
-                  scrollToBlock(item.id);
-                }}
-                style={{
-                  justifyContent: 'flex-start',
-                  paddingLeft: 8 + (item.level - 1) * 18,
-                  height: 'auto',
-                  minHeight: 32,
-                  whiteSpace: 'normal',
-                  textAlign: 'left',
-                }}
-              >
-                <span>{item.number ? `${item.number} ` : ''}{item.title}</span>
-              </Button>
-            ))}
-          </Space>
-        ) : (
-          <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无标题块" />
-        )}
-      </Drawer>
 
       <Modal
         title="共享文档"
