@@ -36,11 +36,14 @@ import {
   PlusOutlined,
   ReloadOutlined,
   SaveOutlined,
+  ShareAltOutlined,
   StarFilled,
   StarOutlined,
+  TeamOutlined,
   UpOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
-import { documentsApi, projectGroupsApi } from '../api';
+import { documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -63,6 +66,14 @@ const departmentOptions = [
   { value: 'ADS', label: '4_投放' },
   { value: 'MGT', label: '经营管理' },
   { value: 'ALL', label: '通用' },
+];
+
+const orgDepartmentOptions = [
+  { value: 'commercial', label: '商务' },
+  { value: 'operation', label: '产运' },
+  { value: 'rd', label: '研发' },
+  { value: 'general', label: '综合' },
+  { value: 'ad_delivery', label: '投放' },
 ];
 
 const docTypeOptions = [
@@ -101,6 +112,7 @@ const highlightOptions = [
 
 const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, item.label]));
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
+const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
 const blockTypeLabel = Object.fromEntries(blockTypeOptions.map(item => [item.value, item.label]));
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
@@ -284,11 +296,41 @@ function asSwitchValue(value, defaultValue = false) {
   return Boolean(Number(value));
 }
 
+function emptyShareDraft() {
+  return {
+    project_group_ids: [],
+    departments: [],
+    team_ids: [],
+    user_ids: [],
+  };
+}
+
+function sharesToDraft(shares = []) {
+  return shares.reduce((draft, share) => {
+    if (share.target_type === 'project_group' && share.target_id) draft.project_group_ids.push(Number(share.target_id));
+    if (share.target_type === 'department' && share.target_key) draft.departments.push(share.target_key);
+    if (share.target_type === 'team' && share.target_id) draft.team_ids.push(Number(share.target_id));
+    if (share.target_type === 'user' && share.target_id) draft.user_ids.push(Number(share.target_id));
+    return draft;
+  }, emptyShareDraft());
+}
+
+function draftToShares(draft) {
+  return [
+    ...(draft.project_group_ids || []).map(id => ({ target_type: 'project_group', target_id: id })),
+    ...(draft.departments || []).map(key => ({ target_type: 'department', target_key: key })),
+    ...(draft.team_ids || []).map(id => ({ target_type: 'team', target_id: id })),
+    ...(draft.user_ids || []).map(id => ({ target_type: 'user', target_id: id })),
+  ];
+}
+
 export default function Documents() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const [folders, setFolders] = useState([]);
   const [projectGroups, setProjectGroups] = useState([]);
+  const [teams, setTeams] = useState([]);
+  const [users, setUsers] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [selectedDoc, setSelectedDoc] = useState(null);
@@ -305,6 +347,10 @@ export default function Documents() {
   const [optionsSaving, setOptionsSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSaving, setShareSaving] = useState(false);
+  const [shareDraft, setShareDraft] = useState(emptyShareDraft());
   const [tocOpen, setTocOpen] = useState(false);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [createForm] = Form.useForm();
@@ -340,6 +386,15 @@ export default function Documents() {
   const loadProjectGroups = async () => {
     const rows = await projectGroupsApi.list();
     setProjectGroups(rows.filter(item => item.status !== 'inactive'));
+  };
+
+  const loadShareOptions = async () => {
+    const [teamRows, userRows] = await Promise.all([
+      teamsApi.list(),
+      usersApi.listSimple({ include_readonly: true }),
+    ]);
+    setTeams(teamRows);
+    setUsers(userRows);
   };
 
   const loadDocuments = async () => {
@@ -466,6 +521,43 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '保存页面选项失败');
     } finally {
       setOptionsSaving(false);
+    }
+  };
+
+  const openShare = async () => {
+    if (!selectedDoc) return;
+    setShareOpen(true);
+    setShareLoading(true);
+    try {
+      const [shares] = await Promise.all([
+        documentsApi.listShares(selectedDoc.id),
+        loadShareOptions(),
+      ]);
+      setShareDraft(sharesToDraft(shares));
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '加载共享范围失败');
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const saveShares = async () => {
+    if (!selectedDoc) return;
+    setShareSaving(true);
+    try {
+      const data = await documentsApi.saveShares(selectedDoc.id, draftToShares(shareDraft));
+      setSelectedDoc(prev => ({
+        ...prev,
+        shares: data.shares,
+        access_summary: data.access_summary,
+      }));
+      await loadDocuments();
+      setShareOpen(false);
+      message.success('共享范围已保存');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '保存共享范围失败');
+    } finally {
+      setShareSaving(false);
     }
   };
 
@@ -702,6 +794,101 @@ export default function Documents() {
         </div>
       </Space>
     </div>
+  );
+
+  const renderShareSelector = () => (
+    <Spin spinning={shareLoading}>
+      <Space direction="vertical" size={14} style={{ width: '100%' }}>
+        <div style={{ padding: 12, background: '#f8fafc', borderRadius: 8 }}>
+          <Space size={8} wrap>
+            <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
+            <Text type="secondary">创建人、管理员和高管默认可访问；下方用于追加共享范围。</Text>
+          </Space>
+        </div>
+        <div>
+          <Text strong>项目组</Text>
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择项目组"
+            value={shareDraft.project_group_ids}
+            onChange={value => setShareDraft(prev => ({ ...prev, project_group_ids: value }))}
+            options={projectGroups.map(group => ({
+              value: group.id,
+              label: `${group.name}${group.code ? ` (${group.code})` : ''}`,
+            }))}
+            style={{ width: '100%', marginTop: 8 }}
+          />
+        </div>
+        <div>
+          <Text strong>部门</Text>
+          <Select
+            mode="multiple"
+            allowClear
+            placeholder="选择部门"
+            value={shareDraft.departments}
+            onChange={value => setShareDraft(prev => ({ ...prev, departments: value }))}
+            options={orgDepartmentOptions}
+            style={{ width: '100%', marginTop: 8 }}
+          />
+        </div>
+        <div>
+          <Text strong>小组</Text>
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择小组"
+            value={shareDraft.team_ids}
+            onChange={value => setShareDraft(prev => ({ ...prev, team_ids: value }))}
+            options={teams.map(team => ({
+              value: team.id,
+              label: `${team.name}${team.department ? ` / ${orgDepartmentLabel[team.department] || team.department}` : ''}`,
+            }))}
+            style={{ width: '100%', marginTop: 8 }}
+          />
+        </div>
+        <div>
+          <Text strong>个人</Text>
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择个人"
+            value={shareDraft.user_ids}
+            onChange={value => setShareDraft(prev => ({ ...prev, user_ids: value }))}
+            options={users.map(item => ({
+              value: item.id,
+              label: `${item.display_name || item.username}${item.department ? ` / ${orgDepartmentLabel[item.department] || item.department}` : ''}`,
+            }))}
+            style={{ width: '100%', marginTop: 8 }}
+          />
+        </div>
+        <Divider style={{ margin: '2px 0' }} />
+        <Space size={6} wrap>
+          {(shareDraft.project_group_ids || []).map(id => {
+            const group = projectGroups.find(item => Number(item.id) === Number(id));
+            return <Tag key={`pg-${id}`} icon={<TeamOutlined />} color="blue">{group?.name || `项目组 ${id}`}</Tag>;
+          })}
+          {(shareDraft.departments || []).map(key => (
+            <Tag key={`dept-${key}`} color="green">{orgDepartmentLabel[key] || key}</Tag>
+          ))}
+          {(shareDraft.team_ids || []).map(id => {
+            const team = teams.find(item => Number(item.id) === Number(id));
+            return <Tag key={`team-${id}`} icon={<TeamOutlined />} color="purple">{team?.name || `小组 ${id}`}</Tag>;
+          })}
+          {(shareDraft.user_ids || []).map(id => {
+            const item = users.find(user => Number(user.id) === Number(id));
+            return <Tag key={`user-${id}`} icon={<UserOutlined />} color="orange">{item?.display_name || item?.username || `用户 ${id}`}</Tag>;
+          })}
+          {draftToShares(shareDraft).length === 0 && <Text type="secondary">尚未追加共享对象</Text>}
+        </Space>
+      </Space>
+    </Spin>
   );
 
   const renderBlockToolbar = () => {
@@ -1031,6 +1218,9 @@ export default function Documents() {
                   >
                     <Button icon={<MoreOutlined />}>页面</Button>
                   </Dropdown>
+                  <Button icon={<ShareAltOutlined />} onClick={openShare}>
+                    共享 · {selectedDoc.access_summary?.label || '仅自己'}
+                  </Button>
                   <Button
                     icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
                     onClick={() => toggleFavorite(selectedDoc)}
@@ -1109,6 +1299,20 @@ export default function Documents() {
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无标题块" />
         )}
       </Drawer>
+
+      <Modal
+        title="共享文档"
+        open={shareOpen}
+        onCancel={() => setShareOpen(false)}
+        onOk={saveShares}
+        okText="保存共享"
+        cancelText="取消"
+        confirmLoading={shareSaving}
+        destroyOnClose
+        width={680}
+      >
+        {renderShareSelector()}
+      </Modal>
 
       <Modal
         title="新建文档"
