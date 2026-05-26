@@ -833,10 +833,10 @@ function getChangeLogSortTime(log) {
 
 function sortChangeLogsLatestFirst(logs = []) {
   return [...logs].sort((a, b) => {
-    const timeDiff = getChangeLogSortTime(b) - getChangeLogSortTime(a);
-    if (timeDiff !== 0) return timeDiff;
     const versionDiff = compareVersionTextDesc(a?.version, b?.version);
     if (versionDiff !== 0) return versionDiff;
+    const timeDiff = getChangeLogSortTime(b) - getChangeLogSortTime(a);
+    if (timeDiff !== 0) return timeDiff;
     return Number(b?.id || 0) - Number(a?.id || 0);
   });
 }
