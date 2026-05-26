@@ -1399,7 +1399,7 @@ export default function Documents() {
                     )}
                     {canDelete && (
                       <Popconfirm
-                        title="删除这条页面编辑记录？"
+                        title="删除这条改动记录？"
                         onConfirm={() => deleteChangeLog(item.id)}
                         okText="删除"
                         cancelText="取消"
@@ -1535,12 +1535,30 @@ export default function Documents() {
 
           {renderChangeLogEditor()}
 
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <Text strong>历史记录</Text>
+            <Tag>{logs.length} 条</Tag>
+          </div>
           <List
             dataSource={logs}
             rowKey="id"
             split={false}
-            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无页面编辑记录" /> }}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史记录" /> }}
             renderItem={renderChangeLogItem}
+          />
+
+          <Divider style={{ margin: '2px 0' }} />
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <Text strong>页面编辑记录</Text>
+            <Tag color="green">{editRecords.length} 条</Tag>
+          </div>
+          <List
+            dataSource={editRecords}
+            rowKey="id"
+            split={false}
+            locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无页面编辑记录" /> }}
+            renderItem={renderEditRecordItem}
           />
         </Space>
       </Drawer>
@@ -1956,8 +1974,8 @@ export default function Documents() {
                   <Button icon={<ShareAltOutlined />} onClick={openShare}>
                     共享 · {selectedDoc.access_summary?.label || '仅自己'}
                   </Button>
-                  <Tooltip title="页面编辑记录">
-                    <Button icon={<HistoryOutlined />} onClick={openChangeLogs} aria-label="页面编辑记录" />
+                  <Tooltip title="改动历史">
+                    <Button icon={<HistoryOutlined />} onClick={openChangeLogs} aria-label="改动历史" />
                   </Tooltip>
                   <Button
                     icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
