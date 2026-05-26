@@ -99,6 +99,7 @@ import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
 import ProductAssets from './pages/ProductAssets';
 import CompanySubjects from './pages/CompanySubjects';
+import Documents from './pages/Documents';
 import ExecutiveDashboard from './pages/ExecutiveDashboard';
 import ExecutiveTalents from './pages/ExecutiveTalents';
 import ExecutiveDynamics from './pages/ExecutiveDynamics';
@@ -109,17 +110,6 @@ import RecruitRadar from './pages/RecruitRadar';
 import RecruitRadarConfig from './pages/RecruitRadarConfig';
 import NotificationBell from './components/NotificationBell';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
-
-// 占位页面（待开发模块）
-function ComingSoon({ title }) {
-  return (
-    <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
-      <div style={{ fontSize: 48, marginBottom: 16 }}>🚧</div>
-      <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>{title}</div>
-      <div>该模块正在开发中，敬请期待</div>
-    </div>
-  );
-}
 
 const roleLabel = { admin: '管理员', leader: '组长', member: '成员', readonly: '只读', guest: '访客', sales_director: '商务总监' };
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
@@ -824,7 +814,7 @@ function AppLayout() {
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
             <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />
             <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
-            <Route path="/documents" element={<PrivateRoute><ComingSoon title="文档中心" /></PrivateRoute>} />
+            <Route path="/documents" element={<PrivateRoute><Documents /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
             <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />
