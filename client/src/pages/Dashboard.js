@@ -1459,7 +1459,7 @@ export default function Dashboard() {
         {[
           !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
           !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { title: '待办提醒', value: weeklyUnfinishedTaskCount, icon: <BellOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { title: '本周待办提醒', value: weeklyUnfinishedTaskCount, icon: <BellOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
           {
             title: '本周任务',
             value: weeklyTaskCount,
