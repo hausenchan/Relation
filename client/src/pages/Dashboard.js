@@ -48,6 +48,64 @@ const priorityMap = {
   low:    { label: '低', color: 'default' },
 };
 
+const taskPrioritySortRank = { high: 0, medium: 1, low: 2 };
+const taskStatusSortRank = { pending: 0, in_progress: 1, suspended: 2, done: 3 };
+const taskDateColumnKeys = new Set(['plan_date', 'start_date', 'complete_date']);
+const taskSortableColumnKeys = new Set([
+  'title',
+  'task_source_label',
+  'priority',
+  'assigned_to_name',
+  'created_by_name',
+  'assigned_by_name',
+  'assigner_name',
+  'follower_name',
+  'shared_to_names',
+  'plan_date',
+  'start_date',
+  'complete_date',
+  'display_status_label',
+  'display_result',
+]);
+
+const normalizeTaskSortText = (value) => String(value ?? '').trim().toLowerCase();
+
+const getTaskDateSortValue = (value) => {
+  if (!value) return 0;
+  const timestamp = dayjs(value).valueOf();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const compareTaskTextValue = (a, b) => (
+  normalizeTaskSortText(a).localeCompare(normalizeTaskSortText(b), 'zh-CN', {
+    numeric: true,
+    sensitivity: 'base',
+  })
+);
+
+const compareTaskRankValue = (a, b, rankMap) => {
+  const aRank = rankMap[a] ?? Number.MAX_SAFE_INTEGER;
+  const bRank = rankMap[b] ?? Number.MAX_SAFE_INTEGER;
+  return aRank - bRank;
+};
+
+const getTaskColumnSorter = (columnKey) => {
+  if (!taskSortableColumnKeys.has(columnKey)) return null;
+
+  return (a, b) => {
+    if (columnKey === 'priority') {
+      return compareTaskRankValue(a.priority, b.priority, taskPrioritySortRank);
+    }
+    if (columnKey === 'display_status_label') {
+      return compareTaskRankValue(a.display_status || a.status, b.display_status || b.status, taskStatusSortRank);
+    }
+    if (taskDateColumnKeys.has(columnKey)) {
+      return getTaskDateSortValue(a[columnKey]) - getTaskDateSortValue(b[columnKey]);
+    }
+    return compareTaskTextValue(a[columnKey], b[columnKey]);
+  };
+};
+
 const taskTableDefaultWidths = {
   assigned: {
     title: 360,
@@ -535,9 +593,15 @@ export default function Dashboard() {
       const columnKey = column.key || column.dataIndex;
       const width = widths[columnKey] || column.width;
       const minWidth = taskTableMinWidths[columnKey] || 72;
+      const sorter = column.sorter ?? getTaskColumnSorter(columnKey);
       return {
         ...column,
         width,
+        ...(sorter ? {
+          sorter,
+          sortDirections: ['ascend', 'descend'],
+          showSorterTooltip: { title: '点击切换排序' },
+        } : {}),
         onHeaderCell: () => ({
           width,
           minWidth,
