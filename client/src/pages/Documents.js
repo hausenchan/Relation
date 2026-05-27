@@ -29,6 +29,8 @@ import {
   message,
 } from 'antd';
 import {
+  CaretDownFilled,
+  CaretRightFilled,
   CloseOutlined,
   CopyOutlined,
   ClockCircleOutlined,
@@ -407,6 +409,26 @@ function buildCollapsedListHiddenIds(blocks = []) {
     }
   });
   return hidden;
+}
+
+function buildHierarchicalGuideMap(blocks = [], hiddenIds = new Set()) {
+  const visibleBlocks = blocks.filter(block => isHierarchicalListBlock(block) && !hiddenIds.has(block.id));
+  const map = new Map();
+
+  visibleBlocks.forEach((block, index) => {
+    const indent = getListIndent(block);
+    const nextBlocks = visibleBlocks.slice(index + 1);
+    const nextVisible = nextBlocks[0] || null;
+    map.set(block.id, {
+      ancestorLines: Array.from({ length: indent }, (_, level) => ({
+        level,
+        continuesBelow: nextBlocks.some(next => getListIndent(next) >= level + 1),
+      })),
+      hasChildren: Boolean(nextVisible && getListIndent(nextVisible) > indent),
+    });
+  });
+
+  return map;
 }
 
 function renderBlockMenuLabel(item) {
@@ -938,6 +960,10 @@ export default function Documents() {
   );
   const numberedListMarkers = useMemo(() => buildNumberedListMarkers(editorBlocks), [editorBlocks]);
   const hiddenListBlockIds = useMemo(() => buildCollapsedListHiddenIds(editorBlocks), [editorBlocks]);
+  const hierarchicalGuideMap = useMemo(
+    () => buildHierarchicalGuideMap(editorBlocks, hiddenListBlockIds),
+    [editorBlocks, hiddenListBlockIds]
+  );
   const presentationSections = useMemo(
     () => buildPresentationSections(editorBlocks, editorTitle || selectedDoc?.title),
     [editorBlocks, editorTitle, selectedDoc?.title]
@@ -2789,28 +2815,74 @@ export default function Documents() {
     return Upload.LIST_IGNORE;
   };
 
-  const renderListGuides = (indent, top = 0, bottom = 0) => (
-    Array.from({ length: indent }, (_, level) => (
-      <span
-        key={`guide-${level}`}
-        style={{
-          position: 'absolute',
-          left: level * listIndentWidth + 11,
-          top,
-          bottom,
-          width: 1,
-          background: '#edf2f7',
-          pointerEvents: 'none',
-        }}
-      />
-    ))
-  );
+  const renderListGuides = (block, options = {}) => {
+    const guideMeta = hierarchicalGuideMap.get(block.id);
+    const indent = getListIndent(block);
+    if ((!guideMeta?.ancestorLines?.length && !guideMeta?.hasChildren) || indent < 0) return null;
+
+    const {
+      top = 0,
+      bottom = 0,
+      centerY = 14,
+      lineOffset = 8,
+      color = '#e5e7eb',
+    } = options;
+    const lineStyles = {
+      position: 'absolute',
+      width: 1,
+      background: color,
+      pointerEvents: 'none',
+    };
+
+    return (
+      <>
+        {(guideMeta?.ancestorLines || []).map(({ level, continuesBelow }) => (
+          <span
+            key={`${block.id}-guide-${level}`}
+            style={{
+              ...lineStyles,
+              left: level * listIndentWidth + lineOffset,
+              top,
+              ...(continuesBelow
+                ? { bottom }
+                : { height: Math.max(1, centerY - top + 1) }),
+            }}
+          />
+        ))}
+        {indent > 0 && (
+          <span
+            style={{
+              position: 'absolute',
+              left: (indent - 1) * listIndentWidth + lineOffset,
+              top: centerY,
+              width: listIndentWidth,
+              height: 1,
+              background: color,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
+        {guideMeta?.hasChildren && (
+          <span
+            style={{
+              ...lineStyles,
+              left: indent * listIndentWidth + lineOffset,
+              top: centerY,
+              bottom,
+            }}
+          />
+        )}
+      </>
+    );
+  };
 
   const renderHierarchicalListBlock = (block, commonProps) => {
     const meta = getBlockMeta(block);
     const indent = getListIndent(block);
     const collapsed = Boolean(meta.collapsed);
-    const markerColor = block.type === 'fold-list' ? '#111827' : '#374151';
+    const markerColor = block.type === 'fold-list'
+      ? (collapsed ? '#9ca3af' : '#111827')
+      : '#374151';
     const marker = block.type === 'bullet'
       ? getBulletListMarker(indent)
       : numberedListMarkers.get(block.id);
@@ -2819,18 +2891,26 @@ export default function Documents() {
       <Button
         type="text"
         size="small"
-        icon={collapsed ? <RightOutlined /> : <DownOutlined />}
+        icon={collapsed ? <CaretRightFilled /> : <CaretDownFilled />}
         onClick={(event) => {
           event.stopPropagation();
           updateBlockMeta(block.id, { collapsed: !collapsed });
         }}
-        style={{ width: 24, minWidth: 24, height: 24, padding: 0, color: markerColor }}
+        style={{
+          width: 18,
+          minWidth: 18,
+          height: 18,
+          padding: 0,
+          marginTop: 4,
+          color: markerColor,
+          fontSize: 11,
+        }}
       />
     ) : (
       <Text style={{
-        width: 24,
-        minWidth: 24,
-        paddingTop: 1,
+        width: 18,
+        minWidth: 18,
+        paddingTop: 2,
         textAlign: block.type === 'numbered' ? 'right' : 'center',
         color: markerColor,
         fontWeight: block.type === 'numbered' ? 500 : 700,
@@ -2841,8 +2921,8 @@ export default function Documents() {
 
     return (
       <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
-        {renderListGuides(indent)}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        {renderListGuides(block, { centerY: 14, lineOffset: 8 })}
+        <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
           {markerNode}
           <TextArea
             {...commonProps}
@@ -3200,6 +3280,7 @@ export default function Documents() {
   };
 
   const renderPresentationBlock = (block) => {
+    if (hiddenListBlockIds.has(block.id)) return null;
     const meta = getBlockMeta(block);
     const indent = getListIndent(block);
     const blockStyle = {
@@ -3233,11 +3314,24 @@ export default function Documents() {
         ? getBulletListMarker(indent)
         : block.type === 'numbered'
           ? numberedListMarkers.get(block.id)
-          : meta.collapsed ? '▸' : '▾';
+          : null;
       return (
-        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * (isMobile ? 22 : 30), display: 'flex', gap: 14 }}>
-          {renderListGuides(indent, 4, 4)}
-          <span style={{ minWidth: 28, textAlign: block.type === 'bullet' ? 'center' : 'right', color: '#64748b', fontWeight: block.type === 'fold-list' ? 700 : 500 }}>{marker}</span>
+        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * listIndentWidth, display: 'flex', gap: 10 }}>
+          {renderListGuides(block, { top: 4, bottom: 4, centerY: 18, lineOffset: 8 })}
+          <span
+            style={{
+              minWidth: 18,
+              display: 'inline-flex',
+              justifyContent: block.type === 'numbered' ? 'flex-end' : 'center',
+              color: block.type === 'fold-list' ? (meta.collapsed ? '#9ca3af' : '#111827') : '#64748b',
+              fontWeight: block.type === 'fold-list' ? 700 : 500,
+              paddingTop: 5,
+            }}
+          >
+            {block.type === 'fold-list'
+              ? (meta.collapsed ? <CaretRightFilled style={{ fontSize: 13 }} /> : <CaretDownFilled style={{ fontSize: 13 }} />)
+              : marker}
+          </span>
           <span style={{ fontWeight: block.type === 'fold-list' ? 700 : 400 }}>{block.content}</span>
         </div>
       );
