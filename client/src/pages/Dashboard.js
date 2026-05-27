@@ -269,7 +269,8 @@ export default function Dashboard() {
   const priorityRank = (priority) => ({ high: 0, medium: 1, low: 2 }[priority] ?? 3);
   const taskSortTime = (task) => {
     const date = task.plan_date || task.created_at;
-    return date ? dayjs(date).valueOf() : Number.MAX_SAFE_INTEGER;
+    const value = date ? dayjs(date).valueOf() : 0;
+    return Number.isFinite(value) ? value : 0;
   };
   const taskSortBucket = (task) => {
     const status = task.display_status || task.status;
@@ -283,7 +284,7 @@ export default function Dashboard() {
   const sortDashboardTasks = (tasks) => [...tasks].sort((a, b) => {
     const bucketDiff = taskSortBucket(a) - taskSortBucket(b);
     if (bucketDiff !== 0) return bucketDiff;
-    const timeDiff = taskSortTime(a) - taskSortTime(b);
+    const timeDiff = taskSortTime(b) - taskSortTime(a);
     if (timeDiff !== 0) return timeDiff;
     return priorityRank(a.priority) - priorityRank(b.priority);
   });
