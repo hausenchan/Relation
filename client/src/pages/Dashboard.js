@@ -624,6 +624,13 @@ export default function Dashboard() {
     return isWithinRange(t.plan_date, teamTaskDateRange);
   });
 
+  const dashboardPersonalTasks = [...assignedTasks, ...executionTasks];
+  const isCurrentWeekTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'week');
+  const weeklyTaskCount = dashboardPersonalTasks.filter(isCurrentWeekTask).length;
+  const weeklyUnfinishedTaskCount = dashboardPersonalTasks.filter(task => (
+    isCurrentWeekTask(task) && (task.display_status || task.status) !== 'done'
+  )).length;
+
   const renderSharedToNames = (value) => (
     value
       ? <Tooltip title={value}>{value}</Tooltip>
@@ -1452,14 +1459,10 @@ export default function Dashboard() {
         {[
           !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
           !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { title: '待办提醒', value: stats?.pendingReminders || 0, icon: <BellOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { title: '待办提醒', value: weeklyUnfinishedTaskCount, icon: <BellOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
           {
             title: '本周任务',
-            value: [...assignedTasks, ...executionTasks].filter(t => {
-              if (!t.plan_date) return false;
-              const planDate = dayjs(t.plan_date);
-              return planDate.isSame(dayjs(), 'week');
-            }).length,
+            value: weeklyTaskCount,
             icon: <CalendarOutlined />,
             gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)'
           },
