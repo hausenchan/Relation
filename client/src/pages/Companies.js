@@ -770,6 +770,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                       <AppstoreOutlined />
                       <Text strong style={{ wordBreak: 'break-word' }}>{p.name}</Text>
                       {p.category && <Tag>{p.category}</Tag>}
+                      {p.product_category && <Tag color="cyan">{p.product_category}</Tag>}
                       {entityName && (
                         <Tag color="geekblue" style={{ fontSize: 11 }}>{entityName}</Tag>
                       )}
@@ -797,6 +798,16 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                   {p.discovery_source && (
                     <div style={{ marginTop: 6, fontSize: 12 }}>
                       <Text type="secondary">产品发现出处：</Text>{p.discovery_source}
+                    </div>
+                  )}
+                  {p.contact_phone && (
+                    <div style={{ marginTop: 6, fontSize: 12 }}>
+                      <Text type="secondary">联系电话：</Text>{p.contact_phone}
+                    </div>
+                  )}
+                  {p.domain && (
+                    <div style={{ marginTop: 6, fontSize: 12, wordBreak: 'break-all' }}>
+                      <Text type="secondary">域名：</Text>{p.domain}
                     </div>
                   )}
                   {p.description && <Paragraph style={{ marginTop: 6, marginBottom: 4, fontSize: 13 }}>{p.description}</Paragraph>}
@@ -827,17 +838,22 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
       >
         <Form form={form} layout="vertical" size="small">
           <Row gutter={16}>
-            <Col span={isMobile ? 24 : 10}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="产品名称" name="name" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 7}>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="产品类型" name="category">
                 <Input placeholder="如：SaaS、APP、小程序" />
               </Form.Item>
             </Col>
-            <Col span={isMobile ? 24 : 7}>
+            <Col span={isMobile ? 24 : 8}>
+              <Form.Item label="产品类目" name="product_category">
+                <Input placeholder="产品类目，工具，互动营销，短剧等" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 8}>
               <Form.Item label="状态" name="status" initialValue="active">
                 <Select>
                   {Object.entries(productStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
@@ -861,6 +877,16 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
             <Col span={isMobile ? 24 : 12}>
               <Form.Item label="上线时间" name="launch_date">
                 <Input placeholder="如：2023-06" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="联系电话" name="contact_phone">
+                <Input placeholder="客服电话，方便看集团关联" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="域名" name="domain">
+                <Input placeholder="对应产品的域名，方便看集团关联" />
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>
