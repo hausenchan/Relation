@@ -1,10 +1,18 @@
 import React, { useState } from 'react';
 import { Form, Input, Button, Card, Typography, message, Grid } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
+
+function getSafeRedirectPath(value) {
+  if (!value || typeof value !== 'string') return '/';
+  if (!value.startsWith('/') || value.startsWith('//')) return '/';
+  if (value.startsWith('/login')) return '/';
+  return value;
+}
 
 // SVG Logo —— 闪电 + 齿轮融合，充满力量与激情
 function MidongLogo({ size = 72 }) {
@@ -46,13 +54,20 @@ export default function Login() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const { login } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
+  const redirectPath = getSafeRedirectPath(
+    searchParams.get('redirect')
+    || `${location.state?.from?.pathname || ''}${location.state?.from?.search || ''}${location.state?.from?.hash || ''}`
+  );
 
   const handleSubmit = async (values) => {
     setLoading(true);
     try {
       await login(values.username, values.password);
-      window.location.href = '/';
+      navigate(redirectPath, { replace: true });
     } catch (err) {
       message.error(err.response?.data?.error || '登录失败');
     } finally {
