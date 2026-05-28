@@ -44,6 +44,7 @@ import {
   FundProjectionScreenOutlined,
   HistoryOutlined,
   LeftOutlined,
+  LinkOutlined,
   MenuFoldOutlined,
   MenuOutlined,
   MenuUnfoldOutlined,
@@ -54,15 +55,16 @@ import {
   RightOutlined,
   RollbackOutlined,
   SaveOutlined,
-  ShareAltOutlined,
   StarFilled,
   StarOutlined,
   TeamOutlined,
   UndoOutlined,
   UpOutlined,
+  UserAddOutlined,
   UserOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 
@@ -230,6 +232,46 @@ const mediaAcceptMap = {
   video: '.mp4,.mov,.avi',
   audio: '.mp3,.wav,.m4a,.aac,.ogg',
 };
+const documentLinkParamKeys = ['doc', 'document_id', 'documentId'];
+
+function getDocumentIdFromSearch(searchParams) {
+  for (const key of documentLinkParamKeys) {
+    const value = searchParams.get(key);
+    const id = Number(value);
+    if (Number.isFinite(id) && id > 0) return id;
+  }
+  return null;
+}
+
+function buildDocumentPageLink(docId) {
+  const id = Number(docId);
+  if (!Number.isFinite(id) || id <= 0) return '';
+  const url = new URL('/documents', window.location.origin);
+  url.searchParams.set('doc', String(id));
+  return url.toString();
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const input = document.createElement('textarea');
+  input.value = text;
+  input.setAttribute('readonly', '');
+  input.style.position = 'fixed';
+  input.style.left = '-9999px';
+  input.style.top = '0';
+  document.body.appendChild(input);
+  input.focus();
+  input.select();
+  try {
+    const copied = document.execCommand('copy');
+    if (!copied) throw new Error('copy failed');
+  } finally {
+    document.body.removeChild(input);
+  }
+}
 
 function getFileExt(filename = '') {
   return String(filename || '').split('.').pop().toLowerCase();
@@ -934,6 +976,7 @@ function sortEditRecordsLatestFirst(records = []) {
 export default function Documents() {
   const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
+  const [searchParams, setSearchParams] = useSearchParams();
   const isMobile = !screens.md;
   const [folders, setFolders] = useState([]);
   const [projectGroups, setProjectGroups] = useState([]);
@@ -985,6 +1028,7 @@ export default function Documents() {
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
   const presentationRef = useRef(null);
+  const autoOpenedDocIdRef = useRef(null);
   const editorUndoStackRef = useRef([]);
   const applyingUndoRef = useRef(false);
   const editorAreaSelectionRef = useRef(null);
@@ -1034,6 +1078,16 @@ export default function Documents() {
   );
 
   const getDocTabId = (id) => Number(id);
+
+  const replaceDocumentLinkParam = (docId) => {
+    const nextParams = new URLSearchParams(searchParams);
+    documentLinkParamKeys.forEach(key => nextParams.delete(key));
+    const normalizedId = getDocTabId(docId);
+    if (Number.isFinite(normalizedId) && normalizedId > 0) {
+      nextParams.set('doc', String(normalizedId));
+    }
+    setSearchParams(nextParams, { replace: true });
+  };
 
   const canManageDoc = (doc) => Boolean(
     currentUser && doc && (isDocumentAdminUser(currentUser) || Number(doc.created_by) === Number(currentUser.id))
@@ -1108,6 +1162,7 @@ export default function Documents() {
   };
 
   const clearActiveDocument = () => {
+    replaceDocumentLinkParam(null);
     setSelectedDocId(null);
     setSelectedDoc(null);
     setEditorTitle('');
@@ -1273,6 +1328,9 @@ export default function Documents() {
   const openDocumentTab = (docOrId) => {
     const docId = getDocTabId(typeof docOrId === 'object' ? docOrId?.id : docOrId);
     if (!docId) return;
+    if (getDocumentIdFromSearch(searchParams) !== docId) {
+      replaceDocumentLinkParam(docId);
+    }
     persistActiveDocTabState();
     const docSummary = typeof docOrId === 'object' ? docOrId : getDocumentSummaryById(docId);
     if (docSummary?.id) {
@@ -1347,6 +1405,21 @@ export default function Documents() {
     }, 300);
     return () => clearTimeout(timer);
   }, [keyword]);
+
+  useEffect(() => {
+    const docId = getDocumentIdFromSearch(searchParams);
+    if (!docId) {
+      autoOpenedDocIdRef.current = null;
+      return;
+    }
+    if (getDocTabId(selectedDocId) === docId) {
+      autoOpenedDocIdRef.current = docId;
+      return;
+    }
+    if (autoOpenedDocIdRef.current === docId) return;
+    autoOpenedDocIdRef.current = docId;
+    openDocumentTab(docId);
+  }, [searchParams, selectedDocId]);
 
   useEffect(() => {
     if (selectedDocId) loadDetail(selectedDocId);
@@ -1559,7 +1632,9 @@ export default function Documents() {
     if (getDocTabId(selectedDocId) !== normalizedId) return;
     const nextActiveTab = nextTabs[closingIndex] || nextTabs[closingIndex - 1] || null;
     if (nextActiveTab) {
-      setSelectedDocId(getDocTabId(nextActiveTab.id));
+      const nextActiveDocId = getDocTabId(nextActiveTab.id);
+      replaceDocumentLinkParam(nextActiveDocId);
+      setSelectedDocId(nextActiveDocId);
     } else {
       clearActiveDocument();
     }
@@ -1786,6 +1861,19 @@ export default function Documents() {
       cancelText: '取消',
       onOk: () => restoreEditRecord(record),
     });
+  };
+
+  const handleCopyPageLink = async () => {
+    if (!selectedDoc?.id) return;
+    const pageLink = buildDocumentPageLink(selectedDoc.id);
+    if (!pageLink) return;
+    try {
+      await copyTextToClipboard(pageLink);
+      setPageMenuOpen(false);
+      message.success('页面链接已复制，可分享给有权限的人');
+    } catch {
+      message.error('复制失败，请手动复制浏览器地址');
+    }
   };
 
   const handleDelete = async () => {
@@ -2419,6 +2507,17 @@ export default function Documents() {
             <span style={{ flex: 1, textAlign: 'left' }}>撤回</span>
             <Text type="secondary" style={{ fontSize: 12 }}>⌘Z</Text>
           </Button>
+          <Tooltip title="复制页面链接可以粘贴到其他页面或分享给他人" placement="left">
+            <Button
+              type="text"
+              block
+              icon={<LinkOutlined />}
+              onClick={handleCopyPageLink}
+              style={{ justifyContent: 'flex-start', padding: '4px 8px' }}
+            >
+              复制页面链接
+            </Button>
+          </Tooltip>
           <Popconfirm
             title="确认删除该页面？"
             onConfirm={() => {
@@ -4213,8 +4312,8 @@ export default function Documents() {
                   <Tooltip title="演示模式">
                     <Button icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode} aria-label="演示模式" />
                   </Tooltip>
-                  <Tooltip title={`共享 · ${selectedDoc.access_summary?.label || '仅自己'}`}>
-                    <Button icon={<ShareAltOutlined />} onClick={openShare} aria-label={`共享 · ${selectedDoc.access_summary?.label || '仅自己'}`} />
+                  <Tooltip title={`添加分享人 · ${selectedDoc.access_summary?.label || '仅自己'}`}>
+                    <Button icon={<UserAddOutlined />} onClick={openShare} aria-label={`添加分享人 · ${selectedDoc.access_summary?.label || '仅自己'}`} />
                   </Tooltip>
                   <Tooltip title="改动历史">
                     <Button icon={<HistoryOutlined />} onClick={openChangeLogs} aria-label="改动历史" />
