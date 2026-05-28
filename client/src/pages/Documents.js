@@ -949,6 +949,7 @@ export default function Documents() {
   const [editorTitle, setEditorTitle] = useState('');
   const [editorBlocks, setEditorBlocks] = useState([createBlock()]);
   const [selectedBlockId, setSelectedBlockId] = useState(null);
+  const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
   const [domainFilter, setDomainFilter] = useState('all');
@@ -986,6 +987,8 @@ export default function Documents() {
   const presentationRef = useRef(null);
   const editorUndoStackRef = useRef([]);
   const applyingUndoRef = useRef(false);
+  const editorAreaSelectionRef = useRef(null);
+  const suppressEditorClickRef = useRef(false);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -1448,6 +1451,10 @@ export default function Documents() {
     window.addEventListener('keydown', handleUndoKeyDown);
     return () => window.removeEventListener('keydown', handleUndoKeyDown);
   }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
+
+  useEffect(() => () => {
+    editorAreaSelectionRef.current?.cleanup?.();
+  }, []);
 
   const openCreate = () => {
     createForm.resetFields();
@@ -1921,6 +1928,31 @@ export default function Documents() {
     if (nextSelected) focusBlock(nextSelected.id);
   };
 
+  const deleteBlocksByIds = (ids = []) => {
+    const deleteSet = new Set(ids.filter(Boolean));
+    if (!deleteSet.size) return false;
+    const firstDeletedIndex = editorBlocks.findIndex(block => deleteSet.has(block.id));
+    if (firstDeletedIndex < 0) return false;
+    pushEditorUndoSnapshot();
+    const nextBlocks = editorBlocks.filter(block => !deleteSet.has(block.id));
+    if (!nextBlocks.length) {
+      const blank = createBlock();
+      setEditorBlocks([blank]);
+      setSelectedBlockId(blank.id);
+      clearAreaBlockSelection();
+      focusBlock(blank.id);
+      return true;
+    }
+    const nextSelected = nextBlocks[Math.min(firstDeletedIndex, nextBlocks.length - 1)] || nextBlocks[0];
+    setEditorBlocks(nextBlocks);
+    setSelectedBlockId(nextSelected?.id || null);
+    clearAreaBlockSelection();
+    setHoveredBlockId(null);
+    setOpenBlockMenuId(null);
+    if (nextSelected) focusBlock(nextSelected.id);
+    return true;
+  };
+
   const moveBlock = (id, direction) => {
     pushEditorUndoSnapshot();
     setEditorBlocks(prev => {
@@ -2096,6 +2128,144 @@ export default function Documents() {
       if (previousBlock) focusBlock(previousBlock.id);
     }
   };
+
+  const setAreaBlockSelection = (ids = []) => {
+    setSelectedAreaBlockIds(prev => (
+      prev.length === ids.length && prev.every((id, index) => id === ids[index]) ? prev : ids
+    ));
+  };
+
+  const clearAreaBlockSelection = () => setAreaBlockSelection([]);
+
+  const isEditorAreaSelectionIgnoredTarget = (target) => {
+    if (!target?.closest) return false;
+    return Boolean(target.closest('textarea, input, button, a, [role="button"], .ant-select, .ant-dropdown, .ant-picker, .ant-checkbox-wrapper'));
+  };
+
+  const getEditorBlockIdsInArea = (areaRect) => {
+    const editorNode = document.getElementById('document-editor-blocks');
+    if (!editorNode) return [];
+    return Array.from(editorNode.querySelectorAll('[data-doc-block-id]'))
+      .filter(node => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0
+          && rect.height > 0
+          && rect.left <= areaRect.right
+          && rect.right >= areaRect.left
+          && rect.top <= areaRect.bottom
+          && rect.bottom >= areaRect.top;
+      })
+      .map(node => node.getAttribute('data-doc-block-id'))
+      .filter(Boolean);
+  };
+
+  const handleEditorAreaMouseDown = (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    if (isEditorAreaSelectionIgnoredTarget(event.target)) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+
+    const cleanup = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      editorAreaSelectionRef.current = null;
+    };
+
+    const handleMouseMove = (moveEvent) => {
+      const selectionState = editorAreaSelectionRef.current;
+      if (!selectionState) return;
+      const dx = moveEvent.clientX - startX;
+      const dy = moveEvent.clientY - startY;
+      if (!selectionState.dragging && Math.hypot(dx, dy) < 6) return;
+      selectionState.dragging = true;
+      moveEvent.preventDefault();
+      window.getSelection?.()?.removeAllRanges();
+      const areaRect = {
+        left: Math.min(startX, moveEvent.clientX),
+        right: Math.max(startX, moveEvent.clientX),
+        top: Math.min(startY, moveEvent.clientY),
+        bottom: Math.max(startY, moveEvent.clientY),
+      };
+      const ids = getEditorBlockIdsInArea(areaRect);
+      setAreaBlockSelection(ids);
+      if (ids.length) {
+        setSelectedBlockId(ids[ids.length - 1]);
+        setHoveredBlockId(null);
+        setOpenBlockMenuId(null);
+      }
+    };
+
+    const handleMouseUp = (upEvent) => {
+      const selectionState = editorAreaSelectionRef.current;
+      cleanup();
+      if (selectionState?.dragging) {
+        suppressEditorClickRef.current = true;
+        upEvent.preventDefault();
+        window.setTimeout(() => {
+          suppressEditorClickRef.current = false;
+        }, 0);
+      } else if (!event.target.closest?.('[data-doc-block-id]')) {
+        clearAreaBlockSelection();
+      }
+    };
+
+    editorAreaSelectionRef.current = { cleanup, dragging: false };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const getSelectedEditorBlockIds = () => {
+    const selection = window.getSelection?.();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return [];
+    const editorNode = document.getElementById('document-editor-blocks');
+    if (!editorNode) return [];
+    const ranges = Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index));
+    const touchesEditor = ranges.some(range => {
+      try {
+        return range.intersectsNode(editorNode);
+      } catch {
+        return false;
+      }
+    });
+    if (!touchesEditor) return [];
+    return Array.from(editorNode.querySelectorAll('[data-doc-block-id]'))
+      .filter(node => ranges.some(range => {
+        try {
+          return range.intersectsNode(node);
+        } catch {
+          return false;
+        }
+      }))
+      .map(node => node.getAttribute('data-doc-block-id'))
+      .filter(Boolean);
+  };
+
+  const hasActiveNativeTextSelection = () => {
+    const activeElement = document.activeElement;
+    if (!activeElement || !['TEXTAREA', 'INPUT'].includes(activeElement.tagName)) return false;
+    const { selectionStart, selectionEnd } = activeElement;
+    return typeof selectionStart === 'number'
+      && typeof selectionEnd === 'number'
+      && selectionStart !== selectionEnd;
+  };
+
+  useEffect(() => {
+    const handleSelectionDeleteKeyDown = (event) => {
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!['Delete', 'Backspace'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (hasActiveNativeTextSelection()) return;
+      const selectedBlockIds = selectedAreaBlockIds.length ? selectedAreaBlockIds : getSelectedEditorBlockIds();
+      if (!selectedBlockIds.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (deleteBlocksByIds(selectedBlockIds)) {
+        clearAreaBlockSelection();
+        window.getSelection?.()?.removeAllRanges();
+      }
+    };
+    window.addEventListener('keydown', handleSelectionDeleteKeyDown);
+    return () => window.removeEventListener('keydown', handleSelectionDeleteKeyDown);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen, editorBlocks, editorTitle, selectedBlockId, selectedAreaBlockIds]);
 
   const scrollToBlock = (id) => {
     setSelectedBlockId(id);
@@ -3604,7 +3774,10 @@ export default function Documents() {
       bordered: false,
       autoSize: { minRows: block.type === 'code' ? 3 : 1 },
       placeholder: active ? (block.type?.startsWith('heading') ? '输入标题' : '输入内容') : '',
-      onFocus: () => setSelectedBlockId(block.id),
+      onFocus: () => {
+        setSelectedBlockId(block.id);
+        clearAreaBlockSelection();
+      },
       onChange: event => updateBlock(block.id, { content: event.target.value }),
       onKeyDown: event => handleBlockKeyDown(event, block, index),
       style: {
@@ -3783,20 +3956,26 @@ export default function Documents() {
     if (hiddenListBlockIds.has(block.id)) return null;
     const menuOpen = openBlockMenuId === block.id;
     const active = menuOpen || hoveredBlockId === block.id;
+    const areaSelected = selectedAreaBlockIds.includes(block.id);
     const heading = headingMeta.map.get(block.id);
     return (
       <div
         id={`doc-block-${block.id}`}
+        data-doc-block-id={block.id}
         key={block.id}
-        onClick={() => setSelectedBlockId(block.id)}
+        onClick={() => {
+          if (suppressEditorClickRef.current) return;
+          setSelectedBlockId(block.id);
+          clearAreaBlockSelection();
+        }}
         onMouseEnter={() => setHoveredBlockId(block.id)}
         onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
         style={{
           display: 'grid',
           gridTemplateColumns: isMobile ? '24px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
           gap: 4,
-          border: menuOpen ? '1px solid #c7d2fe' : '1px solid transparent',
-          background: block.highlight || (menuOpen ? '#fafafa' : 'transparent'),
+          border: areaSelected ? '1px solid #93c5fd' : (menuOpen ? '1px solid #c7d2fe' : '1px solid transparent'),
+          background: areaSelected ? '#eff6ff' : (block.highlight || (menuOpen ? '#fafafa' : 'transparent')),
           borderRadius: 6,
           padding: '3px 8px 3px 0',
           marginBottom: 2,
@@ -4084,7 +4263,7 @@ export default function Documents() {
                 alignItems: 'flex-start',
                 flexDirection: isMobile ? 'column' : 'row',
               }}>
-                <section style={{
+                <section id="document-editor-blocks" onMouseDown={handleEditorAreaMouseDown} style={{
                   flex: 1,
                   minWidth: 0,
                   maxWidth: getEditorMaxWidth(selectedDoc),
