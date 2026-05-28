@@ -1,18 +1,12 @@
 import React, { useState } from 'react';
 import { Form, Input, Button, Card, Typography, message, Grid } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
+import { getLocationPath, getSafeInternalPath, resolveLoginRedirect } from '../utils/redirect';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
-
-function getSafeRedirectPath(value) {
-  if (!value || typeof value !== 'string') return '/';
-  if (!value.startsWith('/') || value.startsWith('//')) return '/';
-  if (value.startsWith('/login')) return '/';
-  return value;
-}
 
 // SVG Logo —— 闪电 + 齿轮融合，充满力量与激情
 function MidongLogo({ size = 72 }) {
@@ -55,19 +49,18 @@ export default function Login() {
   const isMobile = !screens.md;
   const { login } = useAuth();
   const location = useLocation();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
-  const redirectPath = getSafeRedirectPath(
+  const redirectPath = getSafeInternalPath(
     searchParams.get('redirect')
-    || `${location.state?.from?.pathname || ''}${location.state?.from?.search || ''}${location.state?.from?.hash || ''}`
+    || getLocationPath(location.state?.from)
   );
 
   const handleSubmit = async (values) => {
     setLoading(true);
     try {
       await login(values.username, values.password);
-      navigate(redirectPath, { replace: true });
+      window.location.replace(resolveLoginRedirect(redirectPath));
     } catch (err) {
       message.error(err.response?.data?.error || '登录失败');
     } finally {

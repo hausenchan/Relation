@@ -110,16 +110,10 @@ import RecruitRadar from './pages/RecruitRadar';
 import RecruitRadarConfig from './pages/RecruitRadarConfig';
 import NotificationBell from './components/NotificationBell';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
+import { buildLoginPath, getLocationPath, getSafeInternalPath } from './utils/redirect';
 
 const roleLabel = { admin: '管理员', leader: '组长', member: '成员', readonly: '只读', guest: '访客', sales_director: '商务总监' };
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
-
-function getSafeInternalPath(value) {
-  if (!value || typeof value !== 'string') return '/';
-  if (!value.startsWith('/') || value.startsWith('//')) return '/';
-  if (value.startsWith('/login')) return '/';
-  return value;
-}
 
 // 路由守卫
 function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
@@ -127,8 +121,8 @@ function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
   const location = useLocation();
   if (loading) return null;
   if (!user) {
-    const redirectPath = `${location.pathname}${location.search}${location.hash}` || '/';
-    return <Navigate to={`/login?redirect=${encodeURIComponent(redirectPath)}`} replace state={{ from: location }} />;
+    const redirectPath = getLocationPath(location);
+    return <Navigate to={buildLoginPath(redirectPath)} replace state={{ from: location }} />;
   }
   if (adminOnly && user.role !== 'admin') {
     return (

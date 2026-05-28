@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { buildLoginPath, getBrowserPath } from '../utils/redirect';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -16,11 +17,7 @@ api.interceptors.response.use(
     if (err.response?.status === 401 && err.config?.url !== '/auth/login') {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
-      const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}` || '/';
-      const loginPath = currentPath.startsWith('/login')
-        ? '/login'
-        : `/login?redirect=${encodeURIComponent(currentPath)}`;
-      window.location.href = loginPath;
+      window.location.href = buildLoginPath(getBrowserPath());
     }
     return Promise.reject(err);
   }
