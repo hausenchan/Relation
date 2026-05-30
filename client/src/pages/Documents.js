@@ -232,7 +232,7 @@ const mediaAcceptMap = {
   video: '.mp4,.mov,.avi',
   audio: '.mp3,.wav,.m4a,.aac,.ogg',
 };
-const documentLinkParamKeys = ['doc', 'document_id', 'documentId'];
+const documentLinkParamKeys = ['doc', 'document_id', 'documentId', 'docId'];
 
 function getDocumentIdFromSearch(searchParams) {
   for (const key of documentLinkParamKeys) {
@@ -1027,6 +1027,7 @@ export default function Documents() {
   const [folderTreeExpandedKeys, setFolderTreeExpandedKeys] = useState([]);
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
+  const [shareLinkError, setShareLinkError] = useState(null);
   const presentationRef = useRef(null);
   const autoOpenedDocIdRef = useRef(null);
   const editorUndoStackRef = useRef([]);
@@ -1073,6 +1074,9 @@ export default function Documents() {
   const activePresentationSlideIndex = Math.min(presentationSlideIndex, presentationSlideCount - 1);
   const activePresentationSection = presentationSections[activePresentationSlideIndex] || presentationSections[0];
   const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
+  const deepLinkedDocId = useMemo(() => {
+    return getDocumentIdFromSearch(searchParams);
+  }, [searchParams]);
   const canManageSelectedDoc = Boolean(
     currentUser && selectedDoc && (isDocumentAdminUser(currentUser) || Number(selectedDoc.created_by) === Number(currentUser.id))
   );
@@ -1161,8 +1165,7 @@ export default function Documents() {
     });
   };
 
-  const clearActiveDocument = () => {
-    replaceDocumentLinkParam(null);
+  const clearActiveDocument = ({ keepQuery = false } = {}) => {
     setSelectedDocId(null);
     setSelectedDoc(null);
     setEditorTitle('');
@@ -1176,6 +1179,10 @@ export default function Documents() {
     setShareOpen(false);
     setChangeLogOpen(false);
     setPresentationOpen(false);
+    if (!keepQuery) {
+      replaceDocumentLinkParam(null);
+      setShareLinkError(null);
+    }
     resetEditorUndoStack();
   };
 
@@ -1310,16 +1317,27 @@ export default function Documents() {
       setHoveredBlockId(null);
       setOpenBlockMenuId(null);
       setTocOpen(asSwitchValue(detail.toc_enabled, true));
+      setShareLinkError(null);
       resetEditorUndoStack();
     } catch (err) {
+      const isDeepLinkTarget = Number(deepLinkedDocId) === Number(docId);
       setOpenDocTabs(prev => prev.filter(tab => getDocTabId(tab.id) !== docId));
       setDocTabStates(prev => {
         const next = { ...prev };
         delete next[docId];
         return next;
       });
-      if (getDocTabId(selectedDocId) === docId) clearActiveDocument();
-      message.error(err.response?.data?.error || err.message || '加载文档详情失败');
+      if (getDocTabId(selectedDocId) === docId) clearActiveDocument({ keepQuery: isDeepLinkTarget });
+      if (isDeepLinkTarget) {
+        setShareLinkError({
+          docId,
+          message: err.response?.status === 404
+            ? '该文档不存在，或你暂无访问权限。请联系创建人或管理员共享后再打开。'
+            : (err.response?.data?.error || err.message || '打开文档失败，请稍后重试'),
+        });
+      } else {
+        message.error(err.response?.data?.error || err.message || '加载文档详情失败');
+      }
     } finally {
       setDetailLoading(false);
     }
@@ -1424,6 +1442,20 @@ export default function Documents() {
   useEffect(() => {
     if (selectedDocId) loadDetail(selectedDocId);
   }, [selectedDocId]);
+
+  useEffect(() => {
+    if (!deepLinkedDocId) return;
+    if (getDocTabId(selectedDocId) === deepLinkedDocId) return;
+    if (Number(shareLinkError?.docId) === Number(deepLinkedDocId)) return;
+    setShareLinkError(null);
+    openDocumentTab(deepLinkedDocId);
+  }, [deepLinkedDocId, selectedDocId, shareLinkError]);
+
+  useEffect(() => {
+    const activeDocId = getDocTabId(selectedDocId);
+    if (!activeDocId || activeDocId === deepLinkedDocId) return;
+    replaceDocumentLinkParam(activeDocId);
+  }, [selectedDocId, deepLinkedDocId]);
 
   useEffect(() => {
     if (!selectedDoc?.id || !selectedDocId) return;
@@ -1702,6 +1734,19 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '加载共享范围失败');
     } finally {
       setShareLoading(false);
+    }
+  };
+
+  const handleCopyDocumentLink = async () => {
+    if (!selectedDoc?.id) return;
+    const pageLink = buildDocumentPageLink(selectedDoc.id);
+    if (!pageLink) return;
+    try {
+      await copyTextToClipboard(pageLink);
+      setPageMenuOpen(false);
+      message.success('已复制文档链接，可直接发到钉钉群或好友');
+    } catch {
+      message.error('复制链接失败，请稍后重试');
     }
   };
 
@@ -2493,6 +2538,15 @@ export default function Documents() {
     <div style={{ width: 280, padding: 14, background: '#fff', borderRadius: 8, boxShadow: '0 6px 24px rgba(15,23,42,0.16)' }}>
       <Space direction="vertical" size={14} style={{ width: '100%' }}>
         <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Button
+            type="text"
+            block
+            icon={<CopyOutlined />}
+            onClick={handleCopyDocumentLink}
+            style={{ justifyContent: 'flex-start', padding: '4px 8px' }}
+          >
+            复制链接
+          </Button>
           <Button
             type="text"
             block
@@ -4264,8 +4318,19 @@ export default function Documents() {
         {renderDocTabs()}
         {!selectedDoc ? (
           <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed #d9d9d9', borderRadius: 8 }}>
-            <Empty description="选择或新建一篇文档">
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建文档</Button>
+            <Empty description={shareLinkError?.message || '选择或新建一篇文档'}>
+              {shareLinkError ? (
+                <Button
+                  onClick={() => {
+                    setShareLinkError(null);
+                    clearActiveDocument();
+                  }}
+                >
+                  返回文档中心
+                </Button>
+              ) : (
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建文档</Button>
+              )}
             </Empty>
           </div>
         ) : (
@@ -4287,6 +4352,15 @@ export default function Documents() {
                   </Text>
                 </Space>
                 <Space wrap size={6}>
+                  <Tooltip title="复制链接">
+                    <Button
+                      icon={<CopyOutlined />}
+                      onClick={handleCopyDocumentLink}
+                      aria-label="复制链接"
+                    >
+                      {!isMobile && '复制链接'}
+                    </Button>
+                  </Tooltip>
                   <Tooltip title="目录">
                     <span>
                       <Button

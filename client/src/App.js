@@ -117,8 +117,8 @@ const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', read
 
 // 路由守卫
 function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
-  const { user, loading, canAccessModule, isExecutive } = useAuth();
   const location = useLocation();
+  const { user, loading, canAccessModule, isExecutive } = useAuth();
   if (loading) return null;
   if (!user) {
     const redirectPath = getLocationPath(location);
@@ -852,10 +852,10 @@ export default function App() {
   );
 }
 
-// 已登录则跳首页
+// 已登录则跳转到目标页
 function LoginGuard() {
-  const { user, loading } = useAuth();
   const location = useLocation();
+  const { user, loading } = useAuth();
   const redirectPath = getSafeInternalPath(new URLSearchParams(location.search).get('redirect'));
   if (loading) return null;
   if (user) return <Navigate to={redirectPath} replace />;

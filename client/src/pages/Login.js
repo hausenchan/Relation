@@ -47,8 +47,8 @@ function MidongLogo({ size = 72 }) {
 export default function Login() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
-  const { login } = useAuth();
   const location = useLocation();
+  const { login } = useAuth();
   const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const redirectPath = getSafeInternalPath(
