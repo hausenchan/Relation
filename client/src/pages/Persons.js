@@ -94,8 +94,47 @@ const weightMap = {
   low:    { label: '低', color: 'default' },
 };
 
+const counterpartyBudgetCategoryOptions = [
+  { value: 'h5', label: 'H5' },
+  { value: 'api', label: 'api' },
+  { value: 'assist', label: '助力' },
+  { value: 'acquisition', label: '拉新' },
+  { value: 'reactivation', label: '拉活' },
+  { value: 'sdk', label: 'SDK' },
+  { value: 'other', label: '其他' },
+];
+
+const trafficScenarioOptions = [
+  { value: 'app', label: 'APP' },
+  { value: 'h5', label: 'H5' },
+  { value: 'wechat_mini_program', label: '微信小程序' },
+  { value: 'alipay_mini_program', label: '支付宝小程序' },
+  { value: 'quick_app', label: '快应用' },
+  { value: 'wechat_group', label: '微信社群' },
+  { value: 'alipay_group', label: '支付宝社群' },
+  { value: 'douyin_mini_program', label: '抖音小程序' },
+  { value: 'adx', label: 'Adx' },
+  { value: 'account_launch', label: '开户投放' },
+  { value: 'other', label: '其他' },
+];
+
+const counterpartyBudgetCategoryMap = Object.fromEntries(
+  counterpartyBudgetCategoryOptions.map(option => [option.value, option])
+);
+const trafficScenarioMap = Object.fromEntries(
+  trafficScenarioOptions.map(option => [option.value, option])
+);
+
 const parseRelationTypes = (str) =>
   str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+const parseMultiSelectValues = (str) =>
+  str ? str.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+const formatMultiSelectValues = (values) =>
+  Array.isArray(values)
+    ? [...new Set(values.map(item => String(item || '').trim()).filter(Boolean))].join(',')
+    : (values || '');
 
 const isExecutiveUser = (user) =>
   EXECUTIVE_ROLES.includes(user?.role) || EXECUTIVE_ROLES.includes(user?.executive_role);
@@ -158,6 +197,20 @@ function RelationTags({ value }) {
         const m = relationTypeMap[t];
         return m ? <Tag key={t} color={m.color}>{m.label}</Tag> : null;
       })}
+    </Space>
+  );
+}
+
+function MultiValueTags({ value, optionMap, color = 'blue' }) {
+  const items = parseMultiSelectValues(value);
+  if (items.length === 0) return <Text type="secondary">-</Text>;
+  return (
+    <Space size={[4, 4]} wrap>
+      {items.map(item => (
+        <Tag key={item} color={optionMap[item]?.color || color}>
+          {optionMap[item]?.label || item}
+        </Tag>
+      ))}
     </Space>
   );
 }
@@ -296,6 +349,7 @@ function commonFields({ isMobile }) {
 // 商务圈扩展字段
 function businessFields({ isMobile }) {
   const thirdSpan = isMobile ? 24 : 8;
+  const checkboxSpan = isMobile ? 12 : 6;
   return (
     <>
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>商务信息</Divider>
@@ -322,6 +376,41 @@ function businessFields({ isMobile }) {
           </Form.Item>
         </Col>
       </Row>
+
+      <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>预算与流量场景</Divider>
+      <Form.Item label="对方预算分类" name="counterparty_budget_categories">
+        <Checkbox.Group style={{ width: '100%' }}>
+          <Row gutter={[8, 8]}>
+            {counterpartyBudgetCategoryOptions.map(option => (
+              <Col key={option.value} span={checkboxSpan}>
+                <Checkbox value={option.value}>{option.label}</Checkbox>
+              </Col>
+            ))}
+          </Row>
+        </Checkbox.Group>
+      </Form.Item>
+      <Form.Item label="自有流量场景" name="owned_traffic_scenarios">
+        <Checkbox.Group style={{ width: '100%' }}>
+          <Row gutter={[8, 8]}>
+            {trafficScenarioOptions.map(option => (
+              <Col key={option.value} span={checkboxSpan}>
+                <Checkbox value={option.value}>{option.label}</Checkbox>
+              </Col>
+            ))}
+          </Row>
+        </Checkbox.Group>
+      </Form.Item>
+      <Form.Item label="代理流量场景" name="agency_traffic_scenarios">
+        <Checkbox.Group style={{ width: '100%' }}>
+          <Row gutter={[8, 8]}>
+            {trafficScenarioOptions.map(option => (
+              <Col key={option.value} span={checkboxSpan}>
+                <Checkbox value={option.value}>{option.label}</Checkbox>
+              </Col>
+            ))}
+          </Row>
+        </Checkbox.Group>
+      </Form.Item>
     </>
   );
 }
@@ -499,6 +588,9 @@ export default function Persons() {
   const [filterPotentialLevel, setFilterPotentialLevel] = useState('');
   const [filterRecruitStatus, setFilterRecruitStatus] = useState('');
   const [filterIntentLevel, setFilterIntentLevel] = useState('');
+  const [filterCounterpartyBudgetCategories, setFilterCounterpartyBudgetCategories] = useState([]);
+  const [filterOwnedTrafficScenarios, setFilterOwnedTrafficScenarios] = useState([]);
+  const [filterAgencyTrafficScenarios, setFilterAgencyTrafficScenarios] = useState([]);
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
@@ -544,6 +636,9 @@ export default function Persons() {
     if (filterPotentialLevel) params.potential_level = filterPotentialLevel;
     if (filterRecruitStatus) params.recruit_status = filterRecruitStatus;
     if (filterIntentLevel) params.intent_level = filterIntentLevel;
+    if (filterCounterpartyBudgetCategories.length > 0) params.counterparty_budget_categories = filterCounterpartyBudgetCategories.join(',');
+    if (filterOwnedTrafficScenarios.length > 0) params.owned_traffic_scenarios = filterOwnedTrafficScenarios.join(',');
+    if (filterAgencyTrafficScenarios.length > 0) params.agency_traffic_scenarios = filterAgencyTrafficScenarios.join(',');
     if (filterCity) params.city = filterCity;
     if (filterWeight) params.weight = filterWeight;
     if (filterCreatedBy) params.created_by = filterCreatedBy;
@@ -552,7 +647,22 @@ export default function Persons() {
     setData(res);
     setSelectedRowKeys(prev => prev.filter(id => res.some(r => Number(r.id) === Number(id))));
     setLoading(false);
-  }, [search, filterCategory, filterRelationType, filterPotentialLevel, filterRecruitStatus, filterIntentLevel, filterCity, filterWeight, filterCreatedBy, filterVisibility, canUsePrivatePersons]);
+  }, [
+    search,
+    filterCategory,
+    filterRelationType,
+    filterPotentialLevel,
+    filterRecruitStatus,
+    filterIntentLevel,
+    filterCounterpartyBudgetCategories,
+    filterOwnedTrafficScenarios,
+    filterAgencyTrafficScenarios,
+    filterCity,
+    filterWeight,
+    filterCreatedBy,
+    filterVisibility,
+    canUsePrivatePersons,
+  ]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -590,6 +700,9 @@ export default function Persons() {
       ...record,
       relation_types: parseRelationTypes(record.relation_types),
       city: record.city ? record.city.split(',').map(s => s.trim()).filter(Boolean) : [],
+      counterparty_budget_categories: parseMultiSelectValues(record.counterparty_budget_categories),
+      owned_traffic_scenarios: parseMultiSelectValues(record.owned_traffic_scenarios),
+      agency_traffic_scenarios: parseMultiSelectValues(record.agency_traffic_scenarios),
       visibility_scope: record.visibility_scope || COMPANY_PERSON_SCOPE,
       shared_to: record.shared_to_ids
         ? record.shared_to_ids.split(',').map(Number).filter(Boolean)
@@ -605,6 +718,9 @@ export default function Persons() {
     form.setFieldsValue({
       person_category: 'social',
       relation_types: [],
+      counterparty_budget_categories: [],
+      owned_traffic_scenarios: [],
+      agency_traffic_scenarios: [],
       weight: 'medium',
       visibility_scope: COMPANY_PERSON_SCOPE,
       shared_to: [],
@@ -624,6 +740,9 @@ export default function Persons() {
       city: Array.isArray(values.city)
         ? values.city.join(',')
         : (values.city || ''),
+      counterparty_budget_categories: formatMultiSelectValues(values.counterparty_budget_categories),
+      owned_traffic_scenarios: formatMultiSelectValues(values.owned_traffic_scenarios),
+      agency_traffic_scenarios: formatMultiSelectValues(values.agency_traffic_scenarios),
       visibility_scope: canUsePrivatePersons ? (values.visibility_scope || COMPANY_PERSON_SCOPE) : COMPANY_PERSON_SCOPE,
       shared_to: values.visibility_scope === PRIVATE_PERSON_SCOPE ? [] : values.shared_to,
     };
@@ -1341,6 +1460,9 @@ export default function Persons() {
     filterPotentialLevel,
     filterRecruitStatus,
     filterIntentLevel,
+    filterCounterpartyBudgetCategories.length > 0 && 'counterparty_budget_categories',
+    filterOwnedTrafficScenarios.length > 0 && 'owned_traffic_scenarios',
+    filterAgencyTrafficScenarios.length > 0 && 'agency_traffic_scenarios',
     filterCity,
     filterWeight,
     filterCreatedBy,
@@ -1353,6 +1475,9 @@ export default function Persons() {
     setFilterPotentialLevel('');
     setFilterRecruitStatus('');
     setFilterIntentLevel('');
+    setFilterCounterpartyBudgetCategories([]);
+    setFilterOwnedTrafficScenarios([]);
+    setFilterAgencyTrafficScenarios([]);
     setFilterCity('');
     setFilterWeight('');
     setFilterCreatedBy(undefined);
@@ -1391,6 +1516,11 @@ export default function Persons() {
               setFilterPotentialLevel('');
               setFilterRecruitStatus('');
               setFilterIntentLevel('');
+            }
+            if (v && v !== 'business') {
+              setFilterCounterpartyBudgetCategories([]);
+              setFilterOwnedTrafficScenarios([]);
+              setFilterAgencyTrafficScenarios([]);
             }
           }}
         >
@@ -1473,6 +1603,73 @@ export default function Persons() {
             {Object.entries(intentMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
           </Select>
         </Space>
+      )}
+
+      {(!filterCategory || filterCategory === 'business') && (
+        <div
+          style={{
+            marginBottom: 12,
+            padding: isMobile ? 12 : 14,
+            border: '1px solid #f0f0f0',
+            borderRadius: 12,
+            background: '#fafafa',
+          }}
+        >
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>商务拓展筛选：支持单选或多选组合筛选</Text>
+
+            <div>
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>对方预算分类</div>
+              <Checkbox.Group
+                value={filterCounterpartyBudgetCategories}
+                onChange={values => setFilterCounterpartyBudgetCategories(values)}
+                style={{ width: '100%' }}
+              >
+                <Row gutter={[8, 8]}>
+                  {counterpartyBudgetCategoryOptions.map(option => (
+                    <Col key={option.value} span={isMobile ? 12 : 4}>
+                      <Checkbox value={option.value}>{option.label}</Checkbox>
+                    </Col>
+                  ))}
+                </Row>
+              </Checkbox.Group>
+            </div>
+
+            <div>
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>自有流量场景</div>
+              <Checkbox.Group
+                value={filterOwnedTrafficScenarios}
+                onChange={values => setFilterOwnedTrafficScenarios(values)}
+                style={{ width: '100%' }}
+              >
+                <Row gutter={[8, 8]}>
+                  {trafficScenarioOptions.map(option => (
+                    <Col key={option.value} span={isMobile ? 12 : 4}>
+                      <Checkbox value={option.value}>{option.label}</Checkbox>
+                    </Col>
+                  ))}
+                </Row>
+              </Checkbox.Group>
+            </div>
+
+            <div>
+              <div style={{ marginBottom: 8, fontWeight: 500 }}>代理流量场景</div>
+              <Checkbox.Group
+                value={filterAgencyTrafficScenarios}
+                onChange={values => setFilterAgencyTrafficScenarios(values)}
+                style={{ width: '100%' }}
+              >
+                <Row gutter={[8, 8]}>
+                  {trafficScenarioOptions.map(option => (
+                    <Col key={option.value} span={isMobile ? 12 : 4}>
+                      <Checkbox value={option.value}>{option.label}</Checkbox>
+                    </Col>
+                  ))}
+                </Row>
+              </Checkbox.Group>
+            </div>
+          </Space>
+        </div>
       )}
     </>
   );
@@ -1944,6 +2141,20 @@ export default function Persons() {
                       {current.client_status && (
                         <Descriptions.Item label="客户状态">{current.client_status === 'active' ? '活跃' : current.client_status === 'inactive' ? '不活跃' : '流失'}</Descriptions.Item>
                       )}
+                    </Descriptions>
+                  )}
+
+                  {current.person_category === 'business' && (
+                    <Descriptions column={1} size="small" bordered style={{ marginBottom: 16 }} title="预算与流量场景">
+                      <Descriptions.Item label="对方预算分类">
+                        <MultiValueTags value={current.counterparty_budget_categories} optionMap={counterpartyBudgetCategoryMap} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="自有流量场景">
+                        <MultiValueTags value={current.owned_traffic_scenarios} optionMap={trafficScenarioMap} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="代理流量场景">
+                        <MultiValueTags value={current.agency_traffic_scenarios} optionMap={trafficScenarioMap} />
+                      </Descriptions.Item>
                     </Descriptions>
                   )}
 

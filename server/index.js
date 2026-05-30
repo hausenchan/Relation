@@ -52,6 +52,47 @@ const upload = multer({
 });
 
 const PERSON_NAME_MAX_LENGTH = 30;
+const PERSON_COUNTERPARTY_BUDGET_CATEGORY_OPTIONS = ['h5', 'api', 'assist', 'acquisition', 'reactivation', 'sdk', 'other'];
+const PERSON_TRAFFIC_SCENARIO_OPTIONS = [
+  'app',
+  'h5',
+  'wechat_mini_program',
+  'alipay_mini_program',
+  'quick_app',
+  'wechat_group',
+  'alipay_group',
+  'douyin_mini_program',
+  'adx',
+  'account_launch',
+  'other',
+];
+
+function normalizePersonMultiSelectValues(value, allowedValues = null) {
+  const items = [...new Set(String(value || '')
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean))];
+  if (allowedValues) {
+    const invalid = items.find(item => !allowedValues.includes(item));
+    if (invalid) return { error: invalid };
+  }
+  return { value: items.join(',') };
+}
+
+function buildCsvContainsFilter(column, rawValue) {
+  const values = normalizePersonMultiSelectValues(rawValue).value
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean);
+  if (values.length === 0) return { sql: '', params: [] };
+
+  const clauses = values.map(() => `(${column} = ? OR ${column} LIKE ? OR ${column} LIKE ? OR ${column} LIKE ?)`);
+  const params = [];
+  values.forEach(value => {
+    params.push(value, `${value},%`, `%,${value}`, `%,${value},%`);
+  });
+  return { sql: ` AND (${clauses.join(' OR ')})`, params };
+}
 
 function normalizePersonName(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -383,6 +424,9 @@ db.exec(`
     -- 商务圈字段
     relationship_level TEXT DEFAULT 'normal',
     client_status TEXT DEFAULT 'active',
+    counterparty_budget_categories TEXT DEFAULT '',
+    owned_traffic_scenarios TEXT DEFAULT '',
+    agency_traffic_scenarios TEXT DEFAULT '',
     -- 人才圈字段
     talent_type TEXT DEFAULT 'external',
     current_company TEXT,
@@ -590,6 +634,9 @@ if (existingCols.length > 0) {
     ["success_traits", "TEXT"],
     ["potential_level","TEXT"],
     ["weight",        "TEXT DEFAULT 'medium'"],
+    ["counterparty_budget_categories", "TEXT DEFAULT ''"],
+    ["owned_traffic_scenarios", "TEXT DEFAULT ''"],
+    ["agency_traffic_scenarios", "TEXT DEFAULT ''"],
     ["created_by",    "INTEGER DEFAULT NULL"],
     ["assigned_to",   "INTEGER DEFAULT NULL"],
     ["lat",           "REAL DEFAULT NULL"],
@@ -4239,7 +4286,21 @@ app.put('/api/admin/menu-perms/:userId', auth, adminOnly, (req, res) => {
 
 // =========== 人脉 API ===========
 app.get('/api/persons', (req, res) => {
-  const { search, person_category, relation_type, potential_level, recruit_status, intent_level, city, weight, created_by, visibility_scope } = req.query;
+  const {
+    search,
+    person_category,
+    relation_type,
+    potential_level,
+    recruit_status,
+    intent_level,
+    city,
+    weight,
+    created_by,
+    visibility_scope,
+    counterparty_budget_categories,
+    owned_traffic_scenarios,
+    agency_traffic_scenarios,
+  } = req.query;
   const { id: me, role } = req.user;
   let query = `
     SELECT p.*,
@@ -4283,6 +4344,15 @@ app.get('/api/persons', (req, res) => {
   if (potential_level) { query += ' AND p.potential_level = ?'; params.push(potential_level); }
   if (recruit_status) { query += ' AND p.recruit_status = ?'; params.push(recruit_status); }
   if (intent_level) { query += ' AND p.intent_level = ?'; params.push(intent_level); }
+  const counterpartyBudgetFilter = buildCsvContainsFilter('p.counterparty_budget_categories', counterparty_budget_categories);
+  query += counterpartyBudgetFilter.sql;
+  params.push(...counterpartyBudgetFilter.params);
+  const ownedTrafficFilter = buildCsvContainsFilter('p.owned_traffic_scenarios', owned_traffic_scenarios);
+  query += ownedTrafficFilter.sql;
+  params.push(...ownedTrafficFilter.params);
+  const agencyTrafficFilter = buildCsvContainsFilter('p.agency_traffic_scenarios', agency_traffic_scenarios);
+  query += agencyTrafficFilter.sql;
+  params.push(...agencyTrafficFilter.params);
   if (city) {
     const cities = city.split(',').filter(Boolean);
     if (cities.length === 1) {
@@ -4433,6 +4503,7 @@ app.post('/api/persons', canWrite, async (req, res) => {
     name, person_category, relation_types, city, company, position, industry,
     phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
     relationship_level, client_status,
+    counterparty_budget_categories, owned_traffic_scenarios, agency_traffic_scenarios,
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
@@ -4442,6 +4513,27 @@ app.post('/api/persons', canWrite, async (req, res) => {
   if (!normalizedName) return res.status(400).json({ error: '姓名必填' });
   if (normalizedName.length > PERSON_NAME_MAX_LENGTH) {
     return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
+  }
+  const normalizedBudgetCategories = normalizePersonMultiSelectValues(
+    counterparty_budget_categories,
+    PERSON_COUNTERPARTY_BUDGET_CATEGORY_OPTIONS
+  );
+  if (normalizedBudgetCategories.error) {
+    return res.status(400).json({ error: '对方预算分类包含不合法的值' });
+  }
+  const normalizedOwnedTrafficScenarios = normalizePersonMultiSelectValues(
+    owned_traffic_scenarios,
+    PERSON_TRAFFIC_SCENARIO_OPTIONS
+  );
+  if (normalizedOwnedTrafficScenarios.error) {
+    return res.status(400).json({ error: '自有流量场景包含不合法的值' });
+  }
+  const normalizedAgencyTrafficScenarios = normalizePersonMultiSelectValues(
+    agency_traffic_scenarios,
+    PERSON_TRAFFIC_SCENARIO_OPTIONS
+  );
+  if (normalizedAgencyTrafficScenarios.error) {
+    return res.status(400).json({ error: '代理流量场景包含不合法的值' });
   }
   const visibility = resolvePersonVisibilityPayload(req.user, visibility_scope);
   if (visibility.error) return res.status(403).json({ error: visibility.error });
@@ -4456,15 +4548,17 @@ app.post('/api/persons', canWrite, async (req, res) => {
     INSERT INTO persons (name, person_category, relation_types, city, company, position, industry,
       phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
       relationship_level, client_status,
+      counterparty_budget_categories, owned_traffic_scenarios, agency_traffic_scenarios,
       talent_type, current_company, current_position, target_position,
       skills, experience_years, education, recruit_status, intent_level,
       potential_level, expected_salary, source, heart, brain, mouth, hand, weight, lat, lng, created_by,
       visibility_scope, private_owner_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     enc.name, person_category || 'social', relation_types || '', city,
     enc.company, enc.position, industry, enc.phone, enc.email, enc.wechat, birthday, enc.address, enc.tags, enc.notes,
     enc.resources, enc.demands, enc.success_traits, relationship_level || 'normal', client_status || 'active',
+    normalizedBudgetCategories.value, normalizedOwnedTrafficScenarios.value, normalizedAgencyTrafficScenarios.value,
     talent_type || 'external', enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status || 'potential', intent_level || 'low',
     potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium', geo.lat, geo.lng, req.user.id
@@ -4689,6 +4783,7 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     name, person_category, relation_types, city, company, position, industry,
     phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
     relationship_level, client_status,
+    counterparty_budget_categories, owned_traffic_scenarios, agency_traffic_scenarios,
     talent_type, current_company, current_position, target_position,
     skills, experience_years, education, recruit_status, intent_level,
     potential_level, expected_salary, source, heart, brain, mouth, hand, weight,
@@ -4698,6 +4793,27 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
   if (!normalizedName) return res.status(400).json({ error: '姓名必填' });
   if (normalizedName.length > PERSON_NAME_MAX_LENGTH) {
     return res.status(400).json({ error: `姓名不能超过 ${PERSON_NAME_MAX_LENGTH} 个字符` });
+  }
+  const normalizedBudgetCategories = normalizePersonMultiSelectValues(
+    counterparty_budget_categories,
+    PERSON_COUNTERPARTY_BUDGET_CATEGORY_OPTIONS
+  );
+  if (normalizedBudgetCategories.error) {
+    return res.status(400).json({ error: '对方预算分类包含不合法的值' });
+  }
+  const normalizedOwnedTrafficScenarios = normalizePersonMultiSelectValues(
+    owned_traffic_scenarios,
+    PERSON_TRAFFIC_SCENARIO_OPTIONS
+  );
+  if (normalizedOwnedTrafficScenarios.error) {
+    return res.status(400).json({ error: '自有流量场景包含不合法的值' });
+  }
+  const normalizedAgencyTrafficScenarios = normalizePersonMultiSelectValues(
+    agency_traffic_scenarios,
+    PERSON_TRAFFIC_SCENARIO_OPTIONS
+  );
+  if (normalizedAgencyTrafficScenarios.error) {
+    return res.status(400).json({ error: '代理流量场景包含不合法的值' });
   }
   const visibility = resolvePersonVisibilityPayload(req.user, visibility_scope, existingPerson);
   if (visibility.error) return res.status(403).json({ error: visibility.error });
@@ -4723,6 +4839,7 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     UPDATE persons SET name=?, person_category=?, relation_types=?, city=?, company=?, position=?, industry=?,
       phone=?, email=?, wechat=?, birthday=?, address=?, tags=?, notes=?, resources=?, demands=?, success_traits=?,
       relationship_level=?, client_status=?,
+      counterparty_budget_categories=?, owned_traffic_scenarios=?, agency_traffic_scenarios=?,
       talent_type=?, current_company=?, current_position=?, target_position=?,
       skills=?, experience_years=?, education=?, recruit_status=?, intent_level=?,
       potential_level=?, expected_salary=?, source=?, heart=?, brain=?, mouth=?, hand=?, weight=?,
@@ -4732,6 +4849,7 @@ app.put('/api/persons/:id', canWrite, async (req, res) => {
     enc.name, person_category, relation_types || '', city,
     enc.company, enc.position, industry, enc.phone, enc.email, enc.wechat, birthday, enc.address, enc.tags, enc.notes,
     enc.resources, enc.demands, enc.success_traits, relationship_level, client_status,
+    normalizedBudgetCategories.value, normalizedOwnedTrafficScenarios.value, normalizedAgencyTrafficScenarios.value,
     talent_type, enc.current_company, enc.current_position, enc.target_position,
     enc.skills, experience_years, enc.education, recruit_status, intent_level,
     potential_level, enc.expected_salary, enc.source, enc.heart, enc.brain, enc.mouth, enc.hand, weight || 'medium',
