@@ -349,7 +349,7 @@ function commonFields({ isMobile }) {
 // 商务圈扩展字段
 function businessFields({ isMobile }) {
   const thirdSpan = isMobile ? 24 : 8;
-  const checkboxSpan = isMobile ? 12 : 6;
+  const checkboxSpan = isMobile ? 12 : 4;
   return (
     <>
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>商务信息</Divider>
@@ -375,42 +375,46 @@ function businessFields({ isMobile }) {
             </Select>
           </Form.Item>
         </Col>
+        <Col span={24}>
+          <Form.Item label="对方预算分类" name="counterparty_budget_categories">
+            <Checkbox.Group style={{ width: '100%' }}>
+              <Row gutter={[8, 8]}>
+                {counterpartyBudgetCategoryOptions.map(option => (
+                  <Col key={option.value} span={checkboxSpan}>
+                    <Checkbox value={option.value}>{option.label}</Checkbox>
+                  </Col>
+                ))}
+              </Row>
+            </Checkbox.Group>
+          </Form.Item>
+        </Col>
+        <Col span={24}>
+          <Form.Item label="自有流量场景" name="owned_traffic_scenarios">
+            <Checkbox.Group style={{ width: '100%' }}>
+              <Row gutter={[8, 8]}>
+                {trafficScenarioOptions.map(option => (
+                  <Col key={option.value} span={checkboxSpan}>
+                    <Checkbox value={option.value}>{option.label}</Checkbox>
+                  </Col>
+                ))}
+              </Row>
+            </Checkbox.Group>
+          </Form.Item>
+        </Col>
+        <Col span={24}>
+          <Form.Item label="代理流量场景" name="agency_traffic_scenarios">
+            <Checkbox.Group style={{ width: '100%' }}>
+              <Row gutter={[8, 8]}>
+                {trafficScenarioOptions.map(option => (
+                  <Col key={option.value} span={checkboxSpan}>
+                    <Checkbox value={option.value}>{option.label}</Checkbox>
+                  </Col>
+                ))}
+              </Row>
+            </Checkbox.Group>
+          </Form.Item>
+        </Col>
       </Row>
-
-      <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>预算与流量场景</Divider>
-      <Form.Item label="对方预算分类" name="counterparty_budget_categories">
-        <Checkbox.Group style={{ width: '100%' }}>
-          <Row gutter={[8, 8]}>
-            {counterpartyBudgetCategoryOptions.map(option => (
-              <Col key={option.value} span={checkboxSpan}>
-                <Checkbox value={option.value}>{option.label}</Checkbox>
-              </Col>
-            ))}
-          </Row>
-        </Checkbox.Group>
-      </Form.Item>
-      <Form.Item label="自有流量场景" name="owned_traffic_scenarios">
-        <Checkbox.Group style={{ width: '100%' }}>
-          <Row gutter={[8, 8]}>
-            {trafficScenarioOptions.map(option => (
-              <Col key={option.value} span={checkboxSpan}>
-                <Checkbox value={option.value}>{option.label}</Checkbox>
-              </Col>
-            ))}
-          </Row>
-        </Checkbox.Group>
-      </Form.Item>
-      <Form.Item label="代理流量场景" name="agency_traffic_scenarios">
-        <Checkbox.Group style={{ width: '100%' }}>
-          <Row gutter={[8, 8]}>
-            {trafficScenarioOptions.map(option => (
-              <Col key={option.value} span={checkboxSpan}>
-                <Checkbox value={option.value}>{option.label}</Checkbox>
-              </Col>
-            ))}
-          </Row>
-        </Checkbox.Group>
-      </Form.Item>
     </>
   );
 }
@@ -588,9 +592,6 @@ export default function Persons() {
   const [filterPotentialLevel, setFilterPotentialLevel] = useState('');
   const [filterRecruitStatus, setFilterRecruitStatus] = useState('');
   const [filterIntentLevel, setFilterIntentLevel] = useState('');
-  const [filterCounterpartyBudgetCategories, setFilterCounterpartyBudgetCategories] = useState([]);
-  const [filterOwnedTrafficScenarios, setFilterOwnedTrafficScenarios] = useState([]);
-  const [filterAgencyTrafficScenarios, setFilterAgencyTrafficScenarios] = useState([]);
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
@@ -636,9 +637,6 @@ export default function Persons() {
     if (filterPotentialLevel) params.potential_level = filterPotentialLevel;
     if (filterRecruitStatus) params.recruit_status = filterRecruitStatus;
     if (filterIntentLevel) params.intent_level = filterIntentLevel;
-    if (filterCounterpartyBudgetCategories.length > 0) params.counterparty_budget_categories = filterCounterpartyBudgetCategories.join(',');
-    if (filterOwnedTrafficScenarios.length > 0) params.owned_traffic_scenarios = filterOwnedTrafficScenarios.join(',');
-    if (filterAgencyTrafficScenarios.length > 0) params.agency_traffic_scenarios = filterAgencyTrafficScenarios.join(',');
     if (filterCity) params.city = filterCity;
     if (filterWeight) params.weight = filterWeight;
     if (filterCreatedBy) params.created_by = filterCreatedBy;
@@ -654,9 +652,6 @@ export default function Persons() {
     filterPotentialLevel,
     filterRecruitStatus,
     filterIntentLevel,
-    filterCounterpartyBudgetCategories,
-    filterOwnedTrafficScenarios,
-    filterAgencyTrafficScenarios,
     filterCity,
     filterWeight,
     filterCreatedBy,
@@ -1460,9 +1455,6 @@ export default function Persons() {
     filterPotentialLevel,
     filterRecruitStatus,
     filterIntentLevel,
-    filterCounterpartyBudgetCategories.length > 0 && 'counterparty_budget_categories',
-    filterOwnedTrafficScenarios.length > 0 && 'owned_traffic_scenarios',
-    filterAgencyTrafficScenarios.length > 0 && 'agency_traffic_scenarios',
     filterCity,
     filterWeight,
     filterCreatedBy,
@@ -1475,9 +1467,6 @@ export default function Persons() {
     setFilterPotentialLevel('');
     setFilterRecruitStatus('');
     setFilterIntentLevel('');
-    setFilterCounterpartyBudgetCategories([]);
-    setFilterOwnedTrafficScenarios([]);
-    setFilterAgencyTrafficScenarios([]);
     setFilterCity('');
     setFilterWeight('');
     setFilterCreatedBy(undefined);
@@ -1516,11 +1505,6 @@ export default function Persons() {
               setFilterPotentialLevel('');
               setFilterRecruitStatus('');
               setFilterIntentLevel('');
-            }
-            if (v && v !== 'business') {
-              setFilterCounterpartyBudgetCategories([]);
-              setFilterOwnedTrafficScenarios([]);
-              setFilterAgencyTrafficScenarios([]);
             }
           }}
         >
@@ -1605,72 +1589,6 @@ export default function Persons() {
         </Space>
       )}
 
-      {(!filterCategory || filterCategory === 'business') && (
-        <div
-          style={{
-            marginBottom: 12,
-            padding: isMobile ? 12 : 14,
-            border: '1px solid #f0f0f0',
-            borderRadius: 12,
-            background: '#fafafa',
-          }}
-        >
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>商务拓展筛选：支持单选或多选组合筛选</Text>
-
-            <div>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>对方预算分类</div>
-              <Checkbox.Group
-                value={filterCounterpartyBudgetCategories}
-                onChange={values => setFilterCounterpartyBudgetCategories(values)}
-                style={{ width: '100%' }}
-              >
-                <Row gutter={[8, 8]}>
-                  {counterpartyBudgetCategoryOptions.map(option => (
-                    <Col key={option.value} span={isMobile ? 12 : 4}>
-                      <Checkbox value={option.value}>{option.label}</Checkbox>
-                    </Col>
-                  ))}
-                </Row>
-              </Checkbox.Group>
-            </div>
-
-            <div>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>自有流量场景</div>
-              <Checkbox.Group
-                value={filterOwnedTrafficScenarios}
-                onChange={values => setFilterOwnedTrafficScenarios(values)}
-                style={{ width: '100%' }}
-              >
-                <Row gutter={[8, 8]}>
-                  {trafficScenarioOptions.map(option => (
-                    <Col key={option.value} span={isMobile ? 12 : 4}>
-                      <Checkbox value={option.value}>{option.label}</Checkbox>
-                    </Col>
-                  ))}
-                </Row>
-              </Checkbox.Group>
-            </div>
-
-            <div>
-              <div style={{ marginBottom: 8, fontWeight: 500 }}>代理流量场景</div>
-              <Checkbox.Group
-                value={filterAgencyTrafficScenarios}
-                onChange={values => setFilterAgencyTrafficScenarios(values)}
-                style={{ width: '100%' }}
-              >
-                <Row gutter={[8, 8]}>
-                  {trafficScenarioOptions.map(option => (
-                    <Col key={option.value} span={isMobile ? 12 : 4}>
-                      <Checkbox value={option.value}>{option.label}</Checkbox>
-                    </Col>
-                  ))}
-                </Row>
-              </Checkbox.Group>
-            </div>
-          </Space>
-        </div>
-      )}
     </>
   );
   const importSummary = importPreview?.summary;
