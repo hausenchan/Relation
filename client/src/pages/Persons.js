@@ -711,11 +711,13 @@ export default function Persons() {
     setEditing(null);
     form.resetFields();
     form.setFieldsValue({
-      person_category: 'social',
+      person_category: 'business',
       relation_types: [],
       counterparty_budget_categories: [],
       owned_traffic_scenarios: [],
       agency_traffic_scenarios: [],
+      relationship_level: 'normal',
+      client_status: 'active',
       weight: 'medium',
       visibility_scope: COMPANY_PERSON_SCOPE,
       shared_to: [],
