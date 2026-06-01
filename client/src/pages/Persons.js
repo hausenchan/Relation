@@ -349,7 +349,6 @@ function commonFields({ isMobile }) {
 // 商务圈扩展字段
 function businessFields({ isMobile }) {
   const thirdSpan = isMobile ? 24 : 8;
-  const checkboxSpan = isMobile ? 12 : 4;
   return (
     <>
       <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>商务信息</Divider>
@@ -377,41 +376,41 @@ function businessFields({ isMobile }) {
         </Col>
         <Col span={24}>
           <Form.Item label="对方预算分类" name="counterparty_budget_categories">
-            <Checkbox.Group style={{ width: '100%' }}>
-              <Row gutter={[8, 8]}>
-                {counterpartyBudgetCategoryOptions.map(option => (
-                  <Col key={option.value} span={checkboxSpan}>
-                    <Checkbox value={option.value}>{option.label}</Checkbox>
-                  </Col>
-                ))}
-              </Row>
-            </Checkbox.Group>
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="请选择对方预算分类"
+              optionFilterProp="label"
+              maxTagCount="responsive"
+              style={{ width: '100%' }}
+              options={counterpartyBudgetCategoryOptions}
+            />
           </Form.Item>
         </Col>
         <Col span={24}>
           <Form.Item label="自有流量场景" name="owned_traffic_scenarios">
-            <Checkbox.Group style={{ width: '100%' }}>
-              <Row gutter={[8, 8]}>
-                {trafficScenarioOptions.map(option => (
-                  <Col key={option.value} span={checkboxSpan}>
-                    <Checkbox value={option.value}>{option.label}</Checkbox>
-                  </Col>
-                ))}
-              </Row>
-            </Checkbox.Group>
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="请选择自有流量场景"
+              optionFilterProp="label"
+              maxTagCount="responsive"
+              style={{ width: '100%' }}
+              options={trafficScenarioOptions}
+            />
           </Form.Item>
         </Col>
         <Col span={24}>
           <Form.Item label="代理流量场景" name="agency_traffic_scenarios">
-            <Checkbox.Group style={{ width: '100%' }}>
-              <Row gutter={[8, 8]}>
-                {trafficScenarioOptions.map(option => (
-                  <Col key={option.value} span={checkboxSpan}>
-                    <Checkbox value={option.value}>{option.label}</Checkbox>
-                  </Col>
-                ))}
-              </Row>
-            </Checkbox.Group>
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="请选择代理流量场景"
+              optionFilterProp="label"
+              maxTagCount="responsive"
+              style={{ width: '100%' }}
+              options={trafficScenarioOptions}
+            />
           </Form.Item>
         </Col>
       </Row>
