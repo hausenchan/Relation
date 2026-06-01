@@ -592,6 +592,9 @@ export default function Persons() {
   const [filterPotentialLevel, setFilterPotentialLevel] = useState('');
   const [filterRecruitStatus, setFilterRecruitStatus] = useState('');
   const [filterIntentLevel, setFilterIntentLevel] = useState('');
+  const [filterCounterpartyBudgetCategories, setFilterCounterpartyBudgetCategories] = useState('');
+  const [filterOwnedTrafficScenarios, setFilterOwnedTrafficScenarios] = useState('');
+  const [filterAgencyTrafficScenarios, setFilterAgencyTrafficScenarios] = useState('');
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [filterCreatedBy, setFilterCreatedBy] = useState(undefined);
@@ -637,6 +640,9 @@ export default function Persons() {
     if (filterPotentialLevel) params.potential_level = filterPotentialLevel;
     if (filterRecruitStatus) params.recruit_status = filterRecruitStatus;
     if (filterIntentLevel) params.intent_level = filterIntentLevel;
+    if (filterCounterpartyBudgetCategories) params.counterparty_budget_categories = filterCounterpartyBudgetCategories;
+    if (filterOwnedTrafficScenarios) params.owned_traffic_scenarios = filterOwnedTrafficScenarios;
+    if (filterAgencyTrafficScenarios) params.agency_traffic_scenarios = filterAgencyTrafficScenarios;
     if (filterCity) params.city = filterCity;
     if (filterWeight) params.weight = filterWeight;
     if (filterCreatedBy) params.created_by = filterCreatedBy;
@@ -652,6 +658,9 @@ export default function Persons() {
     filterPotentialLevel,
     filterRecruitStatus,
     filterIntentLevel,
+    filterCounterpartyBudgetCategories,
+    filterOwnedTrafficScenarios,
+    filterAgencyTrafficScenarios,
     filterCity,
     filterWeight,
     filterCreatedBy,
@@ -1457,6 +1466,9 @@ export default function Persons() {
     filterPotentialLevel,
     filterRecruitStatus,
     filterIntentLevel,
+    filterCounterpartyBudgetCategories,
+    filterOwnedTrafficScenarios,
+    filterAgencyTrafficScenarios,
     filterCity,
     filterWeight,
     filterCreatedBy,
@@ -1469,6 +1481,9 @@ export default function Persons() {
     setFilterPotentialLevel('');
     setFilterRecruitStatus('');
     setFilterIntentLevel('');
+    setFilterCounterpartyBudgetCategories('');
+    setFilterOwnedTrafficScenarios('');
+    setFilterAgencyTrafficScenarios('');
     setFilterCity('');
     setFilterWeight('');
     setFilterCreatedBy(undefined);
@@ -1478,7 +1493,7 @@ export default function Persons() {
     display: 'grid',
     gridTemplateColumns: isMobile
       ? '1fr'
-      : `minmax(260px, 1.6fr) repeat(${canUsePrivatePersons ? 6 : 5}, minmax(120px, 1fr))`,
+      : 'repeat(auto-fit, minmax(160px, 1fr))',
     gap: 12,
     marginBottom: 12,
     width: '100%',
@@ -1490,7 +1505,7 @@ export default function Persons() {
         <Input.Search
           placeholder="搜索姓名、公司、技能、标签"
           allowClear
-          style={{ width: '100%' }}
+          style={{ width: '100%', gridColumn: isMobile ? undefined : 'span 2' }}
           value={search}
           onSearch={setSearch}
           onChange={e => setSearch(e.target.value)}
@@ -1523,6 +1538,39 @@ export default function Persons() {
             .filter(([, v]) => !filterCategory || v.category === filterCategory || !v.category)
             .map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
+        <Select
+          mode="multiple"
+          placeholder="对方预算"
+          allowClear
+          style={{ width: '100%' }}
+          value={filterCounterpartyBudgetCategories ? filterCounterpartyBudgetCategories.split(',') : []}
+          onChange={v => setFilterCounterpartyBudgetCategories(v.join(','))}
+          maxTagCount={1}
+          maxTagTextLength={6}
+          options={counterpartyBudgetCategoryOptions}
+        />
+        <Select
+          mode="multiple"
+          placeholder="自有流量场景"
+          allowClear
+          style={{ width: '100%' }}
+          value={filterOwnedTrafficScenarios ? filterOwnedTrafficScenarios.split(',') : []}
+          onChange={v => setFilterOwnedTrafficScenarios(v.join(','))}
+          maxTagCount={1}
+          maxTagTextLength={6}
+          options={trafficScenarioOptions}
+        />
+        <Select
+          mode="multiple"
+          placeholder="代理流量场景"
+          allowClear
+          style={{ width: '100%' }}
+          value={filterAgencyTrafficScenarios ? filterAgencyTrafficScenarios.split(',') : []}
+          onChange={v => setFilterAgencyTrafficScenarios(v.join(','))}
+          maxTagCount={1}
+          maxTagTextLength={6}
+          options={trafficScenarioOptions}
+        />
         <Select
           mode="multiple"
           placeholder="城市"
