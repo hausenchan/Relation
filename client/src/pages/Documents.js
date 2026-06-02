@@ -31,8 +31,8 @@ import {
 import {
   CaretDownFilled,
   CaretRightFilled,
+  CheckOutlined,
   CloseOutlined,
-  CopyOutlined,
   ClockCircleOutlined,
   DeleteOutlined,
   DownOutlined,
@@ -53,6 +53,7 @@ import {
   PlusOutlined,
   ReloadOutlined,
   RightOutlined,
+  RetweetOutlined,
   RollbackOutlined,
   SaveOutlined,
   StarFilled,
@@ -126,6 +127,36 @@ const blockIconStyle = {
 
 function blockIcon(text, style = {}) {
   return <span style={{ ...blockIconStyle, ...style }}>{text}</span>;
+}
+
+function BlockHandleIcon() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        width: 14,
+        height: 18,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(2, 4px)',
+        gridTemplateRows: 'repeat(3, 4px)',
+        gap: 3,
+        alignContent: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      {Array.from({ length: 6 }).map((_, index) => (
+        <span
+          key={index}
+          style={{
+            width: 4,
+            height: 4,
+            borderRadius: '50%',
+            background: '#9ca3af',
+          }}
+        />
+      ))}
+    </span>
+  );
 }
 
 const blockTypeGroups = [
@@ -209,15 +240,8 @@ const listMarkerCenterOffset = 12;
 const listMarkerColor = '#111827';
 const listGuideColor = '#eef0f2';
 const maxListIndent = 6;
-
-const highlightOptions = [
-  { value: '', label: '无色', color: '#ffffff', border: '#d9d9d9' },
-  { value: '#fff7cc', label: '黄色', color: '#fff7cc' },
-  { value: '#dcfce7', label: '绿色', color: '#dcfce7' },
-  { value: '#dbeafe', label: '蓝色', color: '#dbeafe' },
-  { value: '#f3e8ff', label: '紫色', color: '#f3e8ff' },
-  { value: '#fee2e2', label: '红色', color: '#fee2e2' },
-];
+const blockActionSelectedBackground = '#f7e3e6';
+const blockActionSelectedBorder = '#f2c9d0';
 
 const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, item.label]));
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
@@ -527,10 +551,11 @@ function buildHierarchicalGuideMap(blocks = [], hiddenIds = new Set()) {
   return map;
 }
 
-function renderBlockMenuLabel(item) {
+function renderBlockMenuLabel(item, checked = false) {
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
       <span>{item.label}</span>
+      {checked && <CheckOutlined style={{ color: '#6b7280' }} />}
     </span>
   );
 }
@@ -2011,32 +2036,15 @@ export default function Documents() {
     focusBlock(nextBlock.id);
   };
 
-  const duplicateBlock = (id) => {
-    const source = editorBlocks.find(block => block.id === id);
-    if (!source) return;
-    const nextBlock = createEditorBlock(source.type, {
-      content: source.content,
-      highlight: source.highlight || '',
-      checked: Boolean(source.checked),
-      meta: cloneMeta(source.meta),
-    });
-    pushEditorUndoSnapshot();
-    setEditorBlocks(prev => {
-      const index = prev.findIndex(block => block.id === id);
-      const next = [...prev];
-      next.splice(index + 1, 0, nextBlock);
-      return next;
-    });
-    setSelectedBlockId(nextBlock.id);
-    focusBlock(nextBlock.id);
-  };
-
   const deleteBlock = (id) => {
     pushEditorUndoSnapshot();
     if (editorBlocks.length <= 1) {
       const blank = createBlock();
       setEditorBlocks([blank]);
       setSelectedBlockId(blank.id);
+      setSelectedAreaBlockIds([]);
+      setHoveredBlockId(null);
+      setOpenBlockMenuId(null);
       focusBlock(blank.id);
       return;
     }
@@ -2045,6 +2053,9 @@ export default function Documents() {
     const nextSelected = next[Math.max(0, index - 1)] || next[0];
     setEditorBlocks(next);
     setSelectedBlockId(nextSelected?.id || null);
+    setSelectedAreaBlockIds([]);
+    setHoveredBlockId(null);
+    setOpenBlockMenuId(null);
     if (nextSelected) focusBlock(nextSelected.id);
   };
 
@@ -2073,19 +2084,6 @@ export default function Documents() {
     return true;
   };
 
-  const moveBlock = (id, direction) => {
-    pushEditorUndoSnapshot();
-    setEditorBlocks(prev => {
-      const index = prev.findIndex(block => block.id === id);
-      const targetIndex = index + direction;
-      if (index < 0 || targetIndex < 0 || targetIndex >= prev.length) return prev;
-      const next = [...prev];
-      const [item] = next.splice(index, 1);
-      next.splice(targetIndex, 0, item);
-      return next;
-    });
-  };
-
   const changeBlockType = (id, type, extra = {}) => {
     const current = editorBlocks.find(block => block.id === id);
     const defaultContent = getDefaultBlockContent(type);
@@ -2108,19 +2106,9 @@ export default function Documents() {
     focusBlock(id);
   };
 
-  const addOrTransformBlock = (id, type, extra = {}) => {
-    const current = editorBlocks.find(block => block.id === id);
-    if (!current) return;
-    if (isBlankBlock(current)) {
-      changeBlockType(id, type, extra);
-      return;
-    }
-    addBlockAfter(id, type, extra);
-  };
-
   const insertRecentImageBlock = async (block) => {
     if (!selectedDoc?.id) {
-      addOrTransformBlock(block.id, 'recent-image');
+      changeBlockType(block.id, 'recent-image');
       message.info('请先保存文档，再使用最近上传图片');
       return;
     }
@@ -2128,11 +2116,11 @@ export default function Documents() {
       const rows = await attachmentsApi.list({ source_type: 'document', source_id: selectedDoc.id });
       const image = [...rows].reverse().find(isImageAttachment);
       if (!image) {
-        addOrTransformBlock(block.id, 'recent-image');
+        changeBlockType(block.id, 'recent-image');
         message.info('当前文档还没有最近上传图片，已插入图片上传块');
         return;
       }
-      addOrTransformBlock(block.id, 'recent-image', {
+      changeBlockType(block.id, 'recent-image', {
         content: image.filename || '',
         meta: attachmentToMediaMeta(image),
       });
@@ -2149,44 +2137,29 @@ export default function Documents() {
         await insertRecentImageBlock(block);
         return;
       }
-      addOrTransformBlock(block.id, type);
+      changeBlockType(block.id, type);
       return;
     }
-    if (key.startsWith('highlight:')) {
-      updateBlock(block.id, { highlight: key.replace('highlight:', '') });
-      setSelectedBlockId(block.id);
-      return;
-    }
-    if (key === 'duplicate') duplicateBlock(block.id);
     if (key === 'delete') deleteBlock(block.id);
-    if (key === 'move-up') moveBlock(block.id, -1);
-    if (key === 'move-down') moveBlock(block.id, 1);
   };
 
   const buildBlockMenuItems = (block) => [
-    ...blockTypeGroups.map(group => ({
-      type: 'group',
-      label: group.label,
-      children: group.children.map(item => ({
-        key: `type:${item.value}`,
-        label: renderBlockMenuLabel(item),
-        icon: item.icon,
-      })),
-    })),
     {
-      type: 'group',
-      label: '高亮',
-      children: highlightOptions.map(item => ({
-        key: `highlight:${item.value}`,
-        label: item.value ? item.label : '清除高亮',
-        icon: <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: item.color, border: `1px solid ${item.border || item.color}` }} />,
+      key: 'transform',
+      icon: <RetweetOutlined />,
+      label: '转换为',
+      children: blockTypeGroups.map(group => ({
+        type: 'group',
+        label: group.label,
+        children: group.children.map(item => ({
+          key: `type:${item.value}`,
+          label: renderBlockMenuLabel(item, item.value === block?.type),
+          icon: item.icon,
+        })),
       })),
     },
     { type: 'divider' },
-    { key: 'duplicate', icon: <CopyOutlined />, label: '复制当前块' },
-    { key: 'move-up', icon: <UpOutlined />, label: '上移', disabled: editorBlocks.findIndex(item => item.id === block?.id) <= 0 },
-    { key: 'move-down', icon: <DownOutlined />, label: '下移', disabled: editorBlocks.findIndex(item => item.id === block?.id) >= editorBlocks.length - 1 },
-    { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除当前块' },
+    { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除' },
   ];
 
   const updateListIndent = (block, index, direction) => {
@@ -4086,8 +4059,8 @@ export default function Documents() {
   const renderEditorBlock = (block, index) => {
     if (hiddenListBlockIds.has(block.id)) return null;
     const menuOpen = openBlockMenuId === block.id;
-    const active = menuOpen || hoveredBlockId === block.id;
-    const areaSelected = selectedAreaBlockIds.includes(block.id);
+    const handleVisible = menuOpen || hoveredBlockId === block.id;
+    const blockSelected = selectedAreaBlockIds.includes(block.id);
     const heading = headingMeta.map.get(block.id);
     return (
       <div
@@ -4105,8 +4078,8 @@ export default function Documents() {
           display: 'grid',
           gridTemplateColumns: isMobile ? '24px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
           gap: 4,
-          border: areaSelected ? '1px solid #93c5fd' : (menuOpen ? '1px solid #c7d2fe' : '1px solid transparent'),
-          background: areaSelected ? '#eff6ff' : (block.highlight || (menuOpen ? '#fafafa' : 'transparent')),
+          border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
+          background: blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent'),
           borderRadius: 6,
           padding: '3px 8px 3px 0',
           marginBottom: 2,
@@ -4121,6 +4094,7 @@ export default function Documents() {
             onOpenChange={(open) => {
               setOpenBlockMenuId(open ? block.id : (prev => (prev === block.id ? null : prev)));
             }}
+            placement="bottomLeft"
             menu={{
               items: buildBlockMenuItems(block),
               onClick: ({ key, domEvent }) => {
@@ -4133,19 +4107,21 @@ export default function Documents() {
             <Button
               type="text"
               size="small"
-              icon={<PlusOutlined />}
-              aria-label="添加块"
+              icon={<BlockHandleIcon />}
+              aria-label="块菜单"
               onClick={event => {
                 event.stopPropagation();
                 setSelectedBlockId(block.id);
+                setSelectedAreaBlockIds([block.id]);
               }}
               style={{
                 width: 24,
                 height: 24,
                 minWidth: 24,
-                opacity: active ? 1 : 0,
-                pointerEvents: active ? 'auto' : 'none',
+                opacity: handleVisible ? 1 : 0,
+                pointerEvents: handleVisible ? 'auto' : 'none',
                 color: '#6b7280',
+                background: menuOpen ? '#eef2ff' : '#f3f4f6',
               }}
             />
           </Dropdown>
