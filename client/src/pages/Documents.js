@@ -4182,10 +4182,10 @@ export default function Documents() {
   return (
     <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 120px)', minHeight: 640, flexDirection: isMobile ? 'column' : 'row' }}>
       <aside style={{
-        width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 40 : 340),
-        minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 40 : 320),
+        width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : 340),
+        minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : 320),
         borderRight: isMobile ? 'none' : '1px solid #f0f0f0',
-        paddingRight: isMobile ? 0 : (isFolderSidebarCollapsed ? 8 : 16),
+        paddingRight: isMobile ? 0 : (isFolderSidebarCollapsed ? 0 : 16),
         overflow: isFolderSidebarCollapsed ? 'hidden' : 'auto',
         transition: 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease',
       }}>
@@ -4337,7 +4337,7 @@ export default function Documents() {
           <Spin spinning={detailLoading}>
             <div style={{
               maxWidth: getEditorShellMaxWidth(selectedDoc, asSwitchValue(selectedDoc?.toc_enabled, true) && tocOpen),
-              margin: '0 auto',
+              margin: isFolderSidebarCollapsed ? '0' : '0 auto',
               padding: isMobile ? 0 : '4px 12px',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
