@@ -241,6 +241,7 @@ export default function Dashboard() {
   const [teamTasks, setTeamTasks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [taskSaving, setTaskSaving] = useState(false);
   const [editing, setEditing] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
@@ -289,6 +290,10 @@ export default function Dashboard() {
   const canViewTeamScope = canManageTeamTasks || (user?.team_ids?.length > 0) || (user?.managed_team_ids?.length > 0);
   const canViewTeamTasks = canViewTeamScope || teamTasks.length > 0;
   const hideRelationshipPanels = stats?.showRelationshipPanels === false || ['operation', 'rd'].includes(user?.department);
+  const userOptions = users.map(u => ({ value: u.id, label: u.display_name || u.username }));
+  const taskUserOptions = user?.id && !userOptions.some(option => Number(option.value) === Number(user.id))
+    ? [{ value: user.id, label: user.display_name || user.username || '我' }, ...userOptions]
+    : userOptions;
 
   useEffect(() => {
     loadData();
@@ -548,6 +553,11 @@ export default function Dashboard() {
     setModalOpen(true);
   };
 
+  const closeTaskEditor = () => {
+    if (taskSaving) return;
+    setModalOpen(false);
+  };
+
   const openEdit = (record) => {
     setEditing(record);
     form.setFieldsValue({
@@ -617,11 +627,17 @@ export default function Dashboard() {
   };
 
   const handleSave = async () => {
-    const values = await form.validateFields();
+    let values;
+    try {
+      values = await form.validateFields();
+    } catch {
+      return;
+    }
     const payload = {
       ...values,
       date: values.date?.format('YYYY-MM-DD'),
     };
+    setTaskSaving(true);
     try {
       if (editing) {
         await tasksApi.update(editing.id, payload);
@@ -633,7 +649,9 @@ export default function Dashboard() {
       setModalOpen(false);
       loadData();
     } catch (err) {
-      message.error(err.response?.data?.error || '操作失败');
+      message.error(err.response?.data?.error || err.message || '操作失败');
+    } finally {
+      setTaskSaving(false);
     }
   };
 
@@ -661,6 +679,71 @@ export default function Dashboard() {
       message.error('删除失败');
     }
   };
+
+  const renderTaskEditorForm = () => (
+    <Form
+      form={form}
+      layout="vertical"
+      style={{ marginTop: isMobile ? 0 : 16 }}
+    >
+      <Form.Item label="任务标题" name="title" rules={[{ required: true, message: '请输入任务标题' }]}>
+        <Input size={isMobile ? 'large' : undefined} placeholder="任务标题" />
+      </Form.Item>
+      <Form.Item label="任务描述" name="description">
+        <Input.TextArea rows={isMobile ? 4 : 3} placeholder="任务描述" />
+      </Form.Item>
+      <Form.Item label="任务进度/任务结果" name="result">
+        <Input.TextArea rows={isMobile ? 4 : 3} placeholder="填写当前进度、执行情况或最终结果" />
+      </Form.Item>
+      <Form.Item label="计划日期" name="date" rules={[{ required: true, message: '请选择计划日期' }]}>
+        <DatePicker
+          inputReadOnly={isMobile}
+          size={isMobile ? 'large' : undefined}
+          style={{ width: '100%' }}
+        />
+      </Form.Item>
+      <Form.Item label="优先级" name="priority" rules={[{ required: true }]}>
+        <Select size={isMobile ? 'large' : undefined}>
+          <Option value="high"><Tag color="red">高</Tag></Option>
+          <Option value="medium"><Tag color="orange">中</Tag></Option>
+          <Option value="low"><Tag color="default">低</Tag></Option>
+        </Select>
+      </Form.Item>
+      {editing && (
+        <Form.Item label="任务状态" name="status" rules={[{ required: true, message: '请选择任务状态' }]}>
+          <Select size={isMobile ? 'large' : undefined}>
+            {TASK_STATUS_VALUES.map(value => (
+              <Option key={value} value={value}>
+                <Tag color={statusMap[value].color}>{statusMap[value].label}</Tag>
+              </Option>
+            ))}
+          </Select>
+        </Form.Item>
+      )}
+      {canAssignOthers && (
+        <Form.Item label="指派给" name="assigned_to" rules={[{ required: true, message: '请选择负责人' }]}>
+          <Select
+            showSearch
+            size={isMobile ? 'large' : undefined}
+            placeholder="选择负责人"
+            optionFilterProp="label"
+            options={taskUserOptions}
+          />
+        </Form.Item>
+      )}
+      <Form.Item label="共享给" name="shared_to">
+        <Select
+          mode="multiple"
+          allowClear
+          showSearch
+          size={isMobile ? 'large' : undefined}
+          placeholder="选择可在团队任务中查看此任务的成员"
+          optionFilterProp="label"
+          options={userOptions}
+        />
+      </Form.Item>
+    </Form>
+  );
 
   const filteredAssignedTasks = assignedTasks.filter(t => {
     if (!isTitleSearchHit(t, assignedTaskTitleSearch)) return false;
@@ -1554,7 +1637,13 @@ export default function Dashboard() {
       {/* 任务管理 Tabs */}
       <Card style={{ marginBottom: isMobile ? 16 : 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
         {isMobile && (
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: '100%', marginBottom: 12 }}>
+          <Button
+            type="primary"
+            size="large"
+            icon={<PlusOutlined />}
+            onClick={openAdd}
+            style={{ width: '100%', marginBottom: 12 }}
+          >
             新建任务
           </Button>
         )}
@@ -1622,71 +1711,51 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {/* 任务编辑 Modal */}
-      <Modal
-        title={editing ? '编辑任务' : '新建任务'}
-        open={modalOpen}
-        onOk={handleSave}
-        onCancel={() => setModalOpen(false)}
-        width={isMobile ? '100%' : undefined}
-        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
-        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
-        okText="保存"
-        cancelText="取消"
-      >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item label="任务标题" name="title" rules={[{ required: true, message: '请输入任务标题' }]}>
-            <Input placeholder="任务标题" />
-          </Form.Item>
-          <Form.Item label="任务描述" name="description">
-            <Input.TextArea rows={3} placeholder="任务描述" />
-          </Form.Item>
-          <Form.Item label="任务进度/任务结果" name="result">
-            <Input.TextArea rows={3} placeholder="填写当前进度、执行情况或最终结果" />
-          </Form.Item>
-          <Form.Item label="计划日期" name="date" rules={[{ required: true, message: '请选择计划日期' }]}>
-            <DatePicker style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item label="优先级" name="priority" rules={[{ required: true }]}>
-            <Select>
-              <Option value="high"><Tag color="red">高</Tag></Option>
-              <Option value="medium"><Tag color="orange">中</Tag></Option>
-              <Option value="low"><Tag color="default">低</Tag></Option>
-            </Select>
-          </Form.Item>
-          {editing && (
-            <Form.Item label="任务状态" name="status" rules={[{ required: true, message: '请选择任务状态' }]}>
-              <Select>
-                {TASK_STATUS_VALUES.map(value => (
-                  <Option key={value} value={value}>
-                    <Tag color={statusMap[value].color}>{statusMap[value].label}</Tag>
-                  </Option>
-                ))}
-              </Select>
-            </Form.Item>
-          )}
-          {canAssignOthers && (
-            <Form.Item label="指派给" name="assigned_to" rules={[{ required: true, message: '请选择负责人' }]}>
-              <Select
-                showSearch
-                placeholder="选择负责人"
-                optionFilterProp="label"
-                options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
-              />
-            </Form.Item>
-          )}
-          <Form.Item label="共享给" name="shared_to">
-            <Select
-              mode="multiple"
-              allowClear
-              showSearch
-              placeholder="选择可在团队任务中查看此任务的成员"
-              optionFilterProp="label"
-              options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      {isMobile ? (
+        <Drawer
+          title={editing ? '编辑任务' : '新建任务'}
+          open={modalOpen}
+          onClose={closeTaskEditor}
+          width="100%"
+          placement="right"
+          destroyOnClose={false}
+          styles={{
+            body: {
+              padding: '16px 16px 88px',
+              overflowY: 'auto',
+            },
+            footer: {
+              padding: 12,
+              background: '#fff',
+              boxShadow: '0 -8px 20px rgba(15,23,42,0.08)',
+            },
+          }}
+          footer={
+            <Space style={{ width: '100%' }} size={8}>
+              <Button block size="large" onClick={closeTaskEditor} disabled={taskSaving}>
+                取消
+              </Button>
+              <Button block size="large" type="primary" icon={<CheckOutlined />} loading={taskSaving} onClick={handleSave}>
+                保存
+              </Button>
+            </Space>
+          }
+        >
+          {renderTaskEditorForm()}
+        </Drawer>
+      ) : (
+        <Modal
+          title={editing ? '编辑任务' : '新建任务'}
+          open={modalOpen}
+          onOk={handleSave}
+          onCancel={closeTaskEditor}
+          confirmLoading={taskSaving}
+          okText="保存"
+          cancelText="取消"
+        >
+          {renderTaskEditorForm()}
+        </Modal>
+      )}
 
       <Drawer
         title="任务详情"
