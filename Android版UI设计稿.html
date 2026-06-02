@@ -1,0 +1,998 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Android 商务移动端 UI 设计稿</title>
+  <style>
+    :root {
+      --primary: #4f46e5;
+      --primary-soft: #eef2ff;
+      --ink: #111827;
+      --text: #374151;
+      --muted: #6b7280;
+      --line: #e5e7eb;
+      --surface: #ffffff;
+      --page: #f5f7fb;
+      --green: #059669;
+      --green-soft: #ecfdf5;
+      --orange: #d97706;
+      --orange-soft: #fff7ed;
+      --blue: #2563eb;
+      --blue-soft: #eff6ff;
+      --red: #dc2626;
+      --red-soft: #fef2f2;
+      --purple-soft: #f5f3ff;
+      --shadow: 0 18px 45px rgba(17, 24, 39, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background: var(--page);
+      letter-spacing: 0;
+    }
+
+    .page {
+      min-height: 100vh;
+      padding: 28px;
+    }
+
+    .header {
+      max-width: 1500px;
+      margin: 0 auto 22px;
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) 360px;
+      gap: 18px;
+      align-items: end;
+    }
+
+    .title {
+      margin: 0 0 8px;
+      font-size: 30px;
+      line-height: 1.2;
+      font-weight: 750;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .design-notes {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      gap: 8px;
+      box-shadow: 0 8px 26px rgba(17, 24, 39, 0.06);
+    }
+
+    .note-row {
+      display: grid;
+      grid-template-columns: 76px 1fr;
+      gap: 8px;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .note-row strong {
+      color: var(--ink);
+    }
+
+    .note-row span {
+      color: var(--muted);
+    }
+
+    .boards {
+      max-width: 1500px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(252px, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .artboard-title {
+      margin: 0 0 10px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .screen-tag {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .phone {
+      width: 100%;
+      max-width: 306px;
+      min-width: 252px;
+      margin: 0 auto;
+      aspect-ratio: 390 / 844;
+      background: #0f172a;
+      border-radius: 28px;
+      padding: 10px;
+      box-shadow: var(--shadow);
+    }
+
+    .screen {
+      position: relative;
+      height: 100%;
+      overflow: hidden;
+      background: #f8fafc;
+      border-radius: 22px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .statusbar {
+      height: 34px;
+      padding: 11px 18px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      color: #111827;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .signal {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .appbar {
+      padding: 8px 18px 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .app-title {
+      font-size: 22px;
+      line-height: 1.15;
+      font-weight: 760;
+    }
+
+    .app-action {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      display: grid;
+      place-items: center;
+      color: var(--text);
+      font-weight: 760;
+      box-shadow: 0 4px 12px rgba(17, 24, 39, 0.05);
+    }
+
+    .content {
+      flex: 1;
+      overflow: hidden;
+      padding: 0 16px 74px;
+    }
+
+    .search {
+      height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 8px;
+      color: #9ca3af;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+
+    .search-icon {
+      width: 14px;
+      height: 14px;
+      border: 2px solid #9ca3af;
+      border-radius: 50%;
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .search-icon::after {
+      content: "";
+      width: 6px;
+      height: 2px;
+      background: #9ca3af;
+      position: absolute;
+      right: -5px;
+      bottom: -2px;
+      transform: rotate(45deg);
+      border-radius: 2px;
+    }
+
+    .segmented {
+      display: flex;
+      gap: 6px;
+      padding: 4px;
+      background: #eef1f6;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    .segment {
+      flex: 1;
+      border-radius: 7px;
+      padding: 8px 4px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .segment.active {
+      background: var(--surface);
+      color: var(--primary);
+      box-shadow: 0 4px 10px rgba(17, 24, 39, 0.08);
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .metric {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 8px;
+    }
+
+    .metric-value {
+      font-size: 20px;
+      font-weight: 760;
+      line-height: 1;
+    }
+
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 5px;
+    }
+
+    .chip-row {
+      display: flex;
+      gap: 8px;
+      overflow: hidden;
+      margin-bottom: 12px;
+    }
+
+    .chip {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 7px 10px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+
+    .chip.active {
+      color: var(--primary);
+      border-color: #c7d2fe;
+      background: var(--primary-soft);
+    }
+
+    .section-title {
+      margin: 14px 2px 9px;
+      font-size: 13px;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: 0 3px 12px rgba(17, 24, 39, 0.04);
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: flex-start;
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      min-width: 0;
+      font-size: 14px;
+      line-height: 1.35;
+      font-weight: 720;
+      color: var(--ink);
+      overflow-wrap: anywhere;
+    }
+
+    .card-sub {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin-top: 3px;
+    }
+
+    .tag {
+      flex: 0 0 auto;
+      border-radius: 6px;
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .tag.blue {
+      color: var(--blue);
+      background: var(--blue-soft);
+    }
+
+    .tag.green {
+      color: var(--green);
+      background: var(--green-soft);
+    }
+
+    .tag.orange {
+      color: var(--orange);
+      background: var(--orange-soft);
+    }
+
+    .tag.red {
+      color: var(--red);
+      background: var(--red-soft);
+    }
+
+    .tag.purple {
+      color: var(--primary);
+      background: var(--purple-soft);
+    }
+
+    .meta-line {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .btn {
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      height: 34px;
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      white-space: nowrap;
+    }
+
+    .btn.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #ffffff;
+      flex: 1;
+    }
+
+    .btn.ghost {
+      background: #f9fafb;
+    }
+
+    .bottom-nav {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 68px;
+      background: rgba(255, 255, 255, 0.96);
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 7px 8px 9px;
+    }
+
+    .nav-item {
+      position: relative;
+      display: grid;
+      justify-items: center;
+      align-content: center;
+      gap: 3px;
+      color: #8b93a1;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .nav-item.active {
+      color: var(--primary);
+    }
+
+    .nav-icon {
+      width: 25px;
+      height: 25px;
+      display: block;
+    }
+
+    .nav-icon svg {
+      width: 25px;
+      height: 25px;
+      display: block;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .badge {
+      position: absolute;
+      top: 4px;
+      right: 12px;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--red);
+      color: #ffffff;
+      display: grid;
+      place-items: center;
+      font-size: 10px;
+      font-weight: 760;
+      border: 2px solid #ffffff;
+    }
+
+    .fab {
+      position: absolute;
+      right: 18px;
+      bottom: 80px;
+      width: 48px;
+      height: 48px;
+      border-radius: 16px;
+      background: var(--primary);
+      color: #ffffff;
+      display: grid;
+      place-items: center;
+      font-size: 28px;
+      line-height: 1;
+      box-shadow: 0 12px 24px rgba(79, 70, 229, 0.35);
+    }
+
+    .empty-space {
+      height: 10px;
+    }
+
+    .other-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+
+    .module-card {
+      min-height: 86px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      display: grid;
+      align-content: space-between;
+      box-shadow: 0 3px 12px rgba(17, 24, 39, 0.04);
+    }
+
+    .module-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      color: var(--primary);
+      background: var(--primary-soft);
+      font-weight: 760;
+      margin-bottom: 8px;
+    }
+
+    .module-title {
+      font-size: 14px;
+      font-weight: 740;
+      margin-bottom: 3px;
+    }
+
+    .module-sub {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .detail-sheet {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 76px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      box-shadow: 0 20px 40px rgba(17, 24, 39, 0.2);
+    }
+
+    .sheet-handle {
+      width: 40px;
+      height: 4px;
+      border-radius: 999px;
+      background: #d1d5db;
+      margin: 0 auto 12px;
+    }
+
+    .field-row {
+      display: grid;
+      grid-template-columns: 72px 1fr;
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid #f3f4f6;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .field-row:last-child {
+      border-bottom: 0;
+    }
+
+    .field-label {
+      color: var(--muted);
+    }
+
+    .field-value {
+      color: var(--ink);
+      font-weight: 650;
+    }
+
+    @media (max-width: 1380px) {
+      .boards {
+        grid-template-columns: repeat(3, minmax(252px, 1fr));
+      }
+    }
+
+    @media (max-width: 900px) {
+      .page {
+        padding: 18px;
+      }
+
+      .header {
+        grid-template-columns: 1fr;
+      }
+
+      .boards {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="header">
+      <div>
+        <h1 class="title">Android 商务移动端 UI 设计稿</h1>
+        <p class="subtitle">定位为商务人员移动工作端。底部 5 个 Tab：任务、商机、人脉、公司、其他。前四个承接高频业务动作，其他承载目标、周报、策略、需求、文档中心。</p>
+      </div>
+      <div class="design-notes">
+        <div class="note-row"><strong>风格</strong><span>紧凑、清爽、偏执行工具，不做 Web 菜单缩小版。</span></div>
+        <div class="note-row"><strong>交互</strong><span>列表卡片 + 状态标签 + 底部主操作，筛选用底部弹层。</span></div>
+        <div class="note-row"><strong>重点</strong><span>让商务人员快速处理任务、推进商机、查人脉、看公司。</span></div>
+      </div>
+    </header>
+
+    <section class="boards">
+      <div>
+        <h2 class="artboard-title">任务 <span class="screen-tag">需我执行</span></h2>
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar">
+              <span>09:41</span>
+              <span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 88%</span>
+            </div>
+            <div class="appbar">
+              <div class="app-title">任务</div>
+              <div class="app-action">筛</div>
+            </div>
+            <div class="content">
+              <div class="segmented">
+                <div class="segment active">需我执行</div>
+                <div class="segment">我指派的</div>
+                <div class="segment">团队</div>
+              </div>
+              <div class="metric-row">
+                <div class="metric"><div class="metric-value">7</div><div class="metric-label">未完成</div></div>
+                <div class="metric"><div class="metric-value">2</div><div class="metric-label">逾期</div></div>
+                <div class="metric"><div class="metric-value">4</div><div class="metric-label">本周</div></div>
+              </div>
+              <div class="chip-row">
+                <div class="chip active">全部</div>
+                <div class="chip">商机</div>
+                <div class="chip">日常</div>
+                <div class="chip">今天</div>
+              </div>
+              <div class="card-list">
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">客户A-海韵 - 商机1测试</div>
+                      <div class="card-sub">石海韵 指派 · 计划日期 -</div>
+                    </div>
+                    <span class="tag purple">商机</span>
+                  </div>
+                  <div class="meta-line"><span>状态：待处理</span><span>关联对象：客户A-海韵</span></div>
+                  <div class="button-row">
+                    <button class="btn primary">开始跟进</button>
+                    <button class="btn ghost">详情</button>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">整理下周预算方拜访名单</div>
+                      <div class="card-sub">陈晨 指派 · 今天</div>
+                    </div>
+                    <span class="tag blue">日常</span>
+                  </div>
+                  <div class="meta-line"><span>优先级：高</span><span>状态：进行中</span></div>
+                  <div class="button-row">
+                    <button class="btn primary">完成</button>
+                    <button class="btn ghost">记录进度</button>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">对接广州游戏媒体流量包</div>
+                      <div class="card-sub">计划日期 06-03</div>
+                    </div>
+                    <span class="tag orange">待开始</span>
+                  </div>
+                  <div class="meta-line"><span>来源：日常</span><span>执行人：我</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="bottom-nav">
+              <div class="nav-item active"><span class="badge">7</span><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" /><path d="m8.5 9 1.7 1.7L14 7.8" /><path d="M8.5 15h7" /></svg></div><span>任务</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1Z" /><path d="M12 2.8v2" /></svg></div><span>商机</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2" /><path d="M3.8 19c.8-3.3 2.9-5.1 6.2-5.1 1.7 0 3.1.5 4.2 1.5" /><circle cx="16.7" cy="9.7" r="2.5" /><path d="M14.2 19.1c.7-2.2 2.1-3.4 4.2-3.4 1.5 0 2.6.6 3.2 1.8" /></svg></div><span>人脉</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20.5V6.2a1.8 1.8 0 0 1 1.8-1.8h8.4A1.8 1.8 0 0 1 17 6.2v14.3" /><path d="M3.8 20.5h16.4" /><path d="M9 8h3" /><path d="M9 12h3" /><path d="M9 16h3" /><path d="M17 10.5h1.8a1.2 1.2 0 0 1 1.2 1.2v8.8" /></svg></div><span>公司</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.7" /><rect x="14" y="4" width="6" height="6" rx="1.7" /><rect x="4" y="14" width="6" height="6" rx="1.7" /><rect x="14" y="14" width="6" height="6" rx="1.7" /></svg></div><span>其他</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 class="artboard-title">商机 <span class="screen-tag">状态流转</span></h2>
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar">
+              <span>09:41</span>
+              <span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 88%</span>
+            </div>
+            <div class="appbar">
+              <div class="app-title">商机</div>
+              <div class="app-action">+</div>
+            </div>
+            <div class="content">
+              <div class="search"><span class="search-icon"></span><span>搜索商机、公司、人脉</span></div>
+              <div class="chip-row">
+                <div class="chip active">全部</div>
+                <div class="chip">新商机</div>
+                <div class="chip">跟进中</div>
+                <div class="chip">已成交</div>
+              </div>
+              <div class="section-title"><span>我的商机</span><span>23 条</span></div>
+              <div class="card-list">
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">小游戏 H5 预算合作</div>
+                      <div class="card-sub">客户A-海韵 · 公司A</div>
+                    </div>
+                    <span class="tag orange">跟进中</span>
+                  </div>
+                  <div class="meta-line"><span>跟进人：钟鹏涛</span><span>更新：今天 10:20</span></div>
+                  <div class="button-row">
+                    <button class="btn primary">记录跟进</button>
+                    <button class="btn ghost">改状态</button>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">APP 开户投放资源置换</div>
+                      <div class="card-sub">广州量星 · 李明</div>
+                    </div>
+                    <span class="tag blue">新商机</span>
+                  </div>
+                  <div class="meta-line"><span>关注人：2</span><span>创建人：石海韵</span></div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">微信社群拉活合作</div>
+                      <div class="card-sub">深圳青木互动</div>
+                    </div>
+                    <span class="tag green">已成交</span>
+                  </div>
+                  <div class="meta-line"><span>成交记录已归档</span><span>06-01</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="fab">+</div>
+            <div class="bottom-nav">
+              <div class="nav-item"><span class="badge">7</span><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" /><path d="m8.5 9 1.7 1.7L14 7.8" /><path d="M8.5 15h7" /></svg></div><span>任务</span></div>
+              <div class="nav-item active"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1Z" /><path d="M12 2.8v2" /></svg></div><span>商机</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2" /><path d="M3.8 19c.8-3.3 2.9-5.1 6.2-5.1 1.7 0 3.1.5 4.2 1.5" /><circle cx="16.7" cy="9.7" r="2.5" /><path d="M14.2 19.1c.7-2.2 2.1-3.4 4.2-3.4 1.5 0 2.6.6 3.2 1.8" /></svg></div><span>人脉</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20.5V6.2a1.8 1.8 0 0 1 1.8-1.8h8.4A1.8 1.8 0 0 1 17 6.2v14.3" /><path d="M3.8 20.5h16.4" /><path d="M9 8h3" /><path d="M9 12h3" /><path d="M9 16h3" /><path d="M17 10.5h1.8a1.2 1.2 0 0 1 1.2 1.2v8.8" /></svg></div><span>公司</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.7" /><rect x="14" y="4" width="6" height="6" rx="1.7" /><rect x="4" y="14" width="6" height="6" rx="1.7" /><rect x="14" y="14" width="6" height="6" rx="1.7" /></svg></div><span>其他</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 class="artboard-title">人脉 <span class="screen-tag">搜索与筛选</span></h2>
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar">
+              <span>09:41</span>
+              <span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 88%</span>
+            </div>
+            <div class="appbar">
+              <div class="app-title">人脉</div>
+              <div class="app-action">+</div>
+            </div>
+            <div class="content">
+              <div class="search"><span class="search-icon"></span><span>搜索姓名、公司、标签</span></div>
+              <div class="chip-row">
+                <div class="chip active">商务圈</div>
+                <div class="chip">VIP</div>
+                <div class="chip">H5</div>
+                <div class="chip">自有流量</div>
+              </div>
+              <div class="card-list">
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">客户A-海韵</div>
+                      <div class="card-sub">公司A · 商务负责人</div>
+                    </div>
+                    <span class="tag purple">普通</span>
+                  </div>
+                  <div class="meta-line"><span>预算：H5 / api</span><span>自有：微信小程序</span></div>
+                  <div class="button-row">
+                    <button class="btn primary">记录互动</button>
+                    <button class="btn ghost">新建商机</button>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">李明</div>
+                      <div class="card-sub">广州量星 · 投放负责人</div>
+                    </div>
+                    <span class="tag red">重要</span>
+                  </div>
+                  <div class="meta-line"><span>代理：开户投放</span><span>最近互动：昨天</span></div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">王晓晨</div>
+                      <div class="card-sub">深圳青木互动 · BD</div>
+                    </div>
+                    <span class="tag blue">潜在</span>
+                  </div>
+                  <div class="meta-line"><span>城市：深圳</span><span>标签：社群流量</span></div>
+                </div>
+              </div>
+              <div class="detail-sheet">
+                <div class="sheet-handle"></div>
+                <div class="field-row"><div class="field-label">筛选</div><div class="field-value">对方预算、多选流量场景、城市</div></div>
+                <div class="field-row"><div class="field-label">交互</div><div class="field-value">底部弹层，不挤占列表空间</div></div>
+              </div>
+            </div>
+            <div class="bottom-nav">
+              <div class="nav-item"><span class="badge">7</span><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" /><path d="m8.5 9 1.7 1.7L14 7.8" /><path d="M8.5 15h7" /></svg></div><span>任务</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1Z" /><path d="M12 2.8v2" /></svg></div><span>商机</span></div>
+              <div class="nav-item active"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2" /><path d="M3.8 19c.8-3.3 2.9-5.1 6.2-5.1 1.7 0 3.1.5 4.2 1.5" /><circle cx="16.7" cy="9.7" r="2.5" /><path d="M14.2 19.1c.7-2.2 2.1-3.4 4.2-3.4 1.5 0 2.6.6 3.2 1.8" /></svg></div><span>人脉</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20.5V6.2a1.8 1.8 0 0 1 1.8-1.8h8.4A1.8 1.8 0 0 1 17 6.2v14.3" /><path d="M3.8 20.5h16.4" /><path d="M9 8h3" /><path d="M9 12h3" /><path d="M9 16h3" /><path d="M17 10.5h1.8a1.2 1.2 0 0 1 1.2 1.2v8.8" /></svg></div><span>公司</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.7" /><rect x="14" y="4" width="6" height="6" rx="1.7" /><rect x="4" y="14" width="6" height="6" rx="1.7" /><rect x="14" y="14" width="6" height="6" rx="1.7" /></svg></div><span>其他</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 class="artboard-title">公司 <span class="screen-tag">研究详情</span></h2>
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar">
+              <span>09:41</span>
+              <span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 88%</span>
+            </div>
+            <div class="appbar">
+              <div class="app-title">公司</div>
+              <div class="app-action">筛</div>
+            </div>
+            <div class="content">
+              <div class="search"><span class="search-icon"></span><span>搜索公司、行业、城市</span></div>
+              <div class="chip-row">
+                <div class="chip active">全部</div>
+                <div class="chip">有商机</div>
+                <div class="chip">广州</div>
+                <div class="chip">游戏</div>
+              </div>
+              <div class="card-list">
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">广州量星科技有限公司</div>
+                      <div class="card-sub">游戏 · 广州 · 12 名人员</div>
+                    </div>
+                    <span class="tag orange">有商机</span>
+                  </div>
+                  <div class="meta-line"><span>产品：3</span><span>最近研究：今天</span></div>
+                  <div class="button-row">
+                    <button class="btn primary">查看人员</button>
+                    <button class="btn ghost">新增研究</button>
+                  </div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">深圳青木互动</div>
+                      <div class="card-sub">社群流量 · 深圳</div>
+                    </div>
+                    <span class="tag blue">跟进中</span>
+                  </div>
+                  <div class="meta-line"><span>关联人脉：4</span><span>产品：小程序矩阵</span></div>
+                </div>
+                <div class="card">
+                  <div class="card-head">
+                    <div>
+                      <div class="card-title">杭州云游网络</div>
+                      <div class="card-sub">APP · 杭州</div>
+                    </div>
+                    <span class="tag green">活跃</span>
+                  </div>
+                  <div class="meta-line"><span>人员：8</span><span>最近互动：06-01</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="bottom-nav">
+              <div class="nav-item"><span class="badge">7</span><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" /><path d="m8.5 9 1.7 1.7L14 7.8" /><path d="M8.5 15h7" /></svg></div><span>任务</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1Z" /><path d="M12 2.8v2" /></svg></div><span>商机</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2" /><path d="M3.8 19c.8-3.3 2.9-5.1 6.2-5.1 1.7 0 3.1.5 4.2 1.5" /><circle cx="16.7" cy="9.7" r="2.5" /><path d="M14.2 19.1c.7-2.2 2.1-3.4 4.2-3.4 1.5 0 2.6.6 3.2 1.8" /></svg></div><span>人脉</span></div>
+              <div class="nav-item active"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20.5V6.2a1.8 1.8 0 0 1 1.8-1.8h8.4A1.8 1.8 0 0 1 17 6.2v14.3" /><path d="M3.8 20.5h16.4" /><path d="M9 8h3" /><path d="M9 12h3" /><path d="M9 16h3" /><path d="M17 10.5h1.8a1.2 1.2 0 0 1 1.2 1.2v8.8" /></svg></div><span>公司</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.7" /><rect x="14" y="4" width="6" height="6" rx="1.7" /><rect x="4" y="14" width="6" height="6" rx="1.7" /><rect x="14" y="14" width="6" height="6" rx="1.7" /></svg></div><span>其他</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h2 class="artboard-title">其他 <span class="screen-tag">低频业务</span></h2>
+        <div class="phone">
+          <div class="screen">
+            <div class="statusbar">
+              <span>09:41</span>
+              <span class="signal"><span class="dot"></span><span class="dot"></span><span class="dot"></span> 88%</span>
+            </div>
+            <div class="appbar">
+              <div class="app-title">其他</div>
+              <div class="app-action">设</div>
+            </div>
+            <div class="content">
+              <div class="section-title"><span>目标与计划</span><span>低频查看</span></div>
+              <div class="other-grid">
+                <div class="module-card">
+                  <div>
+                    <div class="module-icon">目</div>
+                    <div class="module-title">目标</div>
+                    <div class="module-sub">查看目标进度，补充进展</div>
+                  </div>
+                </div>
+                <div class="module-card">
+                  <div>
+                    <div class="module-icon">周</div>
+                    <div class="module-title">周报</div>
+                    <div class="module-sub">填写本周总结和计划</div>
+                  </div>
+                </div>
+              </div>
+              <div class="section-title"><span>业务流转</span><span></span></div>
+              <div class="other-grid">
+                <div class="module-card">
+                  <div>
+                    <div class="module-icon">策</div>
+                    <div class="module-title">策略</div>
+                    <div class="module-sub">查看策略和执行状态</div>
+                  </div>
+                </div>
+                <div class="module-card">
+                  <div>
+                    <div class="module-icon">需</div>
+                    <div class="module-title">需求</div>
+                    <div class="module-sub">查看研发需求进展</div>
+                  </div>
+                </div>
+              </div>
+              <div class="section-title"><span>知识协作</span><span></span></div>
+              <div class="card">
+                <div class="card-head">
+                  <div>
+                    <div class="card-title">文档中心</div>
+                    <div class="card-sub">查看 PRD、方案、测试报告和项目文档</div>
+                  </div>
+                  <span class="tag purple">入口</span>
+                </div>
+              </div>
+              <div class="empty-space"></div>
+            </div>
+            <div class="bottom-nav">
+              <div class="nav-item"><span class="badge">7</span><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5h10a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-12a2 2 0 0 1 2-2Z" /><path d="m8.5 9 1.7 1.7L14 7.8" /><path d="M8.5 15h7" /></svg></div><span>任务</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="m15.5 8.5-2.1 5.1-5.1 2.1 2.1-5.1 5.1-2.1Z" /><path d="M12 2.8v2" /></svg></div><span>商机</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2" /><path d="M3.8 19c.8-3.3 2.9-5.1 6.2-5.1 1.7 0 3.1.5 4.2 1.5" /><circle cx="16.7" cy="9.7" r="2.5" /><path d="M14.2 19.1c.7-2.2 2.1-3.4 4.2-3.4 1.5 0 2.6.6 3.2 1.8" /></svg></div><span>人脉</span></div>
+              <div class="nav-item"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20.5V6.2a1.8 1.8 0 0 1 1.8-1.8h8.4A1.8 1.8 0 0 1 17 6.2v14.3" /><path d="M3.8 20.5h16.4" /><path d="M9 8h3" /><path d="M9 12h3" /><path d="M9 16h3" /><path d="M17 10.5h1.8a1.2 1.2 0 0 1 1.2 1.2v8.8" /></svg></div><span>公司</span></div>
+              <div class="nav-item active"><div class="nav-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1.7" /><rect x="14" y="4" width="6" height="6" rx="1.7" /><rect x="4" y="14" width="6" height="6" rx="1.7" /><rect x="14" y="14" width="6" height="6" rx="1.7" /></svg></div><span>其他</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
