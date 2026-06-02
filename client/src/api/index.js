@@ -126,6 +126,7 @@ export const companyEntitiesApi = {
 
 export const companyProductsApi = {
   list: (params) => api.get('/company_products', { params }).then(r => r.data),
+  get: (id) => api.get(`/company_products/${id}`).then(r => r.data),
   create: (data) => api.post('/company_products', data).then(r => r.data),
   update: (id, data) => api.put(`/company_products/${id}`, data).then(r => r.data),
   notifyTaskCenter: (id, data) => api.post(`/company_products/${id}/task-center-notification`, data).then(r => r.data),

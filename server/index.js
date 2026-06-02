@@ -6684,8 +6684,16 @@ app.get('/api/company_products', (req, res) => {
   const { company_id, entity_id } = req.query;
   let q = `
     SELECT cp.*,
+      c.name as company_name,
+      c.category as company_category,
+      c.shared_with as company_shared_with,
+      c.created_by as company_created_by,
+      ce.name as entity_name,
+      ce.reg_name as entity_reg_name,
       (SELECT COUNT(*) FROM attachments a WHERE a.source_type = 'company_product' AND a.source_id = cp.id) as attachment_count
     FROM company_products cp
+    LEFT JOIN companies c ON cp.company_id = c.id
+    LEFT JOIN company_entities ce ON cp.entity_id = ce.id
     WHERE 1=1
   `;
   const params = [];
@@ -6693,7 +6701,44 @@ app.get('/api/company_products', (req, res) => {
   if (entity_id === 'null') { q += ' AND cp.entity_id IS NULL'; }
   else if (entity_id) { q += ' AND cp.entity_id = ?'; params.push(entity_id); }
   q += ' ORDER BY cp.launch_date DESC, cp.created_at DESC';
-  res.json(db.prepare(q).all(...params));
+  const rows = db.prepare(q).all(...params)
+    .filter(r => canAccessCompany(req.user, {
+      id: r.company_id,
+      created_by: r.company_created_by,
+      shared_with: r.company_shared_with,
+    }))
+    .map(r => {
+      const { company_shared_with, company_created_by, ...rest } = r;
+      return { ...rest, company_name: decrypt(r.company_name) };
+    });
+  res.json(rows);
+});
+
+app.get('/api/company_products/:id', (req, res) => {
+  const row = db.prepare(`
+    SELECT cp.*,
+      c.name as company_name,
+      c.category as company_category,
+      c.shared_with as company_shared_with,
+      c.created_by as company_created_by,
+      ce.name as entity_name,
+      ce.reg_name as entity_reg_name,
+      (SELECT COUNT(*) FROM attachments a WHERE a.source_type = 'company_product' AND a.source_id = cp.id) as attachment_count
+    FROM company_products cp
+    LEFT JOIN companies c ON cp.company_id = c.id
+    LEFT JOIN company_entities ce ON cp.entity_id = ce.id
+    WHERE cp.id = ?
+  `).get(req.params.id);
+  if (!row) return res.status(404).json({ error: '产品不存在' });
+  if (!canAccessCompany(req.user, {
+    id: row.company_id,
+    created_by: row.company_created_by,
+    shared_with: row.company_shared_with,
+  })) {
+    return res.status(403).json({ error: '无权访问该产品' });
+  }
+  const { company_shared_with, company_created_by, ...rest } = row;
+  res.json({ ...rest, company_name: decrypt(row.company_name) });
 });
 
 app.post('/api/company_products', (req, res) => {

@@ -1882,6 +1882,268 @@ function SummaryCard({ companyId }) {
   );
 }
 
+// ==================== 全部产品视图 ====================
+function AllProductsView() {
+  const screens = useBreakpoint();
+  const isMobile = !screens.md;
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailRecord, setDetailRecord] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await companyProductsApi.list();
+      setData(rows);
+    } catch (err) {
+      message.error(err.response?.data?.error || '产品列表加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const productTypes = Array.from(new Set(data.map(p => p.category).filter(Boolean)));
+  const filteredData = data.filter(p => {
+    const keyword = search.trim().toLowerCase();
+    const hit = !keyword || [
+      p.name,
+      p.product_link,
+      p.company_name,
+      p.entity_reg_name,
+      p.entity_name,
+      p.category,
+      p.product_category,
+      p.discovery_source,
+    ].some(v => String(v || '').toLowerCase().includes(keyword));
+    const typeHit = !filterType || p.category === filterType;
+    return hit && typeHit;
+  });
+
+  const openProductDetail = async (record) => {
+    setDetailRecord(record);
+    setDetailOpen(true);
+    setDetailLoading(true);
+    try {
+      const detail = await companyProductsApi.get(record.id);
+      setDetailRecord(detail);
+    } catch (err) {
+      message.error(err.response?.data?.error || '产品详情加载失败');
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  const renderProductLink = (link) => {
+    if (!link) return '-';
+    return (
+      <a href={link} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }} onClick={e => e.stopPropagation()}>
+        <LinkOutlined /> 打开链接
+      </a>
+    );
+  };
+
+  const renderSubject = (record) => record.entity_reg_name || record.entity_name || '-';
+
+  const columns = [
+    {
+      title: '产品名称',
+      dataIndex: 'name',
+      width: 180,
+      sorter: (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN'),
+      render: (v, r) => (
+        <Button type="link" onClick={() => openProductDetail(r)} style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left' }}>
+          <Text strong style={{ color: '#1677ff' }}>{v}</Text>
+        </Button>
+      ),
+    },
+    {
+      title: '产品链接',
+      dataIndex: 'product_link',
+      width: 150,
+      ellipsis: true,
+      render: renderProductLink,
+    },
+    {
+      title: '公司主体',
+      width: 180,
+      render: (_, r) => renderSubject(r),
+    },
+    {
+      title: '集团名字',
+      dataIndex: 'company_name',
+      width: 160,
+      render: v => v || '-',
+    },
+    {
+      title: '产品类型',
+      dataIndex: 'category',
+      width: 110,
+      render: v => v ? <Tag>{v}</Tag> : '-',
+    },
+    {
+      title: '产品类目',
+      dataIndex: 'product_category',
+      width: 110,
+      render: v => v ? <Tag color="cyan">{v}</Tag> : '-',
+    },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 90,
+      render: v => <Tag color={productStatusMap[v]?.color}>{productStatusMap[v]?.label || v || '-'}</Tag>,
+    },
+    {
+      title: '发现出处',
+      dataIndex: 'discovery_source',
+      width: 130,
+      ellipsis: true,
+      render: v => v || '-',
+    },
+    {
+      title: '更新时间',
+      dataIndex: 'updated_at',
+      width: 110,
+      render: v => v?.slice(0, 10) || '-',
+    },
+    {
+      title: '操作',
+      width: 90,
+      render: (_, r) => <Button size="small" onClick={() => openProductDetail(r)}>查看详情</Button>,
+    },
+  ];
+
+  const renderProductCard = (record) => (
+    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <Card size="small" style={{ width: '100%', cursor: 'pointer' }} onClick={() => openProductDetail(record)}>
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <Text strong style={{ color: '#1677ff', fontSize: 15, wordBreak: 'break-word' }}>{record.name}</Text>
+              <div style={{ marginTop: 6 }}>
+                <Text type="secondary">集团：{record.company_name || '-'}</Text>
+              </div>
+            </div>
+            {record.category && <Tag>{record.category}</Tag>}
+          </div>
+          <Text type="secondary">公司主体：{renderSubject(record)}</Text>
+          {record.product_category && <Tag color="cyan" style={{ width: 'fit-content' }}>{record.product_category}</Tag>}
+          {record.product_link && <div onClick={e => e.stopPropagation()}>{renderProductLink(record.product_link)}</div>}
+          <Space size={[6, 6]} wrap>
+            <Tag color={productStatusMap[record.status]?.color}>{productStatusMap[record.status]?.label || record.status || '-'}</Tag>
+            {(record.attachment_count || 0) > 0 && <Tag icon={<PaperClipOutlined />}>附件 {record.attachment_count}</Tag>}
+            {record.updated_at && <Text type="secondary">更新：{record.updated_at.slice(0, 10)}</Text>}
+          </Space>
+        </Space>
+      </Card>
+    </List.Item>
+  );
+
+  return (
+    <div>
+      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
+        <Input.Search
+          placeholder="搜索产品、链接、集团、主体、类型"
+          allowClear
+          style={{ width: isMobile ? '100%' : 320 }}
+          onSearch={setSearch}
+          onChange={e => !e.target.value && setSearch('')}
+        />
+        <Select
+          placeholder="产品类型"
+          allowClear
+          style={{ width: isMobile ? '100%' : 160 }}
+          value={filterType || undefined}
+          onChange={v => setFilterType(v || '')}
+        >
+          {productTypes.map(type => <Option key={type} value={type}>{type}</Option>)}
+        </Select>
+        <Text type="secondary">共 {filteredData.length} 个产品</Text>
+      </Space>
+
+      {isMobile ? (
+        <List
+          dataSource={filteredData}
+          rowKey="id"
+          loading={loading}
+          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
+          locale={{ emptyText: '暂无产品数据' }}
+          renderItem={renderProductCard}
+        />
+      ) : (
+        <ResizableTable
+          storageKey="company-products-overview-table-columns"
+          columns={columns}
+          dataSource={filteredData}
+          rowKey="id"
+          loading={loading}
+          size="small"
+          scroll={{ x: 1200 }}
+          pagination={{ defaultPageSize: 15 }}
+          onRow={record => ({
+            onDoubleClick: () => openProductDetail(record),
+            style: { cursor: 'pointer' },
+          })}
+        />
+      )}
+
+      <Drawer
+        title={
+          <Space>
+            <AppstoreOutlined />
+            <span>{detailRecord?.name || '产品详情'}</span>
+            {detailRecord?.category && <Tag>{detailRecord.category}</Tag>}
+          </Space>
+        }
+        open={detailOpen}
+        onClose={() => setDetailOpen(false)}
+        width={isMobile ? '100%' : 720}
+        bodyStyle={isMobile ? { padding: 12 } : undefined}
+      >
+        {detailRecord && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
+              <Descriptions.Item label="产品名称" span={2}>{detailRecord.name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="产品链接" span={2}>{renderProductLink(detailRecord.product_link)}</Descriptions.Item>
+              <Descriptions.Item label="公司主体">{renderSubject(detailRecord)}</Descriptions.Item>
+              <Descriptions.Item label="集团名字">{detailRecord.company_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="产品类型">{detailRecord.category || '-'}</Descriptions.Item>
+              <Descriptions.Item label="产品类目">{detailRecord.product_category || '-'}</Descriptions.Item>
+              <Descriptions.Item label="状态">
+                <Tag color={productStatusMap[detailRecord.status]?.color}>{productStatusMap[detailRecord.status]?.label || detailRecord.status || '-'}</Tag>
+              </Descriptions.Item>
+              <Descriptions.Item label="上线时间">{detailRecord.launch_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="发现出处">{detailRecord.discovery_source || '-'}</Descriptions.Item>
+              <Descriptions.Item label="联系电话">{detailRecord.contact_phone || '-'}</Descriptions.Item>
+              <Descriptions.Item label="域名" span={2}>{detailRecord.domain || '-'}</Descriptions.Item>
+              <Descriptions.Item label="产品描述" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="目标用户" span={2}>{detailRecord.target_users || '-'}</Descriptions.Item>
+              <Descriptions.Item label="核心功能" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.core_features || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="备注" span={2}>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.notes || '-'}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="创建时间">{detailRecord.created_at || '-'}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{detailRecord.updated_at || '-'}</Descriptions.Item>
+            </Descriptions>
+
+            {detailLoading && <Text type="secondary">正在刷新详情...</Text>}
+            <AttachmentList sourceType="company_product" sourceId={detailRecord.id} title="产品附件" showPreview />
+          </Space>
+        )}
+      </Drawer>
+    </div>
+  );
+}
+
 // ==================== 主页面 ====================
 export default function Companies() {
   const screens = useBreakpoint();
@@ -2090,65 +2352,84 @@ export default function Companies() {
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加公司</Button>
-      </div>
+      <Tabs
+        defaultActiveKey="companies"
+        tabBarGutter={isMobile ? 12 : 20}
+        items={[
+          {
+            key: 'companies',
+            label: <span><BankOutlined /> 公司</span>,
+            children: (
+              <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+                  <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加公司</Button>
+                </div>
 
-      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
-        <Input.Search
-          placeholder="搜索公司名称、行业、业务、标签"
-          allowClear
-          style={{ width: isMobile ? '100%' : 280 }}
-          onSearch={setSearch}
-          onChange={e => !e.target.value && setSearch('')}
-        />
-        <Select
-          placeholder="公司分类"
-          allowClear
-          style={{ width: isMobile ? '100%' : 130 }}
-          value={filterCategory || undefined}
-          onChange={v => setFilterCategory(v || '')}
-        >
-          {Object.entries(categoryMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
-        </Select>
-        <Select
-          placeholder="关联项目组"
-          mode="multiple"
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          style={{ width: isMobile ? '100%' : 180 }}
-          value={filterProjectGroups}
-          onChange={value => setFilterProjectGroups(value)}
-          options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
-        />
-      </Space>
+                <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
+                  <Input.Search
+                    placeholder="搜索公司名称、行业、业务、标签"
+                    allowClear
+                    style={{ width: isMobile ? '100%' : 280 }}
+                    onSearch={setSearch}
+                    onChange={e => !e.target.value && setSearch('')}
+                  />
+                  <Select
+                    placeholder="公司分类"
+                    allowClear
+                    style={{ width: isMobile ? '100%' : 130 }}
+                    value={filterCategory || undefined}
+                    onChange={v => setFilterCategory(v || '')}
+                  >
+                    {Object.entries(categoryMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                  </Select>
+                  <Select
+                    placeholder="关联项目组"
+                    mode="multiple"
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    style={{ width: isMobile ? '100%' : 180 }}
+                    value={filterProjectGroups}
+                    onChange={value => setFilterProjectGroups(value)}
+                    options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
+                  />
+                </Space>
 
-      {isMobile ? (
-        <List
-          dataSource={data}
-          rowKey="id"
-          loading={loading}
-          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
-          locale={{ emptyText: '暂无公司数据' }}
-          renderItem={renderCompanyCard}
-        />
-      ) : (
-        <ResizableTable
-          storageKey="companies-table-columns"
-          columns={columns}
-          dataSource={data}
-          rowKey="id"
-          loading={loading}
-          size="small"
-          scroll={{ x: 1180 }}
-          pagination={{ defaultPageSize: 15 }}
-          onRow={record => ({
-            onDoubleClick: () => openDetail(record),
-            style: { cursor: 'pointer' },
-          })}
-        />
-      )}
+                {isMobile ? (
+                  <List
+                    dataSource={data}
+                    rowKey="id"
+                    loading={loading}
+                    pagination={{ defaultPageSize: 15, showSizeChanger: false }}
+                    locale={{ emptyText: '暂无公司数据' }}
+                    renderItem={renderCompanyCard}
+                  />
+                ) : (
+                  <ResizableTable
+                    storageKey="companies-table-columns"
+                    columns={columns}
+                    dataSource={data}
+                    rowKey="id"
+                    loading={loading}
+                    size="small"
+                    scroll={{ x: 1180 }}
+                    pagination={{ defaultPageSize: 15 }}
+                    onRow={record => ({
+                      onDoubleClick: () => openDetail(record),
+                      style: { cursor: 'pointer' },
+                    })}
+                  />
+                )}
+              </>
+            ),
+          },
+          {
+            key: 'products',
+            label: <span><AppstoreOutlined /> 产品</span>,
+            children: <AllProductsView />,
+          },
+        ]}
+      />
 
       {/* 添加/编辑弹窗 */}
       <CompanyModal
