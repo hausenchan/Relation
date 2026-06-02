@@ -5782,12 +5782,14 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
   const { status, done_note, due_date } = req.body;
   const task = db.prepare('SELECT * FROM follow_up_tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
-  if (task.person_id) {
-    const person = getPersonAccessRecord(task.person_id);
-    if (person && !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到' });
-  }
   if (task.assigned_to !== req.user.id && !isAdmin(req.user.role)) {
     return res.status(403).json({ error: '无权操作' });
+  }
+  if (task.person_id) {
+    const person = getPersonAccessRecord(task.person_id);
+    if (person && isPrivatePerson(person) && !canAccessPrivatePerson(req.user, person)) {
+      return res.status(404).json({ error: '未找到' });
+    }
   }
   const now = new Date().toISOString();
   const startedAt = status === 'in_progress'
