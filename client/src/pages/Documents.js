@@ -1737,19 +1737,6 @@ export default function Documents() {
     }
   };
 
-  const handleCopyDocumentLink = async () => {
-    if (!selectedDoc?.id) return;
-    const pageLink = buildDocumentPageLink(selectedDoc.id);
-    if (!pageLink) return;
-    try {
-      await copyTextToClipboard(pageLink);
-      setPageMenuOpen(false);
-      message.success('已复制文档链接，可直接发到钉钉群或好友');
-    } catch {
-      message.error('复制链接失败，请稍后重试');
-    }
-  };
-
   const saveShares = async () => {
     if (!selectedDoc) return;
     setShareSaving(true);
@@ -2538,15 +2525,6 @@ export default function Documents() {
     <div style={{ width: 280, padding: 14, background: '#fff', borderRadius: 8, boxShadow: '0 6px 24px rgba(15,23,42,0.16)' }}>
       <Space direction="vertical" size={14} style={{ width: '100%' }}>
         <Space direction="vertical" size={4} style={{ width: '100%' }}>
-          <Button
-            type="text"
-            block
-            icon={<CopyOutlined />}
-            onClick={handleCopyDocumentLink}
-            style={{ justifyContent: 'flex-start', padding: '4px 8px' }}
-          >
-            复制链接
-          </Button>
           <Button
             type="text"
             block
@@ -4352,15 +4330,6 @@ export default function Documents() {
                   </Text>
                 </Space>
                 <Space wrap size={6}>
-                  <Tooltip title="复制链接">
-                    <Button
-                      icon={<CopyOutlined />}
-                      onClick={handleCopyDocumentLink}
-                      aria-label="复制链接"
-                    >
-                      {!isMobile && '复制链接'}
-                    </Button>
-                  </Tooltip>
                   <Tooltip title="目录">
                     <span>
                       <Button
