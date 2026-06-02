@@ -164,35 +164,48 @@
     }
 
     .appbar {
-      padding: 8px 18px 12px;
+      min-height: 48px;
+      padding: 4px 18px 10px;
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end;
       align-items: center;
     }
 
     .app-title {
-      font-size: 22px;
-      line-height: 1.15;
-      font-weight: 760;
+      display: none;
+    }
+
+    .app-actions {
+      display: flex;
+      align-items: center;
+      gap: 18px;
     }
 
     .app-action {
-      width: 34px;
-      height: 34px;
-      border-radius: 8px;
-      background: var(--surface);
-      border: 1px solid var(--line);
-      display: grid;
-      place-items: center;
+      width: 27px;
+      height: 27px;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
       color: var(--text);
-      font-weight: 760;
-      box-shadow: 0 4px 12px rgba(17, 24, 39, 0.05);
+      display: block;
+    }
+
+    .app-action svg {
+      width: 27px;
+      height: 27px;
+      display: block;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .content {
       flex: 1;
       overflow: hidden;
-      padding: 0 16px 74px;
+      padding: 2px 16px 74px;
     }
 
     .search {
@@ -641,7 +654,11 @@
             </div>
             <div class="appbar">
               <div class="app-title">任务</div>
-              <div class="app-action">筛</div>
+              <div class="app-actions">
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16" /><path d="M7 12h10" /><path d="M10 18h4" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 8v8" /><path d="M8 12h8" /></svg></div>
+              </div>
             </div>
             <div class="content">
               <div class="segmented">
@@ -722,7 +739,11 @@
             </div>
             <div class="appbar">
               <div class="app-title">商机</div>
-              <div class="app-action">+</div>
+              <div class="app-actions">
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16" /><path d="M7 12h10" /><path d="M10 18h4" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 8v8" /><path d="M8 12h8" /></svg></div>
+              </div>
             </div>
             <div class="content">
               <div class="search"><span class="search-icon"></span><span>搜索商机、公司、人脉</span></div>
@@ -792,7 +813,11 @@
             </div>
             <div class="appbar">
               <div class="app-title">人脉</div>
-              <div class="app-action">+</div>
+              <div class="app-actions">
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16" /><path d="M7 12h10" /><path d="M10 18h4" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 8v8" /><path d="M8 12h8" /></svg></div>
+              </div>
             </div>
             <div class="content">
               <div class="search"><span class="search-icon"></span><span>搜索姓名、公司、标签</span></div>
@@ -865,7 +890,11 @@
             </div>
             <div class="appbar">
               <div class="app-title">公司</div>
-              <div class="app-action">筛</div>
+              <div class="app-actions">
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16" /><path d="M7 12h10" /><path d="M10 18h4" /></svg></div>
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 8v8" /><path d="M8 12h8" /></svg></div>
+              </div>
             </div>
             <div class="content">
               <div class="search"><span class="search-icon"></span><span>搜索公司、行业、城市</span></div>
@@ -933,7 +962,9 @@
             </div>
             <div class="appbar">
               <div class="app-title">其他</div>
-              <div class="app-action">设</div>
+              <div class="app-actions">
+                <div class="app-action"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.66V21.4a2.1 2.1 0 0 1-4.2 0v-.06a1.8 1.8 0 0 0-1.1-1.66 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 3.6 15a1.8 1.8 0 0 0-1.66-1.1H1.9a2.1 2.1 0 0 1 0-4.2h.06A1.8 1.8 0 0 0 3.6 8.7a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04a1.8 1.8 0 0 0 1.98.36 1.8 1.8 0 0 0 1.1-1.66V2.1a2.1 2.1 0 0 1 4.2 0v.06a1.8 1.8 0 0 0 1.1 1.66 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.66 1.1h.06a2.1 2.1 0 0 1 0 4.2h-.06A1.8 1.8 0 0 0 19.4 15Z" /></svg></div>
+              </div>
             </div>
             <div class="content">
               <div class="section-title"><span>目标与计划</span><span>低频查看</span></div>
