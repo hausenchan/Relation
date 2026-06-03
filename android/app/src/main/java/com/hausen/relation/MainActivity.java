@@ -128,7 +128,7 @@ public class MainActivity extends Activity {
     }
 
     private String routeForTab(int tab) {
-        if (tab == TAB_OPPORTUNITIES) return "/opportunities";
+        if (tab == TAB_OPPORTUNITIES) return "/leads";
         if (tab == TAB_PERSONS) return "/persons";
         if (tab == TAB_COMPANIES) return "/companies";
         return "/";
@@ -360,7 +360,7 @@ public class MainActivity extends Activity {
             || path.startsWith("/follow-up-tasks") || path.startsWith("/my-tasks") || path.startsWith("/task-board")) {
             return TAB_TASKS;
         }
-        if (path.startsWith("/opportunities")) return TAB_OPPORTUNITIES;
+        if (path.startsWith("/leads") || path.startsWith("/opportunities")) return TAB_OPPORTUNITIES;
         if (path.startsWith("/persons") || path.startsWith("/interactions")) return TAB_PERSONS;
         if (path.startsWith("/companies")) return TAB_COMPANIES;
         return TAB_MORE;
