@@ -1156,6 +1156,7 @@ export default function Documents() {
   const editorUndoStackRef = useRef([]);
   const applyingUndoRef = useRef(false);
   const editorAreaSelectionRef = useRef(null);
+  const selectedAreaBlockIdsRef = useRef([]);
   const blockHandleSelectionRef = useRef(null);
   const activeEditorSnapshotRef = useRef(null);
   const lastSavedSignatureRef = useRef({});
@@ -1732,6 +1733,14 @@ export default function Documents() {
     if (inlineToolbarHideTimerRef.current) window.clearTimeout(inlineToolbarHideTimerRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!selectedAreaBlockIdsRef.current.length) return;
+    const validIds = normalizeBlockSelectionIds(selectedAreaBlockIdsRef.current);
+    if (validIds.length !== selectedAreaBlockIdsRef.current.length) {
+      setAreaBlockSelection(validIds);
+    }
+  }, [editorBlocks]);
+
   const openCreate = () => {
     setEditingPropertyDoc(null);
     createForm.resetFields();
@@ -2292,7 +2301,7 @@ export default function Documents() {
       const blank = createBlock();
       setEditorBlocks([blank]);
       setSelectedBlockId(blank.id);
-      setSelectedAreaBlockIds([]);
+      clearAreaBlockSelection();
       setHoveredBlockId(null);
       setOpenBlockMenuId(null);
       focusBlock(blank.id);
@@ -2303,7 +2312,7 @@ export default function Documents() {
     const nextSelected = next[Math.max(0, index - 1)] || next[0];
     setEditorBlocks(next);
     setSelectedBlockId(nextSelected?.id || null);
-    setSelectedAreaBlockIds([]);
+    clearAreaBlockSelection();
     setHoveredBlockId(null);
     setOpenBlockMenuId(null);
     if (nextSelected) focusBlock(nextSelected.id);
@@ -2409,6 +2418,10 @@ export default function Documents() {
     if (key.startsWith('type:')) {
       const type = key.replace('type:', '');
       if (type === 'recent-image') {
+        if (targetIds.length > 1) {
+          message.info('最近上传图片暂不支持批量转换');
+          return;
+        }
         await insertRecentImageBlock(block);
         return;
       }
@@ -2433,17 +2446,18 @@ export default function Documents() {
     const targetSet = new Set(targetIds);
     const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
     const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
-    return [
-      ...blockTypeGroups.map(group => ({
-        type: 'group',
-        label: group.label,
-        children: group.children.map(item => ({
-          key: `type:${item.value}`,
-          label: renderBlockMenuLabel(item, targetBlocks.length > 0 && targetBlocks.every(target => target.type === item.value)),
-          icon: item.icon,
-          disabled: targetCount > 1 && item.value === 'recent-image',
-        })),
+    const convertChildren = blockTypeGroups.map(group => ({
+      type: 'group',
+      label: group.label,
+      children: group.children.map(item => ({
+        key: `type:${item.value}`,
+        label: renderBlockMenuLabel(item, targetBlocks.length > 0 && targetBlocks.every(target => target.type === item.value)),
+        icon: item.icon,
+        disabled: targetCount > 1 && item.value === 'recent-image',
       })),
+    }));
+    return [
+      { key: 'convert', icon: <ReloadOutlined />, label: '转换为', children: convertChildren },
       { type: 'divider' },
       { key: 'delete', danger: true, icon: <DeleteOutlined />, label: targetCount > 1 ? `删除 ${targetCount} 个块` : '删除' },
     ];
@@ -2509,13 +2523,87 @@ export default function Documents() {
     }
   };
 
+  const normalizeBlockSelectionIds = (ids = []) => {
+    const idSet = new Set(ids.filter(Boolean));
+    if (!idSet.size) return [];
+    return editorBlocks.map(block => block.id).filter(id => idSet.has(id));
+  };
+
   const setAreaBlockSelection = (ids = []) => {
+    const nextIds = normalizeBlockSelectionIds(ids);
+    selectedAreaBlockIdsRef.current = nextIds;
     setSelectedAreaBlockIds(prev => (
-      prev.length === ids.length && prev.every((id, index) => id === ids[index]) ? prev : ids
+      prev.length === nextIds.length && prev.every((id, index) => id === nextIds[index]) ? prev : nextIds
     ));
   };
 
-  const clearAreaBlockSelection = () => setAreaBlockSelection([]);
+  const clearAreaBlockSelection = () => {
+    pendingBlockMenuTargetIdsRef.current = [];
+    setAreaBlockSelection([]);
+  };
+
+  const getVisibleEditorBlockIds = () => {
+    const editorNode = document.getElementById('document-editor-blocks');
+    const ids = editorNode
+      ? Array.from(editorNode.querySelectorAll('[data-doc-block-id]'))
+        .map(node => node.getAttribute('data-doc-block-id'))
+        .filter(Boolean)
+      : [];
+    return ids.length ? ids : editorBlocks.map(block => block.id);
+  };
+
+  const getEditorBlockIdFromPoint = (clientX, clientY, fallbackIds = []) => {
+    const editorNode = document.getElementById('document-editor-blocks');
+    if (!editorNode) return null;
+    const directNode = document.elementFromPoint?.(clientX, clientY)?.closest?.('[data-doc-block-id]');
+    if (directNode && editorNode.contains(directNode)) {
+      return directNode.getAttribute('data-doc-block-id');
+    }
+
+    const nodes = Array.from(editorNode.querySelectorAll('[data-doc-block-id]'))
+      .filter(node => !fallbackIds.length || fallbackIds.includes(node.getAttribute('data-doc-block-id')));
+    if (!nodes.length) return null;
+    const nodeAtY = nodes.find(node => {
+      const rect = node.getBoundingClientRect();
+      return clientY >= rect.top && clientY <= rect.bottom;
+    });
+    if (nodeAtY) return nodeAtY.getAttribute('data-doc-block-id');
+
+    const firstNode = nodes[0];
+    const lastNode = nodes[nodes.length - 1];
+    if (clientY < firstNode.getBoundingClientRect().top) return firstNode.getAttribute('data-doc-block-id');
+    if (clientY > lastNode.getBoundingClientRect().bottom) return lastNode.getAttribute('data-doc-block-id');
+    return null;
+  };
+
+  const getBlockRangeIds = (startId, endId, blockIds = getVisibleEditorBlockIds()) => {
+    const startIndex = blockIds.indexOf(startId);
+    const endIndex = blockIds.indexOf(endId);
+    if (startIndex < 0 || endIndex < 0) return [];
+    const from = Math.min(startIndex, endIndex);
+    const to = Math.max(startIndex, endIndex);
+    return blockIds.slice(from, to + 1);
+  };
+
+  const setBlockRangeSelection = (startId, endId, blockIds = getVisibleEditorBlockIds()) => {
+    const nextIds = getBlockRangeIds(startId, endId, blockIds);
+    if (!nextIds.length) return [];
+    setAreaBlockSelection(nextIds);
+    setSelectedBlockId(endId);
+    setHoveredBlockId(null);
+    setOpenBlockMenuId(null);
+    return nextIds;
+  };
+
+  const clearNativeEditorSelection = () => {
+    window.getSelection?.()?.removeAllRanges();
+    const activeElement = document.activeElement;
+    if (!activeElement || !['TEXTAREA', 'INPUT'].includes(activeElement.tagName)) return;
+    if (typeof activeElement.setSelectionRange !== 'function') return;
+    const cursorPosition = activeElement.selectionEnd ?? activeElement.value?.length ?? 0;
+    activeElement.setSelectionRange(cursorPosition, cursorPosition);
+    activeElement.blur?.();
+  };
 
   const isEditorAreaSelectionIgnoredTarget = (target) => {
     if (!target?.closest) return false;
@@ -2541,9 +2629,13 @@ export default function Documents() {
 
   const handleEditorAreaMouseDown = (event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
-    if (isEditorAreaSelectionIgnoredTarget(event.target)) return;
+    const startBlockNode = event.target.closest?.('[data-doc-block-id]');
+    const startsInBlockTextArea = Boolean(startBlockNode && event.target.closest?.('textarea'));
+    if (isEditorAreaSelectionIgnoredTarget(event.target) && !startsInBlockTextArea) return;
     const startX = event.clientX;
     const startY = event.clientY;
+    const startBlockId = startBlockNode?.getAttribute('data-doc-block-id') || null;
+    const visibleBlockIds = startBlockId ? getVisibleEditorBlockIds() : [];
 
     const cleanup = () => {
       window.removeEventListener('mousemove', handleMouseMove);
@@ -2556,10 +2648,26 @@ export default function Documents() {
       if (!selectionState) return;
       const dx = moveEvent.clientX - startX;
       const dy = moveEvent.clientY - startY;
-      if (!selectionState.dragging && Math.hypot(dx, dy) < 6) return;
+      const movedDistance = Math.hypot(dx, dy);
+      if (selectionState.startBlockId) {
+        const currentId = getEditorBlockIdFromPoint(moveEvent.clientX, moveEvent.clientY, selectionState.blockIds);
+        if (!selectionState.dragging) {
+          if (movedDistance < 6 || !currentId || currentId === selectionState.startBlockId) return;
+        }
+        if (currentId) {
+          selectionState.dragging = true;
+          selectionState.mode = 'range';
+          moveEvent.preventDefault();
+          clearNativeEditorSelection();
+          setBlockRangeSelection(selectionState.startBlockId, currentId, selectionState.blockIds);
+          return;
+        }
+      }
+      if (!selectionState.dragging && movedDistance < 6) return;
       selectionState.dragging = true;
+      selectionState.mode = 'area';
       moveEvent.preventDefault();
-      window.getSelection?.()?.removeAllRanges();
+      clearNativeEditorSelection();
       const areaRect = {
         left: Math.min(startX, moveEvent.clientX),
         right: Math.max(startX, moveEvent.clientX),
@@ -2589,7 +2697,13 @@ export default function Documents() {
       }
     };
 
-    editorAreaSelectionRef.current = { cleanup, dragging: false };
+    editorAreaSelectionRef.current = {
+      cleanup,
+      dragging: false,
+      mode: null,
+      startBlockId,
+      blockIds: visibleBlockIds,
+    };
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
   };
@@ -2623,36 +2737,33 @@ export default function Documents() {
   const getBlockMenuTargetIds = (blockId) => {
     const pendingTargetIds = pendingBlockMenuTargetIdsRef.current || [];
     if (pendingTargetIds.includes(blockId)) return pendingTargetIds;
-    if (selectedAreaBlockIds.includes(blockId) && selectedAreaBlockIds.length) return selectedAreaBlockIds;
+    const selectedTargetIds = selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds;
+    if (selectedTargetIds.includes(blockId) && selectedTargetIds.length) return selectedTargetIds;
     const textSelectionIds = getSelectedEditorBlockIds();
     if (textSelectionIds.includes(blockId)) return textSelectionIds;
     return [blockId].filter(Boolean);
   };
 
   const selectBlockFromHandle = (event, blockId) => {
-    const blockIds = editorBlocks.map(block => block.id);
+    const blockIds = getVisibleEditorBlockIds();
     const blockIndex = blockIds.indexOf(blockId);
     if (blockIndex < 0) return;
 
     if (event.shiftKey && selectedBlockId) {
       const anchorIndex = blockIds.indexOf(selectedBlockId);
       if (anchorIndex >= 0) {
-        const from = Math.min(anchorIndex, blockIndex);
-        const to = Math.max(anchorIndex, blockIndex);
-        setAreaBlockSelection(blockIds.slice(from, to + 1));
-        setSelectedBlockId(blockId);
+        setBlockRangeSelection(selectedBlockId, blockId, blockIds);
         return;
       }
     }
 
     if (event.metaKey || event.ctrlKey) {
-      setSelectedAreaBlockIds(prev => {
-        const base = prev.length ? prev : (selectedBlockId ? [selectedBlockId] : []);
-        const next = base.includes(blockId)
-          ? base.filter(id => id !== blockId)
-          : [...base, blockId];
-        return next.length ? next : [blockId];
-      });
+      const currentSelection = selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds;
+      const base = currentSelection.length ? currentSelection : (selectedBlockId ? [selectedBlockId] : []);
+      const next = base.includes(blockId)
+        ? base.filter(id => id !== blockId)
+        : [...base, blockId];
+      setAreaBlockSelection(next.length ? next : [blockId]);
       setSelectedBlockId(blockId);
       return;
     }
@@ -2664,33 +2775,21 @@ export default function Documents() {
   const updateHandleDragSelection = (clientY) => {
     const dragState = blockHandleSelectionRef.current;
     if (!dragState) return;
-    const editorNode = document.getElementById('document-editor-blocks');
-    if (!editorNode) return;
-    const nodes = Array.from(editorNode.querySelectorAll('[data-doc-block-id]'));
-    if (!nodes.length) return;
-    const currentNode = nodes.find(node => {
-      const rect = node.getBoundingClientRect();
-      return clientY >= rect.top && clientY <= rect.bottom;
-    }) || nodes.find(node => clientY < node.getBoundingClientRect().top) || nodes[nodes.length - 1];
-    const currentId = currentNode?.getAttribute('data-doc-block-id');
-    const currentIndex = dragState.blockIds.indexOf(currentId);
-    if (currentIndex < 0) return;
-    const from = Math.min(dragState.startIndex, currentIndex);
-    const to = Math.max(dragState.startIndex, currentIndex);
-    const nextIds = dragState.blockIds.slice(from, to + 1);
-    setAreaBlockSelection(nextIds);
-    setSelectedBlockId(currentId);
+    const currentId = getEditorBlockIdFromPoint(dragState.startX, clientY, dragState.blockIds);
+    if (!currentId) return;
+    setBlockRangeSelection(dragState.startId, currentId, dragState.blockIds);
   };
 
   const startBlockHandleSelection = (event, blockId) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
-    const blockIds = editorBlocks.map(block => block.id);
+    const blockIds = getVisibleEditorBlockIds();
     const startIndex = blockIds.indexOf(blockId);
     if (startIndex < 0) return;
     pendingBlockMenuTargetIdsRef.current = getBlockMenuTargetIds(blockId);
     blockHandleSelectionRef.current = {
       startX: event.clientX,
       startY: event.clientY,
+      startId: blockId,
       startIndex,
       blockIds,
       dragging: false,
@@ -2711,7 +2810,7 @@ export default function Documents() {
       if (!dragState.dragging && Math.hypot(dx, dy) < 6) return;
       dragState.dragging = true;
       moveEvent.preventDefault();
-      window.getSelection?.()?.removeAllRanges();
+      clearNativeEditorSelection();
       updateHandleDragSelection(moveEvent.clientY);
     };
 
@@ -4983,7 +5082,8 @@ export default function Documents() {
         onClick={() => {
           if (suppressEditorClickRef.current) return;
           setSelectedBlockId(block.id);
-          if (!selectedAreaBlockIds.includes(block.id)) {
+          const currentSelection = selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds;
+          if (!currentSelection.includes(block.id)) {
             clearAreaBlockSelection();
           }
         }}
@@ -5018,6 +5118,7 @@ export default function Documents() {
                   return;
                 }
                 const targetIds = getBlockMenuTargetIds(block.id);
+                pendingBlockMenuTargetIdsRef.current = targetIds;
                 setAreaBlockSelection(targetIds);
                 setSelectedBlockId(block.id);
                 setOpenBlockMenuId(block.id);
