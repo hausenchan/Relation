@@ -5081,7 +5081,11 @@ export default function Documents() {
     if (hiddenListBlockIds.has(block.id)) return null;
     const menuOpen = openBlockMenuId === block.id;
     const blockSelected = selectedAreaBlockIds.includes(block.id);
-    const handleVisible = isMobile || menuOpen || blockSelected || hoveredBlockId === block.id;
+    const selectedVisibleBlockIds = selectedAreaBlockIds.filter(id => !hiddenListBlockIds.has(id));
+    const multiBlockSelected = selectedVisibleBlockIds.length > 1;
+    const groupHandleBlockId = multiBlockSelected ? selectedVisibleBlockIds[0] : null;
+    const canShowGroupHandle = !multiBlockSelected || block.id === groupHandleBlockId || menuOpen;
+    const handleVisible = canShowGroupHandle && (isMobile || menuOpen || blockSelected || hoveredBlockId === block.id);
     const heading = headingMeta.map.get(block.id);
     const comments = getBlockInlineComments(block);
     const commentsOpen = activeCommentBlockId === block.id && comments.length > 0;
