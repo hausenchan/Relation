@@ -4356,7 +4356,9 @@ export default function Documents() {
         onClick={() => {
           if (suppressEditorClickRef.current) return;
           setSelectedBlockId(block.id);
-          clearAreaBlockSelection();
+          if (!selectedAreaBlockIds.includes(block.id)) {
+            clearAreaBlockSelection();
+          }
         }}
         onMouseEnter={() => setHoveredBlockId(block.id)}
         onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
