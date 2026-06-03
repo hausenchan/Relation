@@ -1163,6 +1163,7 @@ export default function Documents() {
   const pendingSavePromisesRef = useRef({});
   const saveCurrentDocumentRef = useRef(null);
   const pendingBlockMenuTargetIdsRef = useRef([]);
+  const activeBlockMenuTargetIdsRef = useRef([]);
   const suppressBlockMenuOpenUntilRef = useRef(0);
   const suppressEditorClickRef = useRef(false);
   const inlineToolbarHideTimerRef = useRef(null);
@@ -2378,10 +2379,16 @@ export default function Documents() {
     if (!targetIds.length) return false;
     const targetSet = new Set(targetIds);
     const firstId = targetIds[0];
+    const isBatchListConversion = targetIds.length > 1 && isHierarchicalListBlock({ type });
+    const batchListIndent = isBatchListConversion ? 0 : null;
     pushEditorUndoSnapshot();
-    setEditorBlocks(prev => prev.map(block => (
-      targetSet.has(block.id) ? { ...block, ...buildBlockTypePatch(block, type, extra) } : block
-    )));
+    setEditorBlocks(prev => prev.map(block => {
+      if (!targetSet.has(block.id)) return block;
+      const patchExtra = isBatchListConversion
+        ? { ...extra, meta: { ...cloneMeta(extra.meta), indent: batchListIndent } }
+        : extra;
+      return { ...block, ...buildBlockTypePatch(block, type, patchExtra) };
+    }));
     setSelectedBlockId(firstId);
     setAreaBlockSelection(targetIds);
     focusBlock(firstId);
@@ -2413,8 +2420,11 @@ export default function Documents() {
 
   const handleBlockMenuAction = async (block, key) => {
     if (!block) return;
-    const targetIds = getBlockMenuTargetIds(block.id);
+    const targetIds = activeBlockMenuTargetIdsRef.current.includes(block.id)
+      ? activeBlockMenuTargetIdsRef.current
+      : getBlockMenuTargetIds(block.id);
     pendingBlockMenuTargetIdsRef.current = [];
+    activeBlockMenuTargetIdsRef.current = targetIds;
     if (key.startsWith('type:')) {
       const type = key.replace('type:', '');
       if (type === 'recent-image') {
@@ -2539,6 +2549,7 @@ export default function Documents() {
 
   const clearAreaBlockSelection = () => {
     pendingBlockMenuTargetIdsRef.current = [];
+    activeBlockMenuTargetIdsRef.current = [];
     setAreaBlockSelection([]);
   };
 
@@ -5119,12 +5130,16 @@ export default function Documents() {
                 }
                 const targetIds = getBlockMenuTargetIds(block.id);
                 pendingBlockMenuTargetIdsRef.current = targetIds;
+                activeBlockMenuTargetIdsRef.current = targetIds;
                 setAreaBlockSelection(targetIds);
                 setSelectedBlockId(block.id);
                 setOpenBlockMenuId(block.id);
                 return;
               }
               pendingBlockMenuTargetIdsRef.current = [];
+              if (openBlockMenuId === block.id && !activeBlockMenuTargetIdsRef.current.includes(block.id)) {
+                activeBlockMenuTargetIdsRef.current = [];
+              }
               setOpenBlockMenuId(prev => (prev === block.id ? null : prev));
             }}
             placement="bottomLeft"
