@@ -1106,6 +1106,7 @@ export default function Documents() {
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
+  const [blockMenuTargetIds, setBlockMenuTargetIds] = useState([]);
   const [inlineToolbar, setInlineToolbar] = useState(null);
   const [commentComposer, setCommentComposer] = useState(null);
   const [commentDraft, setCommentDraft] = useState('');
@@ -2375,7 +2376,7 @@ export default function Documents() {
   };
 
   const changeBlocksType = (ids = [], type, extra = {}) => {
-    const targetIds = ids.filter(Boolean);
+    const targetIds = normalizeBlockSelectionIds(ids);
     if (!targetIds.length) return false;
     const targetSet = new Set(targetIds);
     const firstId = targetIds[0];
@@ -2418,9 +2419,12 @@ export default function Documents() {
     }
   };
 
-  const handleBlockMenuAction = async (block, key) => {
+  const handleBlockMenuAction = async (block, key, targetIdsOverride = []) => {
     if (!block) return;
-    const targetIds = activeBlockMenuTargetIdsRef.current.includes(block.id)
+    const overrideTargetIds = normalizeBlockSelectionIds(targetIdsOverride);
+    const targetIds = overrideTargetIds.includes(block.id)
+      ? overrideTargetIds
+      : activeBlockMenuTargetIdsRef.current.includes(block.id)
       ? activeBlockMenuTargetIdsRef.current
       : getBlockMenuTargetIds(block.id);
     pendingBlockMenuTargetIdsRef.current = [];
@@ -2451,8 +2455,12 @@ export default function Documents() {
     }
   };
 
-  const buildBlockMenuItems = (block) => {
-    const targetIds = getBlockMenuTargetIds(block?.id);
+  const buildBlockMenuItems = (block, targetIdsOverride = []) => {
+    const targetIds = targetIdsOverride.length
+      ? targetIdsOverride
+      : (activeBlockMenuTargetIdsRef.current.includes(block?.id)
+        ? activeBlockMenuTargetIdsRef.current
+        : getBlockMenuTargetIds(block?.id));
     const targetSet = new Set(targetIds);
     const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
     const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
@@ -2550,6 +2558,7 @@ export default function Documents() {
   const clearAreaBlockSelection = () => {
     pendingBlockMenuTargetIdsRef.current = [];
     activeBlockMenuTargetIdsRef.current = [];
+    setBlockMenuTargetIds([]);
     setAreaBlockSelection([]);
   };
 
@@ -2746,13 +2755,26 @@ export default function Documents() {
   };
 
   const getBlockMenuTargetIds = (blockId) => {
-    const pendingTargetIds = pendingBlockMenuTargetIdsRef.current || [];
-    if (pendingTargetIds.includes(blockId)) return pendingTargetIds;
     const selectedTargetIds = selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds;
     if (selectedTargetIds.includes(blockId) && selectedTargetIds.length) return selectedTargetIds;
+    const pendingTargetIds = pendingBlockMenuTargetIdsRef.current || [];
+    if (pendingTargetIds.includes(blockId)) return pendingTargetIds;
+    const activeTargetIds = activeBlockMenuTargetIdsRef.current || [];
+    if (activeTargetIds.includes(blockId)) return activeTargetIds;
     const textSelectionIds = getSelectedEditorBlockIds();
     if (textSelectionIds.includes(blockId)) return textSelectionIds;
     return [blockId].filter(Boolean);
+  };
+
+  const captureBlockMenuTargetIds = (blockId) => {
+    const targetIds = normalizeBlockSelectionIds(getBlockMenuTargetIds(blockId));
+    const nextTargetIds = targetIds.includes(blockId) && targetIds.length ? targetIds : [blockId].filter(Boolean);
+    pendingBlockMenuTargetIdsRef.current = nextTargetIds;
+    activeBlockMenuTargetIdsRef.current = nextTargetIds;
+    setBlockMenuTargetIds(nextTargetIds);
+    setAreaBlockSelection(nextTargetIds);
+    setSelectedBlockId(blockId);
+    return nextTargetIds;
   };
 
   const selectBlockFromHandle = (event, blockId) => {
@@ -5132,27 +5154,32 @@ export default function Documents() {
                   setOpenBlockMenuId(null);
                   return;
                 }
-                const targetIds = getBlockMenuTargetIds(block.id);
-                pendingBlockMenuTargetIdsRef.current = targetIds;
-                activeBlockMenuTargetIdsRef.current = targetIds;
-                setAreaBlockSelection(targetIds);
-                setSelectedBlockId(block.id);
+                captureBlockMenuTargetIds(block.id);
                 setOpenBlockMenuId(block.id);
                 return;
               }
               pendingBlockMenuTargetIdsRef.current = [];
               if (openBlockMenuId === block.id && !activeBlockMenuTargetIdsRef.current.includes(block.id)) {
                 activeBlockMenuTargetIdsRef.current = [];
+                setBlockMenuTargetIds([]);
               }
               setOpenBlockMenuId(prev => (prev === block.id ? null : prev));
             }}
             placement="bottomLeft"
             menu={{
-              items: buildBlockMenuItems(block),
+              items: buildBlockMenuItems(block, blockMenuTargetIds),
               onClick: ({ key, domEvent }) => {
                 domEvent.stopPropagation();
+                let targetIds = [];
+                if (blockMenuTargetIds.includes(block.id)) {
+                  targetIds = [...blockMenuTargetIds];
+                } else if (activeBlockMenuTargetIdsRef.current.includes(block.id)) {
+                  targetIds = [...activeBlockMenuTargetIdsRef.current];
+                } else {
+                  targetIds = captureBlockMenuTargetIds(block.id);
+                }
                 setOpenBlockMenuId(null);
-                handleBlockMenuAction(block, key);
+                handleBlockMenuAction(block, key, targetIds);
               },
             }}
           >
@@ -5168,7 +5195,11 @@ export default function Documents() {
               onClick={event => {
                 event.stopPropagation();
                 if (Date.now() < suppressBlockMenuOpenUntilRef.current) return;
-                selectBlockFromHandle(event, block.id);
+                if (event.metaKey || event.ctrlKey || event.shiftKey) {
+                  selectBlockFromHandle(event, block.id);
+                  return;
+                }
+                captureBlockMenuTargetIds(block.id);
               }}
               style={{
                 width: 24,
