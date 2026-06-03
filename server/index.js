@@ -6707,7 +6707,7 @@ app.get('/api/company_products', (req, res) => {
   if (company_id) { q += ' AND cp.company_id = ?'; params.push(company_id); }
   if (entity_id === 'null') { q += ' AND cp.entity_id IS NULL'; }
   else if (entity_id) { q += ' AND cp.entity_id = ?'; params.push(entity_id); }
-  q += ' ORDER BY cp.launch_date DESC, cp.created_at DESC';
+  q += ' ORDER BY datetime(COALESCE(cp.updated_at, cp.created_at)) DESC, datetime(cp.created_at) DESC, cp.id DESC';
   const rows = db.prepare(q).all(...params)
     .filter(r => canAccessCompany(req.user, {
       id: r.company_id,

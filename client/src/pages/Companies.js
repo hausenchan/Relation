@@ -84,6 +84,19 @@ const companyDuplicateMatchText = {
   keyword_contains: '关键词命中',
 };
 
+function getRecordTime(value) {
+  const time = value ? dayjs(value).valueOf() : 0;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function compareLatestRecordFirst(a = {}, b = {}) {
+  const updatedDiff = getRecordTime(b.updated_at || b.created_at) - getRecordTime(a.updated_at || a.created_at);
+  if (updatedDiff !== 0) return updatedDiff;
+  const createdDiff = getRecordTime(b.created_at) - getRecordTime(a.created_at);
+  if (createdDiff !== 0) return createdDiff;
+  return Number(b.id || 0) - Number(a.id || 0);
+}
+
 function showCompanyDuplicateWarning(duplicateInfo) {
   const matches = Array.isArray(duplicateInfo?.matches) ? duplicateInfo.matches : [];
   const total = duplicateInfo?.total || matches.length;
@@ -692,7 +705,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
     const params = { company_id: companyId };
     if (entityId !== undefined) params.entity_id = entityId === null ? 'null' : entityId;
     const res = await companyProductsApi.list(params);
-    setData(res);
+    setData([...res].sort(compareLatestRecordFirst));
   }, [companyId, entityId]);
 
   useEffect(() => { load(); }, [load]);
