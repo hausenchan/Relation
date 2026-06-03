@@ -1117,7 +1117,7 @@ db.exec(`
     folder_id INTEGER,
     tags TEXT,
     toc_enabled INTEGER DEFAULT 0,
-    width_mode TEXT DEFAULT 'standard',
+    width_mode TEXT DEFAULT 'full',
     custom_width INTEGER,
     small_font_enabled INTEGER DEFAULT 0,
     title_numbering_enabled INTEGER DEFAULT 0,
@@ -1231,6 +1231,12 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_document_attachments_doc ON document_attachments(document_id);
 `);
+
+db.prepare(`
+  UPDATE documents
+  SET width_mode = 'full'
+  WHERE width_mode IS NULL OR width_mode = '' OR width_mode = 'standard'
+`).run();
 
 addColumnIfMissing('document_change_logs', 'detail', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_change_logs', 'detail_text', 'TEXT DEFAULT NULL');
@@ -3783,8 +3789,8 @@ function createDocumentRecord(body, user) {
       INSERT INTO documents (
         document_no, global_seq, title, content, content_text, summary, domain,
         project_group_id, project_code, department_key, doc_type, current_version,
-        folder_id, tags, created_by, updated_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        folder_id, tags, width_mode, created_by, updated_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       documentNo,
       globalSeq,
@@ -3800,6 +3806,7 @@ function createDocumentRecord(body, user) {
       body.current_version || 'V1.0',
       body.folder_id || null,
       tags,
+      body.width_mode || 'full',
       user.id,
       user.id
     );
@@ -4097,7 +4104,7 @@ app.put('/api/documents/:id/page-options', canWrite, (req, res) => {
     WHERE id = ?
   `).run(
     req.body.toc_enabled ? 1 : 0,
-    req.body.width_mode || doc.width_mode || 'standard',
+    req.body.width_mode || doc.width_mode || 'full',
     req.body.custom_width || null,
     req.body.small_font_enabled ? 1 : 0,
     req.body.title_numbering_enabled ? 1 : 0,

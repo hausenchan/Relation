@@ -831,11 +831,11 @@ function buildHeadingMeta(blocks, numberingEnabled) {
 }
 
 function getEditorMaxWidth(doc) {
-  if (!doc) return 860;
+  if (!doc) return '100%';
   if (doc.width_mode === 'full') return '100%';
   if (doc.width_mode === 'wide') return 1120;
   if (doc.width_mode === 'custom') return Number(doc.custom_width) || 960;
-  return 860;
+  return '100%';
 }
 
 function getEditorShellMaxWidth(doc, tocVisible) {
@@ -1736,7 +1736,7 @@ export default function Documents() {
 
   const buildPageOptionsPayload = (patch = {}) => ({
     toc_enabled: asSwitchValue(selectedDoc?.toc_enabled, true),
-    width_mode: selectedDoc?.width_mode || 'standard',
+    width_mode: selectedDoc?.width_mode || 'full',
     custom_width: selectedDoc?.custom_width || null,
     small_font_enabled: asSwitchValue(selectedDoc?.small_font_enabled),
     title_numbering_enabled: asSwitchValue(selectedDoc?.title_numbering_enabled),
@@ -2572,7 +2572,7 @@ export default function Documents() {
         <div>
           <Text strong>编辑宽度</Text>
           <Radio.Group
-            value={selectedDoc?.width_mode || 'standard'}
+            value={selectedDoc?.width_mode || 'full'}
             onChange={event => savePageOptions({
               width_mode: event.target.value,
               custom_width: event.target.value === 'custom' ? (selectedDoc?.custom_width || 960) : selectedDoc?.custom_width,
