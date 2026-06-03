@@ -53,7 +53,6 @@ import {
   PlusOutlined,
   ReloadOutlined,
   RightOutlined,
-  RetweetOutlined,
   RollbackOutlined,
   SaveOutlined,
   StarFilled,
@@ -135,16 +134,16 @@ function BlockHandleIcon() {
       aria-hidden="true"
       style={{
         width: 14,
-        height: 18,
+        height: 14,
         display: 'grid',
         gridTemplateColumns: 'repeat(2, 4px)',
-        gridTemplateRows: 'repeat(3, 4px)',
+        gridTemplateRows: 'repeat(2, 4px)',
         gap: 3,
         alignContent: 'center',
         justifyContent: 'center',
       }}
     >
-      {Array.from({ length: 6 }).map((_, index) => (
+      {Array.from({ length: 4 }).map((_, index) => (
         <span
           key={index}
           style={{
@@ -2163,20 +2162,15 @@ export default function Documents() {
   };
 
   const buildBlockMenuItems = (block) => [
-    {
-      key: 'transform',
-      icon: <RetweetOutlined />,
-      label: '转换为',
-      children: blockTypeGroups.map(group => ({
-        type: 'group',
-        label: group.label,
-        children: group.children.map(item => ({
-          key: `type:${item.value}`,
-          label: renderBlockMenuLabel(item, item.value === block?.type),
-          icon: item.icon,
-        })),
+    ...blockTypeGroups.map(group => ({
+      type: 'group',
+      label: group.label,
+      children: group.children.map(item => ({
+        key: `type:${item.value}`,
+        label: renderBlockMenuLabel(item, item.value === block?.type),
+        icon: item.icon,
       })),
-    },
+    })),
     { type: 'divider' },
     { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除' },
   ];
@@ -4120,7 +4114,11 @@ export default function Documents() {
           <Dropdown
             trigger={['click']}
             open={menuOpen}
-            overlayStyle={{ width: 320, maxHeight: 560, overflowY: 'auto' }}
+            overlayStyle={{
+              width: isMobile ? 300 : 340,
+              maxHeight: 'min(560px, calc(100vh - 96px))',
+              overflowY: 'auto',
+            }}
             onOpenChange={(open) => {
               setOpenBlockMenuId(open ? block.id : (prev => (prev === block.id ? null : prev)));
             }}
