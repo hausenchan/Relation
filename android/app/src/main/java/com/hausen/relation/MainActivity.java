@@ -39,6 +39,7 @@ import com.hausen.relation.data.SessionStore;
 import com.hausen.relation.ui.RelationIconView;
 import com.hausen.relation.ui.Ui;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
@@ -108,7 +109,9 @@ public class MainActivity extends Activity {
         bottomNav.removeAllViews();
         addNavItem(TAB_TASKS, RelationIconView.TASK, "任务");
         addNavItem(TAB_OPPORTUNITIES, RelationIconView.OPPORTUNITY, "商机");
-        addNavItem(TAB_PERSONS, RelationIconView.PERSON, "人脉");
+        if (shouldShowPersonsTab()) {
+            addNavItem(TAB_PERSONS, RelationIconView.PERSON, "人脉");
+        }
         addNavItem(TAB_COMPANIES, RelationIconView.COMPANY, "公司");
         addNavItem(TAB_MORE, RelationIconView.MORE, "其他");
     }
@@ -129,6 +132,9 @@ public class MainActivity extends Activity {
     }
 
     private void switchTab(int tab) {
+        if (tab == TAB_PERSONS && !shouldShowPersonsTab()) {
+            tab = TAB_TASKS;
+        }
         currentTab = tab;
         renderBottomNav();
         if (tab == TAB_MORE) {
@@ -397,10 +403,12 @@ public class MainActivity extends Activity {
                 String userRaw = state.optString("user", "");
                 if (token.isEmpty()) {
                     session.clearLogin();
+                    refreshBottomNavForPermissions();
                     return;
                 }
                 JSONObject user = userRaw.isEmpty() ? null : new JSONObject(userRaw);
                 session.saveLogin(token, user);
+                refreshBottomNavForPermissions();
             } catch (Exception ignored) {
             }
         });
@@ -432,6 +440,9 @@ public class MainActivity extends Activity {
         if (isLoginUrl(url)) return;
         String path = uri.getPath();
         int tab = tabForPath(path == null ? "/" : path);
+        if (tab == TAB_PERSONS && !shouldShowPersonsTab()) {
+            tab = TAB_TASKS;
+        }
         if (tab != currentTab) {
             currentTab = tab;
             showingMoreHome = false;
@@ -448,6 +459,69 @@ public class MainActivity extends Activity {
         if (path.startsWith("/persons") || path.startsWith("/interactions")) return TAB_PERSONS;
         if (path.startsWith("/companies")) return TAB_COMPANIES;
         return TAB_MORE;
+    }
+
+    private void refreshBottomNavForPermissions() {
+        if (currentTab == TAB_PERSONS && !shouldShowPersonsTab()) {
+            switchTab(TAB_TASKS);
+            return;
+        }
+        renderBottomNav();
+    }
+
+    private boolean shouldShowPersonsTab() {
+        JSONObject user = session.user();
+        return canAccessMenu(user, "/persons") && canAccessModule(user, "persons");
+    }
+
+    private boolean canAccessMenu(JSONObject user, String menuKey) {
+        if (user == null || user.length() == 0) return false;
+        if (isAdminUser(user)) return true;
+        JSONArray menuPerms = user.optJSONArray("menuPerms");
+        if (menuPerms == null) return false;
+        for (int i = 0; i < menuPerms.length(); i++) {
+            if (menuKey.equals(menuPerms.optString(i))) return true;
+        }
+        return false;
+    }
+
+    private boolean canAccessModule(JSONObject user, String module) {
+        if (user == null || user.length() == 0) return false;
+        String role = user.optString("role", "");
+        if (isAdminUser(user)
+            || "member".equals(role)
+            || "readonly".equals(role)
+            || "leader".equals(role)
+            || "sales_director".equals(role)) {
+            return true;
+        }
+        if (!"guest".equals(role)) return false;
+        JSONArray modulePerms = user.optJSONArray("modulePerms");
+        if (modulePerms == null) return false;
+        for (int i = 0; i < modulePerms.length(); i++) {
+            JSONObject perm = modulePerms.optJSONObject(i);
+            if (perm != null
+                && module.equals(perm.optString("module"))
+                && perm.optInt("can_read", 0) == 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isAdminUser(JSONObject user) {
+        if (user == null) return false;
+        String role = user.optString("role", "");
+        String executiveRole = user.optString("executive_role", "");
+        return "admin".equals(role)
+            || "ceo".equals(role)
+            || "coo".equals(role)
+            || "cto".equals(role)
+            || "cmo".equals(role)
+            || "ceo".equals(executiveRole)
+            || "coo".equals(executiveRole)
+            || "cto".equals(executiveRole)
+            || "cmo".equals(executiveRole);
     }
 
     private boolean isLoginUrl(String url) {
@@ -531,6 +605,7 @@ public class MainActivity extends Activity {
             .setNegativeButton("取消", null)
             .setPositiveButton("退出", (dialog, which) -> {
                 session.clearLogin();
+                refreshBottomNavForPermissions();
                 if (webView != null) {
                     webView.evaluateJavascript("localStorage.removeItem('token');localStorage.removeItem('user');", value -> {
                         webView.clearHistory();
