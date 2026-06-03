@@ -1086,9 +1086,10 @@ export default function Documents() {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [docTypeSaving, setDocTypeSaving] = useState(false);
+  const [propertySaving, setPropertySaving] = useState(false);
   const [optionsSaving, setOptionsSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingPropertyDoc, setEditingPropertyDoc] = useState(null);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareLoading, setShareLoading] = useState(false);
@@ -1105,8 +1106,10 @@ export default function Documents() {
   const [tocOpen, setTocOpen] = useState(true);
   const [mobileTocOpen, setMobileTocOpen] = useState(false);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const [docContextMenu, setDocContextMenu] = useState({ open: false, x: 0, y: 0, doc: null });
   const [moveFolderOpen, setMoveFolderOpen] = useState(false);
   const [moveFolderId, setMoveFolderId] = useState(null);
+  const [moveFolderDoc, setMoveFolderDoc] = useState(null);
   const [moveFolderSaving, setMoveFolderSaving] = useState(false);
   const [editorUndoStack, setEditorUndoStack] = useState([]);
   const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(false);
@@ -1694,6 +1697,7 @@ export default function Documents() {
   }, []);
 
   const openCreate = () => {
+    setEditingPropertyDoc(null);
     createForm.resetFields();
     createForm.setFieldsValue({
       title: '新页面',
@@ -1706,9 +1710,72 @@ export default function Documents() {
     setCreateOpen(true);
   };
 
+  const openEditProperties = async (docOrId) => {
+    const docId = getDocTabId(typeof docOrId === 'object' ? docOrId?.id : docOrId);
+    if (!docId) return;
+    try {
+      const doc = getDocTabId(selectedDoc?.id) === docId && selectedDoc
+        ? selectedDoc
+        : await documentsApi.get(docId);
+      if (!canManageDoc(doc)) {
+        message.warning('你没有编辑该文档属性的权限');
+        return;
+      }
+      createForm.resetFields();
+      createForm.setFieldsValue({
+        title: doc.title || '未命名文档',
+        domain: doc.domain || 'general',
+        project_group_id: doc.project_group_id || undefined,
+        department_key: doc.department_key || 'ALL',
+        folder_id: doc.folder_id || undefined,
+        doc_type: doc.doc_type || 'TMP',
+      });
+      setEditingPropertyDoc(doc);
+      setCreateOpen(true);
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '加载文档属性失败');
+    }
+  };
+
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
+      if (editingPropertyDoc?.id) {
+        setPropertySaving(true);
+        const isActiveDoc = getDocTabId(selectedDoc?.id) === getDocTabId(editingPropertyDoc.id);
+        const title = values.title || '未命名文档';
+        const blocks = isActiveDoc ? editorBlocks : contentToBlocks(editingPropertyDoc.content);
+        const payload = {
+          ...buildDocumentSavePayload(title, blocks),
+          ...values,
+          title,
+          project_group_id: values.project_group_id || null,
+          folder_id: values.folder_id || null,
+          current_version: editingPropertyDoc.current_version || 'V1.0',
+        };
+        const updated = await documentsApi.update(editingPropertyDoc.id, payload);
+        lastSavedSignatureRef.current[editingPropertyDoc.id] = getDocumentSaveSignature(payload.title, blocks);
+        setCreateOpen(false);
+        setEditingPropertyDoc(null);
+        if (isActiveDoc) {
+          setSelectedDoc(prev => ({ ...prev, ...updated }));
+          setEditorTitle(updated.title || title);
+        }
+        upsertDocTab(updated);
+        setDocTabStates(prev => ({
+          ...prev,
+          [getDocTabId(updated.id)]: {
+            ...(prev[getDocTabId(updated.id)] || {}),
+            doc: { ...(prev[getDocTabId(updated.id)]?.doc || {}), ...updated },
+            editorTitle: updated.title || title,
+            editorBlocks: isActiveDoc ? editorBlocks : blocks,
+          },
+        }));
+        await loadDocuments();
+        await loadFolderTreeDocuments();
+        message.success('文档属性已保存');
+        return;
+      }
       const doc = await documentsApi.create({
         ...values,
         content: { blocks: [] },
@@ -1720,7 +1787,9 @@ export default function Documents() {
       await loadDocuments();
       await loadFolderTreeDocuments();
     } catch (err) {
-      message.error(err.response?.data?.error || err.message || '创建文档失败');
+      message.error(err.response?.data?.error || err.message || (editingPropertyDoc ? '保存文档属性失败' : '创建文档失败'));
+    } finally {
+      setPropertySaving(false);
     }
   };
 
@@ -1764,43 +1833,6 @@ export default function Documents() {
   };
 
   saveCurrentDocumentRef.current = saveCurrentDocument;
-
-  const handleChangeDocType = async (docType) => {
-    if (!selectedDoc?.id || docType === selectedDoc.doc_type) return;
-    setDocTypeSaving(true);
-    try {
-      const payload = {
-        ...buildDocumentSavePayload(editorTitle || selectedDoc.title, editorBlocks),
-        domain: selectedDoc.domain,
-        project_group_id: selectedDoc.project_group_id || null,
-        project_code: selectedDoc.project_code || '',
-        department_key: selectedDoc.department_key,
-        folder_id: selectedDoc.folder_id || null,
-        doc_type: docType,
-        current_version: selectedDoc.current_version || 'V1.0',
-      };
-      const updated = await documentsApi.update(selectedDoc.id, payload);
-      lastSavedSignatureRef.current[selectedDoc.id] = getDocumentSaveSignature(payload.title, editorBlocks);
-      setSelectedDoc(prev => ({ ...prev, ...updated }));
-      upsertDocTab(updated);
-      setDocTabStates(prev => ({
-        ...prev,
-        [getDocTabId(updated.id)]: {
-          ...(prev[getDocTabId(updated.id)] || {}),
-          doc: { ...(prev[getDocTabId(updated.id)]?.doc || {}), ...updated },
-          editorTitle,
-          editorBlocks,
-        },
-      }));
-      await loadDocuments();
-      await loadFolderTreeDocuments();
-      message.success('文档类型已更新');
-    } catch (err) {
-      message.error(err.response?.data?.error || err.message || '修改文档类型失败');
-    } finally {
-      setDocTypeSaving(false);
-    }
-  };
 
   const getDocTabSnapshot = async (docId) => {
     const normalizedId = getDocTabId(docId);
@@ -2096,6 +2128,18 @@ export default function Documents() {
     }
   };
 
+  const handleCopyDocLink = async (doc) => {
+    if (!doc?.id) return;
+    const pageLink = buildDocumentPageLink(doc.id);
+    if (!pageLink) return;
+    try {
+      await copyTextToClipboard(pageLink);
+      message.success('页面链接已复制，可分享给有权限的人');
+    } catch {
+      message.error('复制失败，请手动复制浏览器地址');
+    }
+  };
+
   const handleDelete = async () => {
     if (!selectedDoc) return;
     const deletedDocId = getDocTabId(selectedDoc.id);
@@ -2110,15 +2154,19 @@ export default function Documents() {
     }
   };
 
-  const openMoveFolder = () => {
-    if (!selectedDoc) return;
+  const openMoveFolder = (doc = selectedDoc) => {
+    const targetDoc = doc?.id ? doc : selectedDoc;
+    if (!targetDoc) return;
     setPageMenuOpen(false);
-    setMoveFolderId(selectedDoc.folder_id ? Number(selectedDoc.folder_id) : null);
+    setDocContextMenu(prev => ({ ...prev, open: false }));
+    setMoveFolderDoc(targetDoc);
+    setMoveFolderId(targetDoc.folder_id ? Number(targetDoc.folder_id) : null);
     setMoveFolderOpen(true);
   };
 
   const handleMoveFolder = async () => {
-    if (!selectedDoc || !moveFolderId) return;
+    const targetDoc = moveFolderDoc || selectedDoc;
+    if (!targetDoc || !moveFolderId) return;
     const targetFolder = folders.find(folder => Number(folder.id) === Number(moveFolderId));
     if (!targetFolder) {
       message.error('请选择目标文件夹');
@@ -2126,21 +2174,24 @@ export default function Documents() {
     }
     setMoveFolderSaving(true);
     try {
-      await documentsApi.update(selectedDoc.id, {
-        title: editorTitle || selectedDoc.title || '未命名文档',
-        content: blocksToContent(editorBlocks),
-        content_text: blocksToText(editorBlocks),
+      const isActiveDoc = getDocTabId(selectedDoc?.id) === getDocTabId(targetDoc.id);
+      const blocks = isActiveDoc ? editorBlocks : contentToBlocks(targetDoc.content);
+      await documentsApi.update(targetDoc.id, {
+        title: isActiveDoc ? (editorTitle || targetDoc.title || '未命名文档') : (targetDoc.title || '未命名文档'),
+        content: blocksToContent(blocks),
+        content_text: blocksToText(blocks),
         folder_id: targetFolder.id,
-        domain: targetFolder.domain || selectedDoc.domain,
+        domain: targetFolder.domain || targetDoc.domain,
         project_group_id: targetFolder.project_group_id || 0,
-        department_key: targetFolder.department_key || selectedDoc.department_key,
-        doc_type: selectedDoc.doc_type || targetFolder.default_doc_type || 'TMP',
+        department_key: targetFolder.department_key || targetDoc.department_key,
+        doc_type: targetDoc.doc_type || targetFolder.default_doc_type || 'TMP',
       });
       setMoveFolderOpen(false);
+      setMoveFolderDoc(null);
       setSelectedFolderId(Number(targetFolder.id));
       if (targetFolder.domain) setDomainFilter(targetFolder.domain);
       setSopOnly(false);
-      await loadDetail(selectedDoc.id, { force: true });
+      if (isActiveDoc) await loadDetail(targetDoc.id, { force: true });
       await loadDocuments();
       await loadFolderTreeDocuments();
       message.success(`已移动到 ${targetFolder.name}`);
@@ -2678,10 +2729,45 @@ export default function Documents() {
     focusBlock(id);
   };
 
+  const openDocContextMenu = (event, item) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openDocumentTab(item);
+    setDocContextMenu({
+      open: true,
+      x: event.clientX,
+      y: event.clientY,
+      doc: item,
+    });
+  };
+
+  const closeDocContextMenu = () => {
+    setDocContextMenu(prev => ({ ...prev, open: false }));
+  };
+
+  const handleDocContextAction = ({ key }) => {
+    const doc = docContextMenu.doc;
+    if (!doc?.id) return;
+    closeDocContextMenu();
+    if (key === 'copy-link') {
+      handleCopyDocLink(doc);
+      return;
+    }
+    if (key === 'move') {
+      openMoveFolder(doc);
+      return;
+    }
+    if (key === 'edit-properties') {
+      openDocumentTab(doc);
+      openEditProperties(doc);
+    }
+  };
+
   const renderDocItem = (item) => (
     <List.Item
       key={item.id}
       onClick={() => openDocumentTab(item)}
+      onContextMenu={event => openDocContextMenu(event, item)}
       style={{
         cursor: 'pointer',
         padding: isMobile ? '14px 12px' : '10px 8px',
@@ -4622,6 +4708,35 @@ export default function Documents() {
                     style={{ marginTop: 8 }}
                   />
                 </Spin>
+                <Dropdown
+                  open={docContextMenu.open}
+                  trigger={[]}
+                  onOpenChange={(open) => {
+                    if (!open) closeDocContextMenu();
+                  }}
+                  menu={{
+                    onClick: handleDocContextAction,
+                    items: [
+                      { key: 'copy-link', icon: <LinkOutlined />, label: '复制页面链接' },
+                      { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
+                      {
+                        key: 'edit-properties',
+                        icon: <EditOutlined />,
+                        label: '编辑文档属性',
+                        disabled: !canManageDoc(docContextMenu.doc),
+                      },
+                    ],
+                  }}
+                >
+                  <span style={{
+                    position: 'fixed',
+                    left: docContextMenu.x,
+                    top: docContextMenu.y,
+                    width: 1,
+                    height: 1,
+                    pointerEvents: 'none',
+                  }} />
+                </Dropdown>
               </div>
             </>
           )}
@@ -4796,19 +4911,7 @@ export default function Documents() {
                 <Tag>{domainLabel[selectedDoc.domain] || selectedDoc.domain}</Tag>
                 <Tag>{selectedDoc.project_group_name || selectedDoc.project_code || '未关联项目组'}</Tag>
                 <Tag>{departmentLabel[selectedDoc.department_key] || selectedDoc.department_key}</Tag>
-                {canManageSelectedDoc ? (
-                  <Select
-                    size="small"
-                    value={selectedDoc.doc_type || 'TMP'}
-                    options={docTypeOptions}
-                    loading={docTypeSaving}
-                    disabled={docTypeSaving}
-                    onChange={handleChangeDocType}
-                    style={{ minWidth: 118 }}
-                  />
-                ) : (
-                  <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
-                )}
+                <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
                 {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
               </Space>
 
@@ -4870,7 +4973,10 @@ export default function Documents() {
       <Modal
         title="移动到"
         open={moveFolderOpen}
-        onCancel={() => setMoveFolderOpen(false)}
+        onCancel={() => {
+          setMoveFolderOpen(false);
+          setMoveFolderDoc(null);
+        }}
         onOk={handleMoveFolder}
         okText="移动"
         cancelText="取消"
@@ -4879,7 +4985,7 @@ export default function Documents() {
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
         okButtonProps={{
-          disabled: !moveFolderId || Number(moveFolderId) === Number(selectedDoc?.folder_id),
+          disabled: !moveFolderId || Number(moveFolderId) === Number((moveFolderDoc || selectedDoc)?.folder_id),
         }}
         destroyOnClose
       >
@@ -4894,7 +5000,7 @@ export default function Documents() {
             options={folders.map(folder => ({
               value: Number(folder.id),
               label: getFolderPathLabel(folder),
-              disabled: Number(folder.id) === Number(selectedDoc?.folder_id),
+              disabled: Number(folder.id) === Number((moveFolderDoc || selectedDoc)?.folder_id),
             }))}
             style={{ width: '100%' }}
             notFoundContent="暂无可移动的文件夹"
@@ -4903,12 +5009,16 @@ export default function Documents() {
       </Modal>
 
       <Modal
-        title="新建文档"
+        title={editingPropertyDoc ? '编辑文档' : '新建文档'}
         open={createOpen}
-        onCancel={() => setCreateOpen(false)}
+        onCancel={() => {
+          setCreateOpen(false);
+          setEditingPropertyDoc(null);
+        }}
         onOk={handleCreate}
-        okText="创建"
+        okText={editingPropertyDoc ? '保存' : '创建'}
         cancelText="取消"
+        confirmLoading={propertySaving}
         destroyOnClose
         width={isMobile ? '100%' : undefined}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
