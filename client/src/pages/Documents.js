@@ -1651,6 +1651,7 @@ export default function Documents() {
 
   useEffect(() => () => {
     editorAreaSelectionRef.current?.cleanup?.();
+    blockHandleSelectionRef.current?.cleanup?.();
   }, []);
 
   const openCreate = () => {
@@ -2256,6 +2257,7 @@ export default function Documents() {
           key: `type:${item.value}`,
           label: renderBlockMenuLabel(item, targetBlocks.length > 0 && targetBlocks.every(target => target.type === item.value)),
           icon: item.icon,
+          disabled: targetCount > 1 && item.value === 'recent-image',
         })),
       })),
       { type: 'divider' },
@@ -2515,6 +2517,7 @@ export default function Documents() {
       window.removeEventListener('mouseup', handleMouseUp);
       blockHandleSelectionRef.current = null;
     };
+    blockHandleSelectionRef.current.cleanup = cleanup;
 
     const handleMouseMove = (moveEvent) => {
       const dragState = blockHandleSelectionRef.current;
@@ -2532,6 +2535,7 @@ export default function Documents() {
       const dragState = blockHandleSelectionRef.current;
       cleanup();
       if (dragState?.dragging) {
+        pendingBlockMenuTargetIdsRef.current = [];
         suppressBlockMenuOpenUntilRef.current = Date.now() + 250;
         suppressEditorClickRef.current = true;
         upEvent.preventDefault();
@@ -4322,6 +4326,10 @@ export default function Documents() {
             }}
             onOpenChange={(open) => {
               if (open) {
+                if (Date.now() < suppressBlockMenuOpenUntilRef.current) {
+                  setOpenBlockMenuId(null);
+                  return;
+                }
                 const targetIds = getBlockMenuTargetIds(block.id);
                 setAreaBlockSelection(targetIds);
                 setSelectedBlockId(block.id);
@@ -4348,13 +4356,11 @@ export default function Documents() {
               aria-label="块菜单"
               onMouseDown={event => {
                 event.stopPropagation();
-                if (event.metaKey || event.ctrlKey || event.shiftKey) return;
-                const targetIds = getBlockMenuTargetIds(block.id);
-                pendingBlockMenuTargetIdsRef.current = targetIds;
-                if (targetIds.length > 1) setAreaBlockSelection(targetIds);
+                startBlockHandleSelection(event, block.id);
               }}
               onClick={event => {
                 event.stopPropagation();
+                if (Date.now() < suppressBlockMenuOpenUntilRef.current) return;
                 selectBlockFromHandle(event, block.id);
               }}
               style={{
