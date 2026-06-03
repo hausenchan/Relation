@@ -449,15 +449,57 @@ function getBulletListMarker(indent) {
   return markers[clampListIndent(indent) % markers.length];
 }
 
-function renderBulletListMarker(indent, scale = 1) {
+function renderBulletListMarker(indent, scale = 1, hasChildren = false) {
   const markerLevel = clampListIndent(indent) % 3;
-  const markerSize = markerLevel === 1 ? 5 : 4;
+  const markerSize = hasChildren ? 6 : (markerLevel === 1 ? 5 : 4);
   const baseStyle = {
     display: 'block',
     width: markerSize * scale,
     height: markerSize * scale,
     boxSizing: 'border-box',
   };
+
+  if (hasChildren) {
+    if (markerLevel === 1) {
+      return (
+        <span
+          aria-hidden="true"
+          style={{
+            ...baseStyle,
+            borderRadius: 2,
+            background: listMarkerColor,
+          }}
+        />
+      );
+    }
+
+    if (markerLevel === 2) {
+      return (
+        <span
+          aria-hidden="true"
+          style={{
+            ...baseStyle,
+            border: `${Math.max(1, scale)}px solid ${listMarkerColor}`,
+            borderRadius: 2,
+            background: 'transparent',
+            transform: 'rotate(45deg)',
+          }}
+        />
+      );
+    }
+
+    return (
+      <span
+        aria-hidden="true"
+        style={{
+          ...baseStyle,
+          borderRadius: 2,
+          background: listMarkerColor,
+          transform: 'rotate(45deg)',
+        }}
+      />
+    );
+  }
 
   if (markerLevel === 1) {
     return (
@@ -503,12 +545,16 @@ function buildNumberedListMarkers(blocks = []) {
   const counters = [];
   const markers = new Map();
   blocks.forEach(block => {
-    if (block?.type !== 'numbered') {
+    if (!isHierarchicalListBlock(block)) {
       counters.length = 0;
       return;
     }
     const indent = getListIndent(block);
     counters.length = indent + 1;
+    if (block?.type !== 'numbered') {
+      counters.length = indent;
+      return;
+    }
     counters[indent] = (counters[indent] || 0) + 1;
     markers.set(block.id, formatNumberedListMarker(counters[indent], indent));
   });
@@ -1059,6 +1105,9 @@ export default function Documents() {
   const editorUndoStackRef = useRef([]);
   const applyingUndoRef = useRef(false);
   const editorAreaSelectionRef = useRef(null);
+  const blockHandleSelectionRef = useRef(null);
+  const pendingBlockMenuTargetIdsRef = useRef([]);
+  const suppressBlockMenuOpenUntilRef = useRef(0);
   const suppressEditorClickRef = useRef(false);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
@@ -2104,24 +2153,45 @@ export default function Documents() {
 
   const changeBlockType = (id, type, extra = {}) => {
     const current = editorBlocks.find(block => block.id === id);
+    updateBlock(id, {
+      ...buildBlockTypePatch(current, type, extra),
+    });
+    setSelectedBlockId(id);
+    focusBlock(id);
+  };
+
+  const buildBlockTypePatch = (block, type, extra = {}) => {
     const defaultContent = getDefaultBlockContent(type);
     const content = type === 'divider'
       ? ''
-      : (extra.content ?? (isBlankBlock(current) ? defaultContent : (current?.content || defaultContent)));
-    const currentIndent = isHierarchicalListBlock(current) ? getListIndent(current) : 0;
+      : (extra.content ?? (isBlankBlock(block) ? defaultContent : (block?.content || defaultContent)));
+    const currentIndent = isHierarchicalListBlock(block) ? getListIndent(block) : 0;
     const nextMeta = {
       ...getDefaultBlockMeta(type),
       ...(isHierarchicalListBlock({ type }) ? { indent: currentIndent } : {}),
       ...cloneMeta(extra.meta),
     };
-    updateBlock(id, {
+    return {
       type,
       content,
       checked: Boolean(extra.checked),
       meta: nextMeta,
-    });
-    setSelectedBlockId(id);
-    focusBlock(id);
+    };
+  };
+
+  const changeBlocksType = (ids = [], type, extra = {}) => {
+    const targetIds = ids.filter(Boolean);
+    if (!targetIds.length) return false;
+    const targetSet = new Set(targetIds);
+    const firstId = targetIds[0];
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => prev.map(block => (
+      targetSet.has(block.id) ? { ...block, ...buildBlockTypePatch(block, type, extra) } : block
+    )));
+    setSelectedBlockId(firstId);
+    setAreaBlockSelection(targetIds);
+    focusBlock(firstId);
+    return true;
   };
 
   const insertRecentImageBlock = async (block) => {
@@ -2149,31 +2219,49 @@ export default function Documents() {
 
   const handleBlockMenuAction = async (block, key) => {
     if (!block) return;
+    const targetIds = getBlockMenuTargetIds(block.id);
+    pendingBlockMenuTargetIdsRef.current = [];
     if (key.startsWith('type:')) {
       const type = key.replace('type:', '');
       if (type === 'recent-image') {
         await insertRecentImageBlock(block);
         return;
       }
+      if (targetIds.length > 1) {
+        changeBlocksType(targetIds, type);
+        return;
+      }
       changeBlockType(block.id, type);
       return;
     }
-    if (key === 'delete') deleteBlock(block.id);
+    if (key === 'delete') {
+      if (targetIds.length > 1) {
+        deleteBlocksByIds(targetIds);
+        return;
+      }
+      deleteBlock(block.id);
+    }
   };
 
-  const buildBlockMenuItems = (block) => [
-    ...blockTypeGroups.map(group => ({
-      type: 'group',
-      label: group.label,
-      children: group.children.map(item => ({
-        key: `type:${item.value}`,
-        label: renderBlockMenuLabel(item, item.value === block?.type),
-        icon: item.icon,
+  const buildBlockMenuItems = (block) => {
+    const targetIds = getBlockMenuTargetIds(block?.id);
+    const targetSet = new Set(targetIds);
+    const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
+    const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
+    return [
+      ...blockTypeGroups.map(group => ({
+        type: 'group',
+        label: group.label,
+        children: group.children.map(item => ({
+          key: `type:${item.value}`,
+          label: renderBlockMenuLabel(item, targetBlocks.length > 0 && targetBlocks.every(target => target.type === item.value)),
+          icon: item.icon,
+        })),
       })),
-    })),
-    { type: 'divider' },
-    { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除' },
-  ];
+      { type: 'divider' },
+      { key: 'delete', danger: true, icon: <DeleteOutlined />, label: targetCount > 1 ? `删除 ${targetCount} 个块` : '删除' },
+    ];
+  };
 
   const updateListIndent = (block, index, direction) => {
     if (!isHierarchicalListBlock(block)) return false;
@@ -2344,6 +2432,117 @@ export default function Documents() {
       }))
       .map(node => node.getAttribute('data-doc-block-id'))
       .filter(Boolean);
+  };
+
+  const getBlockMenuTargetIds = (blockId) => {
+    const pendingTargetIds = pendingBlockMenuTargetIdsRef.current || [];
+    if (pendingTargetIds.includes(blockId)) return pendingTargetIds;
+    if (selectedAreaBlockIds.includes(blockId) && selectedAreaBlockIds.length) return selectedAreaBlockIds;
+    const textSelectionIds = getSelectedEditorBlockIds();
+    if (textSelectionIds.includes(blockId)) return textSelectionIds;
+    return [blockId].filter(Boolean);
+  };
+
+  const selectBlockFromHandle = (event, blockId) => {
+    const blockIds = editorBlocks.map(block => block.id);
+    const blockIndex = blockIds.indexOf(blockId);
+    if (blockIndex < 0) return;
+
+    if (event.shiftKey && selectedBlockId) {
+      const anchorIndex = blockIds.indexOf(selectedBlockId);
+      if (anchorIndex >= 0) {
+        const from = Math.min(anchorIndex, blockIndex);
+        const to = Math.max(anchorIndex, blockIndex);
+        setAreaBlockSelection(blockIds.slice(from, to + 1));
+        setSelectedBlockId(blockId);
+        return;
+      }
+    }
+
+    if (event.metaKey || event.ctrlKey) {
+      setSelectedAreaBlockIds(prev => {
+        const base = prev.length ? prev : (selectedBlockId ? [selectedBlockId] : []);
+        const next = base.includes(blockId)
+          ? base.filter(id => id !== blockId)
+          : [...base, blockId];
+        return next.length ? next : [blockId];
+      });
+      setSelectedBlockId(blockId);
+      return;
+    }
+
+    setSelectedBlockId(blockId);
+    setAreaBlockSelection(getBlockMenuTargetIds(blockId));
+  };
+
+  const updateHandleDragSelection = (clientY) => {
+    const dragState = blockHandleSelectionRef.current;
+    if (!dragState) return;
+    const editorNode = document.getElementById('document-editor-blocks');
+    if (!editorNode) return;
+    const nodes = Array.from(editorNode.querySelectorAll('[data-doc-block-id]'));
+    if (!nodes.length) return;
+    const currentNode = nodes.find(node => {
+      const rect = node.getBoundingClientRect();
+      return clientY >= rect.top && clientY <= rect.bottom;
+    }) || nodes.find(node => clientY < node.getBoundingClientRect().top) || nodes[nodes.length - 1];
+    const currentId = currentNode?.getAttribute('data-doc-block-id');
+    const currentIndex = dragState.blockIds.indexOf(currentId);
+    if (currentIndex < 0) return;
+    const from = Math.min(dragState.startIndex, currentIndex);
+    const to = Math.max(dragState.startIndex, currentIndex);
+    const nextIds = dragState.blockIds.slice(from, to + 1);
+    setAreaBlockSelection(nextIds);
+    setSelectedBlockId(currentId);
+  };
+
+  const startBlockHandleSelection = (event, blockId) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
+    const blockIds = editorBlocks.map(block => block.id);
+    const startIndex = blockIds.indexOf(blockId);
+    if (startIndex < 0) return;
+    pendingBlockMenuTargetIdsRef.current = getBlockMenuTargetIds(blockId);
+    blockHandleSelectionRef.current = {
+      startX: event.clientX,
+      startY: event.clientY,
+      startIndex,
+      blockIds,
+      dragging: false,
+    };
+
+    const cleanup = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      blockHandleSelectionRef.current = null;
+    };
+
+    const handleMouseMove = (moveEvent) => {
+      const dragState = blockHandleSelectionRef.current;
+      if (!dragState) return;
+      const dx = moveEvent.clientX - dragState.startX;
+      const dy = moveEvent.clientY - dragState.startY;
+      if (!dragState.dragging && Math.hypot(dx, dy) < 6) return;
+      dragState.dragging = true;
+      moveEvent.preventDefault();
+      window.getSelection?.()?.removeAllRanges();
+      updateHandleDragSelection(moveEvent.clientY);
+    };
+
+    const handleMouseUp = (upEvent) => {
+      const dragState = blockHandleSelectionRef.current;
+      cleanup();
+      if (dragState?.dragging) {
+        suppressBlockMenuOpenUntilRef.current = Date.now() + 250;
+        suppressEditorClickRef.current = true;
+        upEvent.preventDefault();
+        window.setTimeout(() => {
+          suppressEditorClickRef.current = false;
+        }, 0);
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
   };
 
   const hasActiveNativeTextSelection = () => {
@@ -3239,6 +3438,7 @@ export default function Documents() {
     const marker = block.type === 'bullet'
       ? getBulletListMarker(indent)
       : numberedListMarkers.get(block.id);
+    const hasChildren = Boolean(hierarchicalGuideMap.get(block.id)?.hasChildren);
     const markerLineHeight = (Number(commonProps.style.fontSize) || 15) * (Number(commonProps.style.lineHeight) || 1.75);
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
@@ -3274,7 +3474,7 @@ export default function Documents() {
       />
     ) : block.type === 'bullet' ? (
       <span style={markerContainerStyle}>
-        {renderBulletListMarker(indent)}
+        {renderBulletListMarker(indent, 1, hasChildren)}
       </span>
     ) : (
       <Text style={{
@@ -3687,9 +3887,10 @@ export default function Documents() {
         : block.type === 'numbered'
           ? numberedListMarkers.get(block.id)
           : null;
+      const hasChildren = Boolean(hierarchicalGuideMap.get(block.id)?.hasChildren);
       const markerNode = block.type === 'bullet' ? (
         <span style={{ minWidth: presentationMarkerWidth, height: '1.8em', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-          {renderBulletListMarker(indent, isMobile ? 1 : 1.1)}
+          {renderBulletListMarker(indent, isMobile ? 1 : 1.1, hasChildren)}
         </span>
       ) : (
         <span
@@ -4083,8 +4284,8 @@ export default function Documents() {
   const renderEditorBlock = (block, index) => {
     if (hiddenListBlockIds.has(block.id)) return null;
     const menuOpen = openBlockMenuId === block.id;
-    const handleVisible = isMobile || menuOpen || hoveredBlockId === block.id;
     const blockSelected = selectedAreaBlockIds.includes(block.id);
+    const handleVisible = isMobile || menuOpen || blockSelected || hoveredBlockId === block.id;
     const heading = headingMeta.map.get(block.id);
     return (
       <div
@@ -4120,7 +4321,15 @@ export default function Documents() {
               overflowY: 'auto',
             }}
             onOpenChange={(open) => {
-              setOpenBlockMenuId(open ? block.id : (prev => (prev === block.id ? null : prev)));
+              if (open) {
+                const targetIds = getBlockMenuTargetIds(block.id);
+                setAreaBlockSelection(targetIds);
+                setSelectedBlockId(block.id);
+                setOpenBlockMenuId(block.id);
+                return;
+              }
+              pendingBlockMenuTargetIdsRef.current = [];
+              setOpenBlockMenuId(prev => (prev === block.id ? null : prev));
             }}
             placement="bottomLeft"
             menu={{
@@ -4137,10 +4346,16 @@ export default function Documents() {
               size="small"
               icon={<BlockHandleIcon />}
               aria-label="块菜单"
+              onMouseDown={event => {
+                event.stopPropagation();
+                if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+                const targetIds = getBlockMenuTargetIds(block.id);
+                pendingBlockMenuTargetIdsRef.current = targetIds;
+                if (targetIds.length > 1) setAreaBlockSelection(targetIds);
+              }}
               onClick={event => {
                 event.stopPropagation();
-                setSelectedBlockId(block.id);
-                setSelectedAreaBlockIds([block.id]);
+                selectBlockFromHandle(event, block.id);
               }}
               style={{
                 width: 24,
