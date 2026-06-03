@@ -698,6 +698,19 @@ function blocksToContent(blocks) {
   };
 }
 
+function buildDocumentSavePayload(title, blocks) {
+  const safeBlocks = Array.isArray(blocks) ? blocks : [];
+  return {
+    title: title || '未命名文档',
+    content: blocksToContent(safeBlocks),
+    content_text: blocksToText(safeBlocks),
+  };
+}
+
+function getDocumentSaveSignature(title, blocks) {
+  return JSON.stringify(buildDocumentSavePayload(title, blocks));
+}
+
 function blockMetaToText(meta = {}) {
   const parts = [];
   if (meta.url) parts.push(meta.url);
@@ -1106,6 +1119,10 @@ export default function Documents() {
   const applyingUndoRef = useRef(false);
   const editorAreaSelectionRef = useRef(null);
   const blockHandleSelectionRef = useRef(null);
+  const activeEditorSnapshotRef = useRef(null);
+  const lastSavedSignatureRef = useRef({});
+  const pendingSavePromisesRef = useRef({});
+  const saveCurrentDocumentRef = useRef(null);
   const pendingBlockMenuTargetIdsRef = useRef([]);
   const suppressBlockMenuOpenUntilRef = useRef(0);
   const suppressEditorClickRef = useRef(false);
@@ -1247,6 +1264,7 @@ export default function Documents() {
   const clearActiveDocument = ({ keepQuery = false } = {}) => {
     setSelectedDocId(null);
     setSelectedDoc(null);
+    activeEditorSnapshotRef.current = null;
     setEditorTitle('');
     setEditorBlocks([createBlock()]);
     setSelectedBlockId(null);
@@ -1381,6 +1399,7 @@ export default function Documents() {
     try {
       const detail = await documentsApi.get(id);
       const blocks = contentToBlocks(detail.content);
+      lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(detail.title || '', blocks);
       const isBlankPage = blocks.length === 1 && blocks[0].type === 'paragraph' && isBlankBlock(blocks[0]);
       const nextTabState = {
         doc: detail,
@@ -1553,6 +1572,12 @@ export default function Documents() {
     if (!selectedDoc?.id || !selectedDocId) return;
     const docId = getDocTabId(selectedDocId);
     const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
+    activeEditorSnapshotRef.current = {
+      doc: docSnapshot,
+      editorTitle,
+      editorBlocks,
+      canManage: canManageDoc(docSnapshot),
+    };
     setDocTabStates(prev => ({
       ...prev,
       [docId]: {
@@ -1649,7 +1674,20 @@ export default function Documents() {
     return () => window.removeEventListener('keydown', handleUndoKeyDown);
   }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
 
+  useEffect(() => {
+    const handleSaveKeyDown = (event) => {
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      const key = String(event.key || '').toLowerCase();
+      if (key !== 's' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      saveCurrentDocumentRef.current?.({ force: true }).catch(() => {});
+    };
+    window.addEventListener('keydown', handleSaveKeyDown);
+    return () => window.removeEventListener('keydown', handleSaveKeyDown);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
+
   useEffect(() => () => {
+    saveCurrentDocumentRef.current?.({ silent: true }).catch(() => {});
     editorAreaSelectionRef.current?.cleanup?.();
     blockHandleSelectionRef.current?.cleanup?.();
   }, []);
@@ -1685,27 +1723,46 @@ export default function Documents() {
     }
   };
 
-  const handleSave = async () => {
-    if (!selectedDoc) return;
-    setSaving(true);
+  const saveCurrentDocument = async ({ silent = false, force = false } = {}) => {
+    const snapshot = activeEditorSnapshotRef.current;
+    const doc = snapshot?.doc || selectedDoc;
+    if (!doc?.id || !canManageDoc(doc)) return null;
+    const blocks = Array.isArray(snapshot?.editorBlocks) ? snapshot.editorBlocks : editorBlocks;
+    const title = snapshot?.editorTitle ?? editorTitle;
+    const payload = buildDocumentSavePayload(title, blocks);
+    const signature = JSON.stringify(payload);
+    if (!force && lastSavedSignatureRef.current[doc.id] === signature) return null;
+    if (pendingSavePromisesRef.current[doc.id]) return pendingSavePromisesRef.current[doc.id];
+
+    if (!silent) setSaving(true);
     try {
-      const content = blocksToContent(editorBlocks);
-      const payload = {
-        title: editorTitle || '未命名文档',
-        content,
-        content_text: blocksToText(editorBlocks),
-      };
-      const updated = await documentsApi.update(selectedDoc.id, payload);
-      await loadDetail(selectedDoc.id, { force: true });
-      await loadDocuments();
-      await loadFolderTreeDocuments();
-      message.success(`已保存 ${updated.document_no}`);
+      const savePromise = documentsApi.update(doc.id, payload);
+      pendingSavePromisesRef.current[doc.id] = savePromise;
+      const updated = await savePromise;
+      lastSavedSignatureRef.current[doc.id] = signature;
+      if (!silent && getDocTabId(selectedDocId) === getDocTabId(doc.id)) {
+        await loadDetail(doc.id, { force: true });
+        await loadDocuments();
+        await loadFolderTreeDocuments();
+        message.success(`已保存 ${updated.document_no}`);
+      }
+      return updated;
     } catch (err) {
-      message.error(err.response?.data?.error || err.message || '保存失败');
+      if (!silent) {
+        message.error(err.response?.data?.error || err.message || '保存失败');
+      }
+      throw err;
     } finally {
-      setSaving(false);
+      delete pendingSavePromisesRef.current[doc.id];
+      if (!silent) setSaving(false);
     }
   };
+
+  const handleSave = () => {
+    saveCurrentDocument({ force: true }).catch(() => {});
+  };
+
+  saveCurrentDocumentRef.current = saveCurrentDocument;
 
   const getDocTabSnapshot = async (docId) => {
     const normalizedId = getDocTabId(docId);
