@@ -1086,6 +1086,7 @@ export default function Documents() {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [docTypeSaving, setDocTypeSaving] = useState(false);
   const [optionsSaving, setOptionsSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -1763,6 +1764,43 @@ export default function Documents() {
   };
 
   saveCurrentDocumentRef.current = saveCurrentDocument;
+
+  const handleChangeDocType = async (docType) => {
+    if (!selectedDoc?.id || docType === selectedDoc.doc_type) return;
+    setDocTypeSaving(true);
+    try {
+      const payload = {
+        ...buildDocumentSavePayload(editorTitle || selectedDoc.title, editorBlocks),
+        domain: selectedDoc.domain,
+        project_group_id: selectedDoc.project_group_id || null,
+        project_code: selectedDoc.project_code || '',
+        department_key: selectedDoc.department_key,
+        folder_id: selectedDoc.folder_id || null,
+        doc_type: docType,
+        current_version: selectedDoc.current_version || 'V1.0',
+      };
+      const updated = await documentsApi.update(selectedDoc.id, payload);
+      lastSavedSignatureRef.current[selectedDoc.id] = getDocumentSaveSignature(payload.title, editorBlocks);
+      setSelectedDoc(prev => ({ ...prev, ...updated }));
+      upsertDocTab(updated);
+      setDocTabStates(prev => ({
+        ...prev,
+        [getDocTabId(updated.id)]: {
+          ...(prev[getDocTabId(updated.id)] || {}),
+          doc: { ...(prev[getDocTabId(updated.id)]?.doc || {}), ...updated },
+          editorTitle,
+          editorBlocks,
+        },
+      }));
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      message.success('文档类型已更新');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '修改文档类型失败');
+    } finally {
+      setDocTypeSaving(false);
+    }
+  };
 
   const getDocTabSnapshot = async (docId) => {
     const normalizedId = getDocTabId(docId);
@@ -4758,7 +4796,19 @@ export default function Documents() {
                 <Tag>{domainLabel[selectedDoc.domain] || selectedDoc.domain}</Tag>
                 <Tag>{selectedDoc.project_group_name || selectedDoc.project_code || '未关联项目组'}</Tag>
                 <Tag>{departmentLabel[selectedDoc.department_key] || selectedDoc.department_key}</Tag>
-                <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
+                {canManageSelectedDoc ? (
+                  <Select
+                    size="small"
+                    value={selectedDoc.doc_type || 'TMP'}
+                    options={docTypeOptions}
+                    loading={docTypeSaving}
+                    disabled={docTypeSaving}
+                    onChange={handleChangeDocType}
+                    style={{ minWidth: 118 }}
+                  />
+                ) : (
+                  <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
+                )}
                 {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
               </Space>
 
