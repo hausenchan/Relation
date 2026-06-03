@@ -241,6 +241,7 @@ const listGuideColor = '#eef0f2';
 const maxListIndent = 6;
 const blockActionSelectedBackground = '#f7e3e6';
 const blockActionSelectedBorder = '#f2c9d0';
+const inlineToolbarWidth = 420;
 
 const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, item.label]));
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
@@ -981,6 +982,33 @@ function formatChangeLogTime(value) {
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : String(value).slice(0, 16);
 }
 
+function normalizeInlineComments(comments = []) {
+  if (!Array.isArray(comments)) return [];
+  return comments
+    .map((item, index) => {
+      const start = Math.max(0, Number(item?.start) || 0);
+      const end = Math.max(start, Number(item?.end) || start);
+      const text = String(item?.text || item?.quote || '').slice(0, 500);
+      const comment = String(item?.comment || item?.content || '').trim();
+      return {
+        id: item?.id || `comment_${index}_${start}_${end}`,
+        start,
+        end,
+        text,
+        comment,
+        authorId: item?.authorId ?? item?.author_id ?? null,
+        authorName: item?.authorName || item?.author_name || '匿名用户',
+        createdAt: item?.createdAt || item?.created_at || new Date().toISOString(),
+        updatedAt: item?.updatedAt || item?.updated_at || item?.createdAt || item?.created_at || new Date().toISOString(),
+      };
+    })
+    .filter(item => item.comment || item.text);
+}
+
+function makeInlineCommentId() {
+  return `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function parseEditRecordDiff(record) {
   if (record?.diff && typeof record.diff === 'object') return record.diff;
   if (typeof record?.diff_json === 'string' && record.diff_json.trim()) {
@@ -1078,6 +1106,12 @@ export default function Documents() {
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
+  const [inlineToolbar, setInlineToolbar] = useState(null);
+  const [commentComposer, setCommentComposer] = useState(null);
+  const [commentDraft, setCommentDraft] = useState('');
+  const [activeCommentBlockId, setActiveCommentBlockId] = useState(null);
+  const [editingComment, setEditingComment] = useState(null);
+  const [editingCommentText, setEditingCommentText] = useState('');
   const [mobileLibraryVisible, setMobileLibraryVisible] = useState(false);
   const [domainFilter, setDomainFilter] = useState('all');
   const [keyword, setKeyword] = useState('');
@@ -1130,6 +1164,7 @@ export default function Documents() {
   const pendingBlockMenuTargetIdsRef = useRef([]);
   const suppressBlockMenuOpenUntilRef = useRef(0);
   const suppressEditorClickRef = useRef(false);
+  const inlineToolbarHideTimerRef = useRef(null);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -1694,6 +1729,7 @@ export default function Documents() {
     saveCurrentDocumentRef.current?.({ silent: true }).catch(() => {});
     editorAreaSelectionRef.current?.cleanup?.();
     blockHandleSelectionRef.current?.cleanup?.();
+    if (inlineToolbarHideTimerRef.current) window.clearTimeout(inlineToolbarHideTimerRef.current);
   }, []);
 
   const openCreate = () => {
@@ -2313,9 +2349,11 @@ export default function Documents() {
       ? ''
       : (extra.content ?? (isBlankBlock(block) ? defaultContent : (block?.content || defaultContent)));
     const currentIndent = isHierarchicalListBlock(block) ? getListIndent(block) : 0;
+    const currentComments = normalizeInlineComments(block?.meta?.comments);
     const nextMeta = {
       ...getDefaultBlockMeta(type),
       ...(isHierarchicalListBlock({ type }) ? { indent: currentIndent } : {}),
+      ...(currentComments.length ? { comments: currentComments } : {}),
       ...cloneMeta(extra.meta),
     };
     return {
@@ -3518,6 +3556,459 @@ export default function Documents() {
     )));
   };
 
+  const getBlockInlineComments = (block) => normalizeInlineComments(getBlockMeta(block).comments);
+
+  const getInlineCommentAuthorName = () => (
+    currentUser?.display_name
+    || currentUser?.username
+    || currentUser?.name
+    || currentUser?.email
+    || '当前用户'
+  );
+
+  const hideInlineTextTools = () => {
+    if (inlineToolbarHideTimerRef.current) {
+      window.clearTimeout(inlineToolbarHideTimerRef.current);
+      inlineToolbarHideTimerRef.current = null;
+    }
+    setInlineToolbar(null);
+    setCommentComposer(null);
+    setCommentDraft('');
+  };
+
+  const placeInlineToolbar = (block, input, start, end) => {
+    if (!input || start === end) return;
+    const selectedText = String(input.value || '').slice(start, end);
+    if (!selectedText.trim()) {
+      setInlineToolbar(prev => (prev?.blockId === block.id ? null : prev));
+      return;
+    }
+    const rect = input.getBoundingClientRect();
+    const toolbarWidth = Math.min(inlineToolbarWidth, Math.max(280, window.innerWidth - 24));
+    const left = Math.min(
+      Math.max(12, rect.left + (rect.width / 2) - (toolbarWidth / 2)),
+      Math.max(12, window.innerWidth - toolbarWidth - 12)
+    );
+    const top = Math.max(8, rect.top - 48);
+    setSelectedBlockId(block.id);
+    clearAreaBlockSelection();
+    setInlineToolbar({
+      blockId: block.id,
+      start,
+      end,
+      text: selectedText,
+      top,
+      left,
+      width: toolbarWidth,
+    });
+  };
+
+  const handleInlineTextSelection = (block, event) => {
+    const input = event?.target;
+    if (!input || typeof input.selectionStart !== 'number' || typeof input.selectionEnd !== 'number') return;
+    window.setTimeout(() => {
+      const start = Math.min(input.selectionStart, input.selectionEnd);
+      const end = Math.max(input.selectionStart, input.selectionEnd);
+      if (start === end) {
+        if (!commentComposer) setInlineToolbar(prev => (prev?.blockId === block.id ? null : prev));
+        return;
+      }
+      placeInlineToolbar(block, input, start, end);
+    }, 0);
+  };
+
+  const shiftInlineCommentsForReplace = (comments, start, end, delta, prefixLength = 0) => (
+    normalizeInlineComments(comments).map(comment => {
+      if (comment.end <= start) return comment;
+      if (comment.start >= end) {
+        return { ...comment, start: comment.start + delta, end: comment.end + delta };
+      }
+      if (comment.start >= start && comment.end <= end) {
+        return { ...comment, start: comment.start + prefixLength, end: comment.end + prefixLength };
+      }
+      return { ...comment, end: Math.max(comment.start, comment.end + delta) };
+    })
+  );
+
+  const applyInlineTextReplace = (selection, nextSelectedText, prefixLength = 0) => {
+    if (!selection?.blockId) return false;
+    const block = editorBlocks.find(item => item.id === selection.blockId);
+    if (!block || typeof selection.start !== 'number' || typeof selection.end !== 'number') return false;
+    const content = String(block.content || '');
+    const selected = content.slice(selection.start, selection.end);
+    if (!selected) return false;
+    const nextContent = `${content.slice(0, selection.start)}${nextSelectedText}${content.slice(selection.end)}`;
+    const delta = nextSelectedText.length - selected.length;
+    const nextSelectionStart = selection.start + prefixLength;
+    const nextSelectionEnd = nextSelectionStart + selected.length;
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => prev.map(item => {
+      if (item.id !== selection.blockId) return item;
+      const meta = getBlockMeta(item);
+      return {
+        ...item,
+        content: nextContent,
+        meta: {
+          ...meta,
+          comments: shiftInlineCommentsForReplace(meta.comments, selection.start, selection.end, delta, prefixLength),
+        },
+      };
+    }));
+    window.setTimeout(() => {
+      const input = document.getElementById(`doc-block-input-${selection.blockId}`);
+      if (input?.setSelectionRange) {
+        input.focus();
+        input.setSelectionRange(nextSelectionStart, nextSelectionEnd);
+        placeInlineToolbar({ id: selection.blockId }, input, nextSelectionStart, nextSelectionEnd);
+      }
+    }, 0);
+    return true;
+  };
+
+  const applyInlineWrap = (kind) => {
+    const selection = inlineToolbar;
+    if (!selection) return;
+    const selected = selection.text || '';
+    const wrapMap = {
+      bold: ['**', '**'],
+      italic: ['*', '*'],
+      underline: ['<u>', '</u>'],
+      strike: ['~~', '~~'],
+      code: ['`', '`'],
+      formula: ['$', '$'],
+      color: ['<mark>', '</mark>'],
+      link: ['[', '](https://)'],
+    };
+    const [prefix, suffix] = wrapMap[kind] || ['', ''];
+    if (!prefix && !suffix) return;
+    applyInlineTextReplace(selection, `${prefix}${selected}${suffix}`, prefix.length);
+    if (kind === 'link') message.info('已插入链接格式，请替换链接地址');
+  };
+
+  const openInlineCommentComposer = () => {
+    if (!inlineToolbar?.text?.trim()) return;
+    setCommentComposer({ ...inlineToolbar });
+    setCommentDraft('');
+  };
+
+  const saveInlineComment = () => {
+    const draft = commentDraft.trim();
+    if (!commentComposer?.blockId || !draft) {
+      message.warning('请输入评论内容');
+      return;
+    }
+    const now = new Date().toISOString();
+    const nextComment = {
+      id: makeInlineCommentId(),
+      start: commentComposer.start,
+      end: commentComposer.end,
+      text: commentComposer.text,
+      comment: draft,
+      authorId: currentUser?.id || null,
+      authorName: getInlineCommentAuthorName(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => prev.map(block => {
+      if (block.id !== commentComposer.blockId) return block;
+      const meta = getBlockMeta(block);
+      return {
+        ...block,
+        meta: {
+          ...meta,
+          comments: [...normalizeInlineComments(meta.comments), nextComment],
+        },
+      };
+    }));
+    setActiveCommentBlockId(commentComposer.blockId);
+    hideInlineTextTools();
+    message.success('评论已添加');
+  };
+
+  const startEditInlineComment = (blockId, comment) => {
+    setEditingComment({ blockId, commentId: comment.id });
+    setEditingCommentText(comment.comment || '');
+  };
+
+  const cancelEditInlineComment = () => {
+    setEditingComment(null);
+    setEditingCommentText('');
+  };
+
+  const saveEditedInlineComment = () => {
+    const draft = editingCommentText.trim();
+    if (!editingComment?.blockId || !editingComment?.commentId || !draft) {
+      message.warning('请输入评论内容');
+      return;
+    }
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => prev.map(block => {
+      if (block.id !== editingComment.blockId) return block;
+      const meta = getBlockMeta(block);
+      return {
+        ...block,
+        meta: {
+          ...meta,
+          comments: normalizeInlineComments(meta.comments).map(comment => (
+            comment.id === editingComment.commentId
+              ? { ...comment, comment: draft, updatedAt: new Date().toISOString() }
+              : comment
+          )),
+        },
+      };
+    }));
+    cancelEditInlineComment();
+    message.success('评论已更新');
+  };
+
+  const deleteInlineComment = (blockId, commentId) => {
+    pushEditorUndoSnapshot();
+    const block = editorBlocks.find(item => item.id === blockId);
+    const remainingCount = getBlockInlineComments(block).filter(comment => comment.id !== commentId).length;
+    setEditorBlocks(prev => prev.map(item => {
+      if (item.id !== blockId) return item;
+      const meta = getBlockMeta(item);
+      return {
+        ...item,
+        meta: {
+          ...meta,
+          comments: normalizeInlineComments(meta.comments).filter(comment => comment.id !== commentId),
+        },
+      };
+    }));
+    if (!remainingCount) setActiveCommentBlockId(null);
+    if (editingComment?.commentId === commentId) cancelEditInlineComment();
+    message.success('评论已删除');
+  };
+
+  const keepInlineToolbarOpen = (event) => {
+    if (inlineToolbarHideTimerRef.current) {
+      window.clearTimeout(inlineToolbarHideTimerRef.current);
+      inlineToolbarHideTimerRef.current = null;
+    }
+    if (!event.target?.closest?.('textarea, input')) event.preventDefault();
+  };
+
+  const renderInlineStyleMenu = () => {
+    const block = editorBlocks.find(item => item.id === inlineToolbar?.blockId);
+    if (!block) return null;
+    return (
+      <Dropdown
+        trigger={['click']}
+        menu={{
+          items: blockTypeGroups.map(group => ({
+            type: 'group',
+            label: group.label,
+            children: group.children.map(item => ({
+              key: item.value,
+              label: renderBlockMenuLabel(item, block.type === item.value),
+              icon: item.icon,
+              disabled: item.value === 'recent-image',
+            })),
+          })),
+          onClick: ({ key }) => {
+            changeBlockType(block.id, key);
+            setInlineToolbar(prev => (prev ? { ...prev, blockId: block.id } : prev));
+          },
+        }}
+      >
+        <Button size="small" type="text" style={{ fontWeight: 600, color: '#111827' }}>
+          {blockTypeMap[block.type]?.label || '文本'} <DownOutlined style={{ fontSize: 10 }} />
+        </Button>
+      </Dropdown>
+    );
+  };
+
+  const renderInlineTextToolbar = () => {
+    if (!inlineToolbar || !selectedDoc) return null;
+    return (
+      <div
+        data-inline-text-toolbar="true"
+        onMouseDown={keepInlineToolbarOpen}
+        style={{
+          position: 'fixed',
+          top: inlineToolbar.top,
+          left: inlineToolbar.left,
+          width: inlineToolbar.width,
+          zIndex: 1000,
+          background: '#ffffff',
+          border: '1px solid #e5e7eb',
+          borderRadius: 8,
+          boxShadow: '0 12px 32px rgba(15, 23, 42, 0.16)',
+          padding: 6,
+        }}
+      >
+        <Space size={2} wrap style={{ width: '100%' }}>
+          {renderInlineStyleMenu()}
+          <Divider type="vertical" style={{ marginInline: 4 }} />
+          {[
+            ['bold', 'B', '加粗'],
+            ['italic', 'I', '斜体'],
+            ['underline', 'U', '下划线'],
+            ['strike', 'S', '删除线'],
+            ['code', '{}', '代码'],
+            ['formula', 'ƒ', '公式'],
+            ['color', 'A', '标记颜色'],
+            ['link', <LinkOutlined />, '链接'],
+          ].map(([key, label, title]) => (
+            <Tooltip key={key} title={title}>
+              <Button
+                size="small"
+                type="text"
+                aria-label={title}
+                onClick={() => applyInlineWrap(key)}
+                style={{
+                  width: 28,
+                  minWidth: 28,
+                  padding: 0,
+                  fontWeight: key === 'bold' ? 800 : 600,
+                  fontStyle: key === 'italic' ? 'italic' : 'normal',
+                  textDecoration: key === 'underline' ? 'underline' : key === 'strike' ? 'line-through' : 'none',
+                }}
+              >
+                {label}
+              </Button>
+            </Tooltip>
+          ))}
+          <Divider type="vertical" style={{ marginInline: 4 }} />
+          <Tooltip title="添加评论">
+            <Button size="small" type="text" onClick={openInlineCommentComposer} style={{ paddingInline: 8 }}>
+              评论
+            </Button>
+          </Tooltip>
+        </Space>
+        {commentComposer && (
+          <div style={{ marginTop: 8, borderTop: '1px solid #f1f5f9', paddingTop: 8 }}>
+            <TextArea
+              value={commentDraft}
+              autoSize={{ minRows: 2, maxRows: 5 }}
+              placeholder="输入评论"
+              onChange={event => setCommentDraft(event.target.value)}
+              onKeyDown={event => {
+                if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') saveInlineComment();
+              }}
+              style={{ borderRadius: 6 }}
+            />
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginTop: 8 }}>
+              <Text type="secondary" style={{ fontSize: 12 }} ellipsis={{ tooltip: commentComposer.text }}>
+                “{commentComposer.text}”
+              </Text>
+              <Space size={6}>
+                <Button size="small" onClick={() => {
+                  setCommentComposer(null);
+                  setCommentDraft('');
+                }}>
+                  取消
+                </Button>
+                <Button size="small" type="primary" onClick={saveInlineComment}>评论</Button>
+              </Space>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderInlineCommentPanel = (block) => {
+    const comments = getBlockInlineComments(block);
+    if (!comments.length || activeCommentBlockId !== block.id) return null;
+    return (
+      <div
+        onClick={event => event.stopPropagation()}
+        style={{
+          position: isMobile ? 'static' : 'absolute',
+          top: isMobile ? undefined : 0,
+          left: isMobile ? undefined : 'calc(100% + 12px)',
+          width: isMobile ? '100%' : 320,
+          marginTop: isMobile ? 8 : 0,
+          zIndex: 8,
+          border: '1px solid #dbeafe',
+          borderRadius: 8,
+          background: '#ffffff',
+          boxShadow: '0 12px 30px rgba(15, 23, 42, 0.12)',
+          padding: 12,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+          <Space size={6}>
+            <Text strong>评论</Text>
+            <Tag color="blue">{comments.length}</Tag>
+          </Space>
+          <Button type="text" size="small" icon={<CloseOutlined />} aria-label="收起评论" onClick={() => setActiveCommentBlockId(null)} />
+        </div>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          {comments.map(comment => {
+            const editing = editingComment?.blockId === block.id && editingComment?.commentId === comment.id;
+            return (
+              <div key={comment.id} style={{ border: '1px solid #eef2f7', borderRadius: 8, padding: 10, background: '#fbfdff' }}>
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                    <Space size={8} style={{ minWidth: 0 }}>
+                      <Avatar size={24} style={{ background: '#1677ff', flex: '0 0 auto' }}>
+                        {(comment.authorName || '用').slice(0, 1)}
+                      </Avatar>
+                      <div style={{ minWidth: 0 }}>
+                        <Text strong style={{ fontSize: 13 }}>{comment.authorName}</Text>
+                        <div>
+                          <Text type="secondary" style={{ fontSize: 12 }}>
+                            {formatChangeLogTime(comment.updatedAt || comment.createdAt)}
+                          </Text>
+                        </div>
+                      </div>
+                    </Space>
+                    <Dropdown
+                      trigger={['click']}
+                      menu={{
+                        items: [
+                          { key: 'edit', icon: <EditOutlined />, label: '编辑' },
+                          { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除' },
+                        ],
+                        onClick: ({ key }) => {
+                          if (key === 'edit') startEditInlineComment(block.id, comment);
+                          if (key === 'delete') deleteInlineComment(block.id, comment.id);
+                        },
+                      }}
+                    >
+                      <Button type="text" size="small" icon={<MoreOutlined />} aria-label="评论操作" />
+                    </Dropdown>
+                  </div>
+                  <div style={{
+                    borderLeft: '3px solid #bfdbfe',
+                    paddingLeft: 8,
+                    color: '#64748b',
+                    fontSize: 12,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}>
+                    {comment.text || '所选文本'}
+                  </div>
+                  {editing ? (
+                    <div>
+                      <TextArea
+                        value={editingCommentText}
+                        autoSize={{ minRows: 2, maxRows: 5 }}
+                        onChange={event => setEditingCommentText(event.target.value)}
+                      />
+                      <Space size={6} style={{ marginTop: 8 }}>
+                        <Button size="small" type="primary" onClick={saveEditedInlineComment}>保存</Button>
+                        <Button size="small" onClick={cancelEditInlineComment}>取消</Button>
+                      </Space>
+                    </div>
+                  ) : (
+                    <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#111827' }}>
+                      {comment.comment}
+                    </div>
+                  )}
+                </Space>
+              </div>
+            );
+          })}
+        </Space>
+      </div>
+    );
+  };
+
   const handleMediaUpload = async (block, file, kind) => {
     const acceptText = mediaAcceptMap[kind] || '';
     const allowedExts = acceptText.split(',').map(item => item.replace('.', '').trim()).filter(Boolean);
@@ -4291,6 +4782,16 @@ export default function Documents() {
         clearAreaBlockSelection();
       },
       onChange: event => updateBlock(block.id, { content: event.target.value }),
+      onSelect: event => handleInlineTextSelection(block, event),
+      onMouseUp: event => handleInlineTextSelection(block, event),
+      onKeyUp: event => handleInlineTextSelection(block, event),
+      onBlur: () => {
+        inlineToolbarHideTimerRef.current = window.setTimeout(() => {
+          const activeElement = document.activeElement;
+          if (activeElement?.closest?.('[data-inline-text-toolbar="true"]')) return;
+          setInlineToolbar(null);
+        }, 180);
+      },
       onKeyDown: event => handleBlockKeyDown(event, block, index),
       style: {
         padding: 0,
@@ -4472,6 +4973,8 @@ export default function Documents() {
     const blockSelected = selectedAreaBlockIds.includes(block.id);
     const handleVisible = isMobile || menuOpen || blockSelected || hoveredBlockId === block.id;
     const heading = headingMeta.map.get(block.id);
+    const comments = getBlockInlineComments(block);
+    const commentsOpen = activeCommentBlockId === block.id && comments.length > 0;
     return (
       <div
         id={`doc-block-${block.id}`}
@@ -4487,13 +4990,14 @@ export default function Documents() {
         onMouseEnter={() => setHoveredBlockId(block.id)}
         onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
         style={{
+          position: 'relative',
           display: 'grid',
           gridTemplateColumns: isMobile ? '28px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
           gap: 4,
           border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
-          background: blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent'),
+          background: commentsOpen ? '#f8fbff' : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent')),
           borderRadius: 6,
-          padding: isMobile ? '5px 6px 5px 0' : '3px 8px 3px 0',
+          padding: isMobile ? '5px 6px 5px 0' : `3px ${comments.length ? 34 : 8}px 3px 0`,
           marginBottom: isMobile ? 4 : 2,
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
@@ -4560,7 +5064,54 @@ export default function Documents() {
         </div>
         <div style={{ minWidth: 0 }}>
           {renderBlockInput(block, index, heading)}
+          {isMobile && renderInlineCommentPanel(block)}
         </div>
+        {comments.length > 0 && !isMobile && (
+          <Tooltip title={commentsOpen ? '收起评论' : '展开评论'}>
+            <Button
+              type={commentsOpen ? 'primary' : 'default'}
+              size="small"
+              aria-label={`${comments.length} 条评论`}
+              onClick={event => {
+                event.stopPropagation();
+                setActiveCommentBlockId(prev => (prev === block.id ? null : block.id));
+              }}
+              style={{
+                position: 'absolute',
+                top: 3,
+                right: 4,
+                minWidth: 24,
+                width: 24,
+                height: 24,
+                padding: 0,
+                borderRadius: 12,
+                fontSize: 12,
+                fontWeight: 700,
+              }}
+            >
+              {comments.length}
+            </Button>
+          </Tooltip>
+        )}
+        {comments.length > 0 && isMobile && (
+          <Button
+            size="small"
+            type={commentsOpen ? 'primary' : 'default'}
+            onClick={event => {
+              event.stopPropagation();
+              setActiveCommentBlockId(prev => (prev === block.id ? null : block.id));
+            }}
+            style={{
+              gridColumn: '2 / 3',
+              justifySelf: 'flex-start',
+              marginTop: 6,
+              borderRadius: 12,
+            }}
+          >
+            {comments.length} 条评论
+          </Button>
+        )}
+        {!isMobile && renderInlineCommentPanel(block)}
       </div>
     );
   };
@@ -4933,6 +5484,7 @@ export default function Documents() {
                 </section>
                 {renderTocPanel()}
               </div>
+              {renderInlineTextToolbar()}
             </div>
           </Spin>
         )}
