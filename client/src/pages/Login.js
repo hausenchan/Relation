@@ -3,7 +3,7 @@ import { Form, Input, Button, Card, Typography, message, Grid } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
-import { getLocationPath, getSafeInternalPath, resolveLoginRedirect } from '../utils/redirect';
+import { getAuthorizedRedirectPath, getLocationPath, getSafeInternalPath, resolveLoginRedirect } from '../utils/redirect';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -59,8 +59,8 @@ export default function Login() {
   const handleSubmit = async (values) => {
     setLoading(true);
     try {
-      await login(values.username, values.password);
-      window.location.replace(resolveLoginRedirect(redirectPath));
+      const user = await login(values.username, values.password);
+      window.location.replace(getAuthorizedRedirectPath(resolveLoginRedirect(redirectPath), user));
     } catch (err) {
       message.error(err.response?.data?.error || '登录失败');
     } finally {

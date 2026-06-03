@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { authApi } from './api';
+import { clearLoginRedirect } from './utils/redirect';
 
 const AuthContext = createContext(null);
 const IDLE_TIMEOUT = 2 * 60 * 60 * 1000; // 2小时
@@ -16,6 +17,7 @@ export function AuthProvider({ children }) {
   const doLogout = useCallback(() => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    clearLoginRedirect();
     setUser(null);
     window.location.href = '/login';
   }, []);

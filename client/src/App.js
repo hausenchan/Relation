@@ -110,7 +110,7 @@ import RecruitRadar from './pages/RecruitRadar';
 import RecruitRadarConfig from './pages/RecruitRadarConfig';
 import NotificationBell from './components/NotificationBell';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
-import { buildLoginPath, getLocationPath, getSafeInternalPath } from './utils/redirect';
+import { buildLoginPath, getAuthorizedRedirectPath, getLocationPath, getSafeInternalPath } from './utils/redirect';
 
 const roleLabel = { admin: '管理员', leader: '组长', member: '成员', readonly: '只读', guest: '访客', sales_director: '商务总监' };
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
@@ -798,14 +798,14 @@ function AppLayout() {
             <Route path="/gifts" element={<PrivateRoute><Gifts /></PrivateRoute>} />
             <Route path="/gift-plans" element={<PrivateRoute><GiftPlans /></PrivateRoute>} />
             <Route path="/gift-review" element={<PrivateRoute><GiftReview /></PrivateRoute>} />
-            <Route path="/users" element={<PrivateRoute><Users /></PrivateRoute>} />
-            <Route path="/teams" element={<PrivateRoute><Teams /></PrivateRoute>} />
-            <Route path="/project-groups" element={<PrivateRoute><ProjectGroups /></PrivateRoute>} />
+            <Route path="/users" element={<PrivateRoute adminOnly><Users /></PrivateRoute>} />
+            <Route path="/teams" element={<PrivateRoute adminOnly><Teams /></PrivateRoute>} />
+            <Route path="/project-groups" element={<PrivateRoute adminOnly><ProjectGroups /></PrivateRoute>} />
             <Route path="/trips" element={<PrivateRoute><Trips /></PrivateRoute>} />
             <Route path="/trip-stats" element={<PrivateRoute><TripStats /></PrivateRoute>} />
             <Route path="/budgets" element={<PrivateRoute><Budgets /></PrivateRoute>} />
-            <Route path="/menu-perms" element={<PrivateRoute><MenuPerms /></PrivateRoute>} />
-            <Route path="/cross-team-access" element={<PrivateRoute><CrossTeamAccess /></PrivateRoute>} />
+            <Route path="/menu-perms" element={<PrivateRoute adminOnly><MenuPerms /></PrivateRoute>} />
+            <Route path="/cross-team-access" element={<PrivateRoute adminOnly><CrossTeamAccess /></PrivateRoute>} />
             <Route path="/mobile-task-center" element={<PrivateRoute adminOnly><MobileTaskCenter /></PrivateRoute>} />
             <Route path="/operation-logs" element={<PrivateRoute adminOnly><OperationLogs /></PrivateRoute>} />
             <Route path="/follow-up-tasks" element={<PrivateRoute><FollowUpTasks /></PrivateRoute>} />
@@ -858,6 +858,6 @@ function LoginGuard() {
   const { user, loading } = useAuth();
   const redirectPath = getSafeInternalPath(new URLSearchParams(location.search).get('redirect'));
   if (loading) return null;
-  if (user) return <Navigate to={redirectPath} replace />;
+  if (user) return <Navigate to={getAuthorizedRedirectPath(redirectPath, user)} replace />;
   return <Login />;
 }
