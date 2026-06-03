@@ -12,21 +12,20 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
-import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.URLUtil;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -35,13 +34,12 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import com.hausen.relation.api.ApiCallback;
-import com.hausen.relation.api.ApiClient;
 import com.hausen.relation.data.SessionStore;
 import com.hausen.relation.ui.RelationIconView;
 import com.hausen.relation.ui.Ui;
 
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 public class MainActivity extends Activity {
     private static final int TAB_TASKS = 0;
@@ -51,129 +49,23 @@ public class MainActivity extends Activity {
     private static final int TAB_MORE = 4;
     private static final int FILE_CHOOSER_REQUEST = 7001;
     private static final String WEB_BASE_URL = "https://relation.midongtech.com";
+    private static final String LOGIN_ROUTE = "/login";
 
-    private RelationApp app;
     private SessionStore session;
-    private ApiClient api;
     private FrameLayout contentFrame;
     private LinearLayout bottomNav;
     private ProgressBar pageProgress;
     private WebView webView;
     private int currentTab = TAB_TASKS;
     private boolean showingMoreHome = false;
+    private String lastRoute = "/";
     private ValueCallback<Uri[]> filePathCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        app = (RelationApp) getApplication();
-        session = app.session();
-        api = app.api();
-        if (session.isLoggedIn()) {
-            showMain();
-        } else {
-            showLogin();
-        }
-    }
-
-    private void showLogin() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(Ui.PAGE);
-
-        LinearLayout page = Ui.vertical(this);
-        page.setGravity(Gravity.CENTER_HORIZONTAL);
-        page.setPadding(Ui.dp(this, 24), Ui.dp(this, 48), Ui.dp(this, 24), Ui.dp(this, 32));
-        scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
-
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(getResources().getIdentifier("ic_launcher", "drawable", getPackageName()));
-        page.addView(logo, new LinearLayout.LayoutParams(Ui.dp(this, 64), Ui.dp(this, 64)));
-        page.addView(Ui.spacer(this, 16));
-
-        TextView title = Ui.text(this, "幂动组织中台", 26, Ui.TEXT, Typeface.BOLD);
-        title.setGravity(Gravity.CENTER);
-        page.addView(title, new LinearLayout.LayoutParams(-1, -2));
-
-        TextView desc = Ui.text(this, "连接线上系统，移动端同步 Web 完整功能。", 14, Ui.SECONDARY, Typeface.NORMAL);
-        desc.setGravity(Gravity.CENTER);
-        page.addView(desc, new LinearLayout.LayoutParams(-1, -2));
-        page.addView(Ui.spacer(this, 28));
-
-        LinearLayout card = Ui.vertical(this);
-        card.setPadding(Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18));
-        card.setBackground(Ui.bg(Color.WHITE, 12, this));
-        page.addView(card, new LinearLayout.LayoutParams(-1, -2));
-
-        EditText username = input("用户名", EditorInfo.IME_ACTION_NEXT);
-        EditText password = input("密码", EditorInfo.IME_ACTION_DONE);
-        password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-
-        Button login = Ui.actionButton(this, "登录", true);
-        login.setTextSize(15);
-        login.setLayoutParams(new LinearLayout.LayoutParams(-1, Ui.dp(this, 44)));
-
-        card.addView(label("账号"));
-        card.addView(username);
-        card.addView(Ui.spacer(this, 12));
-        card.addView(label("密码"));
-        card.addView(password);
-        card.addView(Ui.spacer(this, 18));
-        card.addView(login);
-
-        login.setOnClickListener(v -> {
-            String user = username.getText().toString().trim();
-            String pass = password.getText().toString();
-            if (user.isEmpty() || pass.isEmpty()) {
-                showToast("请输入用户名和密码");
-                return;
-            }
-            login.setEnabled(false);
-            login.setText("登录中...");
-            api.login(user, pass, new ApiCallback() {
-                @Override
-                public void onSuccess(String body) {
-                    login.setEnabled(true);
-                    login.setText("登录");
-                    try {
-                        JSONObject json = new JSONObject(body);
-                        session.saveLogin(json.optString("token"), json.optJSONObject("user"));
-                        showMain();
-                    } catch (Exception e) {
-                        showToast("登录响应解析失败");
-                    }
-                }
-
-                @Override
-                public void onError(String message) {
-                    login.setEnabled(true);
-                    login.setText("登录");
-                    showToast(message);
-                }
-            });
-        });
-
-        setContentView(scroll);
-    }
-
-    private EditText input(String hint, int imeAction) {
-        EditText edit = new EditText(this);
-        edit.setSingleLine(true);
-        edit.setHint(hint);
-        edit.setTextSize(15);
-        edit.setTextColor(Ui.TEXT);
-        edit.setHintTextColor(Color.rgb(160, 166, 176));
-        edit.setImeOptions(imeAction);
-        edit.setPadding(Ui.dp(this, 12), 0, Ui.dp(this, 12), 0);
-        edit.setBackground(Ui.strokeBg(this, Color.WHITE, 8, Ui.LINE));
-        edit.setLayoutParams(new LinearLayout.LayoutParams(-1, Ui.dp(this, 44)));
-        return edit;
-    }
-
-    private TextView label(String value) {
-        TextView label = Ui.text(this, value, 13, Ui.SECONDARY, Typeface.NORMAL);
-        label.setPadding(0, 0, 0, Ui.dp(this, 6));
-        return label;
+        session = ((RelationApp) getApplication()).session();
+        showMain();
     }
 
     private void showMain() {
@@ -250,18 +142,8 @@ public class MainActivity extends Activity {
         contentFrame.addView(pageProgress, new FrameLayout.LayoutParams(-1, Ui.dp(this, 2), Gravity.TOP));
 
         String route = normalizeRoute(path);
-        String targetUrl = WEB_BASE_URL + route;
-        String token = session.token();
-        String user = session.user().toString();
-        String html = "<!doctype html><html><head><meta charset=\"utf-8\">"
-            + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            + "<style>body{font-family:sans-serif;color:#767c87;background:#fff;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}</style>"
-            + "</head><body>正在进入...</body><script>"
-            + "localStorage.setItem('token'," + JSONObject.quote(token) + ");"
-            + "localStorage.setItem('user'," + JSONObject.quote(user) + ");"
-            + "location.replace(" + JSONObject.quote(targetUrl) + ");"
-            + "</script></html>";
-        webView.loadDataWithBaseURL(WEB_BASE_URL + "/", html, "text/html", "UTF-8", null);
+        lastRoute = route;
+        webView.loadUrl(WEB_BASE_URL + route);
     }
 
     private String normalizeRoute(String path) {
@@ -310,11 +192,25 @@ public class MainActivity extends Activity {
             super.onPageFinished(view, url);
             updateTabFromUrl(url);
             injectMobileShellCss();
-            if (isLoginUrl(url)) {
-                session.clearLogin();
-                showToast("登录已过期，请重新登录");
-                showLogin();
-            }
+            syncWebSession();
+        }
+
+        @Override
+        public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+            super.onReceivedError(view, request, error);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && request != null && !request.isForMainFrame()) return;
+            String message = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && error != null
+                ? String.valueOf(error.getDescription())
+                : "页面加载失败";
+            renderWebError(message);
+        }
+
+        @Override
+        public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse errorResponse) {
+            super.onReceivedHttpError(view, request, errorResponse);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && request != null && !request.isForMainFrame()) return;
+            int statusCode = errorResponse == null ? 0 : errorResponse.getStatusCode();
+            if (statusCode >= 500) renderWebError("服务器响应异常 (" + statusCode + ")");
         }
     }
 
@@ -388,9 +284,8 @@ public class MainActivity extends Activity {
 
     private void injectMobileShellCss() {
         if (webView == null) return;
-        String css = "header.ant-layout-header{display:none!important;}"
+        String css = ".ant-layout-sider{display:none!important;}"
             + ".app-mobile-menu-drawer{display:none!important;}"
-            + ".ant-layout-sider{display:none!important;}"
             + ".ant-layout-content{margin:0!important;border-radius:0!important;box-shadow:none!important;padding:12px!important;}"
             + "body{background:#fff!important;}"
             + ".ant-modal,.ant-drawer{max-width:100vw!important;}";
@@ -403,6 +298,48 @@ public class MainActivity extends Activity {
             + "document.head.appendChild(style);"
             + "})();";
         webView.evaluateJavascript(js, null);
+    }
+
+    private void syncWebSession() {
+        if (webView == null) return;
+        String js = "(function(){return JSON.stringify({token:localStorage.getItem('token')||'',user:localStorage.getItem('user')||''});})();";
+        webView.evaluateJavascript(js, value -> {
+            try {
+                if (value == null || "null".equals(value)) return;
+                Object parsed = new JSONTokener(value).nextValue();
+                if (!(parsed instanceof String)) return;
+                JSONObject state = new JSONObject((String) parsed);
+                String token = state.optString("token", "");
+                String userRaw = state.optString("user", "");
+                if (token.isEmpty()) {
+                    session.clearLogin();
+                    return;
+                }
+                JSONObject user = userRaw.isEmpty() ? null : new JSONObject(userRaw);
+                session.saveLogin(token, user);
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    private void renderWebError(String message) {
+        if (contentFrame == null) return;
+        contentFrame.removeAllViews();
+        LinearLayout box = Ui.vertical(this);
+        box.setGravity(Gravity.CENTER);
+        box.setPadding(Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24), Ui.dp(this, 24));
+        TextView title = Ui.text(this, "页面加载失败", 18, Ui.TEXT, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        TextView desc = Ui.text(this, message == null || message.trim().isEmpty() ? "请检查网络后重试" : message, 14, Ui.SECONDARY, Typeface.NORMAL);
+        desc.setGravity(Gravity.CENTER);
+        Button retry = Ui.actionButton(this, "重新加载", true);
+        retry.setOnClickListener(v -> loadWebRoute(lastRoute));
+        box.addView(title);
+        box.addView(Ui.spacer(this, 8));
+        box.addView(desc);
+        box.addView(Ui.spacer(this, 16));
+        box.addView(retry, new LinearLayout.LayoutParams(-2, Ui.dp(this, 38)));
+        contentFrame.addView(box, new FrameLayout.LayoutParams(-1, -1));
     }
 
     private void updateTabFromUrl(String url) {
@@ -511,10 +448,13 @@ public class MainActivity extends Activity {
             .setPositiveButton("退出", (dialog, which) -> {
                 session.clearLogin();
                 if (webView != null) {
-                    webView.clearHistory();
-                    webView.clearCache(false);
+                    webView.evaluateJavascript("localStorage.removeItem('token');localStorage.removeItem('user');", value -> {
+                        webView.clearHistory();
+                        loadWebRoute(LOGIN_ROUTE);
+                    });
+                } else {
+                    loadWebRoute(LOGIN_ROUTE);
                 }
-                showLogin();
             })
             .show();
     }
