@@ -1020,6 +1020,7 @@ export default function Documents() {
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
+  const [mobileLibraryVisible, setMobileLibraryVisible] = useState(false);
   const [domainFilter, setDomainFilter] = useState('all');
   const [keyword, setKeyword] = useState('');
   const [selectedFolderId, setSelectedFolderId] = useState(null);
@@ -1043,6 +1044,7 @@ export default function Documents() {
   const [expandedChangeLogIds, setExpandedChangeLogIds] = useState([]);
   const [changeLogNotifyEnabled, setChangeLogNotifyEnabled] = useState(false);
   const [tocOpen, setTocOpen] = useState(true);
+  const [mobileTocOpen, setMobileTocOpen] = useState(false);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [moveFolderOpen, setMoveFolderOpen] = useState(false);
   const [moveFolderId, setMoveFolderId] = useState(null);
@@ -1105,6 +1107,10 @@ export default function Documents() {
   const canManageSelectedDoc = Boolean(
     currentUser && selectedDoc && (isDocumentAdminUser(currentUser) || Number(selectedDoc.created_by) === Number(currentUser.id))
   );
+  const mobileHasEditorTarget = Boolean(selectedDocId || selectedDoc || shareLinkError);
+  const showMobileEditor = isMobile && mobileHasEditorTarget && !mobileLibraryVisible;
+  const showDocumentLibrary = !isMobile || !showMobileEditor;
+  const showDocumentEditor = !isMobile || showMobileEditor;
 
   const getDocTabId = (id) => Number(id);
 
@@ -1198,7 +1204,9 @@ export default function Documents() {
     setSelectedBlockId(null);
     setHoveredBlockId(null);
     setOpenBlockMenuId(null);
+    setMobileLibraryVisible(false);
     setTocOpen(true);
+    setMobileTocOpen(false);
     setPageMenuOpen(false);
     setMoveFolderOpen(false);
     setShareOpen(false);
@@ -1371,6 +1379,7 @@ export default function Documents() {
   const openDocumentTab = (docOrId) => {
     const docId = getDocTabId(typeof docOrId === 'object' ? docOrId?.id : docOrId);
     if (!docId) return;
+    if (isMobile) setMobileLibraryVisible(false);
     if (getDocumentIdFromSearch(searchParams) !== docId) {
       replaceDocumentLinkParam(docId);
     }
@@ -1412,6 +1421,16 @@ export default function Documents() {
     setPageMenuOpen(false);
     setPresentationSlideIndex(0);
     setPresentationOpen(true);
+  };
+
+  const backToMobileLibrary = () => {
+    if (!isMobile) return;
+    persistActiveDocTabState();
+    setMobileLibraryVisible(true);
+    setPageMenuOpen(false);
+    setMobileTocOpen(false);
+    setOpenBlockMenuId(null);
+    clearAreaBlockSelection();
   };
 
   const closePresentationMode = () => {
@@ -2373,11 +2392,11 @@ export default function Documents() {
       onClick={() => openDocumentTab(item)}
       style={{
         cursor: 'pointer',
-        padding: '10px 8px',
+        padding: isMobile ? '14px 12px' : '10px 8px',
         borderRadius: 8,
         background: selectedDocId === item.id ? '#eef2ff' : 'transparent',
         border: selectedDocId === item.id ? '1px solid #c7d2fe' : '1px solid transparent',
-        marginBottom: 6,
+        marginBottom: isMobile ? 8 : 6,
       }}
       actions={[
         <Button
@@ -2395,7 +2414,7 @@ export default function Documents() {
       <List.Item.Meta
         title={
           <Space size={6} wrap>
-            <Text strong ellipsis style={{ maxWidth: 170 }}>{item.title}</Text>
+            <Text strong ellipsis style={{ maxWidth: isMobile ? 'calc(100vw - 172px)' : 170 }}>{item.title}</Text>
             <Tag color="blue">{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
           </Space>
         }
@@ -2495,7 +2514,7 @@ export default function Documents() {
   };
 
   const renderPageMenu = () => (
-    <div style={{ width: 280, padding: 14, background: '#fff', borderRadius: 8, boxShadow: '0 6px 24px rgba(15,23,42,0.16)' }}>
+    <div style={{ width: isMobile ? 'min(92vw, 320px)' : 280, padding: 14, background: '#fff', borderRadius: 8, boxShadow: '0 6px 24px rgba(15,23,42,0.16)' }}>
       <Space direction="vertical" size={14} style={{ width: '100%' }}>
         <Space direction="vertical" size={4} style={{ width: '100%' }}>
           <Button
@@ -3060,45 +3079,54 @@ export default function Documents() {
     );
   };
 
+  const renderTocContent = ({ compact = false } = {}) => (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <Text strong style={{ color: '#64748b' }}>标题目录</Text>
+        {!compact && <Button type="text" size="small" icon={<MoreOutlined />} onClick={() => setTocOpen(false)} />}
+      </div>
+      {headingMeta.toc.length ? (
+        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+          {headingMeta.toc.map(item => (
+            <Button
+              key={item.id}
+              type="text"
+              block
+              onClick={() => {
+                if (compact) setMobileTocOpen(false);
+                scrollToBlock(item.id);
+              }}
+              style={{
+                justifyContent: 'flex-start',
+                paddingLeft: (item.level - 1) * 14,
+                height: 'auto',
+                minHeight: 32,
+                whiteSpace: 'normal',
+                textAlign: 'left',
+                color: '#64748b',
+              }}
+            >
+              <span>{item.number ? `${item.number} ` : ''}{item.title}</span>
+            </Button>
+          ))}
+        </Space>
+      ) : (
+        <Text type="secondary">请在正文添加标题</Text>
+      )}
+    </>
+  );
+
   const renderTocPanel = () => {
-    if (!asSwitchValue(selectedDoc?.toc_enabled, true) || !tocOpen) return null;
+    if (isMobile || !asSwitchValue(selectedDoc?.toc_enabled, true) || !tocOpen) return null;
     return (
       <aside style={{
-        width: isMobile ? '100%' : 260,
+        width: 260,
         flex: '0 0 auto',
         borderLeft: '1px solid #e5e7eb',
-        paddingLeft: isMobile ? 0 : 20,
+        paddingLeft: 20,
         color: '#64748b',
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <Text strong style={{ color: '#64748b' }}>标题目录</Text>
-          <Button type="text" size="small" icon={<MoreOutlined />} onClick={() => setTocOpen(false)} />
-        </div>
-        {headingMeta.toc.length ? (
-          <Space direction="vertical" size={2} style={{ width: '100%' }}>
-            {headingMeta.toc.map(item => (
-              <Button
-                key={item.id}
-                type="text"
-                block
-                onClick={() => scrollToBlock(item.id)}
-                style={{
-                  justifyContent: 'flex-start',
-                  paddingLeft: (item.level - 1) * 14,
-                  height: 'auto',
-                  minHeight: 28,
-                  whiteSpace: 'normal',
-                  textAlign: 'left',
-                  color: '#64748b',
-                }}
-              >
-                <span>{item.number ? `${item.number} ` : ''}{item.title}</span>
-              </Button>
-            ))}
-          </Space>
-        ) : (
-          <Text type="secondary">请在正文添加标题</Text>
-        )}
+        {renderTocContent()}
       </aside>
     );
   };
@@ -3405,8 +3433,8 @@ export default function Documents() {
           onChange={event => updateBlock(block.id, { content: event.target.value })}
           style={{ fontWeight: 600 }}
         />
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 360 }}>
+        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: isMobile ? 320 : 360 }}>
             <thead>
               <tr>
                 {columns.map((column, columnIndex) => (
@@ -3470,7 +3498,7 @@ export default function Documents() {
     const meta = getBlockMeta(block);
     const cells = Array.from({ length: count }, (_, index) => meta.cells?.[index] || '');
     return (
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${count}, minmax(0, 1fr))`, gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : `repeat(${count}, minmax(0, 1fr))`, gap: 10 }}>
         {cells.map((cell, index) => (
           <TextArea
             key={`column-${index}`}
@@ -3500,7 +3528,7 @@ export default function Documents() {
     return (
       <Space direction="vertical" size={5} style={{ width: '100%' }}>
         {rows.map(item => (
-          <div key={item.name} style={{ display: 'grid', gridTemplateColumns: '80px 1fr 44px', gap: 8, alignItems: 'center' }}>
+          <div key={item.name} style={{ display: 'grid', gridTemplateColumns: isMobile ? '64px 1fr 40px' : '80px 1fr 44px', gap: 8, alignItems: 'center' }}>
             <Text ellipsis>{item.name}</Text>
             <div style={{ height: 8, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
               <div style={{ width: `${Math.round((item.value / max) * 100)}%`, height: '100%', background: '#10b981' }} />
@@ -3960,7 +3988,7 @@ export default function Documents() {
     if (block.type === 'metric') {
       const meta = getBlockMeta(block);
       return (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px 80px', gap: 8, alignItems: 'center' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) 120px 80px', gap: 8, alignItems: 'center' }}>
           <Input value={block.content} placeholder="指标名称" onChange={event => updateBlock(block.id, { content: event.target.value })} />
           <InputNumber value={Number(meta.value || 0)} onChange={value => updateBlockMeta(block.id, { value: value || 0 })} style={{ width: '100%' }} />
           <Input value={meta.unit || ''} placeholder="单位" onChange={event => updateBlockMeta(block.id, { unit: event.target.value })} />
@@ -3978,7 +4006,9 @@ export default function Documents() {
             autoSize={{ minRows: 1 }}
             style={{
               ...commonProps.style,
-              fontSize: level === 1 ? 30 : level === 2 ? 24 : level === 3 ? 19 : 16,
+              fontSize: isMobile
+                ? (level === 1 ? 24 : level === 2 ? 21 : level === 3 ? 18 : 16)
+                : (level === 1 ? 30 : level === 2 ? 24 : level === 3 ? 19 : 16),
               fontWeight: 700,
               lineHeight: 1.35,
             }}
@@ -4059,7 +4089,7 @@ export default function Documents() {
   const renderEditorBlock = (block, index) => {
     if (hiddenListBlockIds.has(block.id)) return null;
     const menuOpen = openBlockMenuId === block.id;
-    const handleVisible = menuOpen || hoveredBlockId === block.id;
+    const handleVisible = isMobile || menuOpen || hoveredBlockId === block.id;
     const blockSelected = selectedAreaBlockIds.includes(block.id);
     const heading = headingMeta.map.get(block.id);
     return (
@@ -4076,13 +4106,13 @@ export default function Documents() {
         onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
         style={{
           display: 'grid',
-          gridTemplateColumns: isMobile ? '24px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
+          gridTemplateColumns: isMobile ? '28px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
           gap: 4,
           border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
           background: blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent'),
           borderRadius: 6,
-          padding: '3px 8px 3px 0',
-          marginBottom: 2,
+          padding: isMobile ? '5px 6px 5px 0' : '3px 8px 3px 0',
+          marginBottom: isMobile ? 4 : 2,
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
       >
@@ -4121,7 +4151,7 @@ export default function Documents() {
                 opacity: handleVisible ? 1 : 0,
                 pointerEvents: handleVisible ? 'auto' : 'none',
                 color: '#6b7280',
-                background: menuOpen ? '#eef2ff' : '#f3f4f6',
+                background: menuOpen ? '#eef2ff' : (isMobile ? '#f8fafc' : '#f3f4f6'),
               }}
             />
           </Dropdown>
@@ -4134,13 +4164,21 @@ export default function Documents() {
   };
 
   return (
-    <div style={{ display: 'flex', gap: 16, height: 'calc(100vh - 120px)', minHeight: 640, flexDirection: isMobile ? 'column' : 'row' }}>
+    <div style={{
+      display: 'flex',
+      gap: isMobile ? 0 : 16,
+      height: isMobile ? 'auto' : 'calc(100vh - 120px)',
+      minHeight: isMobile ? 'calc(100vh - 80px)' : 640,
+      flexDirection: 'row',
+      overflow: isMobile ? 'visible' : 'hidden',
+    }}>
+      {showDocumentLibrary && (
       <aside style={{
         width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : 340),
         minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : 320),
         borderRight: isMobile ? 'none' : '1px solid #f0f0f0',
         paddingRight: isMobile ? 0 : (isFolderSidebarCollapsed ? 0 : 16),
-        overflow: isFolderSidebarCollapsed ? 'hidden' : 'auto',
+        overflow: isMobile ? 'visible' : (isFolderSidebarCollapsed ? 'hidden' : 'auto'),
         transition: 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease',
       }}>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -4188,6 +4226,7 @@ export default function Documents() {
                   setDomainFilter(value);
                   setSelectedFolderId(null);
                   setSopOnly(false);
+                  if (isMobile) setMobileLibraryVisible(true);
                 }}
                 style={{ width: '100%' }}
               />
@@ -4196,7 +4235,10 @@ export default function Documents() {
                 allowClear
                 placeholder="搜索标题、编号、正文"
                 value={keyword}
-                onChange={event => setKeyword(event.target.value)}
+                onChange={event => {
+                  setKeyword(event.target.value);
+                  if (isMobile) setMobileLibraryVisible(true);
+                }}
               />
 
               <Space size={8} wrap>
@@ -4207,6 +4249,7 @@ export default function Documents() {
                   onClick={() => {
                     setSopOnly(!sopOnly);
                     setSelectedFolderId(null);
+                    if (isMobile) setMobileLibraryVisible(true);
                   }}
                 >
                   SOP 总库
@@ -4232,6 +4275,7 @@ export default function Documents() {
                       if (typeof key === 'string' && key.startsWith('folder-')) {
                         setSelectedFolderId(Number(key.replace('folder-', '')));
                         setSopOnly(false);
+                        if (isMobile) setMobileLibraryVisible(true);
                         setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev : [...prev, key]));
                       } else if (typeof key === 'string' && key.startsWith('document-')) {
                         const documentId = Number(key.replace('document-', ''));
@@ -4267,34 +4311,99 @@ export default function Documents() {
           )}
         </Space>
       </aside>
+      )}
 
-      <main style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
-        {renderDocTabs()}
+      {showDocumentEditor && (
+      <main style={{ flex: 1, minWidth: 0, width: '100%', overflow: isMobile ? 'visible' : 'auto' }}>
+        {!isMobile && renderDocTabs()}
         {!selectedDoc ? (
-          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed #d9d9d9', borderRadius: 8 }}>
-            <Empty description={shareLinkError?.message || '选择或新建一篇文档'}>
-              {shareLinkError ? (
-                <Button
-                  onClick={() => {
-                    setShareLinkError(null);
-                    clearActiveDocument();
-                  }}
-                >
-                  返回文档中心
-                </Button>
-              ) : (
-                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建文档</Button>
-              )}
-            </Empty>
+          <div style={{
+            minHeight: isMobile ? 'calc(100vh - 96px)' : '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px dashed #d9d9d9',
+            borderRadius: 8,
+          }}>
+            {detailLoading || selectedDocId ? (
+              <Spin tip="正在打开文档" />
+            ) : (
+              <Empty description={shareLinkError?.message || '选择或新建一篇文档'}>
+                {shareLinkError ? (
+                  <Button
+                    onClick={() => {
+                      setShareLinkError(null);
+                      clearActiveDocument();
+                      if (isMobile) setMobileLibraryVisible(true);
+                    }}
+                  >
+                    返回文档中心
+                  </Button>
+                ) : (
+                  <Space>
+                    {isMobile && <Button icon={<LeftOutlined />} onClick={backToMobileLibrary}>文档列表</Button>}
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建文档</Button>
+                  </Space>
+                )}
+              </Empty>
+            )}
           </div>
         ) : (
           <Spin spinning={detailLoading}>
             <div style={{
-              maxWidth: getEditorShellMaxWidth(selectedDoc, asSwitchValue(selectedDoc?.toc_enabled, true) && tocOpen),
-              margin: isFolderSidebarCollapsed ? '0' : '0 auto',
-              padding: isMobile ? 0 : '4px 12px',
+              maxWidth: isMobile ? '100%' : getEditorShellMaxWidth(selectedDoc, asSwitchValue(selectedDoc?.toc_enabled, true) && tocOpen),
+              margin: isMobile || isFolderSidebarCollapsed ? '0' : '0 auto',
+              padding: isMobile ? '0 0 24px' : '4px 12px',
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
+              {isMobile && (
+                <div style={{
+                  position: 'sticky',
+                  top: 0,
+                  zIndex: 6,
+                  margin: '-12px -12px 12px',
+                  padding: '8px 12px',
+                  background: '#fff',
+                  borderBottom: '1px solid #eef2f7',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                    <Button type="text" icon={<LeftOutlined />} onClick={backToMobileLibrary} aria-label="返回文档列表" style={{ flex: '0 0 auto' }} />
+                    <Text strong ellipsis style={{ flex: 1, minWidth: 0 }}>
+                      {editorTitle || selectedDoc.title || '未命名文档'}
+                    </Text>
+                    <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" style={{ flex: '0 0 auto' }} />
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingTop: 8, paddingBottom: 2 }}>
+                    <Button
+                      size="small"
+                      icon={<MenuOutlined />}
+                      disabled={!asSwitchValue(selectedDoc?.toc_enabled, true)}
+                      onClick={() => setMobileTocOpen(true)}
+                    >
+                      目录
+                    </Button>
+                    <Dropdown
+                      trigger={['click']}
+                      open={pageMenuOpen}
+                      onOpenChange={setPageMenuOpen}
+                      dropdownRender={renderPageMenu}
+                    >
+                      <Button size="small" icon={<MoreOutlined />}>页面</Button>
+                    </Dropdown>
+                    <Button size="small" icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode}>演示</Button>
+                    <Button size="small" icon={<UserAddOutlined />} onClick={openShare}>分享</Button>
+                    <Button size="small" icon={<HistoryOutlined />} onClick={openChangeLogs}>历史</Button>
+                    <Button
+                      size="small"
+                      icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
+                      onClick={() => toggleFavorite(selectedDoc)}
+                    >
+                      收藏
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {!isMobile && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
                 <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
                   <Space size={8} wrap>
                     <Tag color="geekblue">{selectedDoc.document_no}</Tag>
@@ -4348,7 +4457,7 @@ export default function Documents() {
                     <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" />
                   </Tooltip>
                 </Space>
-              </div>
+              </div>}
 
               <Input
                 value={editorTitle}
@@ -4360,14 +4469,14 @@ export default function Documents() {
                 style={{
                   border: 'none',
                   boxShadow: 'none',
-                  fontSize: 30,
+                  fontSize: isMobile ? 24 : 30,
                   fontWeight: 700,
-                  padding: '8px 0',
-                  marginBottom: 8,
+                  padding: isMobile ? '4px 0 8px' : '8px 0',
+                  marginBottom: isMobile ? 6 : 8,
                 }}
               />
 
-              <Space size={8} wrap style={{ marginBottom: 16 }}>
+              <Space size={8} wrap style={{ marginBottom: isMobile ? 12 : 16 }}>
                 <Tag>{domainLabel[selectedDoc.domain] || selectedDoc.domain}</Tag>
                 <Tag>{selectedDoc.project_group_name || selectedDoc.project_code || '未关联项目组'}</Tag>
                 <Tag>{departmentLabel[selectedDoc.department_key] || selectedDoc.department_key}</Tag>
@@ -4384,10 +4493,10 @@ export default function Documents() {
                 <section id="document-editor-blocks" onMouseDown={handleEditorAreaMouseDown} style={{
                   flex: 1,
                   minWidth: 0,
-                  maxWidth: getEditorMaxWidth(selectedDoc),
+                  maxWidth: isMobile ? '100%' : getEditorMaxWidth(selectedDoc),
                   width: '100%',
-                  paddingBottom: 96,
-                  minHeight: 420,
+                  paddingBottom: isMobile ? 120 : 96,
+                  minHeight: isMobile ? 'calc(100vh - 260px)' : 420,
                 }}>
                   {editorBlocks.map((block, index) => renderEditorBlock(block, index))}
                 </section>
@@ -4397,6 +4506,7 @@ export default function Documents() {
           </Spin>
         )}
       </main>
+      )}
 
       <Modal
         title="共享文档"
@@ -4407,7 +4517,9 @@ export default function Documents() {
         cancelText="取消"
         confirmLoading={shareSaving}
         destroyOnClose
-        width={680}
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         {renderShareSelector()}
       </Modal>
@@ -4415,6 +4527,17 @@ export default function Documents() {
       {renderChangeLogDrawer()}
 
       {renderPresentationMode()}
+
+      <Drawer
+        title="标题目录"
+        placement="right"
+        open={mobileTocOpen}
+        onClose={() => setMobileTocOpen(false)}
+        width="86vw"
+        styles={{ body: { padding: 14 } }}
+      >
+        {renderTocContent({ compact: true })}
+      </Drawer>
 
       <Modal
         title="移动到"
@@ -4424,6 +4547,9 @@ export default function Documents() {
         okText="移动"
         cancelText="取消"
         confirmLoading={moveFolderSaving}
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
         okButtonProps={{
           disabled: !moveFolderId || Number(moveFolderId) === Number(selectedDoc?.folder_id),
         }}
@@ -4456,6 +4582,9 @@ export default function Documents() {
         okText="创建"
         cancelText="取消"
         destroyOnClose
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <Form form={createForm} layout="vertical">
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
@@ -4500,6 +4629,9 @@ export default function Documents() {
         okText="初始化"
         cancelText="取消"
         destroyOnClose
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         <Form form={templateForm} layout="vertical" initialValues={{ domain: domainFilter === 'all' ? 'domestic_project' : domainFilter, departments: ['PM', 'PD', 'BD', 'OPS', 'ADS'] }}>
           <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
