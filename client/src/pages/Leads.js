@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Table, Tag, Space, Typography, Button, Select, Modal, Form, message,
+  Table, Tag, Space, Typography, Button, Select, Modal, Form, message, Badge,
   Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider, Upload, Grid, List
 } from 'antd';
 import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
@@ -15,6 +15,7 @@ const { useBreakpoint } = Grid;
 const listPrimaryTextStyle = { fontSize: 14, color: '#1f2937', lineHeight: 1.6 };
 const listSecondaryTextStyle = { fontSize: 12, color: '#6b7280', lineHeight: 1.5 };
 const listTableRowStyle = { cursor: 'pointer', fontSize: 13 };
+const listPlainTextStyle = { fontSize: 13, color: '#374151' };
 
 const opportunityStatusMap = {
   new: { label: '新商机', color: '#4F46E5', bg: '#eef2ff', border: '#c7d2fe' },
@@ -22,6 +23,16 @@ const opportunityStatusMap = {
   won: { label: '已成交', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0' },
   lost: { label: '已关闭', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' },
 };
+
+const renderTableText = (value, empty = '-') => (
+  value
+    ? <Text title={value} style={{ ...listPlainTextStyle, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</Text>
+    : <Text type="secondary" style={{ fontSize: 13 }}>{empty}</Text>
+);
+
+const renderShortDate = (value) => (
+  value ? <Text style={listPlainTextStyle}>{dayjs(value).format('MM-DD')}</Text> : <Text type="secondary">-</Text>
+);
 
 const interactionTypeMap = {
   visit: '拜访', call: '通话', gift: '送礼', meal: '餐饮',
@@ -370,22 +381,8 @@ export default function Leads() {
       dataIndex: 'opportunity_status',
       width: 100,
       render: v => {
-        const s = opportunityStatusMap[v] || { label: v || '-', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' };
-        return (
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            maxWidth: '100%', padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 500,
-            color: s.color, background: s.bg, border: `1px solid ${s.border}`,
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            boxSizing: 'border-box',
-          }}>
-            <span style={{
-              display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-              background: s.color, flexShrink: 0,
-            }} />
-            {s.label}
-          </span>
-        );
+        const s = opportunityStatusMap[v] || { label: v || '-' };
+        return <Badge status="processing" text={s.label} />;
       },
     },
     {
@@ -393,28 +390,14 @@ export default function Leads() {
       dataIndex: 'assignee_name',
       width: 150,
       responsive: ['lg'],
-      render: v => v
-        ? (
-          <Space size={6} style={{ maxWidth: '100%' }}>
-            <Avatar size={22} style={{ background: '#4F46E5', fontSize: 10 }}>{v[0]}</Avatar>
-            <Text title={v} style={{ maxWidth: 98, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#374151' }}>{v}</Text>
-          </Space>
-        )
-        : <Text style={{ fontSize: 12, color: '#d1d5db' }}>未指派</Text>,
+      render: v => renderTableText(v, '未指派'),
     },
     {
       title: '创建人',
       dataIndex: 'created_by_name',
       width: 120,
       responsive: ['lg'],
-      render: v => v
-        ? (
-          <Space size={6} style={{ maxWidth: '100%' }}>
-            <Avatar size={22} style={{ background: '#6366f1', fontSize: 10 }}>{v[0]}</Avatar>
-            <Text title={v} style={{ maxWidth: 76, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#374151' }}>{v}</Text>
-          </Space>
-        )
-        : <Text style={{ fontSize: 12, color: '#d1d5db' }}>-</Text>,
+      render: v => renderTableText(v),
     },
     {
       title: '关注人',
@@ -430,7 +413,7 @@ export default function Leads() {
       dataIndex: 'date',
       width: 120,
       sorter: (a, b) => (a.date || '').localeCompare(b.date || ''),
-      render: v => <Text style={{ fontSize: 12, color: '#6b7280' }}>{v || '-'}</Text>,
+      render: renderShortDate,
     },
     {
       title: '操作',
