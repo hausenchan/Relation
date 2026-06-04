@@ -138,7 +138,7 @@ function BlockHandleIcon() {
         justifyContent: 'center',
         width: 18,
         height: 18,
-        color: '#64748b',
+        color: '#6b7280',
         fontSize: 16,
         fontWeight: 700,
         lineHeight: 1,
@@ -159,7 +159,7 @@ function BlockAddIcon() {
         justifyContent: 'center',
         width: 18,
         height: 18,
-        color: '#64748b',
+        color: '#6b7280',
         fontSize: 18,
         fontWeight: 700,
         lineHeight: 1,
@@ -2752,6 +2752,7 @@ export default function Documents() {
           maxHeight: 'min(440px, calc(100vh - 190px))',
           overflowY: 'auto',
           padding: '6px 4px',
+          background: '#fff',
         }}
       >
         {blockTypeGroups.map(group => (
@@ -5573,6 +5574,7 @@ export default function Documents() {
           width: 24,
           display: 'flex',
           justifyContent: 'center',
+          zIndex: 2,
         }}>
           <Tooltip title="添加内容" placement="left">
             <Button
@@ -5593,8 +5595,7 @@ export default function Documents() {
                 height: 24,
                 minWidth: 24,
                 color: '#6b7280',
-                border: '1px solid #e5e7eb',
-                background: '#fff',
+                background: 'transparent',
               }}
             />
           </Tooltip>
@@ -5674,6 +5675,7 @@ export default function Documents() {
           width: 24,
           display: 'flex',
           justifyContent: 'center',
+          zIndex: 2,
         }}>
           <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{handleTooltip}</span>} placement="left">
             <Dropdown
@@ -5683,6 +5685,7 @@ export default function Documents() {
                 width: isMobile ? 300 : 340,
                 maxHeight: 'min(560px, calc(100vh - 96px))',
                 overflowY: 'hidden',
+                zIndex: 2600,
               }}
               dropdownRender={(menu) => (
                 <div
@@ -5692,6 +5695,11 @@ export default function Documents() {
                     width: isMobile ? 300 : 340,
                     maxHeight: 'min(560px, calc(100vh - 96px))',
                     overflow: 'hidden',
+                    background: '#fff',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 6,
+                    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.18)',
+                    color: '#1f2937',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 6px', color: '#374151', fontWeight: 500 }}>
@@ -5700,7 +5708,7 @@ export default function Documents() {
                   </div>
                   {renderConvertBlockTypePanel(block)}
                   <Divider style={{ margin: '4px 0' }} />
-                  {menu}
+                  <div style={{ background: '#fff' }}>{menu}</div>
                 </div>
               )}
               onOpenChange={(open) => {
@@ -5763,8 +5771,7 @@ export default function Documents() {
                   opacity: blankParagraph || handleVisible ? 1 : 0,
                   pointerEvents: blankParagraph || handleVisible ? 'auto' : 'none',
                   color: '#6b7280',
-                  border: '1px solid #e5e7eb',
-                  background: menuOpen ? '#eef2ff' : '#fff',
+                  background: menuOpen ? '#eef2ff' : 'transparent',
                 }}
               />
             </Dropdown>
