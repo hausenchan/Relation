@@ -55,7 +55,6 @@ import {
   ReloadOutlined,
   RightOutlined,
   RollbackOutlined,
-  SaveOutlined,
   StarFilled,
   StarOutlined,
   TeamOutlined,
@@ -6061,7 +6060,6 @@ export default function Documents() {
                     <Text strong ellipsis style={{ flex: 1, minWidth: 0 }}>
                       {editorTitle || selectedDoc.title || '未命名文档'}
                     </Text>
-                    <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" style={{ flex: '0 0 auto' }} />
                   </div>
                   <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingTop: 8, paddingBottom: 2 }}>
                     <Button
@@ -6144,9 +6142,6 @@ export default function Documents() {
                       onClick={() => toggleFavorite(selectedDoc)}
                       aria-label={selectedDoc.is_favorite ? '取消收藏' : '收藏'}
                     />
-                  </Tooltip>
-                  <Tooltip title="保存">
-                    <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" />
                   </Tooltip>
                 </Space>
               </div>}
