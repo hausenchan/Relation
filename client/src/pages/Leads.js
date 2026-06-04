@@ -418,18 +418,13 @@ export default function Leads() {
     {
       title: '操作',
       key: 'actions',
-      width: 90,
-      align: 'right',
+      width: 150,
+      fixed: 'right',
       render: (_, r) => (
-        <Button
-          type="link"
-          size="small"
-          icon={<EditOutlined />}
-          style={{ padding: '0 4px', color: '#4F46E5', fontSize: 12 }}
-          onClick={(e) => { e.stopPropagation(); openEdit(r); }}
-        >
-          编辑
-        </Button>
+        <Space size="small">
+          <Button type="link" size="small" onClick={(e) => { e.stopPropagation(); openDetail(r); }}>详情</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={(e) => { e.stopPropagation(); openEdit(r); }}>编辑</Button>
+        </Space>
       ),
     },
   ];
