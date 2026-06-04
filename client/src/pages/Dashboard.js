@@ -1692,18 +1692,18 @@ export default function Dashboard() {
           !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
           !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
         ].filter(Boolean).map((card, idx) => (
-          <Col xs={12} sm={12} lg={6} key={idx}>
+          <Col xs={12} sm={12} flex={isMobile ? undefined : '0 0 20%'} key={idx}>
             <Card
               className="stat-card"
               style={{ background: card.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
-              styles={{ body: { padding: isMobile ? '16px 18px' : '20px 24px' } }}
+              styles={{ body: { padding: isMobile ? '16px 18px' : '18px 18px' } }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
                   <div style={{ fontSize: isMobile ? 12 : 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500, whiteSpace: 'nowrap' }}>{card.title}</div>
                   <div style={{ fontSize: isMobile ? 28 : 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{card.value}</div>
                 </div>
-                <div style={{ width: isMobile ? 34 : 48, height: isMobile ? 34 : 48, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 18 : 22, color: '#fff' }}>
+                <div style={{ width: isMobile ? 34 : 42, height: isMobile ? 34 : 42, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 18 : 20, color: '#fff' }}>
                   {card.icon}
                 </div>
               </div>
