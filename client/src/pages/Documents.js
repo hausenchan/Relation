@@ -158,6 +158,10 @@ function BlockHandleIcon() {
   );
 }
 
+function BlockAddIcon() {
+  return <PlusOutlined style={{ fontSize: 16, color: '#9ca3af' }} />;
+}
+
 const blockTypeGroups = [
   {
     label: '基础块',
@@ -982,6 +986,17 @@ function formatChangeLogTime(value) {
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : String(value).slice(0, 16);
 }
 
+function formatDocumentTimestamp(value) {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const sqliteUtcMatch = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/);
+  const parseValue = sqliteUtcMatch && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)
+    ? `${sqliteUtcMatch[1]}T${sqliteUtcMatch[2]}Z`
+    : raw;
+  const parsed = dayjs(parseValue);
+  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : raw.slice(0, 16);
+}
+
 function normalizeInlineComments(comments = []) {
   if (!Array.isArray(comments)) return [];
   return comments
@@ -1355,7 +1370,7 @@ export default function Documents() {
     setSelectedDoc(doc);
     setEditorTitle(tabState.editorTitle ?? doc.title ?? '');
     setEditorBlocks(blocks);
-    setSelectedBlockId(tabState.selectedBlockId ?? (isBlankPage ? null : (blocks[0]?.id || null)));
+    setSelectedBlockId(tabState.selectedBlockId ?? (blocks[0]?.id || null));
     setHoveredBlockId(null);
     setOpenBlockMenuId(null);
     setTocOpen(tabState.tocOpen ?? asSwitchValue(doc.toc_enabled, true));
@@ -1447,7 +1462,7 @@ export default function Documents() {
         doc: detail,
         editorTitle: detail.title || '',
         editorBlocks: blocks,
-        selectedBlockId: isBlankPage ? null : (blocks[0]?.id || null),
+        selectedBlockId: blocks[0]?.id || null,
         tocOpen: asSwitchValue(detail.toc_enabled, true),
       };
       setDocTabStates(prev => ({ ...prev, [docId]: { ...(prev[docId] || {}), ...nextTabState } }));
@@ -1455,7 +1470,7 @@ export default function Documents() {
       setSelectedDoc(detail);
       setEditorTitle(detail.title || '');
       setEditorBlocks(blocks);
-      setSelectedBlockId(isBlankPage ? null : (blocks[0]?.id || null));
+      setSelectedBlockId(blocks[0]?.id || null);
       setHoveredBlockId(null);
       setOpenBlockMenuId(null);
       setTocOpen(asSwitchValue(detail.toc_enabled, true));
@@ -1857,6 +1872,21 @@ export default function Documents() {
       pendingSavePromisesRef.current[doc.id] = savePromise;
       const updated = await savePromise;
       lastSavedSignatureRef.current[doc.id] = signature;
+      const docId = getDocTabId(doc.id);
+      const isActiveDoc = getDocTabId(selectedDocId) === docId;
+      if (isActiveDoc) {
+        setSelectedDoc(prev => ({ ...prev, ...updated }));
+      }
+      upsertDocTab(updated);
+      setDocTabStates(prev => ({
+        ...prev,
+        [docId]: {
+          ...(prev[docId] || {}),
+          doc: { ...(prev[docId]?.doc || {}), ...updated },
+        },
+      }));
+      setDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
+      setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       if (!silent && getDocTabId(selectedDocId) === getDocTabId(doc.id)) {
         await loadDetail(doc.id, { force: true });
         await loadDocuments();
@@ -3028,7 +3058,7 @@ export default function Documents() {
           <Space direction="vertical" size={2} style={{ width: '100%' }}>
             <Text type="secondary" style={{ fontSize: 12 }}>{item.document_no}</Text>
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {item.updated_by_name || item.created_by_name || '-'} · {item.updated_at?.slice(0, 16) || '-'}
+              {item.updated_by_name || item.created_by_name || '-'} · {formatDocumentTimestamp(item.updated_at)}
             </Text>
           </Space>
         }
@@ -5621,7 +5651,7 @@ export default function Documents() {
                     <Tag color="cyan">{selectedDoc.access_summary?.label || '仅自己'}</Tag>
                   </Space>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {selectedDoc.updated_at?.slice(0, 16) || '-'}
+                    创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {formatDocumentTimestamp(selectedDoc.updated_at)}
                   </Text>
                 </Space>
                 <Space wrap size={6}>
