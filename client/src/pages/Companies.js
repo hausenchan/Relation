@@ -1717,7 +1717,6 @@ function EntityManager({ companyId, entities, onRefresh }) {
       title: '联系电话',
       dataIndex: 'contact_phone',
       width: 140,
-      fixed: isMobile ? undefined : 'right',
       render: value => value || '-',
     },
     {
