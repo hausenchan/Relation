@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, Tabs, Card, Row, Col, Typography, Divider, DatePicker, AutoComplete, Grid, List, Upload, Tooltip } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined, UploadOutlined, PaperClipOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, ThunderboltOutlined, RiseOutlined, LinkOutlined, BranchesOutlined, FileSearchOutlined, FileTextOutlined, NodeIndexOutlined, UploadOutlined, PaperClipOutlined, BarChartOutlined } from '@ant-design/icons';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
@@ -896,24 +896,40 @@ export default function Strategies() {
         }
       `}</style>
       {/* 统计卡片 */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+          gap: isMobile ? 10 : 16,
+          marginBottom: isMobile ? 16 : 24,
+          width: '100%',
+        }}
+      >
         {[
-          { label: '总策略数', value: stats.total, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-          { label: '变现策略', value: stats.monetization, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
-          { label: '流量策略', value: stats.traffic, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { label: '链路策略', value: stats.link, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { label: '总策略数', value: stats.total, icon: <BarChartOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          { label: '变现策略', value: stats.monetization, icon: <RiseOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+          { label: '流量策略', value: stats.traffic, icon: <ThunderboltOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { label: '链路策略', value: stats.link, icon: <LinkOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
         ].map((item, idx) => (
-          <Col xs={12} sm={6} key={idx}>
-            <div className="stat-card" style={{
-              background: item.gradient, borderRadius: 10, padding: isMobile ? '12px 14px' : '14px 18px',
-              cursor: 'default',
-            }}>
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ fontSize: isMobile ? 22 : 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
-            </div>
-          </Col>
+          <div key={idx} style={{ minWidth: 0 }}>
+            <Card
+              className="stat-card"
+              style={{ background: item.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
+              styles={{ body: { padding: isMobile ? '16px 18px' : '18px 18px' } }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: isMobile ? 12 : 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500, whiteSpace: 'nowrap' }}>{item.label}</div>
+                  <div style={{ fontSize: isMobile ? 28 : 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{item.value}</div>
+                </div>
+                <div style={{ width: isMobile ? 34 : 42, height: isMobile ? 34 : 42, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 18 : 20, color: '#fff' }}>
+                  {item.icon}
+                </div>
+              </div>
+            </Card>
+          </div>
         ))}
-      </Row>
+      </div>
 
       {/* 筛选、Tabs与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>

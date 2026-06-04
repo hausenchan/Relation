@@ -3,7 +3,7 @@ import {
   Table, Tag, Space, Typography, Button, Select, Modal, Form, message, Badge,
   Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider, Upload, Grid, List
 } from 'antd';
-import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined } from '@ant-design/icons';
+import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined, FunnelPlotOutlined, UserAddOutlined, SyncOutlined, TrophyOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
@@ -570,26 +570,40 @@ export default function Leads() {
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计概览 */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
+          gap: isMobile ? 10 : 16,
+          marginBottom: isMobile ? 16 : 24,
+          width: '100%',
+        }}
+      >
         {[
-          { label: '全部商机', value: data.length, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
-          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { label: '全部商机', value: data.length, icon: <FunnelPlotOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, icon: <UserAddOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, icon: <SyncOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, icon: <TrophyOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
         ].map((item, idx) => (
-          <Col xs={12} sm={6} key={idx}>
-            <div className="stat-card" style={{
-              background: item.gradient,
-              borderRadius: 10,
-              padding: isMobile ? '12px 14px' : '14px 16px',
-              cursor: 'default',
-            }}>
-              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ fontSize: isMobile ? 22 : 26, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
-            </div>
-          </Col>
+          <div key={idx} style={{ minWidth: 0 }}>
+            <Card
+              className="stat-card"
+              style={{ background: item.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
+              styles={{ body: { padding: isMobile ? '16px 18px' : '18px 18px' } }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: isMobile ? 12 : 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500, whiteSpace: 'nowrap' }}>{item.label}</div>
+                  <div style={{ fontSize: isMobile ? 28 : 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{item.value}</div>
+                </div>
+                <div style={{ width: isMobile ? 34 : 42, height: isMobile ? 34 : 42, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 18 : 20, color: '#fff' }}>
+                  {item.icon}
+                </div>
+              </div>
+            </Card>
+          </div>
         ))}
-      </Row>
+      </div>
 
       {/* 筛选与表格 */}
       <Card style={{ borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: 'none' }}>

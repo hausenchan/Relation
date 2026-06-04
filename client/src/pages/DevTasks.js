@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber, Card, Row, Col, Typography, Grid, List } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined, ToolOutlined } from '@ant-design/icons';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, message, Drawer, Descriptions, DatePicker, InputNumber, Card, Typography, Grid, List } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOutlined, BranchesOutlined, ToolOutlined, ClockCircleOutlined, SyncOutlined, ExperimentOutlined, CheckCircleOutlined, WarningOutlined } from '@ant-design/icons';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 import { RichTextEditor, RichTextView } from '../components/RichText';
@@ -466,25 +466,41 @@ export default function DevTasks() {
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 状态统计 */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(5, minmax(0, 1fr))',
+          gap: isMobile ? 10 : 16,
+          marginBottom: isMobile ? 16 : 24,
+          width: '100%',
+        }}
+      >
         {[
-          { label: '待开始', value: stats.pending, gradient: 'linear-gradient(135deg, #a8b8d8 0%, #8e9ebc 100%)' },
-          { label: '进行中', value: stats.in_progress, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { label: '测试中', value: stats.testing, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
-          { label: '已完成', value: stats.completed, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
-          { label: '阻塞', value: stats.blocked, gradient: 'linear-gradient(135deg, #eb3349 0%, #f45c43 100%)' },
+          { label: '待开始', value: stats.pending, icon: <ClockCircleOutlined />, gradient: 'linear-gradient(135deg, #a8b8d8 0%, #8e9ebc 100%)' },
+          { label: '进行中', value: stats.in_progress, icon: <SyncOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
+          { label: '测试中', value: stats.testing, icon: <ExperimentOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
+          { label: '已完成', value: stats.completed, icon: <CheckCircleOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
+          { label: '阻塞', value: stats.blocked, icon: <WarningOutlined />, gradient: 'linear-gradient(135deg, #eb3349 0%, #f45c43 100%)' },
         ].map((item, idx) => (
-          <Col xs={12} sm={4} key={idx}>
-            <div className="stat-card" style={{
-              background: item.gradient, borderRadius: 10, padding: isMobile ? '12px 14px' : '12px 16px',
-              cursor: 'default',
-            }}>
-              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.8)', fontWeight: 500 }}>{item.label}</div>
-              <div style={{ fontSize: isMobile ? 22 : 24, fontWeight: 700, color: '#fff', lineHeight: 1.3 }}>{item.value}</div>
-            </div>
-          </Col>
+          <div key={idx} style={{ minWidth: 0 }}>
+            <Card
+              className="stat-card"
+              style={{ background: item.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
+              styles={{ body: { padding: isMobile ? '16px 18px' : '18px 18px' } }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div>
+                  <div style={{ fontSize: isMobile ? 12 : 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500, whiteSpace: 'nowrap' }}>{item.label}</div>
+                  <div style={{ fontSize: isMobile ? 28 : 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{item.value}</div>
+                </div>
+                <div style={{ width: isMobile ? 34 : 42, height: isMobile ? 34 : 42, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 18 : 20, color: '#fff' }}>
+                  {item.icon}
+                </div>
+              </div>
+            </Card>
+          </div>
         ))}
-      </Row>
+      </div>
 
       {/* 筛选与表格 */}
       <Card style={{ borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
