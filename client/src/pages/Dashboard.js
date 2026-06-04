@@ -820,8 +820,14 @@ export default function Dashboard() {
   const isCurrentMonthTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'month');
   const isCurrentWeekTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'week');
   const isTodayTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'day');
+  const isCompletedTodayTask = (task) => (
+    (task.display_status || task.status) === 'done'
+    && (task.done_at || task.complete_date)
+    && dayjs(task.done_at || task.complete_date).isSame(dayjs(), 'day')
+  );
   const monthlyTaskCount = new Set(dashboardPersonalTasks.filter(isCurrentMonthTask).map(task => task.id)).size;
   const todayTaskCount = new Set(dashboardPersonalTasks.filter(isTodayTask).map(task => task.id)).size;
+  const todayCompletedTaskCount = new Set(dashboardPersonalTasks.filter(isCompletedTodayTask).map(task => task.id)).size;
   const weeklyTaskCount = dashboardPersonalTasks.filter(isCurrentWeekTask).length;
   const weeklyUnfinishedTaskCount = dashboardPersonalTasks.filter(task => (
     isCurrentWeekTask(task) && (task.display_status || task.status) !== 'done'
@@ -1657,7 +1663,7 @@ export default function Dashboard() {
             title: '本月任务',
             value: monthlyTaskCount,
             icon: <CheckSquareOutlined />,
-            gradient: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)'
+            gradient: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)'
           },
           {
             title: '本周任务',
@@ -1676,6 +1682,12 @@ export default function Dashboard() {
             value: todayTaskCount,
             icon: <CheckSquareOutlined />,
             gradient: 'linear-gradient(135deg, #fb7185 0%, #ef4444 100%)'
+          },
+          {
+            title: '今日已完成',
+            value: todayCompletedTaskCount,
+            icon: <CheckOutlined />,
+            gradient: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)'
           },
           !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
           !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
