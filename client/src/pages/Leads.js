@@ -390,14 +390,14 @@ export default function Leads() {
       dataIndex: 'assignee_name',
       width: 150,
       responsive: ['lg'],
-      render: v => renderTableText(v, '未指派'),
+      render: v => v || '未指派',
     },
     {
       title: '创建人',
       dataIndex: 'created_by_name',
       width: 120,
       responsive: ['lg'],
-      render: v => renderTableText(v),
+      render: v => v || '-',
     },
     {
       title: '关注人',
