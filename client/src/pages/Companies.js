@@ -1906,6 +1906,10 @@ function AllProductsView() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editForm] = Form.useForm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1933,6 +1937,7 @@ function AllProductsView() {
       p.category,
       p.product_category,
       p.discovery_source,
+      p.notes,
     ].some(v => String(v || '').toLowerCase().includes(keyword));
     const typeHit = !filterType || p.category === filterType;
     return hit && typeHit;
@@ -1949,6 +1954,39 @@ function AllProductsView() {
       message.error(err.response?.data?.error || '产品详情加载失败');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const openProductEdit = async (record) => {
+    setEditingProduct(record);
+    editForm.setFieldsValue(record);
+    setEditOpen(true);
+    try {
+      const detail = await companyProductsApi.get(record.id);
+      setEditingProduct(detail);
+      editForm.setFieldsValue(detail);
+    } catch (err) {
+      message.warning(err.response?.data?.error || '产品详情加载失败，已使用列表数据编辑');
+    }
+  };
+
+  const handleEditSave = async () => {
+    const values = await editForm.validateFields();
+    if (!editingProduct?.id) return;
+    setSavingEdit(true);
+    try {
+      await companyProductsApi.update(editingProduct.id, values);
+      message.success('已更新');
+      setEditOpen(false);
+      setEditingProduct(null);
+      editForm.resetFields();
+      await load();
+      if (detailOpen && detailRecord?.id === editingProduct.id) {
+        const detail = await companyProductsApi.get(editingProduct.id);
+        setDetailRecord(detail);
+      }
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -2019,6 +2057,13 @@ function AllProductsView() {
       render: v => v || '-',
     },
     {
+      title: '备注',
+      dataIndex: 'notes',
+      width: 180,
+      ellipsis: true,
+      render: v => v || '-',
+    },
+    {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 110,
@@ -2027,7 +2072,11 @@ function AllProductsView() {
     {
       title: '操作',
       width: 90,
-      render: (_, r) => <Button size="small" onClick={() => openProductDetail(r)}>查看详情</Button>,
+      render: (_, r) => (
+        <Button size="small" onClick={(e) => { e.stopPropagation(); openProductEdit(r); }}>
+          编辑
+        </Button>
+      ),
     },
   ];
 
@@ -2096,7 +2145,7 @@ function AllProductsView() {
           rowKey="id"
           loading={loading}
           size="small"
-          scroll={{ x: 1200 }}
+          scroll={{ x: 1380 }}
           pagination={{ defaultPageSize: 15 }}
           onRow={record => ({
             onDoubleClick: () => openProductDetail(record),
@@ -2153,6 +2202,94 @@ function AllProductsView() {
           </Space>
         )}
       </Drawer>
+
+      <Modal
+        title={editingProduct ? '编辑产品' : '编辑产品'}
+        open={editOpen}
+        onOk={handleEditSave}
+        confirmLoading={savingEdit}
+        onCancel={() => {
+          setEditOpen(false);
+          setEditingProduct(null);
+          editForm.resetFields();
+        }}
+        width={isMobile ? '100%' : 640}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form form={editForm} layout="vertical" size="small">
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 8}>
+              <Form.Item label="产品名称" name="name" rules={[{ required: true }]}>
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 8}>
+              <Form.Item label="产品类型" name="category">
+                <Input placeholder="如：SaaS、APP、小程序" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 8}>
+              <Form.Item label="产品类目" name="product_category">
+                <Input placeholder="产品类目，工具，互动营销，短剧等" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 8}>
+              <Form.Item label="状态" name="status">
+                <Select>
+                  {Object.entries(productStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 8}>
+              <Form.Item label="上线时间" name="launch_date">
+                <Input placeholder="如：2023-06" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 8}>
+              <Form.Item label="联系电话" name="contact_phone">
+                <Input placeholder="客服电话，方便看集团关联" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="域名" name="domain">
+                <Input placeholder="对应产品的域名，方便看集团关联" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="产品链接" name="product_link">
+                <Input placeholder="请输入 H5 链接或 deeplink 链接，如：https://... 或 app://..." />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="产品发现出处" name="discovery_source">
+                <Input placeholder="如：中青看点" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="产品描述" name="description">
+                <TextArea rows={2} />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="目标用户" name="target_users">
+                <Input placeholder="如：中小企业HR" />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="核心功能" name="core_features">
+                <TextArea rows={2} placeholder="列举1-3个核心功能..." />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
+              <Form.Item label="备注" name="notes">
+                <TextArea rows={3} />
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </Modal>
     </div>
   );
 }
