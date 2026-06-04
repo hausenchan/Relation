@@ -669,7 +669,7 @@ function AppLayout() {
   return (
     <Watermark content={user?.display_name || user?.username} gap={isMobile ? [140, 160] : [200, 200]} font={{ color: 'rgba(0,0,0,0.06)', fontSize: isMobile ? 12 : 14 }} style={{ minHeight: '100vh' }}>
     <MobileOverlayBackHandler enabled={isMobile} />
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ minHeight: '100vh', maxWidth: '100vw', overflowX: 'hidden' }}>
       <Modal
         title="修改密码"
         open={pwdModalOpen}
@@ -732,11 +732,12 @@ function AppLayout() {
         </Drawer>
       )}
 
-      <Layout>
+      <Layout style={{ minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
         <Header style={{
           background: DS.header.bg, padding: isMobile ? '0 12px' : '0 24px', height: DS.header.height, lineHeight: `${DS.header.height}px`,
           display: 'flex', alignItems: 'center', borderBottom: `1px solid ${DS.header.border}`,
           boxShadow: 'none', position: 'sticky', top: 0, zIndex: 10,
+          minWidth: 0,
         }}>
           <span
             onClick={handleMenuIconClick}
@@ -787,6 +788,9 @@ function AppLayout() {
             borderRadius: isMobile ? 0 : 12,
             minHeight: `calc(100vh - ${DS.header.height}px)`,
             boxShadow: isMobile ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
+            minWidth: 0,
+            maxWidth: isMobile ? '100%' : 'calc(100vw - 24px)',
+            overflowX: 'hidden',
           }}
         >
           <Routes>

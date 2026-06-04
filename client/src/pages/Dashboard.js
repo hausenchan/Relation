@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, Row, Col, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions } from 'antd';
+import { Card, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions } from 'antd';
 import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
@@ -1657,7 +1657,15 @@ export default function Dashboard() {
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计卡片 */}
-      <Row gutter={[isMobile ? 10 : 16, isMobile ? 10 : 16]} style={{ marginBottom: isMobile ? 16 : 24 }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(5, minmax(0, 1fr))',
+          gap: isMobile ? 10 : 16,
+          marginBottom: isMobile ? 16 : 24,
+          width: '100%',
+        }}
+      >
         {[
           {
             title: '本月任务',
@@ -1692,7 +1700,7 @@ export default function Dashboard() {
           !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
           !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
         ].filter(Boolean).map((card, idx) => (
-          <Col xs={12} sm={12} flex={isMobile ? undefined : '0 0 20%'} key={idx}>
+          <div key={idx} style={{ minWidth: 0 }}>
             <Card
               className="stat-card"
               style={{ background: card.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
@@ -1708,9 +1716,9 @@ export default function Dashboard() {
                 </div>
               </div>
             </Card>
-          </Col>
+          </div>
         ))}
-      </Row>
+      </div>
 
       {/* 任务管理 Tabs */}
       <Card style={{ marginBottom: isMobile ? 16 : 24, borderRadius: 12, border: '1px solid #e8e8ed', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
