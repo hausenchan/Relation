@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Card, Tag, Space, Typography, Button, DatePicker, Modal, Form, Input, Select,
-  Badge, Tooltip, message, Popconfirm, Divider, Empty, Spin, Row, Col, Statistic, Grid
+  Badge, Tooltip, message, Popconfirm, Divider, Empty, Spin, Row, Col, Statistic, Grid,
+  InputNumber
 } from 'antd';
 import {
   PlusOutlined, CheckOutlined, PlayCircleOutlined, DeleteOutlined,
@@ -72,6 +73,8 @@ export default function TaskBoard() {
     form.resetFields();
     form.setFieldsValue({
       date: selectedDate,
+      estimated_completion_date: selectedDate,
+      estimated_hours: null,
       priority: 'medium',
       status: 'pending',
       assigned_to: member?.id || user?.id,
@@ -86,6 +89,7 @@ export default function TaskBoard() {
     form.setFieldsValue({
       ...record,
       date: record.date ? dayjs(record.date) : null,
+      estimated_completion_date: record.estimated_completion_date ? dayjs(record.estimated_completion_date) : null,
     });
     setModalOpen(true);
   };
@@ -95,6 +99,7 @@ export default function TaskBoard() {
     const payload = {
       ...values,
       date: values.date?.format('YYYY-MM-DD'),
+      estimated_completion_date: values.estimated_completion_date?.format('YYYY-MM-DD'),
       parent_id: parentTask?.id || null,
     };
     try {
@@ -338,8 +343,16 @@ export default function TaskBoard() {
             <Input.TextArea rows={2} placeholder="详细说明（选填）" />
           </Form.Item>
           <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={12}>
-            <Form.Item label="日期" name="date" rules={[{ required: true }]} style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
+            <Form.Item label="计划日期" name="date" rules={[{ required: true, message: '请选择计划日期' }]} style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
               <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item label="预估完成日期" name="estimated_completion_date" rules={[{ required: true, message: '请选择预估完成日期' }]} style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+          </Space>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row', marginTop: isMobile ? 0 : 12 }} size={12}>
+            <Form.Item label="预估工时" name="estimated_hours" style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
+              <InputNumber min={0} step={0.5} addonAfter="人时" style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item label="优先级" name="priority" style={{ flex: 1, marginBottom: 0, width: isMobile ? '100%' : undefined }}>
               <Select>
@@ -406,6 +419,9 @@ function TaskItem({ task, currentUser, isMobile, onStatus, onEdit, onDelete, onA
       {task.created_by_name && (
         <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>指派人：{task.created_by_name}</div>
       )}
+      <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>
+        计划：{task.date || '-'} · 预估完成：{task.estimated_completion_date || '-'} · 预估工时：{(task.estimated_hours === null || task.estimated_hours === undefined || task.estimated_hours === '') ? '-' : `${task.estimated_hours}人时`} · 开始：{task.started_at ? dayjs(task.started_at).format('YYYY-MM-DD') : '-'}
+      </div>
       {task.result && (
         <div style={{ fontSize: 11, color: '#52c41a', marginBottom: 2, whiteSpace: 'pre-wrap' }}>备注：{task.result}</div>
       )}

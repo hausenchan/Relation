@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions } from 'antd';
+import { Card, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions, InputNumber } from 'antd';
 import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
@@ -50,7 +50,7 @@ const priorityMap = {
 
 const taskPrioritySortRank = { high: 0, medium: 1, low: 2 };
 const taskStatusSortRank = { pending: 0, in_progress: 1, suspended: 2, done: 3 };
-const taskDateColumnKeys = new Set(['plan_date', 'start_date', 'complete_date']);
+const taskDateColumnKeys = new Set(['plan_date', 'estimated_completion_date', 'start_date', 'complete_date']);
 const taskSortableColumnKeys = new Set([
   'title',
   'task_source_label',
@@ -62,6 +62,8 @@ const taskSortableColumnKeys = new Set([
   'follower_name',
   'shared_to_names',
   'plan_date',
+  'estimated_completion_date',
+  'estimated_hours',
   'start_date',
   'complete_date',
   'display_status_label',
@@ -114,6 +116,8 @@ const taskTableDefaultWidths = {
     assigned_to_name: 100,
     shared_to_names: 140,
     plan_date: 110,
+    estimated_completion_date: 130,
+    estimated_hours: 100,
     start_date: 110,
     complete_date: 110,
     display_result: 220,
@@ -127,6 +131,8 @@ const taskTableDefaultWidths = {
     created_by_name: 100,
     shared_to_names: 140,
     plan_date: 110,
+    estimated_completion_date: 130,
+    estimated_hours: 100,
     start_date: 110,
     complete_date: 110,
     display_status_label: 100,
@@ -141,6 +147,8 @@ const taskTableDefaultWidths = {
     assigned_to_name: 110,
     shared_to_names: 140,
     plan_date: 110,
+    estimated_completion_date: 130,
+    estimated_hours: 100,
     start_date: 110,
     complete_date: 110,
     display_status_label: 100,
@@ -155,6 +163,8 @@ const taskTableDefaultWidths = {
     follower_name: 110,
     shared_to_names: 140,
     plan_date: 110,
+    estimated_completion_date: 130,
+    estimated_hours: 100,
     start_date: 110,
     complete_date: 110,
     display_status_label: 100,
@@ -165,6 +175,8 @@ const taskTableDefaultWidths = {
 const taskTableMinWidths = {
   title: 180,
   shared_to_names: 100,
+  estimated_completion_date: 112,
+  estimated_hours: 90,
   display_result: 140,
   action: 90,
 };
@@ -364,6 +376,8 @@ export default function Dashboard() {
         task_source: 'normal',
         task_source_label: '日常指派',
         plan_date: t.date,
+        estimated_completion_date: t.estimated_completion_date,
+        estimated_hours: t.estimated_hours,
         start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
         complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
@@ -401,6 +415,8 @@ export default function Dashboard() {
         task_source: 'normal',
         task_source_label: '日常指派',
         plan_date: t.date,
+        estimated_completion_date: t.estimated_completion_date,
+        estimated_hours: t.estimated_hours,
         start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
         complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
@@ -437,6 +453,8 @@ export default function Dashboard() {
         task_source: 'normal',
         task_source_label: Number(t.shared_to_me) === 1 && !canManageTeamTasks ? '共享任务' : '日常指派',
         plan_date: t.date,
+        estimated_completion_date: t.estimated_completion_date,
+        estimated_hours: t.estimated_hours,
         start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
         complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
@@ -475,6 +493,8 @@ export default function Dashboard() {
         task_source: 'normal',
         task_source_label: '共享任务',
         plan_date: t.date,
+        estimated_completion_date: t.estimated_completion_date,
+        estimated_hours: t.estimated_hours,
         start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
         complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
@@ -548,6 +568,8 @@ export default function Dashboard() {
     form.resetFields();
     form.setFieldsValue({
       date: dayjs(),
+      estimated_completion_date: dayjs(),
+      estimated_hours: null,
       priority: 'medium',
       assigned_to: user?.id,
       shared_to: [],
@@ -567,6 +589,7 @@ export default function Dashboard() {
     form.setFieldsValue({
       ...record,
       date: record.date ? dayjs(record.date) : null,
+      estimated_completion_date: record.estimated_completion_date ? dayjs(record.estimated_completion_date) : null,
       shared_to: record.shared_to_ids
         ? String(record.shared_to_ids).split(',').map(Number).filter(Boolean)
         : [],
@@ -640,6 +663,7 @@ export default function Dashboard() {
     const payload = {
       ...values,
       date: values.date?.format('YYYY-MM-DD'),
+      estimated_completion_date: values.estimated_completion_date?.format('YYYY-MM-DD'),
     };
     setTaskSaving(true);
     try {
@@ -747,6 +771,22 @@ export default function Dashboard() {
           style={{ width: '100%' }}
         />
       </Form.Item>
+      <Form.Item label="预估完成日期" name="estimated_completion_date" rules={[{ required: true, message: '请选择预估完成日期' }]}>
+        <DatePicker
+          inputReadOnly={isMobile}
+          size={isMobile ? 'large' : undefined}
+          style={{ width: '100%' }}
+        />
+      </Form.Item>
+      <Form.Item label="预估工时" name="estimated_hours">
+        <InputNumber
+          min={0}
+          step={0.5}
+          addonAfter="人时"
+          size={isMobile ? 'large' : undefined}
+          style={{ width: '100%' }}
+        />
+      </Form.Item>
       <Form.Item label="优先级" name="priority" rules={[{ required: true }]}>
         <Select size={isMobile ? 'large' : undefined}>
           <Option value="high"><Tag color="red">高</Tag></Option>
@@ -848,6 +888,24 @@ export default function Dashboard() {
     render: renderSharedToNames,
   };
 
+  const estimatedCompletionDateColumn = {
+    title: '预估完成日期',
+    dataIndex: 'estimated_completion_date',
+    key: 'estimated_completion_date',
+    width: 130,
+    render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
+  };
+
+  const estimatedHoursColumn = {
+    title: '预估工时',
+    dataIndex: 'estimated_hours',
+    key: 'estimated_hours',
+    width: 100,
+    render: (value) => (value === null || value === undefined || value === '')
+      ? <Text type="secondary">-</Text>
+      : `${value}人时`,
+  };
+
   const executionTaskColumns = [
     {
       title: '任务',
@@ -893,6 +951,8 @@ export default function Dashboard() {
       width: 110,
       render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
     },
+    estimatedCompletionDateColumn,
+    estimatedHoursColumn,
     {
       title: '开始日期',
       dataIndex: 'start_date',
@@ -1005,6 +1065,8 @@ export default function Dashboard() {
       width: 110,
       render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
     },
+    estimatedCompletionDateColumn,
+    estimatedHoursColumn,
     {
       title: '开始日期',
       dataIndex: 'start_date',
@@ -1105,6 +1167,8 @@ export default function Dashboard() {
       width: 110,
       render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
     },
+    estimatedCompletionDateColumn,
+    estimatedHoursColumn,
     {
       title: '开始日期',
       dataIndex: 'start_date',
@@ -1198,6 +1262,8 @@ export default function Dashboard() {
       width: 110,
       render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
     },
+    estimatedCompletionDateColumn,
+    estimatedHoursColumn,
     {
       title: '开始日期',
       dataIndex: 'start_date',
@@ -1276,6 +1342,8 @@ export default function Dashboard() {
               {record.priority && <Tag color={priorityMap[record.priority]?.color}>{priorityMap[record.priority]?.label}</Tag>}
               {Number(record.shared_to_me) === 1 && <Tag color="cyan">共享给我</Tag>}
               {record.plan_date && <Tag>计划 {dayjs(record.plan_date).format('MM-DD')}</Tag>}
+              {record.estimated_completion_date && <Tag>预估完成 {dayjs(record.estimated_completion_date).format('MM-DD')}</Tag>}
+              {(record.estimated_hours !== null && record.estimated_hours !== undefined && record.estimated_hours !== '') && <Tag>预估 {record.estimated_hours}人时</Tag>}
               {record.start_date && <Tag color="processing">开始 {dayjs(record.start_date).format('MM-DD')}</Tag>}
               {record.complete_date && <Tag color="success">完成 {dayjs(record.complete_date).format('MM-DD')}</Tag>}
             </Space>
@@ -1905,6 +1973,10 @@ export default function Dashboard() {
                 </Descriptions.Item>
               )}
               <Descriptions.Item label="计划日期">{detailRecord.plan_date || detailRecord.date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="预估完成日期">{detailRecord.estimated_completion_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="预估工时">
+                {(detailRecord.estimated_hours === null || detailRecord.estimated_hours === undefined || detailRecord.estimated_hours === '') ? '-' : `${detailRecord.estimated_hours}人时`}
+              </Descriptions.Item>
               <Descriptions.Item label="开始日期">{detailRecord.start_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="完成日期">{detailRecord.complete_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="指派人">

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Tag, Space, Typography, Button, Modal, Form, Input, Select,
-  DatePicker, Popconfirm, message, Badge, Tooltip, Drawer, Descriptions, Grid, List
+  DatePicker, Popconfirm, message, Badge, Tooltip, Drawer, Descriptions, Grid, List,
+  InputNumber
 } from 'antd';
 import {
   PlusOutlined, CheckOutlined, PlayCircleOutlined, DeleteOutlined,
@@ -78,6 +79,8 @@ export default function MyTasks() {
     form.resetFields();
     form.setFieldsValue({
       date: dayjs(activeDate),
+      estimated_completion_date: dayjs(activeDate),
+      estimated_hours: null,
       priority: 'medium',
       status: 'pending',
       assigned_to: user?.id,
@@ -92,6 +95,7 @@ export default function MyTasks() {
     form.setFieldsValue({
       ...record,
       date: record.date ? dayjs(record.date) : null,
+      estimated_completion_date: record.estimated_completion_date ? dayjs(record.estimated_completion_date) : null,
     });
     setModalOpen(true);
   };
@@ -101,6 +105,7 @@ export default function MyTasks() {
     const payload = {
       ...values,
       date: values.date?.format('YYYY-MM-DD'),
+      estimated_completion_date: values.estimated_completion_date?.format('YYYY-MM-DD'),
       parent_id: parentTask?.id || null,
     };
     if (editing) {
@@ -175,6 +180,30 @@ export default function MyTasks() {
       },
     },
     {
+      title: '计划日期',
+      dataIndex: 'date',
+      width: 110,
+      render: v => v || '-',
+    },
+    {
+      title: '预估完成日期',
+      dataIndex: 'estimated_completion_date',
+      width: 130,
+      render: v => v || '-',
+    },
+    {
+      title: '预估工时',
+      dataIndex: 'estimated_hours',
+      width: 100,
+      render: v => (v === null || v === undefined || v === '') ? '-' : `${v}人时`,
+    },
+    {
+      title: '开始日期',
+      dataIndex: 'started_at',
+      width: 110,
+      render: v => v ? dayjs(v).format('YYYY-MM-DD') : '-',
+    },
+    {
       title: '操作',
       width: 180,
       render: (_, r) => (
@@ -245,7 +274,12 @@ export default function MyTasks() {
           </div>
 
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Typography.Text type="secondary">日期：{record.date || '-'}</Typography.Text>
+            <Typography.Text type="secondary">计划日期：{record.date || '-'}</Typography.Text>
+            <Typography.Text type="secondary">预估完成：{record.estimated_completion_date || '-'}</Typography.Text>
+            <Typography.Text type="secondary">
+              预估工时：{(record.estimated_hours === null || record.estimated_hours === undefined || record.estimated_hours === '') ? '-' : `${record.estimated_hours}人时`}
+            </Typography.Text>
+            <Typography.Text type="secondary">开始日期：{record.started_at ? dayjs(record.started_at).format('YYYY-MM-DD') : '-'}</Typography.Text>
             <Typography.Text type="secondary">指派人：{record.created_by === user?.id ? '自建' : (record.created_by_name || '-')}</Typography.Text>
           </div>
 
@@ -383,8 +417,16 @@ export default function MyTasks() {
             <Input.TextArea rows={3} placeholder="填写当前进度、执行情况或最终结果（选填）" />
           </Form.Item>
           <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={12}>
-            <Form.Item label="日期" name="date" rules={[{ required: true }]} style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
+            <Form.Item label="计划日期" name="date" rules={[{ required: true, message: '请选择计划日期' }]} style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
               <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item label="预估完成日期" name="estimated_completion_date" rules={[{ required: true, message: '请选择预估完成日期' }]} style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
+              <DatePicker style={{ width: '100%' }} />
+            </Form.Item>
+          </Space>
+          <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row', marginTop: isMobile ? 0 : 12 }} size={12}>
+            <Form.Item label="预估工时" name="estimated_hours" style={{ flex: 1, marginBottom: isMobile ? 12 : 0, width: isMobile ? '100%' : undefined }}>
+              <InputNumber min={0} step={0.5} addonAfter="人时" style={{ width: '100%' }} />
             </Form.Item>
             <Form.Item label="优先级" name="priority" style={{ flex: 1, marginBottom: 0, width: isMobile ? '100%' : undefined }}>
               <Select>
@@ -441,7 +483,12 @@ export default function MyTasks() {
               {detailRecord.result && (
                 <Descriptions.Item label="任务进度/任务结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.result}</div></Descriptions.Item>
               )}
-              <Descriptions.Item label="日期">{detailRecord.date}</Descriptions.Item>
+              <Descriptions.Item label="计划日期">{detailRecord.date}</Descriptions.Item>
+              <Descriptions.Item label="预估完成日期">{detailRecord.estimated_completion_date || '-'}</Descriptions.Item>
+              <Descriptions.Item label="预估工时">
+                {(detailRecord.estimated_hours === null || detailRecord.estimated_hours === undefined || detailRecord.estimated_hours === '') ? '-' : `${detailRecord.estimated_hours}人时`}
+              </Descriptions.Item>
+              <Descriptions.Item label="开始日期">{detailRecord.started_at ? dayjs(detailRecord.started_at).format('YYYY-MM-DD') : '-'}</Descriptions.Item>
               <Descriptions.Item label="优先级">
                 <Tag color={priorityMap[detailRecord.priority]?.color}>{priorityMap[detailRecord.priority]?.label}</Tag>
               </Descriptions.Item>
