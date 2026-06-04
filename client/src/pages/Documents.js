@@ -2505,6 +2505,44 @@ export default function Documents() {
     focusBlock(nextBlock.id);
   };
 
+  const openBlockMenuForId = (blockId) => {
+    if (!blockId) return;
+    pendingBlockMenuTargetIdsRef.current = [blockId];
+    activeBlockMenuTargetIdsRef.current = [blockId];
+    selectedAreaBlockIdsRef.current = [blockId];
+    setBlockMenuTargetIds([blockId]);
+    setSelectedAreaBlockIds([blockId]);
+    setSelectedBlockId(blockId);
+    setOpenBlockMenuId(blockId);
+  };
+
+  const appendBlankBlockAtEnd = ({ openMenu = false } = {}) => {
+    const lastBlock = editorBlocks[editorBlocks.length - 1];
+    if (lastBlock?.type === 'paragraph' && isBlankBlock(lastBlock)) {
+      setSelectedBlockId(lastBlock.id);
+      clearAreaBlockSelection();
+      if (openMenu) {
+        openBlockMenuForId(lastBlock.id);
+        return;
+      }
+      setOpenBlockMenuId(null);
+      focusBlock(lastBlock.id);
+      return;
+    }
+
+    const nextBlock = createBlock();
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => [...prev, nextBlock]);
+    setSelectedBlockId(nextBlock.id);
+    clearAreaBlockSelection();
+    if (openMenu) {
+      openBlockMenuForId(nextBlock.id);
+      return;
+    }
+    setOpenBlockMenuId(null);
+    focusBlock(nextBlock.id);
+  };
+
   const deleteBlock = (id) => {
     pushEditorUndoSnapshot();
     if (editorBlocks.length <= 1) {
@@ -5421,6 +5459,77 @@ export default function Documents() {
     return <TextArea {...commonProps} />;
   };
 
+  const renderAppendBlockShortcut = () => {
+    const visibleBlocks = editorBlocks.filter(block => !hiddenListBlockIds.has(block.id));
+    const lastVisibleBlock = visibleBlocks[visibleBlocks.length - 1];
+    if (lastVisibleBlock?.type === 'paragraph' && isBlankBlock(lastVisibleBlock)) return null;
+
+    return (
+      <div
+        onMouseEnter={() => setHoveredBlockId(null)}
+        style={{
+          position: 'relative',
+          minHeight: 34,
+          padding: isMobile ? '5px 6px' : '3px 8px 3px 0',
+          marginTop: 2,
+        }}
+      >
+        <div style={{
+          position: 'absolute',
+          left: isMobile ? -24 : -32,
+          top: 6,
+          width: 24,
+          display: 'flex',
+          justifyContent: 'center',
+        }}>
+          <Tooltip title="添加内容" placement="left">
+            <Button
+              type="text"
+              size="small"
+              icon={<BlockAddIcon />}
+              aria-label="添加内容"
+              onMouseDown={event => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onClick={event => {
+                event.stopPropagation();
+                appendBlankBlockAtEnd({ openMenu: true });
+              }}
+              style={{
+                width: 24,
+                height: 24,
+                minWidth: 24,
+                color: '#6b7280',
+                background: '#f8fafc',
+              }}
+            />
+          </Tooltip>
+        </div>
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="继续输入"
+          onMouseDown={event => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={() => appendBlankBlockAtEnd()}
+          onKeyDown={event => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            appendBlankBlockAtEnd({ openMenu: event.key === ' ' });
+          }}
+          style={{
+            minHeight: 28,
+            borderRadius: 6,
+            cursor: 'text',
+          }}
+        />
+      </div>
+    );
+  };
+
   const renderEditorBlock = (block, index) => {
     if (hiddenListBlockIds.has(block.id)) return null;
     const menuOpen = openBlockMenuId === block.id;
@@ -5986,6 +6095,7 @@ export default function Documents() {
                   minHeight: isMobile ? 'calc(100vh - 260px)' : 420,
                 }}>
                   {editorBlocks.map((block, index) => renderEditorBlock(block, index))}
+                  {renderAppendBlockShortcut()}
                 </section>
                 {renderTocPanel()}
               </div>
