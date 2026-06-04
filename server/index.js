@@ -6347,6 +6347,7 @@ db.exec(`
     name TEXT NOT NULL,
     reg_name TEXT,
     city TEXT,
+    address TEXT,
     established_date TEXT,
     legal_representative TEXT,
     social_security_count INTEGER,
@@ -6421,6 +6422,7 @@ addColumnIfMissing('companies', 'project_group_ids', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_entities', 'legal_representative', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_entities', 'contact_phone', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_entities', 'established_date', 'TEXT DEFAULT NULL');
+addColumnIfMissing('company_entities', 'address', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_entities', 'social_security_count', 'INTEGER DEFAULT NULL');
 addColumnIfMissing('company_entities', 'software_copyright_count', 'INTEGER DEFAULT NULL');
 addColumnIfMissing('company_personnel', 'manager_id', 'INTEGER DEFAULT NULL');
@@ -6603,7 +6605,7 @@ app.get('/api/company_entities', (req, res) => {
 
 app.post('/api/company_entities', (req, res) => {
   const {
-    company_id, name, reg_name, city, established_date, legal_representative,
+    company_id, name, reg_name, city, address, established_date, legal_representative,
     social_security_count, software_copyright_count, contact_phone, business, notes, sort_order,
   } = req.body;
   const targetCompanyId = Number(company_id);
@@ -6612,12 +6614,12 @@ app.post('/api/company_entities', (req, res) => {
   if (!company || !canAccessCompany(req.user, company)) return res.status(404).json({ error: '所属公司不存在或无权访问' });
   const r = db.prepare(`
     INSERT INTO company_entities (
-      company_id, name, reg_name, city, established_date, legal_representative,
+      company_id, name, reg_name, city, address, established_date, legal_representative,
       social_security_count, software_copyright_count, contact_phone, business, notes, sort_order
     )
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    targetCompanyId, name, reg_name, city, established_date, legal_representative,
+    targetCompanyId, name, reg_name, city, address, established_date, legal_representative,
     social_security_count, software_copyright_count, contact_phone, business, notes, sort_order || 0
   );
   res.json({ id: r.lastInsertRowid });
@@ -6625,7 +6627,7 @@ app.post('/api/company_entities', (req, res) => {
 
 app.put('/api/company_entities/:id', (req, res) => {
   const {
-    company_id, name, reg_name, city, established_date, legal_representative,
+    company_id, name, reg_name, city, address, established_date, legal_representative,
     social_security_count, software_copyright_count, contact_phone, business, notes, sort_order,
   } = req.body;
   const id = Number(req.params.id);
@@ -6640,11 +6642,11 @@ app.put('/api/company_entities/:id', (req, res) => {
 
   const updateEntity = db.transaction(() => {
     db.prepare(`
-      UPDATE company_entities SET company_id=?, name=?, reg_name=?, city=?, established_date=?, legal_representative=?,
+      UPDATE company_entities SET company_id=?, name=?, reg_name=?, city=?, address=?, established_date=?, legal_representative=?,
         social_security_count=?, software_copyright_count=?, contact_phone=?, business=?, notes=?, sort_order=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
     `).run(
-      targetCompanyId, name, reg_name, city, established_date, legal_representative,
+      targetCompanyId, name, reg_name, city, address, established_date, legal_representative,
       social_security_count, software_copyright_count, contact_phone, business, notes, sort_order || 0, id
     );
 

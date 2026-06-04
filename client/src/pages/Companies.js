@@ -1726,6 +1726,7 @@ function EntityManager({ companyId, entities, onRefresh }) {
     },
     { title: '注册名称', dataIndex: 'reg_name', width: 220, render: value => value || '-' },
     { title: '注册城市', dataIndex: 'city', width: 100, render: value => value || '-' },
+    { title: '地址', dataIndex: 'address', width: 240, render: value => value || '-' },
     { title: '成立日期', dataIndex: 'established_date', width: 120, render: value => value || '-' },
     { title: '法人代表', dataIndex: 'legal_representative', width: 120, render: value => value || '-' },
     { title: '主营方向', dataIndex: 'business', width: 220, render: value => value || '-' },
@@ -1821,6 +1822,11 @@ function EntityManager({ companyId, entities, onRefresh }) {
                 <Input placeholder="如：北京" />
               </Form.Item>
             </Col>
+            <Col span={24}>
+              <Form.Item label="地址" name="address">
+                <Input placeholder="请输入注册地址或办公地址" />
+              </Form.Item>
+            </Col>
             <Col span={isMobile ? 24 : 12}>
               <Form.Item label="成立日期" name="established_date">
                 <DatePicker style={{ width: '100%' }} />
@@ -1869,7 +1875,7 @@ function EntityManager({ companyId, entities, onRefresh }) {
         dataSource={entities}
         columns={entityColumns}
         pagination={false}
-        scroll={{ x: 1720 }}
+        scroll={{ x: 1960 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无主体" /> }}
       />
     </>
@@ -2807,6 +2813,7 @@ export default function Companies() {
                       <Descriptions.Item label="主体名称"><Text strong>{entity.name}</Text></Descriptions.Item>
                       {entity.reg_name && <Descriptions.Item label="注册名称">{entity.reg_name}</Descriptions.Item>}
                       {entity.city && <Descriptions.Item label="注册城市">{entity.city}</Descriptions.Item>}
+                      {entity.address && <Descriptions.Item label="地址" span={3}>{entity.address}</Descriptions.Item>}
                       {entity.established_date && <Descriptions.Item label="成立日期">{entity.established_date}</Descriptions.Item>}
                       {entity.legal_representative && <Descriptions.Item label="法人代表">{entity.legal_representative}</Descriptions.Item>}
                       {(entity.social_security_count !== null && entity.social_security_count !== undefined && entity.social_security_count !== '') && (
