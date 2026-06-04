@@ -1711,9 +1711,15 @@ function EntityManager({ companyId, entities, onRefresh }) {
     { title: '注册名称', dataIndex: 'reg_name', width: 220, render: value => value || '-' },
     { title: '注册城市', dataIndex: 'city', width: 100, render: value => value || '-' },
     { title: '法人代表', dataIndex: 'legal_representative', width: 120, render: value => value || '-' },
-    { title: '联系电话', dataIndex: 'contact_phone', width: 140, render: value => value || '-' },
     { title: '主营方向', dataIndex: 'business', width: 220, render: value => value || '-' },
     { title: '备注', dataIndex: 'notes', width: 220, render: value => value || '-' },
+    {
+      title: '联系电话',
+      dataIndex: 'contact_phone',
+      width: 140,
+      fixed: isMobile ? undefined : 'right',
+      render: value => value || '-',
+    },
     {
       title: '操作',
       key: 'actions',
