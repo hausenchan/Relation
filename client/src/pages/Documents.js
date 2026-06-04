@@ -134,33 +134,41 @@ function BlockHandleIcon() {
     <span
       aria-hidden="true"
       style={{
-        width: 14,
-        height: 14,
-        display: 'grid',
-        gridTemplateColumns: 'repeat(2, 4px)',
-        gridTemplateRows: 'repeat(2, 4px)',
-        gap: 3,
-        alignContent: 'center',
+        display: 'inline-flex',
+        alignItems: 'center',
         justifyContent: 'center',
+        width: 18,
+        height: 18,
+        color: '#64748b',
+        fontSize: 16,
+        fontWeight: 700,
+        lineHeight: 1,
       }}
     >
-      {Array.from({ length: 4 }).map((_, index) => (
-        <span
-          key={index}
-          style={{
-            width: 4,
-            height: 4,
-            borderRadius: '50%',
-            background: '#9ca3af',
-          }}
-        />
-      ))}
+      ::
     </span>
   );
 }
 
 function BlockAddIcon() {
-  return <PlusOutlined style={{ fontSize: 16, color: '#9ca3af' }} />;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        color: '#64748b',
+        fontSize: 18,
+        fontWeight: 700,
+        lineHeight: 1,
+      }}
+    >
+      +
+    </span>
+  );
 }
 
 const blockTypeGroups = [
@@ -5501,7 +5509,8 @@ export default function Documents() {
                 height: 24,
                 minWidth: 24,
                 color: '#6b7280',
-                background: '#f8fafc',
+                border: '1px solid #e5e7eb',
+                background: '#fff',
               }}
             />
           </Tooltip>
@@ -5538,7 +5547,8 @@ export default function Documents() {
     const multiBlockSelected = selectedVisibleBlockIds.length > 1;
     const groupHandleBlockId = multiBlockSelected ? selectedVisibleBlockIds[0] : null;
     const canShowGroupHandle = !multiBlockSelected || block.id === groupHandleBlockId || menuOpen;
-    const handleVisible = canShowGroupHandle && (isMobile || menuOpen || blockSelected || hoveredBlockId === block.id);
+    const blockFocused = selectedBlockId === block.id;
+    const handleVisible = canShowGroupHandle && (isMobile || menuOpen || blockSelected || blockFocused || hoveredBlockId === block.id);
     const heading = headingMeta.map.get(block.id);
     const comments = getBlockInlineComments(block);
     const commentsOpen = activeCommentBlockId === block.id && comments.length > 0;
@@ -5669,7 +5679,8 @@ export default function Documents() {
                   opacity: blankParagraph || handleVisible ? 1 : 0,
                   pointerEvents: blankParagraph || handleVisible ? 'auto' : 'none',
                   color: '#6b7280',
-                  background: menuOpen ? '#eef2ff' : (isMobile ? '#f8fafc' : '#f3f4f6'),
+                  border: '1px solid #e5e7eb',
+                  background: menuOpen ? '#eef2ff' : '#fff',
                 }}
               />
             </Dropdown>
