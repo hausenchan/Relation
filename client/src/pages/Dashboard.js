@@ -1651,21 +1651,26 @@ export default function Dashboard() {
       {/* 统计卡片 */}
       <Row gutter={[isMobile ? 10 : 16, isMobile ? 10 : 16]} style={{ marginBottom: isMobile ? 16 : 24 }}>
         {[
-          !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-          !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { title: '本周待办提醒', value: weeklyUnfinishedTaskCount, icon: <BellOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
           {
             title: '本周任务',
             value: weeklyTaskCount,
             icon: <CalendarOutlined />,
-            gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)'
+            gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)'
+          },
+          {
+            title: '本周待办',
+            value: weeklyUnfinishedTaskCount,
+            icon: <BellOutlined />,
+            gradient: 'linear-gradient(135deg, #f59e0b 0%, #f97316 100%)'
           },
           {
             title: '今日任务',
             value: todayTaskCount,
             icon: <CheckSquareOutlined />,
-            gradient: 'linear-gradient(135deg, #36d1dc 0%, #5b86e5 100%)'
+            gradient: 'linear-gradient(135deg, #fb7185 0%, #ef4444 100%)'
           },
+          !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
+          !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
         ].filter(Boolean).map((card, idx) => (
           <Col xs={12} sm={12} lg={6} key={idx}>
             <Card
