@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table, Button, Input, Select, Tag, Space, Modal, Form, Row, Col,
   Typography, Drawer, Tabs, Popconfirm, message, Tooltip, Divider,
-  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber, Collapse, Grid, List, Upload
+  Timeline, Card, Badge, Empty, Descriptions, Segmented, InputNumber, Collapse, Grid, List, Upload, DatePicker
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, BankOutlined,
@@ -1670,17 +1670,25 @@ function EntityManager({ companyId, entities, onRefresh }) {
   };
   const openEdit = (e) => {
     setEditing(e);
-    form.setFieldsValue({ ...e, company_id: e.company_id || companyId });
+    form.setFieldsValue({
+      ...e,
+      company_id: e.company_id || companyId,
+      established_date: e.established_date ? dayjs(e.established_date) : undefined,
+    });
     setModalOpen(true);
   };
 
   const handleSave = async () => {
     const values = await form.validateFields();
+    const payload = {
+      ...values,
+      established_date: values.established_date ? dayjs(values.established_date).format('YYYY-MM-DD') : null,
+    };
     if (editing) {
-      await companyEntitiesApi.update(editing.id, values);
+      await companyEntitiesApi.update(editing.id, payload);
       message.success('已更新');
     } else {
-      await companyEntitiesApi.create(values);
+      await companyEntitiesApi.create(payload);
       message.success('已添加');
     }
     setModalOpen(false);
@@ -1710,6 +1718,7 @@ function EntityManager({ companyId, entities, onRefresh }) {
     },
     { title: '注册名称', dataIndex: 'reg_name', width: 220, render: value => value || '-' },
     { title: '注册城市', dataIndex: 'city', width: 100, render: value => value || '-' },
+    { title: '成立日期', dataIndex: 'established_date', width: 120, render: value => value || '-' },
     { title: '法人代表', dataIndex: 'legal_representative', width: 120, render: value => value || '-' },
     { title: '主营方向', dataIndex: 'business', width: 220, render: value => value || '-' },
     { title: '备注', dataIndex: 'notes', width: 220, render: value => value || '-' },
@@ -1793,6 +1802,11 @@ function EntityManager({ companyId, entities, onRefresh }) {
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="成立日期" name="established_date">
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="法人代表" name="legal_representative">
                 <Input placeholder="请输入法人代表" />
               </Form.Item>
@@ -1825,7 +1839,7 @@ function EntityManager({ companyId, entities, onRefresh }) {
         dataSource={entities}
         columns={entityColumns}
         pagination={false}
-        scroll={{ x: 1400 }}
+        scroll={{ x: 1520 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无主体" /> }}
       />
     </>
@@ -2763,6 +2777,7 @@ export default function Companies() {
                       <Descriptions.Item label="主体名称"><Text strong>{entity.name}</Text></Descriptions.Item>
                       {entity.reg_name && <Descriptions.Item label="注册名称">{entity.reg_name}</Descriptions.Item>}
                       {entity.city && <Descriptions.Item label="注册城市">{entity.city}</Descriptions.Item>}
+                      {entity.established_date && <Descriptions.Item label="成立日期">{entity.established_date}</Descriptions.Item>}
                       {entity.legal_representative && <Descriptions.Item label="法人代表">{entity.legal_representative}</Descriptions.Item>}
                       {entity.contact_phone && <Descriptions.Item label="联系电话">{entity.contact_phone}</Descriptions.Item>}
                       {entity.business && <Descriptions.Item label="主营方向" span={3}>{entity.business}</Descriptions.Item>}
