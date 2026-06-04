@@ -902,6 +902,8 @@ db.exec(`
     title       TEXT NOT NULL,
     description TEXT,
     date        TEXT NOT NULL,
+    estimated_completion_date TEXT NOT NULL,
+    estimated_hours REAL DEFAULT NULL,
     status      TEXT DEFAULT 'pending',
     priority    TEXT DEFAULT 'medium',
     created_by  INTEGER NOT NULL,
@@ -933,6 +935,15 @@ if (taskCols.length > 0 && !taskCols.includes('result')) {
 }
 if (taskCols.length > 0 && !taskCols.includes('started_at')) {
   db.exec("ALTER TABLE tasks ADD COLUMN started_at DATETIME DEFAULT NULL");
+}
+if (taskCols.length > 0 && !taskCols.includes('estimated_completion_date')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN estimated_completion_date TEXT DEFAULT NULL");
+}
+if (taskCols.length > 0 && !taskCols.includes('estimated_hours')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN estimated_hours REAL DEFAULT NULL");
+}
+if (taskCols.length > 0) {
+  db.exec("UPDATE tasks SET estimated_completion_date = date WHERE estimated_completion_date IS NULL OR estimated_completion_date = ''");
 }
 
 // =========== 线索池表 ===========
@@ -5813,6 +5824,15 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
 // =========== 商务任务 API ===========
 const TASK_STATUSES = new Set(['pending', 'in_progress', 'done', 'suspended']);
 
+function normalizeTaskEstimatedHours(value) {
+  if (value === undefined || value === null || value === '') return { value: null };
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue < 0) {
+    return { error: '预估工时需为非负数字' };
+  }
+  return { value: numericValue };
+}
+
 // 获取可见任务（按角色过滤）
 app.get('/api/tasks', (req, res) => {
   const { date, assigned_to, team_id, status, parent_id, mine } = req.query;
@@ -5932,9 +5952,15 @@ app.get('/api/tasks/board', (req, res) => {
 
 // 创建任务
 app.post('/api/tasks', (req, res) => {
-  const { title, description, date, status, priority, assigned_to, team_id, parent_id, result, shared_to } = req.body;
+  const { title, description, date, estimated_completion_date, estimated_hours, status, priority, assigned_to, team_id, parent_id, result, shared_to } = req.body;
   const { id: me } = req.user;
-  if (!title || !date || !assigned_to) return res.status(400).json({ error: '标题、日期、被指派人必填' });
+  if (!title || !date || !estimated_completion_date || !assigned_to) {
+    return res.status(400).json({ error: '标题、计划日期、预估完成日期、被指派人必填' });
+  }
+  const normalizedEstimatedHours = normalizeTaskEstimatedHours(estimated_hours);
+  if (normalizedEstimatedHours.error) {
+    return res.status(400).json({ error: normalizedEstimatedHours.error });
+  }
   const normalizedStatus = status || 'pending';
   if (!TASK_STATUSES.has(normalizedStatus)) {
     return res.status(400).json({ error: '任务状态不合法' });
@@ -5956,12 +5982,14 @@ app.post('/api/tasks', (req, res) => {
 
   const enc = encryptRow('tasks', { title, description, result });
   const r = db.prepare(`
-    INSERT INTO tasks (title, description, date, status, priority, created_by, assigned_to, team_id, parent_id, depth, result)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+    INSERT INTO tasks (title, description, date, estimated_completion_date, estimated_hours, status, priority, created_by, assigned_to, team_id, parent_id, depth, result)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     enc.title,
     enc.description || null,
     date,
+    estimated_completion_date,
+    normalizedEstimatedHours.value,
     normalizedStatus,
     priority || 'medium',
     me,
@@ -5981,11 +6009,18 @@ app.post('/api/tasks', (req, res) => {
 
 // 更新任务
 app.put('/api/tasks/:id', (req, res) => {
-  const { title, description, status, priority, date, result, shared_to } = req.body;
+  const { title, description, status, priority, date, estimated_completion_date, estimated_hours, result, shared_to } = req.body;
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
   if (status !== undefined && !TASK_STATUSES.has(status)) {
     return res.status(400).json({ error: '任务状态不合法' });
+  }
+  if (estimated_completion_date !== undefined && !estimated_completion_date) {
+    return res.status(400).json({ error: '预估完成日期必填' });
+  }
+  const normalizedEstimatedHours = normalizeTaskEstimatedHours(estimated_hours);
+  if (normalizedEstimatedHours.error) {
+    return res.status(400).json({ error: normalizedEstimatedHours.error });
   }
 
   const { id: me, role } = req.user;
@@ -5999,19 +6034,22 @@ app.put('/api/tasks/:id', (req, res) => {
     ? (task.started_at || now)
     : task.started_at;
   const doneAt = status === 'done' ? now : (status && status !== 'done' ? null : task.done_at);
+  const nextEstimatedHours = estimated_hours === undefined ? task.estimated_hours : normalizedEstimatedHours.value;
   const merged = encryptRow('tasks', {
     title: title ?? task.title,
     description: description ?? task.description,
     result: result !== undefined ? result : task.result,
   });
   db.prepare(`
-    UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, started_at=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+    UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, estimated_completion_date=?, estimated_hours=?, started_at=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(
     merged.title,
     merged.description,
     status ?? task.status,
     priority ?? task.priority,
     date ?? task.date,
+    estimated_completion_date ?? task.estimated_completion_date ?? task.date,
+    nextEstimatedHours,
     startedAt,
     doneAt,
     merged.result,
