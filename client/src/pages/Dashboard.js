@@ -243,6 +243,9 @@ export default function Dashboard() {
   const [modalOpen, setModalOpen] = useState(false);
   const [taskSaving, setTaskSaving] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [completeModalOpen, setCompleteModalOpen] = useState(false);
+  const [completeTarget, setCompleteTarget] = useState(null);
+  const [completeSaving, setCompleteSaving] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
   const [taskColumnWidths, setTaskColumnWidths] = useState(() => {
@@ -259,25 +262,26 @@ export default function Dashboard() {
     }
   });
   const [form] = Form.useForm();
+  const [completeForm] = Form.useForm();
   const [users, setUsers] = useState([]);
   const navigate = useNavigate();
 
-  // 筛选条件 - 我指派给别人的任务
+  // 筛选条件 - 我指派
   const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
   const [assignedTaskTitleSearch, setAssignedTaskTitleSearch] = useState('');
 
-  // 筛选条件 - 需我执行的任务
+  // 筛选条件 - 待执行
   const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [executionTaskDateRange, setExecutionTaskDateRange] = useState(null);
   const [executionTaskTitleSearch, setExecutionTaskTitleSearch] = useState('');
 
-  // 筛选条件 - 需我关注的任务
+  // 筛选条件 - 需关注
   const [watchedTaskStatusFilter, setWatchedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [watchedTaskDateRange, setWatchedTaskDateRange] = useState(null);
   const [watchedTaskTitleSearch, setWatchedTaskTitleSearch] = useState('');
 
-  // 筛选条件 - 团队任务
+  // 筛选条件 - 团队
   const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
   const [teamTaskDateRange, setTeamTaskDateRange] = useState(null);
   const [teamTaskAssignerFilter, setTeamTaskAssignerFilter] = useState([]);
@@ -670,6 +674,47 @@ export default function Dashboard() {
     }
   };
 
+  const openCompleteTask = (record) => {
+    setCompleteTarget(record);
+    completeForm.setFieldsValue({
+      result: record?.display_result || record?.result || '',
+    });
+    setCompleteModalOpen(true);
+  };
+
+  const closeCompleteTask = () => {
+    if (completeSaving) return;
+    setCompleteModalOpen(false);
+    setCompleteTarget(null);
+    completeForm.resetFields();
+  };
+
+  const handleCompleteTask = async () => {
+    if (!completeTarget?.id) return;
+    let values;
+    try {
+      values = await completeForm.validateFields();
+    } catch {
+      return;
+    }
+    setCompleteSaving(true);
+    try {
+      await tasksApi.update(completeTarget.id, {
+        status: 'done',
+        result: values.result,
+      });
+      message.success('任务已完成');
+      setCompleteModalOpen(false);
+      setCompleteTarget(null);
+      completeForm.resetFields();
+      loadData();
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '更新失败');
+    } finally {
+      setCompleteSaving(false);
+    }
+  };
+
   const handleDelete = async (id) => {
     try {
       await tasksApi.delete(id);
@@ -773,6 +818,8 @@ export default function Dashboard() {
 
   const dashboardPersonalTasks = [...assignedTasks, ...executionTasks];
   const isCurrentWeekTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'week');
+  const isTodayTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'day');
+  const todayTaskCount = new Set(dashboardPersonalTasks.filter(isTodayTask).map(task => task.id)).size;
   const weeklyTaskCount = dashboardPersonalTasks.filter(isCurrentWeekTask).length;
   const weeklyUnfinishedTaskCount = dashboardPersonalTasks.filter(task => (
     isCurrentWeekTask(task) && (task.display_status || task.status) !== 'done'
@@ -888,7 +935,7 @@ export default function Dashboard() {
               type="link"
               size="small"
               icon={<CheckOutlined />}
-              onClick={() => handleUpdateStatus(record.id, 'done')}
+              onClick={() => openCompleteTask(record)}
             >
               完成
             </Button>
@@ -1246,7 +1293,7 @@ export default function Dashboard() {
                 </Button>
               )}
               {canDone && (
-                <Button type={isMobile ? 'primary' : 'link'} size="small" icon={<CheckOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => handleUpdateStatus(record.id, 'done')}>
+                <Button type={isMobile ? 'primary' : 'link'} size="small" icon={<CheckOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => openCompleteTask(record)}>
                   完成
                 </Button>
               )}
@@ -1279,88 +1326,12 @@ export default function Dashboard() {
 
   const tabItems = [];
 
-  if (canViewAssignedTasks) {
-    tabItems.push({
-      key: 'assigned-tasks',
-      label: (
-        <span>
-          <UserOutlined /> 我指派给别人的任务
-          {countUnfinished(assignedTasks) > 0 && <Badge count={countUnfinished(assignedTasks)} style={{ marginLeft: 8 }} />}
-        </span>
-      ),
-      children: (
-        <div>
-          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-            <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
-              <Input
-                allowClear
-                placeholder="搜索任务标题"
-                value={assignedTaskTitleSearch}
-                onChange={event => setAssignedTaskTitleSearch(event.target.value)}
-                style={isMobile ? { width: '100%' } : { width: 220 }}
-              />
-              <Select
-                mode="multiple"
-                placeholder="状态筛选"
-                value={assignedTaskStatusFilter}
-                onChange={setAssignedTaskStatusFilter}
-                style={isMobile ? { width: '100%' } : { minWidth: 200 }}
-                options={TASK_STATUS_OPTIONS}
-              />
-              <RangePicker
-                placeholder={['开始日期', '结束日期']}
-                value={assignedTaskDateRange}
-                onChange={setAssignedTaskDateRange}
-                style={isMobile ? { width: '100%' } : { width: 240 }}
-              />
-              {(assignedTaskTitleSearch.trim() || assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskDateRange) && (
-                <Button
-                  size="small"
-                  onClick={() => {
-                    setAssignedTaskTitleSearch('');
-                    setAssignedTaskStatusFilter([...TASK_STATUS_VALUES]);
-                    setAssignedTaskDateRange(null);
-                  }}
-                >
-                  重置筛选
-                </Button>
-              )}
-            </Space>
-          </div>
-          {isMobile ? (
-            <List
-              dataSource={filteredAssignedTasks}
-              rowKey="id"
-              loading={loading}
-              pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
-              locale={{ emptyText: '暂无任务数据' }}
-              renderItem={(record) => renderTaskCard(record, 'assigned')}
-            />
-          ) : (
-            <Table
-              dataSource={filteredAssignedTasks}
-              columns={withResizableTaskColumns('assigned', assignedTaskColumns)}
-              rowKey="id"
-              onRow={taskRowProps}
-              components={resizableTableComponents}
-              loading={loading}
-              scroll={{ x: getTaskTableScrollX('assigned') }}
-              tableLayout="fixed"
-              pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
-              size="small"
-            />
-          )}
-        </div>
-      ),
-    });
-  }
-
   tabItems.push(
     {
       key: 'execution-tasks',
       label: (
         <span>
-          <ThunderboltOutlined /> 需我执行的任务
+          <ThunderboltOutlined /> 待执行
           {countUnfinished(executionTasks) > 0 && <Badge count={countUnfinished(executionTasks)} style={{ marginLeft: 8 }} />}
         </span>
       ),
@@ -1431,11 +1402,87 @@ export default function Dashboard() {
     }
   );
 
+  if (canViewAssignedTasks) {
+    tabItems.push({
+      key: 'assigned-tasks',
+      label: (
+        <span>
+          <UserOutlined /> 我指派
+          {countUnfinished(assignedTasks) > 0 && <Badge count={countUnfinished(assignedTasks)} style={{ marginLeft: 8 }} />}
+        </span>
+      ),
+      children: (
+        <div>
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+            <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+              <Input
+                allowClear
+                placeholder="搜索任务标题"
+                value={assignedTaskTitleSearch}
+                onChange={event => setAssignedTaskTitleSearch(event.target.value)}
+                style={isMobile ? { width: '100%' } : { width: 220 }}
+              />
+              <Select
+                mode="multiple"
+                placeholder="状态筛选"
+                value={assignedTaskStatusFilter}
+                onChange={setAssignedTaskStatusFilter}
+                style={isMobile ? { width: '100%' } : { minWidth: 200 }}
+                options={TASK_STATUS_OPTIONS}
+              />
+              <RangePicker
+                placeholder={['开始日期', '结束日期']}
+                value={assignedTaskDateRange}
+                onChange={setAssignedTaskDateRange}
+                style={isMobile ? { width: '100%' } : { width: 240 }}
+              />
+              {(assignedTaskTitleSearch.trim() || assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskDateRange) && (
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setAssignedTaskTitleSearch('');
+                    setAssignedTaskStatusFilter([...TASK_STATUS_VALUES]);
+                    setAssignedTaskDateRange(null);
+                  }}
+                >
+                  重置筛选
+                </Button>
+              )}
+            </Space>
+          </div>
+          {isMobile ? (
+            <List
+              dataSource={filteredAssignedTasks}
+              rowKey="id"
+              loading={loading}
+              pagination={{ defaultPageSize: 20, showSizeChanger: false, simple: isMobile }}
+              locale={{ emptyText: '暂无任务数据' }}
+              renderItem={(record) => renderTaskCard(record, 'assigned')}
+            />
+          ) : (
+            <Table
+              dataSource={filteredAssignedTasks}
+              columns={withResizableTaskColumns('assigned', assignedTaskColumns)}
+              rowKey="id"
+              onRow={taskRowProps}
+              components={resizableTableComponents}
+              loading={loading}
+              scroll={{ x: getTaskTableScrollX('assigned') }}
+              tableLayout="fixed"
+              pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
+              size="small"
+            />
+          )}
+        </div>
+      ),
+    });
+  }
+
   tabItems.push({
     key: 'watched-tasks',
     label: (
       <span>
-        <BellOutlined /> 需我关注的任务
+        <BellOutlined /> 需关注
         {countUnfinished(watchedTasks) > 0 && <Badge count={countUnfinished(watchedTasks)} style={{ marginLeft: 8 }} />}
       </span>
     ),
@@ -1510,7 +1557,7 @@ export default function Dashboard() {
       key: 'team-tasks',
       label: (
         <span>
-          <TeamOutlined /> 团队任务
+          <TeamOutlined /> 团队
           {countUnfinished(teamTasks) > 0 && <Badge count={countUnfinished(teamTasks)} style={{ marginLeft: 8 }} />}
         </span>
       ),
@@ -1612,6 +1659,12 @@ export default function Dashboard() {
             value: weeklyTaskCount,
             icon: <CalendarOutlined />,
             gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)'
+          },
+          {
+            title: '今日任务',
+            value: todayTaskCount,
+            icon: <CheckSquareOutlined />,
+            gradient: 'linear-gradient(135deg, #36d1dc 0%, #5b86e5 100%)'
           },
         ].filter(Boolean).map((card, idx) => (
           <Col xs={12} sm={12} lg={6} key={idx}>
@@ -1756,6 +1809,30 @@ export default function Dashboard() {
           {renderTaskEditorForm()}
         </Modal>
       )}
+
+      <Modal
+        title="完成任务"
+        open={completeModalOpen}
+        onOk={handleCompleteTask}
+        onCancel={closeCompleteTask}
+        confirmLoading={completeSaving}
+        okText="确认完成"
+        cancelText="取消"
+        destroyOnClose={false}
+      >
+        <Form form={completeForm} layout="vertical">
+          <Form.Item
+            label="任务进度/任务结果"
+            name="result"
+            rules={[{ required: true, whitespace: true, message: '请填写任务进度/任务结果' }]}
+          >
+            <Input.TextArea
+              rows={isMobile ? 5 : 4}
+              placeholder="填写任务完成情况、关键进展或最终结果"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <Drawer
         title="任务详情"

@@ -2464,21 +2464,79 @@ export default function Documents() {
     const targetSet = new Set(targetIds);
     const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
     const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
-    const convertChildren = blockTypeGroups.map(group => ({
-      type: 'group',
-      label: group.label,
-      children: group.children.map(item => ({
-        key: `type:${item.value}`,
-        label: renderBlockMenuLabel(item, targetBlocks.length > 0 && targetBlocks.every(target => target.type === item.value)),
-        icon: item.icon,
-        disabled: targetCount > 1 && item.value === 'recent-image',
-      })),
-    }));
     return [
-      { key: 'convert', icon: <ReloadOutlined />, label: '转换为', children: convertChildren },
-      { type: 'divider' },
       { key: 'delete', danger: true, icon: <DeleteOutlined />, label: targetCount > 1 ? `删除 ${targetCount} 个块` : '删除' },
     ];
+  };
+
+  const getCurrentBlockMenuTargetIds = (block) => {
+    if (!block) return [];
+    if (blockMenuTargetIds.includes(block.id)) return [...blockMenuTargetIds];
+    if (activeBlockMenuTargetIdsRef.current.includes(block.id)) return [...activeBlockMenuTargetIdsRef.current];
+    return captureBlockMenuTargetIds(block.id);
+  };
+
+  const renderConvertBlockTypePanel = (block) => {
+    const targetIds = blockMenuTargetIds.length
+      ? blockMenuTargetIds
+      : (activeBlockMenuTargetIdsRef.current.includes(block?.id)
+        ? activeBlockMenuTargetIdsRef.current
+        : getBlockMenuTargetIds(block?.id));
+    const targetSet = new Set(targetIds);
+    const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
+    const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
+    const isSelectedType = (type) => targetBlocks.length > 0 && targetBlocks.every(target => target.type === type);
+
+    return (
+      <div
+        onClick={event => event.stopPropagation()}
+        style={{
+          width: isMobile ? 280 : 320,
+          maxHeight: 'min(440px, calc(100vh - 190px))',
+          overflowY: 'auto',
+          padding: '6px 4px',
+        }}
+      >
+        {blockTypeGroups.map(group => (
+          <div key={group.label} style={{ padding: '2px 0 8px' }}>
+            <div style={{ padding: '6px 12px', fontSize: 12, color: '#8c8c8c' }}>{group.label}</div>
+            {group.children.map(item => {
+              const disabled = targetCount > 1 && item.value === 'recent-image';
+              const selected = isSelectedType(item.value);
+              return (
+                <Button
+                  key={item.value}
+                  type="text"
+                  disabled={disabled}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const nextTargetIds = getCurrentBlockMenuTargetIds(block);
+                    setOpenBlockMenuId(null);
+                    handleBlockMenuAction(block, `type:${item.value}`, nextTargetIds);
+                  }}
+                  style={{
+                    width: '100%',
+                    height: 36,
+                    display: 'flex',
+                    justifyContent: 'flex-start',
+                    alignItems: 'center',
+                    gap: 10,
+                    padding: '0 12px',
+                    borderRadius: 6,
+                    background: selected ? '#f3f4f6' : undefined,
+                    color: selected ? '#111827' : undefined,
+                  }}
+                >
+                  <span style={{ width: 20, display: 'inline-flex', justifyContent: 'center', color: selected ? '#111827' : '#64748b' }}>{item.icon}</span>
+                  <span style={{ flex: 1, textAlign: 'left', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.label}</span>
+                  {selected && <CheckOutlined style={{ color: '#1677ff' }} />}
+                </Button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
   };
 
   const updateListIndent = (block, index, direction) => {
@@ -5146,8 +5204,27 @@ export default function Documents() {
             overlayStyle={{
               width: isMobile ? 300 : 340,
               maxHeight: 'min(560px, calc(100vh - 96px))',
-              overflowY: 'auto',
+              overflowY: 'hidden',
             }}
+            dropdownRender={(menu) => (
+              <div
+                onMouseDown={event => event.stopPropagation()}
+                onClick={event => event.stopPropagation()}
+                style={{
+                  width: isMobile ? 300 : 340,
+                  maxHeight: 'min(560px, calc(100vh - 96px))',
+                  overflow: 'hidden',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 6px', color: '#374151', fontWeight: 500 }}>
+                  <ReloadOutlined />
+                  <span>转换为</span>
+                </div>
+                {renderConvertBlockTypePanel(block)}
+                <Divider style={{ margin: '4px 0' }} />
+                {menu}
+              </div>
+            )}
             onOpenChange={(open) => {
               if (open) {
                 if (Date.now() < suppressBlockMenuOpenUntilRef.current) {
