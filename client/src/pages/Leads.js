@@ -12,6 +12,10 @@ const { Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 
+const listPrimaryTextStyle = { fontSize: 14, color: '#1f2937', lineHeight: 1.6 };
+const listSecondaryTextStyle = { fontSize: 12, color: '#6b7280', lineHeight: 1.5 };
+const listTableRowStyle = { cursor: 'pointer', fontSize: 13 };
+
 const opportunityStatusMap = {
   new: { label: '新商机', color: '#4F46E5', bg: '#eef2ff', border: '#c7d2fe' },
   following: { label: '跟进中', color: '#D97706', bg: '#fffbeb', border: '#fde68a' },
@@ -324,23 +328,13 @@ export default function Leads() {
         const subjectName = isCompetitor ? (r.company_name || '-') : (r.person_name || '-');
         const companyLine = isCompetitor ? '公司商机' : (r.company || r.current_company || '');
         return (
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
-            <Avatar
-              size={32}
-              style={{
-                flex: '0 0 auto',
-                background: isCompetitor ? '#eef2ff' : '#ecfdf5',
-                color: isCompetitor ? '#4F46E5' : '#059669',
-                fontSize: 14,
-              }}
-              icon={isCompetitor ? <BankOutlined /> : <UserOutlined />}
-            />
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                 <Text
                   strong
                   title={r.opportunity_title}
-                  style={{ fontSize: 14, color: '#1f2937', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  style={{ ...listPrimaryTextStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
                   {r.opportunity_title || '-'}
                 </Text>
@@ -361,7 +355,7 @@ export default function Leads() {
               </div>
               <div
                 title={`${subjectName}${companyLine && !isCompetitor ? ' · ' + companyLine : ''}`}
-                style={{ marginTop: 4, fontSize: 12, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                style={{ ...listSecondaryTextStyle, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
               >
                 {subjectName}
                 {companyLine && !isCompetitor && <span style={{ color: '#9ca3af' }}> · {companyLine}</span>}
@@ -659,14 +653,14 @@ export default function Leads() {
             dataSource={data}
             rowKey={(record) => `${record.source_type}-${record.source_id}`}
             loading={loading}
-            size="middle"
+            size="small"
             scroll={{ x: 1150 }}
             tableLayout="fixed"
             pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             locale={{ emptyText: '暂无商机记录' }}
             onRow={(record) => ({
               onClick: () => openDetail(record),
-              style: { cursor: 'pointer' },
+              style: listTableRowStyle,
             })}
           />
         )}

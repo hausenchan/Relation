@@ -16,6 +16,10 @@ const { TextArea } = Input;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 
+const listPrimaryTextStyle = { fontSize: 14, color: '#1f2937', lineHeight: 1.6 };
+const listSecondaryTextStyle = { fontSize: 12, color: '#6b7280', lineHeight: 1.5 };
+const listTableRowStyle = { cursor: 'pointer', fontSize: 13 };
+
 const dimensionMap = {
   monetization: { label: '变现策略', color: 'green', icon: <RiseOutlined /> },
   traffic: { label: '流量策略', color: 'blue', icon: <ThunderboltOutlined /> },
@@ -545,9 +549,10 @@ export default function Strategies() {
       width: 250,
       ellipsis: true,
       render: (text, record) => (
-        <Button type="link" style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left' }} onClick={() => showDetail(record)}>
-          {text}
-        </Button>
+        <Space direction="vertical" size={0}>
+          <Text strong style={listPrimaryTextStyle}>{text || '-'}</Text>
+          {record.description && <Text type="secondary" style={listSecondaryTextStyle}>{cleanDisplayText(record.description)}</Text>}
+        </Space>
       ),
     },
     {
@@ -701,9 +706,9 @@ export default function Strategies() {
       fixed: 'right',
       render: (_, record) => (
         <Space size="small">
-          <Button type="link" size="small" onClick={() => showDetail(record)}>详情</Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>编辑</Button>
-          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record.id)}>删除</Button>
+          <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); showDetail(record); }}>详情</Button>
+          <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); handleEdit(record); }}>编辑</Button>
+          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDelete(record.id); }}>删除</Button>
         </Space>
       ),
     },
@@ -1022,8 +1027,14 @@ export default function Strategies() {
             dataSource={getFilteredData()}
             rowKey="id"
             loading={loading}
+            size="small"
             scroll={{ x: 1920 }}
+            tableLayout="fixed"
             pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 条` }}
+            onRow={(record) => ({
+              onClick: () => showDetail(record),
+              style: listTableRowStyle,
+            })}
           />
         )}
       </Card>
