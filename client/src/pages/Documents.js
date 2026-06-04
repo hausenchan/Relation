@@ -34,6 +34,7 @@ import {
   CheckOutlined,
   CloseOutlined,
   ClockCircleOutlined,
+  CopyOutlined,
   DeleteOutlined,
   DownOutlined,
   EditOutlined,
@@ -1366,7 +1367,6 @@ export default function Documents() {
     const blocks = Array.isArray(tabState.editorBlocks) && tabState.editorBlocks.length
       ? tabState.editorBlocks
       : contentToBlocks(doc.content);
-    const isBlankPage = blocks.length === 1 && blocks[0].type === 'paragraph' && isBlankBlock(blocks[0]);
     setSelectedDoc(doc);
     setEditorTitle(tabState.editorTitle ?? doc.title ?? '');
     setEditorBlocks(blocks);
@@ -1457,7 +1457,6 @@ export default function Documents() {
       const detail = await documentsApi.get(id);
       const blocks = contentToBlocks(detail.content);
       lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(detail.title || '', blocks);
-      const isBlankPage = blocks.length === 1 && blocks[0].type === 'paragraph' && isBlankBlock(blocks[0]);
       const nextTabState = {
         doc: detail,
         editorTitle: detail.title || '',
@@ -2217,6 +2216,17 @@ export default function Documents() {
     }
   };
 
+  const handleCopyCodeBlock = async (event, text) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    try {
+      await copyTextToClipboard(text || '');
+      message.success('代码已复制');
+    } catch {
+      message.error('复制失败，请手动复制代码');
+    }
+  };
+
   const handleDelete = async () => {
     if (!selectedDoc) return;
     const deletedDocId = getDocTabId(selectedDoc.id);
@@ -2604,6 +2614,11 @@ export default function Documents() {
     };
   };
 
+  const getNextBlockTypeAfterEnter = (block) => {
+    if (block.type?.startsWith('heading') || block.type === 'code') return 'paragraph';
+    return block.type || 'paragraph';
+  };
+
   const handleBlockKeyDown = (event, block, index) => {
     if (event.key === 'Tab' && isHierarchicalListBlock(block)) {
       event.preventDefault();
@@ -2612,7 +2627,7 @@ export default function Documents() {
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      const nextType = block.type?.startsWith('heading') ? 'paragraph' : block.type;
+      const nextType = getNextBlockTypeAfterEnter(block);
       addBlockAfter(block.id, nextType, buildContinuationBlockExtra(block));
       return;
     }
@@ -4744,6 +4759,38 @@ export default function Documents() {
     );
   };
 
+  const renderCodeCopyButton = (text, style = {}) => (
+    <Tooltip title="复制代码">
+      <Button
+        type="text"
+        size="small"
+        icon={<CopyOutlined />}
+        aria-label="复制代码"
+        onMouseDown={event => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+        onClick={event => handleCopyCodeBlock(event, text)}
+        style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          zIndex: 2,
+          width: 28,
+          height: 28,
+          minWidth: 28,
+          padding: 0,
+          borderRadius: 6,
+          color: '#cbd5e1',
+          background: 'rgba(15, 23, 42, 0.82)',
+          border: '1px solid rgba(148, 163, 184, 0.34)',
+          boxShadow: '0 4px 12px rgba(15, 23, 42, 0.22)',
+          ...style,
+        }}
+      />
+    </Tooltip>
+  );
+
   const renderPresentationBlock = (block) => {
     if (hiddenListBlockIds.has(block.id)) return null;
     const meta = getBlockMeta(block);
@@ -4831,7 +4878,12 @@ export default function Documents() {
       return <div style={{ ...blockStyle, borderLeft: '5px solid #94a3b8', paddingLeft: 18, color: '#475569', fontStyle: 'italic' }}>{block.content}</div>;
     }
     if (block.type === 'code' || block.type === 'mermaid' || block.type === 'mindmap') {
-      return <pre style={{ margin: 0, padding: 18, borderRadius: 8, background: '#0f172a', color: '#e2e8f0', overflowX: 'auto', fontSize: isMobile ? 14 : 18, lineHeight: 1.7 }}>{block.content}</pre>;
+      return (
+        <div style={{ position: 'relative' }}>
+          {renderCodeCopyButton(block.content)}
+          <pre style={{ margin: 0, padding: '18px 52px 18px 18px', borderRadius: 8, background: '#0f172a', color: '#e2e8f0', overflowX: 'auto', fontSize: isMobile ? 14 : 18, lineHeight: 1.7 }}>{block.content}</pre>
+        </div>
+      );
     }
     if (block.type === 'emphasis' || block.type === 'marquee') {
       return <div style={{ ...blockStyle, padding: '16px 18px', borderRadius: 8, background: '#fef3c7', color: '#92400e', fontWeight: 700 }}>{block.content}</div>;
@@ -4991,12 +5043,18 @@ export default function Documents() {
 
   const renderBlockInput = (block, index, heading) => {
     const active = selectedBlockId === block.id;
+    const placeholder = (() => {
+      if (!active) return '';
+      if (block.type?.startsWith('heading')) return '输入标题';
+      if (block.type === 'paragraph' && isBlankBlock(block)) return '输入 / 选择样式内容';
+      return '输入内容';
+    })();
     const commonProps = {
       id: `doc-block-input-${block.id}`,
       value: block.content,
       bordered: false,
       autoSize: { minRows: block.type === 'code' ? 3 : 1 },
-      placeholder: active ? (block.type?.startsWith('heading') ? '输入标题' : '输入内容') : '',
+      placeholder,
       onFocus: () => {
         setSelectedBlockId(block.id);
         clearAreaBlockSelection();
@@ -5148,17 +5206,25 @@ export default function Documents() {
 
     if (block.type === 'code') {
       return (
-        <TextArea
-          {...commonProps}
-          style={{
-            ...commonProps.style,
-            fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
-            background: '#0f172a',
-            color: '#e2e8f0',
-            borderRadius: 8,
-            padding: 12,
-          }}
-        />
+        <div style={{ position: 'relative' }}>
+          {renderCodeCopyButton(block.content, {
+            top: 7,
+            right: 7,
+            color: '#dbeafe',
+            background: 'rgba(30, 41, 59, 0.92)',
+          })}
+          <TextArea
+            {...commonProps}
+            style={{
+              ...commonProps.style,
+              fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace",
+              background: '#0f172a',
+              color: '#e2e8f0',
+              borderRadius: 8,
+              padding: '12px 50px 12px 12px',
+            }}
+          />
+        </div>
       );
     }
 
@@ -5199,6 +5265,12 @@ export default function Documents() {
     const heading = headingMeta.map.get(block.id);
     const comments = getBlockInlineComments(block);
     const commentsOpen = activeCommentBlockId === block.id && comments.length > 0;
+    const blankParagraph = block.type === 'paragraph' && isBlankBlock(block);
+    const handleIcon = blankParagraph ? <BlockAddIcon /> : <BlockHandleIcon />;
+    const handleLabel = blankParagraph ? '添加各种样式内容' : '块菜单';
+    const handleTooltip = blankParagraph
+      ? '点击 添加各种样式内容\n拖拽 可移动位置'
+      : '点击 打开菜单\n拖拽 可移动位置';
     return (
       <div
         id={`doc-block-${block.id}`}
@@ -5228,97 +5300,99 @@ export default function Documents() {
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'center', paddingTop: block.type?.startsWith('heading') ? 5 : 3 }}>
-          <Dropdown
-            trigger={['click']}
-            open={menuOpen}
-            overlayStyle={{
-              width: isMobile ? 300 : 340,
-              maxHeight: 'min(560px, calc(100vh - 96px))',
-              overflowY: 'hidden',
-            }}
-            dropdownRender={(menu) => (
-              <div
-                onMouseDown={event => event.stopPropagation()}
-                onClick={event => event.stopPropagation()}
-                style={{
-                  width: isMobile ? 300 : 340,
-                  maxHeight: 'min(560px, calc(100vh - 96px))',
-                  overflow: 'hidden',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 6px', color: '#374151', fontWeight: 500 }}>
-                  <ReloadOutlined />
-                  <span>转换为</span>
+          <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{handleTooltip}</span>} placement="left">
+            <Dropdown
+              trigger={['click']}
+              open={menuOpen}
+              overlayStyle={{
+                width: isMobile ? 300 : 340,
+                maxHeight: 'min(560px, calc(100vh - 96px))',
+                overflowY: 'hidden',
+              }}
+              dropdownRender={(menu) => (
+                <div
+                  onMouseDown={event => event.stopPropagation()}
+                  onClick={event => event.stopPropagation()}
+                  style={{
+                    width: isMobile ? 300 : 340,
+                    maxHeight: 'min(560px, calc(100vh - 96px))',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 6px', color: '#374151', fontWeight: 500 }}>
+                    <ReloadOutlined />
+                    <span>{blankParagraph ? '添加内容' : '转换为'}</span>
+                  </div>
+                  {renderConvertBlockTypePanel(block)}
+                  <Divider style={{ margin: '4px 0' }} />
+                  {menu}
                 </div>
-                {renderConvertBlockTypePanel(block)}
-                <Divider style={{ margin: '4px 0' }} />
-                {menu}
-              </div>
-            )}
-            onOpenChange={(open) => {
-              if (open) {
-                if (Date.now() < suppressBlockMenuOpenUntilRef.current) {
+              )}
+              onOpenChange={(open) => {
+                if (open) {
+                  if (Date.now() < suppressBlockMenuOpenUntilRef.current) {
+                    setOpenBlockMenuId(null);
+                    return;
+                  }
+                  captureBlockMenuTargetIds(block.id);
+                  setOpenBlockMenuId(block.id);
+                  return;
+                }
+                pendingBlockMenuTargetIdsRef.current = [];
+                if (openBlockMenuId === block.id && !activeBlockMenuTargetIdsRef.current.includes(block.id)) {
+                  activeBlockMenuTargetIdsRef.current = [];
+                  setBlockMenuTargetIds([]);
+                }
+                setOpenBlockMenuId(prev => (prev === block.id ? null : prev));
+              }}
+              placement="bottomLeft"
+              menu={{
+                items: buildBlockMenuItems(block, blockMenuTargetIds),
+                onClick: ({ key, domEvent }) => {
+                  domEvent.stopPropagation();
+                  let targetIds = [];
+                  if (blockMenuTargetIds.includes(block.id)) {
+                    targetIds = [...blockMenuTargetIds];
+                  } else if (activeBlockMenuTargetIdsRef.current.includes(block.id)) {
+                    targetIds = [...activeBlockMenuTargetIdsRef.current];
+                  } else {
+                    targetIds = captureBlockMenuTargetIds(block.id);
+                  }
                   setOpenBlockMenuId(null);
-                  return;
-                }
-                captureBlockMenuTargetIds(block.id);
-                setOpenBlockMenuId(block.id);
-                return;
-              }
-              pendingBlockMenuTargetIdsRef.current = [];
-              if (openBlockMenuId === block.id && !activeBlockMenuTargetIdsRef.current.includes(block.id)) {
-                activeBlockMenuTargetIdsRef.current = [];
-                setBlockMenuTargetIds([]);
-              }
-              setOpenBlockMenuId(prev => (prev === block.id ? null : prev));
-            }}
-            placement="bottomLeft"
-            menu={{
-              items: buildBlockMenuItems(block, blockMenuTargetIds),
-              onClick: ({ key, domEvent }) => {
-                domEvent.stopPropagation();
-                let targetIds = [];
-                if (blockMenuTargetIds.includes(block.id)) {
-                  targetIds = [...blockMenuTargetIds];
-                } else if (activeBlockMenuTargetIdsRef.current.includes(block.id)) {
-                  targetIds = [...activeBlockMenuTargetIdsRef.current];
-                } else {
-                  targetIds = captureBlockMenuTargetIds(block.id);
-                }
-                setOpenBlockMenuId(null);
-                handleBlockMenuAction(block, key, targetIds);
-              },
-            }}
-          >
-            <Button
-              type="text"
-              size="small"
-              icon={<BlockHandleIcon />}
-              aria-label="块菜单"
-              onMouseDown={event => {
-                event.stopPropagation();
-                startBlockHandleSelection(event, block.id);
+                  handleBlockMenuAction(block, key, targetIds);
+                },
               }}
-              onClick={event => {
-                event.stopPropagation();
-                if (Date.now() < suppressBlockMenuOpenUntilRef.current) return;
-                if (event.metaKey || event.ctrlKey || event.shiftKey) {
-                  selectBlockFromHandle(event, block.id);
-                  return;
-                }
-                captureBlockMenuTargetIds(block.id);
-              }}
-              style={{
-                width: 24,
-                height: 24,
-                minWidth: 24,
-                opacity: handleVisible ? 1 : 0,
-                pointerEvents: handleVisible ? 'auto' : 'none',
-                color: '#6b7280',
-                background: menuOpen ? '#eef2ff' : (isMobile ? '#f8fafc' : '#f3f4f6'),
-              }}
-            />
-          </Dropdown>
+            >
+              <Button
+                type="text"
+                size="small"
+                icon={handleIcon}
+                aria-label={handleLabel}
+                onMouseDown={event => {
+                  event.stopPropagation();
+                  startBlockHandleSelection(event, block.id);
+                }}
+                onClick={event => {
+                  event.stopPropagation();
+                  if (Date.now() < suppressBlockMenuOpenUntilRef.current) return;
+                  if (event.metaKey || event.ctrlKey || event.shiftKey) {
+                    selectBlockFromHandle(event, block.id);
+                    return;
+                  }
+                  captureBlockMenuTargetIds(block.id);
+                }}
+                style={{
+                  width: 24,
+                  height: 24,
+                  minWidth: 24,
+                  opacity: blankParagraph || handleVisible ? 1 : 0,
+                  pointerEvents: blankParagraph || handleVisible ? 'auto' : 'none',
+                  color: '#6b7280',
+                  background: menuOpen ? '#eef2ff' : (isMobile ? '#f8fafc' : '#f3f4f6'),
+                }}
+              />
+            </Dropdown>
+          </Tooltip>
         </div>
         <div style={{ minWidth: 0 }}>
           {renderBlockInput(block, index, heading)}
