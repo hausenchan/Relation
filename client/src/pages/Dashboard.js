@@ -4,7 +4,7 @@ import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   CheckOutlined, PlayCircleOutlined, FlagOutlined, UserOutlined,
-  ThunderboltOutlined
+  ThunderboltOutlined, ScheduleOutlined
 } from '@ant-design/icons';
 import { statsApi, remindersApi, tasksApi, followUpTasksApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -1703,7 +1703,7 @@ export default function Dashboard() {
           {
             title: '本月任务',
             value: monthlyTaskCount,
-            icon: <CheckSquareOutlined />,
+            icon: <ScheduleOutlined />,
             gradient: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)'
           },
           {
@@ -1721,7 +1721,7 @@ export default function Dashboard() {
           {
             title: '今日任务',
             value: todayTaskCount,
-            icon: <CheckSquareOutlined />,
+            icon: <FlagOutlined />,
             gradient: 'linear-gradient(135deg, #fb7185 0%, #ef4444 100%)'
           },
           {
