@@ -262,6 +262,8 @@ const mediaAcceptMap = {
   audio: '.mp3,.wav,.m4a,.aac,.ogg',
 };
 const documentLinkParamKeys = ['doc', 'document_id', 'documentId', 'docId'];
+const documentAutoSaveDelay = 3000;
+const documentAutoSaveInterval = 30000;
 
 function getDocumentIdFromSearch(searchParams) {
   for (const key of documentLinkParamKeys) {
@@ -717,6 +719,19 @@ function getDocumentSaveSignature(title, blocks) {
   return JSON.stringify(buildDocumentSavePayload(title, blocks));
 }
 
+function saveDocumentDraftBeforeUnload(docId, payload) {
+  const token = localStorage.getItem('token');
+  return fetch(`/api/documents/${docId}`, {
+    method: 'PUT',
+    keepalive: true,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
 function blockMetaToText(meta = {}) {
   const parts = [];
   if (meta.url) parts.push(meta.url);
@@ -1168,6 +1183,7 @@ export default function Documents() {
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
   const [shareLinkError, setShareLinkError] = useState(null);
+  const [autoSaving, setAutoSaving] = useState(false);
   const presentationRef = useRef(null);
   const autoOpenedDocIdRef = useRef(null);
   const editorUndoStackRef = useRef([]);
@@ -1176,7 +1192,13 @@ export default function Documents() {
   const selectedAreaBlockIdsRef = useRef([]);
   const blockHandleSelectionRef = useRef(null);
   const activeEditorSnapshotRef = useRef(null);
+  const selectedDocIdRef = useRef(null);
+  const docTabStatesRef = useRef({});
   const lastSavedSignatureRef = useRef({});
+  const dirtyDocumentIdsRef = useRef(new Set());
+  const autoSaveTimerRef = useRef(null);
+  const autoSaveIntervalRef = useRef(null);
+  const saveDirtyDocumentTabsRef = useRef(null);
   const pendingSavePromisesRef = useRef({});
   const saveCurrentDocumentRef = useRef(null);
   const pendingBlockMenuTargetIdsRef = useRef([]);
@@ -1611,6 +1633,14 @@ export default function Documents() {
   }, [selectedDocId]);
 
   useEffect(() => {
+    selectedDocIdRef.current = getDocTabId(selectedDocId);
+  }, [selectedDocId]);
+
+  useEffect(() => {
+    docTabStatesRef.current = docTabStates;
+  }, [docTabStates]);
+
+  useEffect(() => {
     if (!deepLinkedDocId) return;
     if (getDocTabId(selectedDocId) === deepLinkedDocId) return;
     if (Number(shareLinkError?.docId) === Number(deepLinkedDocId)) return;
@@ -1628,6 +1658,12 @@ export default function Documents() {
     if (!selectedDoc?.id || !selectedDocId) return;
     const docId = getDocTabId(selectedDocId);
     const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
+    const signature = getDocumentSaveSignature(editorTitle, editorBlocks);
+    if (lastSavedSignatureRef.current[docId] && lastSavedSignatureRef.current[docId] !== signature) {
+      dirtyDocumentIdsRef.current.add(docId);
+    } else {
+      dirtyDocumentIdsRef.current.delete(docId);
+    }
     activeEditorSnapshotRef.current = {
       doc: docSnapshot,
       editorTitle,
@@ -1742,7 +1778,85 @@ export default function Documents() {
     return () => window.removeEventListener('keydown', handleSaveKeyDown);
   }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
 
+  useEffect(() => {
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    const docId = getDocTabId(selectedDoc?.id);
+    if (!docId || !dirtyDocumentIdsRef.current.has(docId) || !canManageDoc(selectedDoc)) return undefined;
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      setAutoSaving(true);
+      saveDirtyDocumentTabsRef.current?.()
+        .catch(() => {})
+        .finally(() => setAutoSaving(false));
+    }, documentAutoSaveDelay);
+    return () => {
+      if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    };
+  }, [selectedDoc?.id, editorTitle, editorBlocks]);
+
+  useEffect(() => {
+    autoSaveIntervalRef.current = window.setInterval(() => {
+      if (!dirtyDocumentIdsRef.current.size) return;
+      setAutoSaving(true);
+      saveDirtyDocumentTabsRef.current?.()
+        .catch(() => {})
+        .finally(() => setAutoSaving(false));
+    }, documentAutoSaveInterval);
+    return () => {
+      if (autoSaveIntervalRef.current) window.clearInterval(autoSaveIntervalRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const saveSnapshotImmediately = (snapshot) => {
+      const doc = snapshot?.doc;
+      if (!doc?.id || !canManageDoc(doc)) return;
+      const blocks = Array.isArray(snapshot.editorBlocks) ? snapshot.editorBlocks : contentToBlocks(doc.content);
+      const title = snapshot.editorTitle ?? doc.title ?? '';
+      const payload = buildDocumentSavePayload(title, blocks);
+      const signature = JSON.stringify(payload);
+      if (lastSavedSignatureRef.current[doc.id] === signature) return;
+      lastSavedSignatureRef.current[doc.id] = signature;
+      dirtyDocumentIdsRef.current.delete(getDocTabId(doc.id));
+      saveDocumentDraftBeforeUnload(doc.id, payload);
+    };
+
+    const saveDraftsImmediately = () => {
+      const dirtyIds = Array.from(dirtyDocumentIdsRef.current);
+      if (!dirtyIds.length) {
+        saveSnapshotImmediately(activeEditorSnapshotRef.current);
+        return;
+      }
+      dirtyIds.forEach(docId => {
+        const snapshot = selectedDocIdRef.current === docId
+          ? activeEditorSnapshotRef.current
+          : docTabStatesRef.current[docId];
+        saveSnapshotImmediately(snapshot);
+      });
+    };
+
+    const handleBeforeUnload = () => {
+      saveDraftsImmediately();
+    };
+    const handlePageHide = () => {
+      saveDraftsImmediately();
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') saveDraftsImmediately();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handlePageHide);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handlePageHide);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   useEffect(() => () => {
+    if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
+    if (autoSaveIntervalRef.current) window.clearInterval(autoSaveIntervalRef.current);
     saveCurrentDocumentRef.current?.({ silent: true }).catch(() => {});
     editorAreaSelectionRef.current?.cleanup?.();
     blockHandleSelectionRef.current?.cleanup?.();
@@ -1872,6 +1986,7 @@ export default function Documents() {
       const updated = await savePromise;
       lastSavedSignatureRef.current[doc.id] = signature;
       const docId = getDocTabId(doc.id);
+      dirtyDocumentIdsRef.current.delete(docId);
       const isActiveDoc = getDocTabId(selectedDocId) === docId;
       if (isActiveDoc) {
         setSelectedDoc(prev => ({ ...prev, ...updated }));
@@ -1903,6 +2018,59 @@ export default function Documents() {
       if (!silent) setSaving(false);
     }
   };
+
+  const saveDocumentSnapshot = async (snapshot, { force = false } = {}) => {
+    const doc = snapshot?.doc;
+    if (!doc?.id || !canManageDoc(doc)) return null;
+    const blocks = Array.isArray(snapshot.editorBlocks) ? snapshot.editorBlocks : contentToBlocks(doc.content);
+    const title = snapshot.editorTitle ?? doc.title ?? '';
+    const payload = buildDocumentSavePayload(title, blocks);
+    const signature = JSON.stringify(payload);
+    const docId = getDocTabId(doc.id);
+    if (!force && lastSavedSignatureRef.current[doc.id] === signature) {
+      dirtyDocumentIdsRef.current.delete(docId);
+      return null;
+    }
+    if (pendingSavePromisesRef.current[doc.id]) return pendingSavePromisesRef.current[doc.id];
+    const savePromise = documentsApi.update(doc.id, payload);
+    pendingSavePromisesRef.current[doc.id] = savePromise;
+    try {
+      const updated = await savePromise;
+      lastSavedSignatureRef.current[doc.id] = signature;
+      dirtyDocumentIdsRef.current.delete(docId);
+      const isActiveDoc = getDocTabId(selectedDocId) === docId;
+      if (isActiveDoc) {
+        setSelectedDoc(prev => ({ ...prev, ...updated }));
+      }
+      upsertDocTab(updated);
+      setDocTabStates(prev => ({
+        ...prev,
+        [docId]: {
+          ...(prev[docId] || {}),
+          doc: { ...(prev[docId]?.doc || {}), ...updated },
+        },
+      }));
+      setDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
+      setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
+      return updated;
+    } finally {
+      delete pendingSavePromisesRef.current[doc.id];
+    }
+  };
+
+  const saveDirtyDocumentTabs = async () => {
+    const dirtyIds = Array.from(dirtyDocumentIdsRef.current);
+    if (!dirtyIds.length) return [];
+    const snapshots = dirtyIds
+      .map(docId => {
+        if (selectedDocIdRef.current === docId) return activeEditorSnapshotRef.current;
+        return docTabStatesRef.current[docId];
+      })
+      .filter(Boolean);
+    return Promise.all(snapshots.map(snapshot => saveDocumentSnapshot(snapshot).catch(() => null)));
+  };
+
+  saveDirtyDocumentTabsRef.current = saveDirtyDocumentTabs;
 
   const handleSave = () => {
     saveCurrentDocument({ force: true }).catch(() => {});
@@ -5288,18 +5456,22 @@ export default function Documents() {
         onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
         style={{
           position: 'relative',
-          display: 'grid',
-          gridTemplateColumns: isMobile ? '28px minmax(0, 1fr)' : '32px minmax(0, 1fr)',
-          gap: 4,
           border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
           background: commentsOpen ? '#f8fbff' : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent')),
           borderRadius: 6,
-          padding: isMobile ? '5px 6px 5px 0' : `3px ${comments.length ? 34 : 8}px 3px 0`,
+          padding: isMobile ? '5px 6px' : `3px ${comments.length ? 34 : 8}px 3px 0`,
           marginBottom: isMobile ? 4 : 2,
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
       >
-        <div style={{ display: 'flex', justifyContent: 'center', paddingTop: block.type?.startsWith('heading') ? 5 : 3 }}>
+        <div style={{
+          position: 'absolute',
+          left: isMobile ? -24 : -32,
+          top: block.type?.startsWith('heading') ? 8 : 6,
+          width: 24,
+          display: 'flex',
+          justifyContent: 'center',
+        }}>
           <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{handleTooltip}</span>} placement="left">
             <Dropdown
               trigger={['click']}
@@ -5726,6 +5898,7 @@ export default function Documents() {
                   </Space>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {formatDocumentTimestamp(selectedDoc.updated_at)}
+                    {autoSaving && ' · 自动保存中'}
                   </Text>
                 </Space>
                 <Space wrap size={6}>
