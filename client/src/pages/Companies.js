@@ -1658,18 +1658,20 @@ function EntityManager({ companyId, entities, onRefresh }) {
     }
   }, []);
 
+  useEffect(() => {
+    loadCompanyOptions();
+  }, [loadCompanyOptions]);
+
   const openAdd = () => {
     setEditing(null);
     form.resetFields();
     form.setFieldsValue({ company_id: companyId });
     setModalOpen(true);
-    loadCompanyOptions();
   };
   const openEdit = (e) => {
     setEditing(e);
     form.setFieldsValue({ ...e, company_id: e.company_id || companyId });
     setModalOpen(true);
-    loadCompanyOptions();
   };
 
   const handleSave = async () => {
@@ -1690,6 +1692,60 @@ function EntityManager({ companyId, entities, onRefresh }) {
     message.success('已删除，该主体下人员和产品已解绑');
     onRefresh();
   };
+
+  const companyNameMap = Object.fromEntries(companyOptions.map(company => [company.id, company.name]));
+  const entityColumns = [
+    {
+      title: '所属公司',
+      dataIndex: 'company_id',
+      width: 150,
+      render: value => companyNameMap[value] || (Number(value) === Number(companyId) ? '当前公司' : value || '-'),
+    },
+    {
+      title: '主体名称',
+      dataIndex: 'name',
+      width: 150,
+      fixed: isMobile ? undefined : 'left',
+      render: value => <Text strong>{value || '-'}</Text>,
+    },
+    { title: '注册名称', dataIndex: 'reg_name', width: 220, render: value => value || '-' },
+    { title: '注册城市', dataIndex: 'city', width: 100, render: value => value || '-' },
+    { title: '法人代表', dataIndex: 'legal_representative', width: 120, render: value => value || '-' },
+    { title: '联系电话', dataIndex: 'contact_phone', width: 140, render: value => value || '-' },
+    { title: '主营方向', dataIndex: 'business', width: 220, render: value => value || '-' },
+    { title: '备注', dataIndex: 'notes', width: 220, render: value => value || '-' },
+    {
+      title: '操作',
+      key: 'actions',
+      width: 110,
+      fixed: isMobile ? undefined : 'right',
+      render: (_, record) => (
+        <Space size={4}>
+          <Tooltip title="编辑主体">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              aria-label="编辑主体"
+              onClick={() => openEdit(record)}
+            />
+          </Tooltip>
+          <Popconfirm
+            title="删除主体后，该主体下的人员和产品将解绑（不会删除），确认？"
+            onConfirm={() => handleDelete(record.id)}
+          >
+            <Button
+              type="text"
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              aria-label="删除主体"
+            />
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
 
   return (
     <>
@@ -1731,6 +1787,16 @@ function EntityManager({ companyId, entities, onRefresh }) {
                 <Input placeholder="如：北京" />
               </Form.Item>
             </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="法人代表" name="legal_representative">
+                <Input placeholder="请输入法人代表" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="联系电话" name="contact_phone">
+                <Input placeholder="请输入联系电话" />
+              </Form.Item>
+            </Col>
             <Col span={24}>
               <Form.Item label="主营方向" name="business">
                 <Input placeholder="该主体的核心业务方向" />
@@ -1748,38 +1814,15 @@ function EntityManager({ companyId, entities, onRefresh }) {
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
         <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={openAdd}>新增主体</Button>
       </div>
-      {entities.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          {entities.map(e => (
-            <Tag
-              key={e.id}
-              style={{ marginBottom: 4, cursor: 'default', fontSize: 12, padding: '2px 8px' }}
-            >
-              {e.name}
-              {e.reg_name && <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>{e.reg_name}</Text>}
-              <Button
-                type="link"
-                size="small"
-                icon={<EditOutlined />}
-                style={{ fontSize: 11, padding: '0 2px', height: 18 }}
-                onClick={() => openEdit(e)}
-              />
-              <Popconfirm
-                title="删除主体后，该主体下的人员和产品将解绑（不会删除），确认？"
-                onConfirm={() => handleDelete(e.id)}
-              >
-                <Button
-                  type="link"
-                  size="small"
-                  danger
-                  icon={<DeleteOutlined />}
-                  style={{ fontSize: 11, padding: '0 2px', height: 18 }}
-                />
-              </Popconfirm>
-            </Tag>
-          ))}
-        </div>
-      )}
+      <Table
+        size="small"
+        rowKey="id"
+        dataSource={entities}
+        columns={entityColumns}
+        pagination={false}
+        scroll={{ x: 1400 }}
+        locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无主体" /> }}
+      />
     </>
   );
 }
@@ -2715,6 +2758,8 @@ export default function Companies() {
                       <Descriptions.Item label="主体名称"><Text strong>{entity.name}</Text></Descriptions.Item>
                       {entity.reg_name && <Descriptions.Item label="注册名称">{entity.reg_name}</Descriptions.Item>}
                       {entity.city && <Descriptions.Item label="注册城市">{entity.city}</Descriptions.Item>}
+                      {entity.legal_representative && <Descriptions.Item label="法人代表">{entity.legal_representative}</Descriptions.Item>}
+                      {entity.contact_phone && <Descriptions.Item label="联系电话">{entity.contact_phone}</Descriptions.Item>}
                       {entity.business && <Descriptions.Item label="主营方向" span={3}>{entity.business}</Descriptions.Item>}
                       {entity.notes && <Descriptions.Item label="备注" span={3}>{entity.notes}</Descriptions.Item>}
                     </Descriptions>

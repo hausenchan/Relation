@@ -6347,6 +6347,8 @@ db.exec(`
     name TEXT NOT NULL,
     reg_name TEXT,
     city TEXT,
+    legal_representative TEXT,
+    contact_phone TEXT,
     business TEXT,
     notes TEXT,
     sort_order INTEGER DEFAULT 0,
@@ -6413,6 +6415,8 @@ db.exec(`
 addColumnIfMissing('companies', 'created_by', 'INTEGER DEFAULT NULL');
 addColumnIfMissing('companies', 'shared_with', 'TEXT DEFAULT NULL');
 addColumnIfMissing('companies', 'project_group_ids', 'TEXT DEFAULT NULL');
+addColumnIfMissing('company_entities', 'legal_representative', 'TEXT DEFAULT NULL');
+addColumnIfMissing('company_entities', 'contact_phone', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_personnel', 'manager_id', 'INTEGER DEFAULT NULL');
 addColumnIfMissing('company_personnel', 'entity_id', 'INTEGER DEFAULT NULL');
 addColumnIfMissing('company_products', 'entity_id', 'INTEGER DEFAULT NULL');
@@ -6592,20 +6596,22 @@ app.get('/api/company_entities', (req, res) => {
 });
 
 app.post('/api/company_entities', (req, res) => {
-  const { company_id, name, reg_name, city, business, notes, sort_order } = req.body;
+  const { company_id, name, reg_name, city, legal_representative, contact_phone, business, notes, sort_order } = req.body;
   const targetCompanyId = Number(company_id);
   if (!targetCompanyId) return res.status(400).json({ error: '所属公司必填' });
   const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(targetCompanyId);
   if (!company || !canAccessCompany(req.user, company)) return res.status(404).json({ error: '所属公司不存在或无权访问' });
   const r = db.prepare(`
-    INSERT INTO company_entities (company_id, name, reg_name, city, business, notes, sort_order)
-    VALUES (?,?,?,?,?,?,?)
-  `).run(targetCompanyId, name, reg_name, city, business, notes, sort_order || 0);
+    INSERT INTO company_entities (
+      company_id, name, reg_name, city, legal_representative, contact_phone, business, notes, sort_order
+    )
+    VALUES (?,?,?,?,?,?,?,?,?)
+  `).run(targetCompanyId, name, reg_name, city, legal_representative, contact_phone, business, notes, sort_order || 0);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/company_entities/:id', (req, res) => {
-  const { company_id, name, reg_name, city, business, notes, sort_order } = req.body;
+  const { company_id, name, reg_name, city, legal_representative, contact_phone, business, notes, sort_order } = req.body;
   const id = Number(req.params.id);
   const currentEntity = db.prepare('SELECT * FROM company_entities WHERE id = ?').get(id);
   if (!currentEntity) return res.status(404).json({ error: '主体不存在' });
@@ -6618,9 +6624,10 @@ app.put('/api/company_entities/:id', (req, res) => {
 
   const updateEntity = db.transaction(() => {
     db.prepare(`
-      UPDATE company_entities SET company_id=?, name=?, reg_name=?, city=?, business=?, notes=?, sort_order=?,
+      UPDATE company_entities SET company_id=?, name=?, reg_name=?, city=?, legal_representative=?, contact_phone=?,
+        business=?, notes=?, sort_order=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
-    `).run(targetCompanyId, name, reg_name, city, business, notes, sort_order || 0, id);
+    `).run(targetCompanyId, name, reg_name, city, legal_representative, contact_phone, business, notes, sort_order || 0, id);
 
     if (Number(currentEntity.company_id) !== targetCompanyId) {
       db.prepare(`
