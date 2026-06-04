@@ -732,7 +732,7 @@ function AppLayout() {
         </Drawer>
       )}
 
-      <Layout style={{ minWidth: 0, maxWidth: '100%', overflowX: 'hidden' }}>
+      <Layout style={{ flex: '1 1 0', width: 0, minWidth: 0, overflowX: 'hidden' }}>
         <Header style={{
           background: DS.header.bg, padding: isMobile ? '0 12px' : '0 24px', height: DS.header.height, lineHeight: `${DS.header.height}px`,
           display: 'flex', alignItems: 'center', borderBottom: `1px solid ${DS.header.border}`,
@@ -789,7 +789,7 @@ function AppLayout() {
             minHeight: `calc(100vh - ${DS.header.height}px)`,
             boxShadow: isMobile ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
             minWidth: 0,
-            maxWidth: isMobile ? '100%' : 'calc(100vw - 24px)',
+            maxWidth: '100%',
             overflowX: 'hidden',
           }}
         >

@@ -101,6 +101,9 @@ const getTaskColumnSorter = (columnKey) => {
     if (columnKey === 'display_status_label') {
       return compareTaskRankValue(a.display_status || a.status, b.display_status || b.status, taskStatusSortRank);
     }
+    if (columnKey === 'estimated_hours') {
+      return Number(a.estimated_hours ?? -1) - Number(b.estimated_hours ?? -1);
+    }
     if (taskDateColumnKeys.has(columnKey)) {
       return getTaskDateSortValue(a[columnKey]) - getTaskDateSortValue(b[columnKey]);
     }
