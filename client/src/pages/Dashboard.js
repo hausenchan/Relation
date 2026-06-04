@@ -817,8 +817,10 @@ export default function Dashboard() {
   });
 
   const dashboardPersonalTasks = [...assignedTasks, ...executionTasks];
+  const isCurrentMonthTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'month');
   const isCurrentWeekTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'week');
   const isTodayTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'day');
+  const monthlyTaskCount = new Set(dashboardPersonalTasks.filter(isCurrentMonthTask).map(task => task.id)).size;
   const todayTaskCount = new Set(dashboardPersonalTasks.filter(isTodayTask).map(task => task.id)).size;
   const weeklyTaskCount = dashboardPersonalTasks.filter(isCurrentWeekTask).length;
   const weeklyUnfinishedTaskCount = dashboardPersonalTasks.filter(task => (
@@ -1651,6 +1653,12 @@ export default function Dashboard() {
       {/* 统计卡片 */}
       <Row gutter={[isMobile ? 10 : 16, isMobile ? 10 : 16]} style={{ marginBottom: isMobile ? 16 : 24 }}>
         {[
+          {
+            title: '本月任务',
+            value: monthlyTaskCount,
+            icon: <CheckSquareOutlined />,
+            gradient: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)'
+          },
           {
             title: '本周任务',
             value: weeklyTaskCount,
