@@ -245,7 +245,7 @@ function AppLayout() {
   const [pwdForm] = Form.useForm();
   const [pwdLoading, setPwdLoading] = useState(false);
   const menuScrollRef = React.useRef(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'executive', 'system']);
@@ -316,6 +316,7 @@ function AppLayout() {
   };
 
   const selectedKey = '/' + location.pathname.split('/')[1];
+  const desktopSiderWidth = isMobile ? 0 : (collapsed ? DS.sidebar.collapsedWidth : DS.sidebar.width);
 
   // 路由 → 页面标题映射
   const pageTitleMap = {
@@ -669,7 +670,7 @@ function AppLayout() {
   return (
     <Watermark content={user?.display_name || user?.username} gap={isMobile ? [140, 160] : [200, 200]} font={{ color: 'rgba(0,0,0,0.06)', fontSize: isMobile ? 12 : 14 }} style={{ minHeight: '100vh' }}>
     <MobileOverlayBackHandler enabled={isMobile} />
-    <Layout style={{ minHeight: '100vh', maxWidth: '100vw', overflowX: 'hidden' }}>
+    <Layout style={{ minHeight: '100vh', width: '100vw', maxWidth: '100vw', overflowX: 'hidden' }}>
       <Modal
         title="修改密码"
         open={pwdModalOpen}
@@ -732,7 +733,15 @@ function AppLayout() {
         </Drawer>
       )}
 
-      <Layout style={{ flex: '1 1 0', width: 0, minWidth: 0, overflowX: 'hidden' }}>
+      <Layout
+        style={{
+          flex: '0 0 auto',
+          width: isMobile ? '100%' : `calc(100vw - ${desktopSiderWidth}px)`,
+          maxWidth: isMobile ? '100%' : `calc(100vw - ${desktopSiderWidth}px)`,
+          minWidth: 0,
+          overflowX: 'hidden',
+        }}
+      >
         <Header style={{
           background: DS.header.bg, padding: isMobile ? '0 12px' : '0 24px', height: DS.header.height, lineHeight: `${DS.header.height}px`,
           display: 'flex', alignItems: 'center', borderBottom: `1px solid ${DS.header.border}`,
@@ -788,8 +797,10 @@ function AppLayout() {
             borderRadius: isMobile ? 0 : 12,
             minHeight: `calc(100vh - ${DS.header.height}px)`,
             boxShadow: isMobile ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
+            width: 'auto',
             minWidth: 0,
             maxWidth: '100%',
+            boxSizing: 'border-box',
             overflowX: 'hidden',
           }}
         >
