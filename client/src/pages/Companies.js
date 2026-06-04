@@ -1662,6 +1662,12 @@ function EntityManager({ companyId, entities, onRefresh }) {
     loadCompanyOptions();
   }, [loadCompanyOptions]);
 
+  const normalizeOptionalCount = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) ? numericValue : null;
+  };
+
   const openAdd = () => {
     setEditing(null);
     form.resetFields();
@@ -1683,6 +1689,8 @@ function EntityManager({ companyId, entities, onRefresh }) {
     const payload = {
       ...values,
       established_date: values.established_date ? dayjs(values.established_date).format('YYYY-MM-DD') : null,
+      social_security_count: normalizeOptionalCount(values.social_security_count),
+      software_copyright_count: normalizeOptionalCount(values.software_copyright_count),
     };
     if (editing) {
       await companyEntitiesApi.update(editing.id, payload);
@@ -1722,6 +1730,18 @@ function EntityManager({ companyId, entities, onRefresh }) {
     { title: '法人代表', dataIndex: 'legal_representative', width: 120, render: value => value || '-' },
     { title: '主营方向', dataIndex: 'business', width: 220, render: value => value || '-' },
     { title: '备注', dataIndex: 'notes', width: 220, render: value => value || '-' },
+    {
+      title: '社保人数',
+      dataIndex: 'social_security_count',
+      width: 100,
+      render: value => (value === null || value === undefined || value === '') ? '-' : value,
+    },
+    {
+      title: '软著数量',
+      dataIndex: 'software_copyright_count',
+      width: 100,
+      render: value => (value === null || value === undefined || value === '') ? '-' : value,
+    },
     {
       title: '联系电话',
       dataIndex: 'contact_phone',
@@ -1812,6 +1832,16 @@ function EntityManager({ companyId, entities, onRefresh }) {
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="社保人数" name="social_security_count">
+                <InputNumber min={0} precision={0} style={{ width: '100%' }} placeholder="请输入社保人数" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="软著数量" name="software_copyright_count">
+                <InputNumber min={0} precision={0} style={{ width: '100%' }} placeholder="请输入软著数量" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="联系电话" name="contact_phone">
                 <Input placeholder="请输入联系电话" />
               </Form.Item>
@@ -1839,7 +1869,7 @@ function EntityManager({ companyId, entities, onRefresh }) {
         dataSource={entities}
         columns={entityColumns}
         pagination={false}
-        scroll={{ x: 1520 }}
+        scroll={{ x: 1720 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无主体" /> }}
       />
     </>
@@ -2663,7 +2693,7 @@ export default function Companies() {
         }
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
-        width={isMobile ? '100%' : 860}
+        width={isMobile ? '100%' : '66vw'}
         bodyStyle={isMobile ? { padding: 12 } : undefined}
         extra={
           <Button icon={<EditOutlined />} onClick={() => { setDrawerOpen(false); openEdit(current); }}>
@@ -2779,6 +2809,12 @@ export default function Companies() {
                       {entity.city && <Descriptions.Item label="注册城市">{entity.city}</Descriptions.Item>}
                       {entity.established_date && <Descriptions.Item label="成立日期">{entity.established_date}</Descriptions.Item>}
                       {entity.legal_representative && <Descriptions.Item label="法人代表">{entity.legal_representative}</Descriptions.Item>}
+                      {(entity.social_security_count !== null && entity.social_security_count !== undefined && entity.social_security_count !== '') && (
+                        <Descriptions.Item label="社保人数">{entity.social_security_count}</Descriptions.Item>
+                      )}
+                      {(entity.software_copyright_count !== null && entity.software_copyright_count !== undefined && entity.software_copyright_count !== '') && (
+                        <Descriptions.Item label="软著数量">{entity.software_copyright_count}</Descriptions.Item>
+                      )}
                       {entity.contact_phone && <Descriptions.Item label="联系电话">{entity.contact_phone}</Descriptions.Item>}
                       {entity.business && <Descriptions.Item label="主营方向" span={3}>{entity.business}</Descriptions.Item>}
                       {entity.notes && <Descriptions.Item label="备注" span={3}>{entity.notes}</Descriptions.Item>}
