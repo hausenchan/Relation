@@ -4,7 +4,7 @@ import {
   TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   CheckOutlined, PlayCircleOutlined, FlagOutlined, UserOutlined,
-  ThunderboltOutlined, ScheduleOutlined
+  ThunderboltOutlined, ScheduleOutlined, LikeFilled, CheckCircleFilled
 } from '@ant-design/icons';
 import { statsApi, remindersApi, tasksApi, followUpTasksApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -47,6 +47,24 @@ const priorityMap = {
   medium: { label: '中', color: 'orange' },
   low:    { label: '低', color: 'default' },
 };
+
+function CompletedBoostIcon() {
+  return (
+    <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+      <LikeFilled style={{ fontSize: 22 }} />
+      <CheckCircleFilled
+        style={{
+          position: 'absolute',
+          right: -8,
+          top: -8,
+          fontSize: 12,
+          color: '#dcfce7',
+          filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.18))',
+        }}
+      />
+    </span>
+  );
+}
 
 const taskPrioritySortRank = { high: 0, medium: 1, low: 2 };
 const taskStatusSortRank = { pending: 0, in_progress: 1, suspended: 2, done: 3 };
@@ -1727,7 +1745,7 @@ export default function Dashboard() {
           {
             title: '今日已完成',
             value: todayCompletedTaskCount,
-            icon: <CheckOutlined />,
+            icon: <CompletedBoostIcon />,
             gradient: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)'
           },
           !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
