@@ -55,7 +55,6 @@ import {
   ReloadOutlined,
   RightOutlined,
   RollbackOutlined,
-  SaveOutlined,
   StarFilled,
   StarOutlined,
   TeamOutlined,
@@ -1417,10 +1416,14 @@ export default function Documents() {
       || docTabStates[docId]?.doc;
   };
 
-  const focusBlock = (id) => {
+  const focusBlock = (id, cursorPosition = null) => {
     window.setTimeout(() => {
       const input = document.getElementById(`doc-block-input-${id}`);
-      if (input) input.focus();
+      if (!input) return;
+      input.focus();
+      if (typeof cursorPosition === 'number' && typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(cursorPosition, cursorPosition);
+      }
     }, 0);
   };
 
@@ -2833,6 +2836,88 @@ export default function Documents() {
     return block.type || 'paragraph';
   };
 
+  const splitInlineCommentsForEnter = (comments, splitStart, splitEnd) => {
+    const leftComments = [];
+    const rightComments = [];
+    normalizeInlineComments(comments).forEach(comment => {
+      if (comment.end <= splitStart) {
+        leftComments.push(comment);
+        return;
+      }
+      if (comment.start >= splitEnd) {
+        rightComments.push({
+          ...comment,
+          start: comment.start - splitEnd,
+          end: comment.end - splitEnd,
+        });
+        return;
+      }
+      if (comment.start < splitStart) {
+        leftComments.push({
+          ...comment,
+          end: splitStart,
+          text: String(comment.text || '').slice(0, Math.max(0, splitStart - comment.start)),
+        });
+      }
+      if (comment.end > splitEnd) {
+        rightComments.push({
+          ...comment,
+          id: `${comment.id}_split`,
+          start: 0,
+          end: comment.end - splitEnd,
+          text: String(comment.text || '').slice(Math.max(0, splitEnd - comment.start)),
+        });
+      }
+    });
+    return { leftComments, rightComments };
+  };
+
+  const splitBlockAtCursor = (event, block, index) => {
+    const input = event.target;
+    const content = String(block.content || '');
+    const selectionStart = typeof input?.selectionStart === 'number' ? input.selectionStart : content.length;
+    const selectionEnd = typeof input?.selectionEnd === 'number' ? input.selectionEnd : selectionStart;
+    const start = Math.max(0, Math.min(selectionStart, selectionEnd, content.length));
+    const end = Math.max(start, Math.min(Math.max(selectionStart, selectionEnd), content.length));
+    const leftContent = content.slice(0, start);
+    const rightContent = content.slice(end);
+    const nextType = getNextBlockTypeAfterEnter(block);
+    const continuationExtra = buildContinuationBlockExtra(block);
+    const meta = getBlockMeta(block);
+    const { leftComments, rightComments } = splitInlineCommentsForEnter(meta.comments, start, end);
+    const leftMeta = {
+      ...meta,
+      ...(leftComments.length ? { comments: leftComments } : {}),
+    };
+    if (!leftComments.length) delete leftMeta.comments;
+    const nextMeta = {
+      ...cloneMeta(continuationExtra.meta),
+      ...(rightComments.length ? { comments: rightComments } : {}),
+    };
+    const nextBlock = createEditorBlock(nextType, {
+      ...continuationExtra,
+      content: rightContent,
+      meta: nextMeta,
+    });
+
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => {
+      const blockIndex = prev.findIndex(item => item.id === block.id);
+      const insertIndex = blockIndex >= 0 ? blockIndex : index;
+      const nextBlocks = [...prev];
+      if (insertIndex >= 0 && insertIndex < nextBlocks.length) {
+        nextBlocks[insertIndex] = { ...nextBlocks[insertIndex], content: leftContent, meta: leftMeta };
+        nextBlocks.splice(insertIndex + 1, 0, nextBlock);
+        return nextBlocks;
+      }
+      return [...nextBlocks, nextBlock];
+    });
+    setSelectedBlockId(nextBlock.id);
+    clearAreaBlockSelection();
+    setOpenBlockMenuId(null);
+    focusBlock(nextBlock.id, 0);
+  };
+
   const handleBlockKeyDown = (event, block, index) => {
     if (event.key === 'Tab' && isHierarchicalListBlock(block)) {
       event.preventDefault();
@@ -2841,8 +2926,7 @@ export default function Documents() {
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      const nextType = getNextBlockTypeAfterEnter(block);
-      addBlockAfter(block.id, nextType, buildContinuationBlockExtra(block));
+      splitBlockAtCursor(event, block, index);
       return;
     }
     if (event.key === 'Backspace' && !block.content && isHierarchicalListBlock(block) && getListIndent(block) > 0) {
@@ -5976,7 +6060,6 @@ export default function Documents() {
                     <Text strong ellipsis style={{ flex: 1, minWidth: 0 }}>
                       {editorTitle || selectedDoc.title || '未命名文档'}
                     </Text>
-                    <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" style={{ flex: '0 0 auto' }} />
                   </div>
                   <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingTop: 8, paddingBottom: 2 }}>
                     <Button
@@ -6059,9 +6142,6 @@ export default function Documents() {
                       onClick={() => toggleFavorite(selectedDoc)}
                       aria-label={selectedDoc.is_favorite ? '取消收藏' : '收藏'}
                     />
-                  </Tooltip>
-                  <Tooltip title="保存">
-                    <Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={handleSave} aria-label="保存" />
                   </Tooltip>
                 </Space>
               </div>}
