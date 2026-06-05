@@ -2638,12 +2638,18 @@ export default function Documents() {
     const targetSet = new Set(targetIds);
     const firstId = targetIds[0];
     const isBatchListConversion = targetIds.length > 1 && isHierarchicalListBlock({ type });
-    const batchListIndent = isBatchListConversion ? 0 : null;
     pushEditorUndoSnapshot();
     setEditorBlocks(prev => prev.map(block => {
       if (!targetSet.has(block.id)) return block;
       const patchExtra = isBatchListConversion
-        ? { ...extra, meta: { ...cloneMeta(extra.meta), indent: batchListIndent } }
+        ? {
+          ...extra,
+          meta: {
+            ...cloneMeta(extra.meta),
+            indent: 0,
+            ...(type === 'fold-list' ? { collapsed: false } : {}),
+          },
+        }
         : extra;
       return { ...block, ...buildBlockTypePatch(block, type, patchExtra) };
     }));
@@ -2679,13 +2685,13 @@ export default function Documents() {
   const handleBlockMenuAction = async (block, key, targetIdsOverride = []) => {
     if (!block) return;
     const overrideTargetIds = normalizeBlockSelectionIds(targetIdsOverride);
+    const activeTargetIds = normalizeBlockSelectionIds(activeBlockMenuTargetIdsRef.current);
     const targetIds = overrideTargetIds.includes(block.id)
       ? overrideTargetIds
-      : activeBlockMenuTargetIdsRef.current.includes(block.id)
-      ? activeBlockMenuTargetIdsRef.current
-      : getBlockMenuTargetIds(block.id);
+      : (activeTargetIds.includes(block.id) ? activeTargetIds : normalizeBlockSelectionIds(getBlockMenuTargetIds(block.id)));
     pendingBlockMenuTargetIdsRef.current = [];
     activeBlockMenuTargetIdsRef.current = targetIds;
+    setBlockMenuTargetIds(targetIds);
     if (key.startsWith('type:')) {
       const type = key.replace('type:', '');
       if (type === 'recent-image') {
@@ -2713,11 +2719,11 @@ export default function Documents() {
   };
 
   const buildBlockMenuItems = (block, targetIdsOverride = []) => {
-    const targetIds = targetIdsOverride.length
-      ? targetIdsOverride
-      : (activeBlockMenuTargetIdsRef.current.includes(block?.id)
-        ? activeBlockMenuTargetIdsRef.current
-        : getBlockMenuTargetIds(block?.id));
+    const overrideTargetIds = normalizeBlockSelectionIds(targetIdsOverride);
+    const activeTargetIds = normalizeBlockSelectionIds(activeBlockMenuTargetIdsRef.current);
+    const targetIds = overrideTargetIds.includes(block?.id)
+      ? overrideTargetIds
+      : (activeTargetIds.includes(block?.id) ? activeTargetIds : normalizeBlockSelectionIds(getBlockMenuTargetIds(block?.id)));
     const targetSet = new Set(targetIds);
     const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
     const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
@@ -2728,17 +2734,21 @@ export default function Documents() {
 
   const getCurrentBlockMenuTargetIds = (block) => {
     if (!block) return [];
-    if (blockMenuTargetIds.includes(block.id)) return [...blockMenuTargetIds];
-    if (activeBlockMenuTargetIdsRef.current.includes(block.id)) return [...activeBlockMenuTargetIdsRef.current];
+    const menuTargetIds = normalizeBlockSelectionIds(blockMenuTargetIds);
+    if (menuTargetIds.includes(block.id)) return menuTargetIds;
+    const activeTargetIds = normalizeBlockSelectionIds(activeBlockMenuTargetIdsRef.current);
+    if (activeTargetIds.includes(block.id)) return activeTargetIds;
+    const selectedTargetIds = normalizeBlockSelectionIds(selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds);
+    if (selectedTargetIds.includes(block.id)) return selectedTargetIds;
     return captureBlockMenuTargetIds(block.id);
   };
 
   const renderConvertBlockTypePanel = (block) => {
-    const targetIds = blockMenuTargetIds.length
-      ? blockMenuTargetIds
-      : (activeBlockMenuTargetIdsRef.current.includes(block?.id)
-        ? activeBlockMenuTargetIdsRef.current
-        : getBlockMenuTargetIds(block?.id));
+    const menuTargetIds = normalizeBlockSelectionIds(blockMenuTargetIds);
+    const activeTargetIds = normalizeBlockSelectionIds(activeBlockMenuTargetIdsRef.current);
+    const targetIds = menuTargetIds.includes(block?.id)
+      ? menuTargetIds
+      : (activeTargetIds.includes(block?.id) ? activeTargetIds : normalizeBlockSelectionIds(getBlockMenuTargetIds(block?.id)));
     const targetSet = new Set(targetIds);
     const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
     const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
