@@ -3570,14 +3570,17 @@ export default function Documents() {
         </Space>
         <Divider style={{ margin: '0' }} />
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Text strong>目录抽屉</Text>
+          <Text strong>标题目录</Text>
           <Switch
             size="small"
             loading={optionsSaving}
             checked={asSwitchValue(selectedDoc?.toc_enabled, true)}
             onChange={checked => {
               savePageOptions({ toc_enabled: checked });
-              if (checked) setMobileTocOpen(true);
+              if (checked) {
+                setTocOpen(true);
+                if (isMobile) setMobileTocOpen(true);
+              }
             }}
           />
         </div>
@@ -4123,7 +4126,7 @@ export default function Documents() {
   );
 
   const renderTocPanel = () => {
-    if (isMobile || !asSwitchValue(selectedDoc?.toc_enabled, true) || !tocOpen) return null;
+    if (isMobile || !tocOpen) return null;
     return (
       <aside style={{
         width: 260,
@@ -4131,6 +4134,11 @@ export default function Documents() {
         borderLeft: '1px solid #e5e7eb',
         paddingLeft: 20,
         color: '#64748b',
+        position: 'sticky',
+        top: 16,
+        alignSelf: 'flex-start',
+        maxHeight: 'calc(100vh - 160px)',
+        overflowY: 'auto',
       }}>
         {renderTocContent()}
       </aside>
@@ -4139,7 +4147,7 @@ export default function Documents() {
 
   const openTocDrawer = () => {
     setTocOpen(true);
-    setMobileTocOpen(true);
+    if (isMobile) setMobileTocOpen(true);
   };
 
   const getBlockMeta = (block) => ({ ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) });
@@ -6122,7 +6130,7 @@ export default function Documents() {
         ) : (
           <Spin spinning={detailLoading}>
             <div style={{
-              maxWidth: isMobile ? '100%' : getEditorShellMaxWidth(selectedDoc, asSwitchValue(selectedDoc?.toc_enabled, true) && tocOpen),
+              maxWidth: isMobile ? '100%' : getEditorShellMaxWidth(selectedDoc, tocOpen),
               margin: isMobile || isFolderSidebarCollapsed ? '0' : '0 auto',
               padding: isMobile ? '0 0 24px' : '4px 12px',
             }}>
@@ -6299,7 +6307,7 @@ export default function Documents() {
       <Drawer
         title="标题目录"
         placement="right"
-        open={mobileTocOpen}
+        open={isMobile && mobileTocOpen}
         onClose={() => setMobileTocOpen(false)}
         width={isMobile ? '86vw' : 360}
         styles={{ body: { padding: 14 } }}
