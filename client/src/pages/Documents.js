@@ -1230,6 +1230,28 @@ export default function Documents() {
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
 
+  useEffect(() => {
+    const styleId = 'document-block-menu-style';
+    if (document.getElementById(styleId)) return undefined;
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = `
+      .document-block-menu-dropdown,
+      .document-block-menu-dropdown .ant-dropdown-menu {
+        background: #fff !important;
+        color: #1f2937 !important;
+      }
+      .document-block-menu-dropdown .ant-dropdown-menu {
+        box-shadow: none !important;
+      }
+      .document-block-menu-dropdown .ant-dropdown-menu-item {
+        color: #1f2937 !important;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {};
+  }, []);
+
   const selectedFolder = useMemo(
     () => folders.find(folder => Number(folder.id) === Number(selectedFolderId)),
     [folders, selectedFolderId]
@@ -5694,7 +5716,7 @@ export default function Documents() {
         <div style={{
           position: 'absolute',
           left: isMobile ? -24 : -32,
-          top: block.type?.startsWith('heading') ? 8 : 6,
+          top: blankParagraph ? 4 : (block.type?.startsWith('heading') ? 8 : 6),
           width: 24,
           display: 'flex',
           justifyContent: 'center',
@@ -5710,6 +5732,7 @@ export default function Documents() {
                 overflowY: 'hidden',
                 zIndex: 2600,
               }}
+              overlayClassName="document-block-menu-dropdown"
               dropdownRender={(menu) => (
                 <div
                   onMouseDown={event => event.stopPropagation()}
@@ -5775,12 +5798,22 @@ export default function Documents() {
                 icon={handleIcon}
                 aria-label={handleLabel}
                 onMouseDown={event => {
+                  if (blankParagraph) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                  }
                   event.stopPropagation();
                   startBlockHandleSelection(event, block.id);
                 }}
                 onClick={event => {
                   event.stopPropagation();
                   if (Date.now() < suppressBlockMenuOpenUntilRef.current) return;
+                  if (blankParagraph) {
+                    captureBlockMenuTargetIds(block.id);
+                    setOpenBlockMenuId(block.id);
+                    return;
+                  }
                   if (event.metaKey || event.ctrlKey || event.shiftKey) {
                     selectBlockFromHandle(event, block.id);
                     return;
