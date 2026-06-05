@@ -4145,7 +4145,11 @@ export default function Documents() {
     );
   };
 
-  const openTocDrawer = () => {
+  const toggleTocPanel = () => {
+    if (!isMobile) {
+      setTocOpen(prev => !prev);
+      return;
+    }
     setTocOpen(true);
     if (isMobile) setMobileTocOpen(true);
   };
@@ -6154,7 +6158,7 @@ export default function Documents() {
                     <Button
                       size="small"
                       icon={<MenuOutlined />}
-                      onClick={openTocDrawer}
+                      onClick={toggleTocPanel}
                     >
                       目录
                     </Button>
@@ -6196,8 +6200,9 @@ export default function Documents() {
                   <Tooltip title="目录">
                     <span>
                       <Button
+                        type={tocOpen ? 'primary' : 'default'}
                         icon={<MenuOutlined />}
-                        onClick={openTocDrawer}
+                        onClick={toggleTocPanel}
                         aria-label="目录"
                       />
                     </span>
