@@ -29,7 +29,6 @@ import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
-import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.URLUtil;
@@ -293,20 +292,11 @@ public class MainActivity extends Activity {
         updateTopBarForTab();
         setShellBarsVisible(false);
         ensureWebView();
-        clearWebLoginState();
         contentFrame.removeAllViews();
         contentFrame.addView(webView, new FrameLayout.LayoutParams(-1, -1));
         contentFrame.addView(pageProgress, new FrameLayout.LayoutParams(-1, Ui.dp(this, 2), Gravity.TOP));
         lastRoute = LOGIN_ROUTE;
         webView.loadUrl(WEB_BASE_URL + LOGIN_ROUTE);
-    }
-
-    private void clearWebLoginState() {
-        if (webView == null) return;
-        CookieManager.getInstance().removeAllCookies(null);
-        CookieManager.getInstance().flush();
-        WebStorage.getInstance().deleteAllData();
-        webView.clearCache(true);
     }
 
     private void updateTopBarForTab() {
@@ -457,6 +447,7 @@ public class MainActivity extends Activity {
         public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
             super.onReceivedError(view, request, error);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && request != null && !request.isForMainFrame()) return;
+            handleRouteChanged(view == null ? "" : view.getUrl());
             String message = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && error != null
                 ? String.valueOf(error.getDescription())
                 : "页面加载失败";
@@ -738,12 +729,14 @@ public class MainActivity extends Activity {
                 if (token.isEmpty()) {
                     session.clearLogin();
                     refreshBottomNavForPermissions();
+                    handleRouteChanged(webView == null ? "" : webView.getUrl());
                     if (currentTab == TAB_MORE && showingMoreHome) renderMoreHome();
                     return;
                 }
                 JSONObject user = userRaw.isEmpty() ? null : new JSONObject(userRaw);
                 session.saveLogin(token, user);
                 refreshBottomNavForPermissions();
+                handleRouteChanged(webView == null ? "" : webView.getUrl());
                 if (currentTab == TAB_MORE && showingMoreHome) renderMoreHome();
             } catch (Exception ignored) {
             }
@@ -761,7 +754,13 @@ public class MainActivity extends Activity {
         TextView desc = Ui.text(this, message == null || message.trim().isEmpty() ? "请检查网络后重试" : message, 14, Ui.SECONDARY, Typeface.NORMAL);
         desc.setGravity(Gravity.CENTER);
         Button retry = Ui.actionButton(this, "重新加载", true);
-        retry.setOnClickListener(v -> loadWebRoute(lastRoute));
+        retry.setOnClickListener(v -> {
+            if (LOGIN_ROUTE.equals(lastRoute)) {
+                loadLoginPage();
+            } else {
+                loadWebRoute(lastRoute);
+            }
+        });
         box.addView(title);
         box.addView(Ui.spacer(this, 8));
         box.addView(desc);
