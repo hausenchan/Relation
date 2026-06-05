@@ -12,9 +12,14 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
+import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.ValueCallback;
@@ -27,6 +32,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.URLUtil;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -54,13 +60,20 @@ public class MainActivity extends Activity {
     private static final String LOGIN_ROUTE = "/login";
 
     private SessionStore session;
+    private LinearLayout topBar;
+    private EditText searchInput;
+    private FrameLayout addAction;
     private FrameLayout contentFrame;
     private LinearLayout bottomNav;
     private ProgressBar pageProgress;
     private WebView webView;
+    private Handler searchHandler;
+    private Runnable searchRunnable;
+    private boolean suppressSearchChange = false;
     private int currentTab = TAB_TASKS;
     private boolean showingMoreHome = false;
     private String lastRoute = "/";
+    private String moreSearchQuery = "";
     private ValueCallback<Uri[]> filePathCallback;
 
     @Override
@@ -68,6 +81,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         tuneSystemBars();
         session = ((RelationApp) getApplication()).session();
+        searchHandler = new Handler(Looper.getMainLooper());
         showMain();
     }
 
@@ -84,6 +98,8 @@ public class MainActivity extends Activity {
         LinearLayout root = Ui.vertical(this);
         root.setBackgroundColor(Ui.PAGE);
 
+        topBar = buildTopBar();
+
         contentFrame = new FrameLayout(this);
         contentFrame.setBackgroundColor(Ui.PAGE);
         pageProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -93,15 +109,71 @@ public class MainActivity extends Activity {
 
         bottomNav = Ui.horizontal(this);
         bottomNav.setGravity(Gravity.CENTER);
-        bottomNav.setPadding(Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
-        bottomNav.setBackground(Ui.strokeBg(this, Color.WHITE, 0, Ui.LINE));
+        bottomNav.setPadding(Ui.dp(this, 2), Ui.dp(this, 3), Ui.dp(this, 2), Ui.dp(this, 2));
+        bottomNav.setBackground(Ui.strokeBg(this, Color.WHITE, 0, Color.rgb(226, 226, 226)));
 
+        root.addView(topBar, new LinearLayout.LayoutParams(-1, Ui.dp(this, 54)));
         root.addView(contentFrame, new LinearLayout.LayoutParams(-1, 0, 1));
-        root.addView(bottomNav, new LinearLayout.LayoutParams(-1, Ui.dp(this, 60)));
+        root.addView(bottomNav, new LinearLayout.LayoutParams(-1, Ui.dp(this, 58)));
         setContentView(root);
 
         renderBottomNav();
+        updateTopBarForTab();
         switchTab(TAB_TASKS);
+    }
+
+    private LinearLayout buildTopBar() {
+        LinearLayout bar = Ui.horizontal(this);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(Ui.dp(this, 12), Ui.dp(this, 7), Ui.dp(this, 10), Ui.dp(this, 7));
+        bar.setBackgroundColor(Ui.BAR);
+
+        LinearLayout searchBox = Ui.horizontal(this);
+        searchBox.setGravity(Gravity.CENTER_VERTICAL);
+        searchBox.setPadding(Ui.dp(this, 10), 0, Ui.dp(this, 8), 0);
+        searchBox.setBackground(Ui.bg(Ui.SEARCH_BG, 6, this));
+
+        RelationIconView searchIcon = new RelationIconView(this, RelationIconView.SEARCH);
+        searchIcon.setIconColor(Ui.TERTIARY);
+        searchBox.addView(searchIcon, new LinearLayout.LayoutParams(Ui.dp(this, 18), Ui.dp(this, 18)));
+
+        searchInput = new EditText(this);
+        searchInput.setSingleLine(true);
+        searchInput.setTextSize(14);
+        searchInput.setTextColor(Ui.TEXT);
+        searchInput.setHintTextColor(Ui.TERTIARY);
+        searchInput.setPadding(Ui.dp(this, 7), 0, 0, 0);
+        searchInput.setBackground(null);
+        searchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        searchInput.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                if (suppressSearchChange) return;
+                scheduleTopSearch(s == null ? "" : s.toString());
+            }
+        });
+        searchInput.setOnEditorActionListener((v, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                runTopSearch(searchInput.getText().toString());
+                return true;
+            }
+            return false;
+        });
+        searchBox.addView(searchInput, new LinearLayout.LayoutParams(0, -1, 1));
+        bar.addView(searchBox, new LinearLayout.LayoutParams(0, -1, 1));
+
+        addAction = new FrameLayout(this);
+        addAction.setPadding(Ui.dp(this, 7), Ui.dp(this, 7), Ui.dp(this, 7), Ui.dp(this, 7));
+        RelationIconView plus = new RelationIconView(this, RelationIconView.PLUS);
+        plus.setIconColor(Ui.TEXT);
+        addAction.addView(plus, new FrameLayout.LayoutParams(Ui.dp(this, 26), Ui.dp(this, 26), Gravity.CENTER));
+        addAction.setOnClickListener(v -> performTopAddAction());
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(Ui.dp(this, 42), -1);
+        addParams.leftMargin = Ui.dp(this, 6);
+        bar.addView(addAction, addParams);
+
+        return bar;
     }
 
     private void renderBottomNav() {
@@ -123,10 +195,13 @@ public class MainActivity extends Activity {
         boolean active = currentTab == tab;
         RelationIconView icon = new RelationIconView(this, iconType);
         icon.setIconColor(active ? Ui.PRIMARY : Ui.SECONDARY);
-        TextView text = Ui.text(this, label, 11, active ? Ui.PRIMARY : Ui.SECONDARY, active ? Typeface.BOLD : Typeface.NORMAL);
+        TextView text = Ui.text(this, label, 11, active ? Ui.PRIMARY : Ui.SECONDARY, Typeface.NORMAL);
         text.setGravity(Gravity.CENTER);
-        item.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 24), Ui.dp(this, 24)));
-        item.addView(text, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(Ui.dp(this, 25), Ui.dp(this, 25));
+        item.addView(icon, iconParams);
+        LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(-2, -2);
+        textParams.topMargin = Ui.dp(this, 2);
+        item.addView(text, textParams);
         item.setOnClickListener(v -> switchTab(tab));
         bottomNav.addView(item, new LinearLayout.LayoutParams(0, -1, 1));
     }
@@ -137,6 +212,7 @@ public class MainActivity extends Activity {
         }
         currentTab = tab;
         renderBottomNav();
+        updateTopBarForTab();
         if (tab == TAB_MORE) {
             renderMoreHome();
             return;
@@ -162,6 +238,92 @@ public class MainActivity extends Activity {
         String route = normalizeRoute(path);
         lastRoute = route;
         webView.loadUrl(WEB_BASE_URL + route);
+    }
+
+    private void updateTopBarForTab() {
+        if (topBar == null || searchInput == null || addAction == null) return;
+        boolean showAdd = currentTab == TAB_OPPORTUNITIES || currentTab == TAB_PERSONS || currentTab == TAB_COMPANIES;
+        addAction.setVisibility(showAdd ? View.VISIBLE : View.GONE);
+        searchInput.setHint(searchHintForTab(currentTab));
+        suppressSearchChange = true;
+        searchInput.setText(currentTab == TAB_MORE ? moreSearchQuery : "");
+        suppressSearchChange = false;
+    }
+
+    private void setShellBarsVisible(boolean visible) {
+        int state = visible ? View.VISIBLE : View.GONE;
+        if (topBar != null) topBar.setVisibility(state);
+        if (bottomNav != null) bottomNav.setVisibility(state);
+    }
+
+    private String searchHintForTab(int tab) {
+        if (tab == TAB_OPPORTUNITIES) return "搜索商机";
+        if (tab == TAB_PERSONS) return "搜索人脉";
+        if (tab == TAB_COMPANIES) return "搜索公司、产品";
+        if (tab == TAB_MORE) return "搜索功能";
+        return "搜索任务";
+    }
+
+    private void scheduleTopSearch(String keyword) {
+        if (searchRunnable != null) searchHandler.removeCallbacks(searchRunnable);
+        searchRunnable = () -> runTopSearch(keyword);
+        searchHandler.postDelayed(searchRunnable, 260);
+    }
+
+    private void runTopSearch(String keyword) {
+        String query = keyword == null ? "" : keyword.trim();
+        if (currentTab == TAB_MORE) {
+            moreSearchQuery = query;
+            renderMoreHome();
+            return;
+        }
+        if (webView == null) return;
+        webView.evaluateJavascript(buildSearchScript(query), null);
+    }
+
+    private String buildSearchScript(String query) {
+        return "(function(){"
+            + "var q=" + JSONObject.quote(query) + ";"
+            + "var inputs=Array.from(document.querySelectorAll('input')).filter(function(el){return (el.placeholder||'').indexOf('搜索')>=0;});"
+            + "var input=inputs[0];"
+            + "if(!input)return false;"
+            + "var setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;"
+            + "setter.call(input,q);"
+            + "input.dispatchEvent(new Event('input',{bubbles:true}));"
+            + "input.dispatchEvent(new Event('change',{bubbles:true}));"
+            + "input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true}));"
+            + "return true;"
+            + "})();";
+    }
+
+    private void performTopAddAction() {
+        if (webView == null) return;
+        webView.evaluateJavascript(buildAddScript(), value -> {
+            if (value == null || "false".equals(value) || "null".equals(value)) {
+                showToast("当前页面暂无新增入口");
+            }
+        });
+    }
+
+    private String buildAddScript() {
+        String label = addLabelForTab(currentTab);
+        return "(function(){"
+            + "var target=" + JSONObject.quote(label) + ";"
+            + "var buttons=Array.from(document.querySelectorAll('button')).filter(function(b){return !b.closest('.ant-modal,.ant-drawer');});"
+            + "var exact=buttons.find(function(b){return b.getAttribute('data-relation-mobile-add')==='true'&&(b.textContent||'').trim().indexOf(target)>=0;});"
+            + "var fallback=buttons.find(function(b){var t=(b.textContent||'').trim();return t.indexOf('添加')>=0||t.indexOf('新增')>=0||t.indexOf('新建')>=0;});"
+            + "var btn=exact||fallback;"
+            + "if(!btn)return false;"
+            + "btn.click();"
+            + "return true;"
+            + "})();";
+    }
+
+    private String addLabelForTab(int tab) {
+        if (tab == TAB_OPPORTUNITIES) return "添加商机";
+        if (tab == TAB_PERSONS) return "添加人脉";
+        if (tab == TAB_COMPANIES) return "添加公司";
+        return "新增";
     }
 
     private String normalizeRoute(String path) {
@@ -208,6 +370,7 @@ public class MainActivity extends Activity {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
+            setShellBarsVisible(!isLoginUrl(url));
             updateTabFromUrl(url);
             injectMobileShellCss();
             syncWebSession();
@@ -303,83 +466,99 @@ public class MainActivity extends Activity {
     private void injectMobileShellCss() {
         if (webView == null) return;
         String css =
-            ":root{--md-primary:#07c160;--md-primary-dark:#12945b;--md-bg:#f5f6f7;--md-card:#fff;--md-text:#111827;--md-sub:#8a8f98;--md-line:#e8eaed;--md-blue:#2f7dcc;}"
+            ":root{--md-primary:#07c160;--md-primary-dark:#129611;--md-bg:#f5f5f5;--md-card:#fff;--md-text:#111;--md-sub:#808080;--md-light:#a8a8a8;--md-line:#ededed;--md-bar:#f7f7f7;--md-search:#ededed;--md-blue:#3478f6;--md-orange:#d88720;}"
             + "html,body,#root{background:var(--md-bg)!important;color:var(--md-text)!important;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif!important;-webkit-font-smoothing:antialiased!important;letter-spacing:0!important;}"
             + "body{margin:0!important;overflow-x:hidden!important;}"
             + ".ant-layout{background:var(--md-bg)!important;}"
-            + ".ant-layout-sider,.app-mobile-menu-drawer{display:none!important;}"
-            + ".ant-layout-header{height:auto!important;min-height:48px!important;line-height:normal!important;padding:10px 14px 6px!important;background:rgba(245,246,247,.96)!important;border-bottom:0!important;box-shadow:none!important;backdrop-filter:blur(12px)!important;}"
-            + ".ant-layout-header>span:first-child{width:30px!important;height:30px!important;margin-right:6px!important;border-radius:8px!important;}"
-            + ".ant-layout-header .ant-avatar{box-shadow:none!important;}"
-            + ".ant-layout-content{margin:0!important;border-radius:0!important;box-shadow:none!important;background:var(--md-bg)!important;padding:12px 14px 26px!important;min-height:auto!important;}"
-            + ".ant-layout-content::after{content:'';display:block;height:10px;}"
+            + ".ant-layout-sider,.app-mobile-menu-drawer,.ant-layout-header{display:none!important;}"
+            + ".ant-layout-content{margin:0!important;border-radius:0!important;box-shadow:none!important;background:var(--md-bg)!important;padding:0!important;min-height:auto!important;}"
+            + ".ant-layout-content::after{content:'';display:block;height:12px;}"
             + "h1,h2,h3,h4,h5,.ant-typography{letter-spacing:0!important;color:var(--md-text)!important;}"
-            + ".ant-typography h4,h4.ant-typography{font-size:18px!important;line-height:1.35!important;font-weight:700!important;margin:2px 0 12px!important;}"
-            + ".ant-btn{height:40px!important;border-radius:10px!important;font-size:15px!important;font-weight:500!important;box-shadow:none!important;border-color:var(--md-line)!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:6px!important;}"
-            + ".ant-btn-primary{background:var(--md-primary)!important;border-color:var(--md-primary)!important;color:#fff!important;box-shadow:0 4px 10px rgba(7,193,96,.12)!important;}"
-            + ".ant-btn-primary:hover,.ant-btn-primary:active{background:var(--md-primary-dark)!important;border-color:var(--md-primary-dark)!important;}"
-            + ".ant-btn-link{color:var(--md-primary-dark)!important;padding:0 4px!important;height:auto!important;font-weight:500!important;}"
-            + ".ant-input,.ant-input-affix-wrapper,.ant-select-selector,.ant-picker{min-height:42px!important;border-radius:10px!important;border-color:#dfe3e8!important;background:#fff!important;font-size:15px!important;box-shadow:none!important;}"
-            + ".ant-input::placeholder{color:#b0b6bf!important;}"
-            + ".ant-select-selection-placeholder,.ant-picker-input>input::placeholder{color:#b0b6bf!important;}"
+            + ".ant-typography h4,h4.ant-typography{font-size:17px!important;line-height:1.35!important;font-weight:600!important;margin:0 0 10px!important;}"
+            + ".ant-btn{height:36px!important;border-radius:7px!important;font-size:14px!important;font-weight:400!important;box-shadow:none!important;border-color:var(--md-line)!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:5px!important;}"
+            + ".ant-btn-primary{background:var(--md-primary)!important;border-color:var(--md-primary)!important;color:#fff!important;box-shadow:none!important;}"
+            + ".ant-btn-link{color:var(--md-primary-dark)!important;padding:0 2px!important;height:auto!important;font-weight:400!important;}"
+            + ".ant-input,.ant-input-affix-wrapper,.ant-select-selector,.ant-picker{min-height:38px!important;border-radius:7px!important;border-color:#dfdfdf!important;background:#fff!important;font-size:14px!important;box-shadow:none!important;}"
+            + ".ant-input::placeholder,.ant-select-selection-placeholder,.ant-picker-input>input::placeholder{color:#aaa!important;}"
             + ".ant-space{max-width:100%!important;}"
-            + ".ant-space.ant-space-vertical{gap:10px!important;}"
-            + ".ant-card,.ant-list-item>div[role='button'],.ant-list .ant-list-item>div:not(.ant-list-item-meta),.ant-table-wrapper,.ant-collapse,.ant-descriptions,.ant-form,.ant-tabs{border-radius:12px!important;}"
-            + ".ant-card{border:1px solid var(--md-line)!important;box-shadow:0 3px 10px rgba(15,23,42,.035)!important;}"
-            + ".ant-card-body{padding:14px!important;}"
-            + ".ant-list{background:transparent!important;}"
-            + ".ant-list-item{padding:0!important;margin:0 0 10px!important;border:none!important;}"
-            + ".ant-list-item>div[role='button'],.ant-list .ant-list-item>div:not(.ant-list-item-meta){background:var(--md-card)!important;border:1px solid var(--md-line)!important;border-radius:12px!important;box-shadow:0 3px 10px rgba(15,23,42,.035)!important;padding:14px!important;}"
-            + ".ant-list-item>div[role='button']:active,.ant-list .ant-list-item>div:not(.ant-list-item-meta):active{background:#fdfdfd!important;}"
-            + ".ant-list-item .ant-typography,.ant-list-item span,.ant-list-item div{line-height:1.5!important;}"
-            + ".ant-list-item strong,.ant-list-item .ant-typography strong{font-weight:700!important;color:var(--md-text)!important;}"
-            + ".ant-tag{border-radius:7px!important;font-size:13px!important;line-height:24px!important;padding:0 8px!important;margin-inline-end:6px!important;background:#f7f8fa!important;border-color:#e3e6ea!important;color:#59616c!important;}"
-            + ".ant-tag-blue,.ant-tag-processing{background:#edf7ff!important;border-color:#b8def8!important;color:#2f7dcc!important;}"
-            + ".ant-tag-orange,.ant-tag-warning{background:#fff7e8!important;border-color:#f2d29a!important;color:#a56b18!important;}"
-            + ".ant-tag-green,.ant-tag-success{background:#edf9f2!important;border-color:#b9e7cd!important;color:#148652!important;}"
+            + ".ant-card,.ant-list-item>div[role='button'],.ant-list .ant-list-item>div:not(.ant-list-item-meta),.ant-table-wrapper,.ant-collapse,.ant-descriptions,.ant-form,.ant-tabs{border-radius:0!important;}"
+            + ".ant-card{border:0!important;box-shadow:none!important;background:#fff!important;}"
+            + ".ant-card-body{padding:13px 16px!important;}"
+            + ".ant-list{background:#fff!important;border-top:1px solid var(--md-line)!important;border-bottom:1px solid var(--md-line)!important;}"
+            + ".ant-list-item{padding:0!important;margin:0!important;border:none!important;border-bottom:1px solid var(--md-line)!important;background:#fff!important;}"
+            + ".ant-list-item:last-child{border-bottom:none!important;}"
+            + ".ant-list-item>div[role='button'],.ant-list .ant-list-item>div:not(.ant-list-item-meta){background:#fff!important;border:0!important;border-radius:0!important;box-shadow:none!important;padding:13px 16px!important;}"
+            + ".ant-list-item>div[role='button']:active,.ant-list .ant-list-item>div:not(.ant-list-item-meta):active,.ant-card:active{background:#f7f7f7!important;}"
+            + ".ant-list-item .ant-typography,.ant-list-item span,.ant-list-item div{line-height:1.42!important;}"
+            + ".ant-list-item strong,.ant-list-item .ant-typography strong{font-weight:600!important;color:var(--md-text)!important;}"
+            + ".ant-tag{border-radius:4px!important;font-size:11px!important;line-height:19px!important;padding:0 6px!important;margin-inline-end:4px!important;background:#f7f7f7!important;border-color:#e5e5e5!important;color:#666!important;}"
+            + ".ant-tag-blue,.ant-tag-processing{background:#edf5ff!important;border-color:#c9e2ff!important;color:#2f7dcc!important;}"
+            + ".ant-tag-orange,.ant-tag-warning{background:#fff5e7!important;border-color:#f1d29e!important;color:#a36b18!important;}"
+            + ".ant-tag-green,.ant-tag-success{background:#eff9f2!important;border-color:#c4ebd1!important;color:#148652!important;}"
             + ".ant-tag-purple{background:#f4f1ff!important;border-color:#d9d0ff!important;color:#5b45bf!important;}"
-            + ".ant-tabs{background:transparent!important;}"
-            + ".ant-tabs-nav{margin:4px 0 14px!important;}"
-            + ".ant-tabs-tab{padding:10px 2px!important;font-size:16px!important;font-weight:600!important;color:#3f4652!important;}"
-            + ".ant-tabs-tab-active .ant-tabs-tab-btn{color:var(--md-primary-dark)!important;font-weight:700!important;}"
-            + ".ant-tabs-ink-bar{background:var(--md-primary)!important;height:3px!important;border-radius:999px!important;}"
-            + ".ant-pagination{margin:18px 0 8px!important;}"
-            + ".ant-pagination-item{border-radius:10px!important;border-color:#dfe3e8!important;}"
+            + ".ant-tabs{background:var(--md-bg)!important;}"
+            + ".ant-tabs-nav{margin:0!important;padding:0 16px!important;background:#fff!important;border-bottom:1px solid var(--md-line)!important;}"
+            + ".ant-tabs-tab{padding:12px 2px!important;font-size:15px!important;font-weight:500!important;color:#444!important;}"
+            + ".ant-tabs-tab-active .ant-tabs-tab-btn{color:var(--md-primary-dark)!important;font-weight:600!important;}"
+            + ".ant-tabs-ink-bar{background:var(--md-primary)!important;height:2px!important;border-radius:999px!important;}"
+            + ".ant-tabs-content-holder{padding-top:10px!important;}"
+            + ".ant-pagination{margin:14px 0 8px!important;text-align:center!important;}"
+            + ".ant-pagination-item{border-radius:6px!important;border-color:#ddd!important;}"
             + ".ant-pagination-item-active{border-color:var(--md-primary)!important;}"
             + ".ant-pagination-item-active a{color:var(--md-primary-dark)!important;}"
-            + ".ant-drawer-content,.ant-modal-content{border-radius:14px 14px 0 0!important;overflow:hidden!important;}"
-            + ".ant-drawer-header,.ant-modal-header{padding:14px 16px!important;border-bottom:1px solid var(--md-line)!important;}"
-            + ".ant-drawer-body,.ant-modal-body{padding:14px!important;background:#fff!important;}"
+            + ".ant-drawer-content,.ant-modal-content{border-radius:0!important;overflow:hidden!important;background:#fff!important;}"
+            + ".ant-drawer-header,.ant-modal-header{padding:14px 16px!important;border-bottom:1px solid var(--md-line)!important;background:#f7f7f7!important;}"
+            + ".ant-drawer-body,.ant-modal-body{padding:14px 16px!important;background:#fff!important;}"
             + ".ant-modal,.ant-drawer{max-width:100vw!important;}"
-            + ".ant-descriptions-view,.ant-table{border-radius:10px!important;overflow:hidden!important;}"
-            + ".ant-table-wrapper{background:#fff!important;overflow:hidden!important;border:1px solid var(--md-line)!important;}"
-            + ".ant-table-thead>tr>th{background:#f7f8fa!important;color:#59616c!important;font-weight:600!important;}"
-            + ".ant-table-tbody>tr>td{font-size:14px!important;}"
-            + ".ql-container,.ql-toolbar{border-color:#dfe3e8!important;}"
-            + ".ql-toolbar{border-radius:10px 10px 0 0!important;}"
-            + ".ql-container{border-radius:0 0 10px 10px!important;}"
+            + ".ant-modal-footer{padding:10px 16px 14px!important;border-top:1px solid var(--md-line)!important;}"
+            + ".ant-descriptions-view,.ant-table{border-radius:0!important;overflow:hidden!important;}"
+            + ".ant-table-wrapper{background:#fff!important;overflow:hidden!important;border:0!important;}"
+            + ".ant-table-thead>tr>th{background:#f7f7f7!important;color:#666!important;font-weight:500!important;}"
+            + ".ant-table-tbody>tr>td{font-size:13px!important;}"
+            + ".ql-container,.ql-toolbar{border-color:#dfdfdf!important;}"
             + "@media(max-width:768px){"
-            + "  .ant-layout-content{padding:12px 14px 26px!important;}"
             + "  .ant-layout-content>div{padding:0!important;}"
-            + "  .ant-layout-content>div>div:first-child{margin-bottom:12px!important;}"
-            + "  .ant-layout-content>div>div:first-child h4,.ant-layout-content>div>div:first-child .ant-typography{font-size:18px!important;}"
-            + "  .ant-btn-primary{width:100%!important;height:44px!important;border-radius:11px!important;}"
-            + "  .ant-space[style*='width: 100%'],.ant-space[style*='width:100%']{gap:10px!important;}"
+            + "  .ant-layout-content>div>div:first-child{margin-bottom:0!important;}"
+            + "  .ant-layout-content>div>div:first-child h4,.ant-layout-content>div>div:first-child .ant-typography{font-size:17px!important;}"
+            + "  button[data-relation-mobile-add='true'],button[data-relation-mobile-import='true']{display:none!important;}"
+            + "  [data-relation-mobile-search='true']{position:absolute!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important;}"
+            + "  .relation-mobile-empty-action-row,.relation-mobile-stat-grid{display:none!important;}"
             + "  .ant-select,.ant-picker,.ant-input-affix-wrapper{width:100%!important;}"
-            + "  .ant-list-item>div[role='button']{padding:14px!important;border-radius:12px!important;}"
-            + "  .ant-list-item .ant-space{row-gap:8px!important;}"
-            + "  .ant-list-item .ant-btn{height:34px!important;border-radius:9px!important;font-size:14px!important;padding:0 10px!important;background:#fff!important;}"
+            + "  .ant-tabs-nav{position:sticky!important;top:0!important;z-index:3!important;}"
+            + "  .ant-list-item>div[role='button']{position:relative!important;min-height:62px!important;padding-left:64px!important;}"
+            + "  html[data-relation-route^='/persons'] .ant-list-item>div[role='button']::before{content:'';position:absolute;left:16px;top:16px;width:36px;height:36px;border-radius:6px;background:linear-gradient(135deg,#07c160,#31d982);}"
+            + "  html[data-relation-route^='/persons'] .ant-list-item>div[role='button']::after{content:'人';position:absolute;left:16px;top:16px;width:36px;height:36px;line-height:36px;text-align:center;color:#fff;font-size:15px;font-weight:600;}"
+            + "  html[data-relation-route^='/companies'] .ant-list-item .ant-card{position:relative!important;padding-left:48px!important;min-height:64px!important;}"
+            + "  html[data-relation-route^='/companies'] .ant-list-item .ant-card::before{content:'';position:absolute;left:16px;top:16px;width:36px;height:36px;border-radius:7px;background:linear-gradient(135deg,#4da3ff,#2f7dcc);}"
+            + "  html[data-relation-route^='/companies'] .ant-list-item .ant-card::after{content:'司';position:absolute;left:16px;top:16px;width:36px;height:36px;line-height:36px;text-align:center;color:#fff;font-size:15px;font-weight:600;}"
+            + "  html[data-relation-route^='/leads'] .ant-list-item .ant-card{position:relative!important;padding-left:48px!important;min-height:64px!important;}"
+            + "  html[data-relation-route^='/leads'] .ant-list-item .ant-card::before{content:'';position:absolute;left:16px;top:16px;width:36px;height:36px;border-radius:7px;background:linear-gradient(135deg,#ffad42,#f08300);}"
+            + "  html[data-relation-route^='/leads'] .ant-list-item .ant-card::after{content:'机';position:absolute;left:16px;top:16px;width:36px;height:36px;line-height:36px;text-align:center;color:#fff;font-size:15px;font-weight:600;}"
+            + "  .ant-list-item .ant-space{row-gap:5px!important;}"
+            + "  .ant-list-item .ant-btn{height:28px!important;border-radius:5px!important;font-size:12px!important;padding:0 8px!important;background:#fff!important;}"
             + "  .ant-list-item .ant-btn-link{height:auto!important;background:transparent!important;color:var(--md-primary-dark)!important;}"
-            + "  .ant-list-item [style*='box-shadow']{box-shadow:0 3px 10px rgba(15,23,42,.035)!important;}"
-            + "  .ant-list-item [style*='borderRadius: 12'],.ant-list-item [style*='border-radius: 12']{border-radius:12px!important;}"
+            + "  .ant-list-item [style*='box-shadow']{box-shadow:none!important;}"
+            + "  .ant-list-item [style*='borderRadius'],.ant-list-item [style*='border-radius']{border-radius:0!important;}"
             + "  .ant-list-item [style*='color: rgb(31, 31, 31)']{color:var(--md-text)!important;}"
-            + "  .ant-list-item [style*='font-size: 15']{font-size:16px!important;line-height:1.45!important;}"
+            + "  .ant-list-item [style*='font-size: 15']{font-size:16px!important;line-height:1.35!important;}"
             + "  .ant-list-item [style*='color: rgb(136, 136, 136)'],.ant-typography-secondary{color:var(--md-sub)!important;}"
+            + "  .ant-list-item p{font-size:13px!important;color:#555!important;margin-bottom:0!important;}"
             + "  .ant-form-item{margin-bottom:12px!important;}"
-            + "  .ant-modal-footer{padding:10px 14px 14px!important;}"
+            + "  .ant-modal{top:0!important;max-width:100vw!important;padding-bottom:0!important;}"
+            + "  .ant-modal-content{min-height:100vh!important;}"
+            + "  .ant-drawer-body .ant-card{border:1px solid var(--md-line)!important;border-radius:7px!important;}"
             + "}"
             + ".relation-android-ready{}";
         String js = "(function(){"
+            + "function tagRelationMobile(){"
+            + "document.documentElement.setAttribute('data-relation-route',location.pathname||'/');"
+            + "var addButtons=[];"
+            + "Array.from(document.querySelectorAll('button')).forEach(function(btn){if(btn.closest('.ant-modal,.ant-drawer'))return;var t=(btn.textContent||'').trim();if(/添加|新增|新建/.test(t)){btn.setAttribute('data-relation-mobile-add','true');addButtons.push(btn);}if(/导入/.test(t)){btn.setAttribute('data-relation-mobile-import','true');}});"
+            + "addButtons.forEach(function(btn){var row=btn.parentElement;if(row&&!row.querySelector('input,.ant-select')&&row.querySelectorAll('button').length<=2){row.classList.add('relation-mobile-empty-action-row');}});"
+            + "Array.from(document.querySelectorAll('.stat-card')).forEach(function(card){var grid=card.parentElement&&card.parentElement.parentElement;if(grid){grid.classList.add('relation-mobile-stat-grid');}});"
+            + "Array.from(document.querySelectorAll('input')).forEach(function(input){var p=input.getAttribute('placeholder')||'';if(p.indexOf('搜索')>=0){var wrap=input.closest('.ant-input-group-wrapper,.ant-input-affix-wrapper,.ant-input-search,.ant-space')||input;wrap.setAttribute('data-relation-mobile-search','true');}});"
+            + "}"
+            + "tagRelationMobile();setTimeout(tagRelationMobile,250);setTimeout(tagRelationMobile,800);setTimeout(tagRelationMobile,1600);"
             + "var id='relation-android-shell-style';"
             + "var old=document.getElementById(id);if(old)old.remove();"
             + "var style=document.createElement('style');"
@@ -447,6 +626,7 @@ public class MainActivity extends Activity {
             currentTab = tab;
             showingMoreHome = false;
             renderBottomNav();
+            updateTopBarForTab();
         }
     }
 
@@ -537,65 +717,108 @@ public class MainActivity extends Activity {
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(Ui.PAGE);
         LinearLayout page = Ui.vertical(this);
-        page.setPadding(Ui.dp(this, 16), Ui.dp(this, 12), Ui.dp(this, 16), Ui.dp(this, 18));
+        page.setPadding(0, Ui.dp(this, 10), 0, Ui.dp(this, 18));
         scroll.addView(page, new ScrollView.LayoutParams(-1, -2));
 
         LinearLayout profile = Ui.horizontal(this);
-        profile.setPadding(Ui.dp(this, 16), Ui.dp(this, 14), Ui.dp(this, 14), Ui.dp(this, 14));
-        profile.setBackground(Ui.strokeBg(this, Color.WHITE, 8, Ui.LINE));
+        profile.setPadding(Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 16), Ui.dp(this, 18));
+        profile.setBackgroundColor(Color.WHITE);
         ImageView logo = new ImageView(this);
         logo.setImageResource(getResources().getIdentifier("ic_launcher", "drawable", getPackageName()));
-        profile.addView(logo, new LinearLayout.LayoutParams(Ui.dp(this, 46), Ui.dp(this, 46)));
+        profile.addView(logo, new LinearLayout.LayoutParams(Ui.dp(this, 56), Ui.dp(this, 56)));
         LinearLayout account = Ui.vertical(this);
-        account.setPadding(Ui.dp(this, 12), 0, 0, 0);
-        account.addView(Ui.text(this, "幂动组织中台", 18, Ui.TEXT, Typeface.BOLD));
-        account.addView(Ui.text(this, session.displayName(), 14, Ui.SECONDARY, Typeface.NORMAL));
+        account.setPadding(Ui.dp(this, 14), 0, 0, 0);
+        account.setGravity(Gravity.CENTER_VERTICAL);
+        account.addView(Ui.text(this, session.displayName(), 19, Ui.TEXT, Typeface.BOLD));
+        TextView subtitle = Ui.text(this, "幂动组织中台", 13, Ui.SECONDARY, Typeface.NORMAL);
+        LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(-2, -2);
+        subtitleParams.topMargin = Ui.dp(this, 7);
+        account.addView(subtitle, subtitleParams);
         profile.addView(account, new LinearLayout.LayoutParams(0, -2, 1));
         RelationIconView logoutIcon = new RelationIconView(this, RelationIconView.LOGOUT);
         logoutIcon.setIconColor(Ui.SECONDARY);
-        profile.addView(logoutIcon, new LinearLayout.LayoutParams(Ui.dp(this, 26), Ui.dp(this, 26)));
+        profile.addView(logoutIcon, new LinearLayout.LayoutParams(Ui.dp(this, 24), Ui.dp(this, 24)));
         profile.setOnClickListener(v -> confirmLogout());
         page.addView(profile, new LinearLayout.LayoutParams(-1, -2));
-        page.addView(Ui.spacer(this, 14));
+        page.addView(Ui.spacer(this, 10));
 
-        page.addView(moreEntry("目标", "目标计划里的目标拆解与进度", RelationIconView.TASK, "/goals"));
-        page.addView(Ui.spacer(this, 8));
-        page.addView(moreEntry("周报", "查看和维护业务周报", RelationIconView.TASK, "/weekly-reports"));
-        page.addView(Ui.spacer(this, 8));
-        page.addView(moreEntry("策略", "业务流转里的策略管理", RelationIconView.OPPORTUNITY, "/strategies"));
-        page.addView(Ui.spacer(this, 8));
-        page.addView(moreEntry("需求", "业务流转里的研发需求", RelationIconView.TASK, "/dev-tasks"));
-        page.addView(Ui.spacer(this, 8));
-        page.addView(moreEntry("文档中心", "制度、SOP、项目资料", RelationIconView.COMPANY, "/documents"));
+        LinearLayout group = Ui.vertical(this);
+        group.setBackgroundColor(Color.WHITE);
+        addMoreEntryIfMatches(group, "目标", "目标拆解与进度", RelationIconView.GOAL, Ui.SOFT_GREEN, "/goals");
+        addMoreEntryIfMatches(group, "周报", "业务周报", RelationIconView.WEEKLY, Ui.SOFT_BLUE, "/weekly-reports");
+        addMoreEntryIfMatches(group, "策略", "业务策略", RelationIconView.STRATEGY, Ui.SOFT_ORANGE, "/strategies");
+        addMoreEntryIfMatches(group, "需求", "研发需求", RelationIconView.DEMAND, Color.rgb(242, 239, 255), "/dev-tasks");
+        addMoreEntryIfMatches(group, "文档中心", "制度、SOP、项目资料", RelationIconView.DOCUMENT, Color.rgb(239, 247, 255), "/documents");
+        if (group.getChildCount() == 0) {
+            TextView empty = Ui.text(this, "没有匹配的功能", 14, Ui.SECONDARY, Typeface.NORMAL);
+            empty.setGravity(Gravity.CENTER);
+            empty.setPadding(0, Ui.dp(this, 32), 0, Ui.dp(this, 32));
+            group.addView(empty, new LinearLayout.LayoutParams(-1, -2));
+        }
+        page.addView(group, new LinearLayout.LayoutParams(-1, -2));
 
         contentFrame.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
     }
 
-    private View moreEntry(String title, String desc, int iconType, String path) {
-        LinearLayout card = Ui.horizontal(this);
-        card.setPadding(Ui.dp(this, 16), Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14));
-        card.setBackground(Ui.strokeBg(this, Color.WHITE, 8, Ui.LINE));
+    private void addMoreEntryIfMatches(LinearLayout parent, String title, String desc, int iconType, int iconBg, String path) {
+        if (moreSearchQuery == null || moreSearchQuery.trim().isEmpty()) {
+            addMoreEntry(parent, title, desc, iconType, iconBg, path);
+            return;
+        }
+        String q = moreSearchQuery.trim();
+        if ((title + " " + desc).contains(q)) {
+            addMoreEntry(parent, title, desc, iconType, iconBg, path);
+        }
+    }
 
+    private void addMoreEntry(LinearLayout parent, String title, String desc, int iconType, int iconBg, String path) {
+        LinearLayout row = Ui.horizontal(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 14), 0);
+        row.setBackgroundColor(Color.WHITE);
+        row.setMinimumHeight(Ui.dp(this, 58));
+        row.setTag(title + " " + desc);
+
+        FrameLayout iconWrap = new FrameLayout(this);
+        iconWrap.setBackground(Ui.bg(iconBg, 7, this));
         RelationIconView icon = new RelationIconView(this, iconType);
-        icon.setIconColor(Ui.PRIMARY);
-        card.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 30), Ui.dp(this, 30)));
+        icon.setIconColor(iconColorForBg(iconBg));
+        iconWrap.addView(icon, new FrameLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22), Gravity.CENTER));
+        row.addView(iconWrap, new LinearLayout.LayoutParams(Ui.dp(this, 36), Ui.dp(this, 36)));
 
         LinearLayout textCol = Ui.vertical(this);
+        textCol.setGravity(Gravity.CENTER_VERTICAL);
         textCol.setPadding(Ui.dp(this, 14), 0, 0, 0);
-        textCol.addView(Ui.text(this, title, 17, Ui.TEXT, Typeface.BOLD));
-        textCol.addView(Ui.text(this, desc, 13, Ui.SECONDARY, Typeface.NORMAL));
-        card.addView(textCol, new LinearLayout.LayoutParams(0, -2, 1));
+        textCol.addView(Ui.text(this, title, 16, Ui.TEXT, Typeface.NORMAL));
+        TextView descView = Ui.text(this, desc, 12, Ui.SECONDARY, Typeface.NORMAL);
+        LinearLayout.LayoutParams descParams = new LinearLayout.LayoutParams(-2, -2);
+        descParams.topMargin = Ui.dp(this, 5);
+        textCol.addView(descView, descParams);
+        row.addView(textCol, new LinearLayout.LayoutParams(0, -1, 1));
 
-        TextView arrow = Ui.text(this, ">", 20, Ui.SECONDARY, Typeface.NORMAL);
+        TextView arrow = Ui.text(this, "›", 26, Ui.TERTIARY, Typeface.NORMAL);
         arrow.setGravity(Gravity.CENTER);
-        card.addView(arrow, new LinearLayout.LayoutParams(Ui.dp(this, 24), -1));
+        row.addView(arrow, new LinearLayout.LayoutParams(Ui.dp(this, 22), -1));
 
-        card.setOnClickListener(v -> {
+        row.setOnClickListener(v -> {
             currentTab = TAB_MORE;
             renderBottomNav();
             loadWebRoute(path);
         });
-        return card;
+        parent.addView(row, new LinearLayout.LayoutParams(-1, Ui.dp(this, 64)));
+
+        View line = new View(this);
+        line.setBackgroundColor(Ui.LINE);
+        LinearLayout.LayoutParams lineParams = new LinearLayout.LayoutParams(-1, Ui.dp(this, 0.5f));
+        lineParams.leftMargin = Ui.dp(this, 66);
+        parent.addView(line, lineParams);
+    }
+
+    private int iconColorForBg(int bg) {
+        if (bg == Ui.SOFT_GREEN) return Ui.PRIMARY_DARK;
+        if (bg == Ui.SOFT_BLUE) return Color.rgb(50, 120, 210);
+        if (bg == Ui.SOFT_ORANGE) return Color.rgb(201, 121, 31);
+        return Color.rgb(98, 91, 180);
     }
 
     private void confirmLogout() {
@@ -667,6 +890,9 @@ public class MainActivity extends Activity {
         if (filePathCallback != null) {
             filePathCallback.onReceiveValue(null);
             filePathCallback = null;
+        }
+        if (searchHandler != null && searchRunnable != null) {
+            searchHandler.removeCallbacks(searchRunnable);
         }
         if (webView != null) {
             webView.destroy();

@@ -13,12 +13,16 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 public final class Ui {
-    public static final int PAGE = Color.rgb(246, 247, 249);
+    public static final int PAGE = Color.rgb(245, 245, 245);
     public static final int SURFACE = Color.WHITE;
-    public static final int PRIMARY = Color.rgb(25, 139, 89);
-    public static final int TEXT = Color.rgb(22, 24, 35);
-    public static final int SECONDARY = Color.rgb(118, 124, 135);
-    public static final int LINE = Color.rgb(229, 232, 237);
+    public static final int PRIMARY = Color.rgb(7, 193, 96);
+    public static final int PRIMARY_DARK = Color.rgb(18, 150, 85);
+    public static final int TEXT = Color.rgb(17, 17, 17);
+    public static final int SECONDARY = Color.rgb(128, 128, 128);
+    public static final int TERTIARY = Color.rgb(168, 168, 168);
+    public static final int LINE = Color.rgb(232, 232, 232);
+    public static final int BAR = Color.rgb(247, 247, 247);
+    public static final int SEARCH_BG = Color.rgb(237, 237, 237);
     public static final int SOFT_GREEN = Color.rgb(232, 248, 239);
     public static final int SOFT_BLUE = Color.rgb(236, 244, 255);
     public static final int SOFT_ORANGE = Color.rgb(255, 244, 230);
@@ -35,7 +39,7 @@ public final class Ui {
         view.setText(value == null ? "" : value);
         view.setTextSize(sp);
         view.setTextColor(color);
-        view.setIncludeFontPadding(true);
+        view.setIncludeFontPadding(false);
         view.setLineSpacing(dp(context, 1), 1.0f);
         if (style != Typeface.NORMAL) view.setTypeface(Typeface.DEFAULT, style);
         return view;

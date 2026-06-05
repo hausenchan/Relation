@@ -19,6 +19,11 @@ public class RelationIconView extends View {
     public static final int PLUS = 8;
     public static final int REFRESH = 9;
     public static final int LOGOUT = 10;
+    public static final int GOAL = 11;
+    public static final int WEEKLY = 12;
+    public static final int STRATEGY = 13;
+    public static final int DEMAND = 14;
+    public static final int DOCUMENT = 15;
 
     private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -101,6 +106,21 @@ public class RelationIconView extends View {
             case LOGOUT:
                 drawLogout(canvas, x, y, s);
                 break;
+            case GOAL:
+                drawGoal(canvas, x, y, s);
+                break;
+            case WEEKLY:
+                drawWeekly(canvas, x, y, s);
+                break;
+            case STRATEGY:
+                drawStrategy(canvas, x, y, s);
+                break;
+            case DEMAND:
+                drawDemand(canvas, x, y, s);
+                break;
+            case DOCUMENT:
+                drawDocument(canvas, x, y, s);
+                break;
             default:
                 drawMore(canvas, x, y, s);
         }
@@ -159,7 +179,6 @@ public class RelationIconView extends View {
     }
 
     private void drawPlus(Canvas c, float x, float y, float s) {
-        c.drawCircle(x + s * .5f, y + s * .5f, s * .3f, stroke);
         c.drawLine(x + s * .5f, y + s * .34f, x + s * .5f, y + s * .66f, stroke);
         c.drawLine(x + s * .34f, y + s * .5f, x + s * .66f, y + s * .5f, stroke);
     }
@@ -181,5 +200,53 @@ public class RelationIconView extends View {
         c.drawLine(x + s * .48f, y + s * .5f, x + s * .78f, y + s * .5f, stroke);
         c.drawLine(x + s * .68f, y + s * .4f, x + s * .78f, y + s * .5f, stroke);
         c.drawLine(x + s * .68f, y + s * .6f, x + s * .78f, y + s * .5f, stroke);
+    }
+
+    private void drawGoal(Canvas c, float x, float y, float s) {
+        c.drawCircle(x + s * .5f, y + s * .5f, s * .28f, stroke);
+        c.drawCircle(x + s * .5f, y + s * .5f, s * .13f, stroke);
+        c.drawCircle(x + s * .5f, y + s * .5f, s * .035f, fill);
+    }
+
+    private void drawWeekly(Canvas c, float x, float y, float s) {
+        RectF r = new RectF(x + s * .22f, y + s * .18f, x + s * .78f, y + s * .82f);
+        c.drawRoundRect(r, s * .09f, s * .09f, stroke);
+        c.drawLine(x + s * .22f, y + s * .34f, x + s * .78f, y + s * .34f, stroke);
+        c.drawLine(x + s * .36f, y + s * .13f, x + s * .36f, y + s * .24f, stroke);
+        c.drawLine(x + s * .64f, y + s * .13f, x + s * .64f, y + s * .24f, stroke);
+        c.drawLine(x + s * .34f, y + s * .52f, x + s * .66f, y + s * .52f, stroke);
+        c.drawLine(x + s * .34f, y + s * .66f, x + s * .56f, y + s * .66f, stroke);
+    }
+
+    private void drawStrategy(Canvas c, float x, float y, float s) {
+        c.drawCircle(x + s * .31f, y + s * .68f, s * .075f, stroke);
+        c.drawCircle(x + s * .49f, y + s * .34f, s * .075f, stroke);
+        c.drawCircle(x + s * .72f, y + s * .56f, s * .075f, stroke);
+        c.drawLine(x + s * .36f, y + s * .62f, x + s * .45f, y + s * .41f, stroke);
+        c.drawLine(x + s * .55f, y + s * .39f, x + s * .66f, y + s * .5f, stroke);
+    }
+
+    private void drawDemand(Canvas c, float x, float y, float s) {
+        RectF r = new RectF(x + s * .24f, y + s * .24f, x + s * .76f, y + s * .76f);
+        c.drawRoundRect(r, s * .1f, s * .1f, stroke);
+        c.drawLine(x + s * .38f, y + s * .38f, x + s * .62f, y + s * .62f, stroke);
+        c.drawLine(x + s * .62f, y + s * .38f, x + s * .38f, y + s * .62f, stroke);
+        c.drawLine(x + s * .5f, y + s * .14f, x + s * .5f, y + s * .24f, stroke);
+        c.drawLine(x + s * .5f, y + s * .76f, x + s * .5f, y + s * .86f, stroke);
+    }
+
+    private void drawDocument(Canvas c, float x, float y, float s) {
+        Path p = new Path();
+        p.moveTo(x + s * .28f, y + s * .16f);
+        p.lineTo(x + s * .58f, y + s * .16f);
+        p.lineTo(x + s * .76f, y + s * .34f);
+        p.lineTo(x + s * .76f, y + s * .84f);
+        p.lineTo(x + s * .28f, y + s * .84f);
+        p.close();
+        c.drawPath(p, stroke);
+        c.drawLine(x + s * .58f, y + s * .16f, x + s * .58f, y + s * .35f, stroke);
+        c.drawLine(x + s * .58f, y + s * .35f, x + s * .76f, y + s * .35f, stroke);
+        c.drawLine(x + s * .38f, y + s * .52f, x + s * .66f, y + s * .52f, stroke);
+        c.drawLine(x + s * .38f, y + s * .66f, x + s * .6f, y + s * .66f, stroke);
     }
 }
