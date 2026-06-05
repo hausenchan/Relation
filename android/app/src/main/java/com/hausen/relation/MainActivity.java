@@ -22,6 +22,7 @@ import android.view.Window;
 import android.view.inputmethod.EditorInfo;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
+import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceError;
@@ -351,6 +352,7 @@ public class MainActivity extends Activity {
         }
         CookieManager.getInstance().setAcceptCookie(true);
 
+        webView.addJavascriptInterface(new RelationAndroidBridge(), "RelationAndroid");
         webView.setWebViewClient(new RelationWebViewClient());
         webView.setWebChromeClient(new RelationWebChromeClient());
         webView.setDownloadListener(new RelationDownloadListener());
@@ -370,8 +372,7 @@ public class MainActivity extends Activity {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
-            setShellBarsVisible(!isLoginUrl(url));
-            updateTabFromUrl(url);
+            handleRouteChanged(url);
             injectMobileShellCss();
             syncWebSession();
         }
@@ -463,6 +464,19 @@ public class MainActivity extends Activity {
         }
     }
 
+    private final class RelationAndroidBridge {
+        @JavascriptInterface
+        public void onRouteChanged(String url) {
+            runOnUiThread(() -> handleRouteChanged(url));
+        }
+    }
+
+    private void handleRouteChanged(String url) {
+        boolean loginUrl = isLoginUrl(url);
+        setShellBarsVisible(!loginUrl);
+        if (!loginUrl) updateTabFromUrl(url);
+    }
+
     private void injectMobileShellCss() {
         if (webView == null) return;
         String css =
@@ -470,7 +484,8 @@ public class MainActivity extends Activity {
             + "html,body,#root{background:var(--md-bg)!important;color:var(--md-text)!important;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif!important;-webkit-font-smoothing:antialiased!important;letter-spacing:0!important;}"
             + "body{margin:0!important;overflow-x:hidden!important;}"
             + ".ant-layout{background:var(--md-bg)!important;}"
-            + ".ant-layout-sider,.app-mobile-menu-drawer,.ant-layout-header{display:none!important;}"
+            + ".ant-layout-sider,.app-mobile-menu-drawer{display:none!important;}"
+            + "html:not([data-relation-route^='/login']) .ant-layout-header{display:none!important;}"
             + ".ant-layout-content{margin:0!important;border-radius:0!important;box-shadow:none!important;background:var(--md-bg)!important;padding:0!important;min-height:auto!important;}"
             + ".ant-layout-content::after{content:'';display:block;height:12px;}"
             + "h1,h2,h3,h4,h5,.ant-typography{letter-spacing:0!important;color:var(--md-text)!important;}"
@@ -522,7 +537,7 @@ public class MainActivity extends Activity {
             + "  .ant-layout-content>div>div:first-child h4,.ant-layout-content>div>div:first-child .ant-typography{font-size:17px!important;}"
             + "  button[data-relation-mobile-add='true'],button[data-relation-mobile-import='true']{display:none!important;}"
             + "  [data-relation-mobile-search='true']{position:absolute!important;left:-9999px!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important;}"
-            + "  .relation-mobile-empty-action-row,.relation-mobile-stat-grid{display:none!important;}"
+            + "  .relation-mobile-empty-action-row{display:none!important;}"
             + "  .ant-select,.ant-picker,.ant-input-affix-wrapper{width:100%!important;}"
             + "  .ant-tabs-nav{position:sticky!important;top:0!important;z-index:3!important;}"
             + "  .ant-list-item>div[role='button']{position:relative!important;min-height:62px!important;padding-left:64px!important;}"
@@ -550,21 +565,26 @@ public class MainActivity extends Activity {
             + "}"
             + ".relation-android-ready{}";
         String js = "(function(){"
+            + "var css=" + JSONObject.quote(css) + ";"
+            + "var styleId='relation-android-shell-style';"
+            + "function isLoginRoute(){return (location.pathname||'').indexOf('/login')===0;}"
+            + "function notifyRoute(){try{if(window.RelationAndroid&&window.RelationAndroid.onRouteChanged){window.RelationAndroid.onRouteChanged(location.href);}}catch(e){}}"
+            + "function removeStyle(){var old=document.getElementById(styleId);if(old)old.remove();}"
+            + "function ensureStyle(){var old=document.getElementById(styleId);if(old)old.remove();var style=document.createElement('style');style.id=styleId;style.textContent=css;document.head.appendChild(style);}"
             + "function tagRelationMobile(){"
             + "document.documentElement.setAttribute('data-relation-route',location.pathname||'/');"
+            + "notifyRoute();"
+            + "if(isLoginRoute()){removeStyle();return;}"
             + "var addButtons=[];"
             + "Array.from(document.querySelectorAll('button')).forEach(function(btn){if(btn.closest('.ant-modal,.ant-drawer'))return;var t=(btn.textContent||'').trim();if(/添加|新增|新建/.test(t)){btn.setAttribute('data-relation-mobile-add','true');addButtons.push(btn);}if(/导入/.test(t)){btn.setAttribute('data-relation-mobile-import','true');}});"
             + "addButtons.forEach(function(btn){var row=btn.parentElement;if(row&&!row.querySelector('input,.ant-select')&&row.querySelectorAll('button').length<=2){row.classList.add('relation-mobile-empty-action-row');}});"
             + "Array.from(document.querySelectorAll('.stat-card')).forEach(function(card){var grid=card.parentElement&&card.parentElement.parentElement;if(grid){grid.classList.add('relation-mobile-stat-grid');}});"
             + "Array.from(document.querySelectorAll('input')).forEach(function(input){var p=input.getAttribute('placeholder')||'';if(p.indexOf('搜索')>=0){var wrap=input.closest('.ant-input-group-wrapper,.ant-input-affix-wrapper,.ant-input-search,.ant-space')||input;wrap.setAttribute('data-relation-mobile-search','true');}});"
+            + "ensureStyle();"
             + "}"
-            + "tagRelationMobile();setTimeout(tagRelationMobile,250);setTimeout(tagRelationMobile,800);setTimeout(tagRelationMobile,1600);"
-            + "var id='relation-android-shell-style';"
-            + "var old=document.getElementById(id);if(old)old.remove();"
-            + "var style=document.createElement('style');"
-            + "style.id=id;"
-            + "style.textContent=" + JSONObject.quote(css) + ";"
-            + "document.head.appendChild(style);"
+            + "function scheduleTag(){setTimeout(tagRelationMobile,0);setTimeout(tagRelationMobile,250);setTimeout(tagRelationMobile,800);}"
+            + "if(!window.__relationAndroidRouteObserver){window.__relationAndroidRouteObserver=true;['pushState','replaceState'].forEach(function(name){var raw=history[name];history[name]=function(){var result=raw.apply(this,arguments);scheduleTag();return result;};});window.addEventListener('popstate',scheduleTag);}"
+            + "scheduleTag();setTimeout(tagRelationMobile,1600);"
             + "})();";
         webView.evaluateJavascript(js, null);
     }
