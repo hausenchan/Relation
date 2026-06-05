@@ -2216,6 +2216,7 @@ export default function Documents() {
     const payload = buildPageOptionsPayload(patch);
     if (Object.prototype.hasOwnProperty.call(patch, 'toc_enabled')) {
       setTocOpen(Boolean(patch.toc_enabled));
+      if (!patch.toc_enabled) setMobileTocOpen(false);
     }
     setOptionsSaving(true);
     try {
@@ -3574,7 +3575,10 @@ export default function Documents() {
             size="small"
             loading={optionsSaving}
             checked={asSwitchValue(selectedDoc?.toc_enabled, true)}
-            onChange={checked => savePageOptions({ toc_enabled: checked })}
+            onChange={checked => {
+              savePageOptions({ toc_enabled: checked });
+              if (checked) setMobileTocOpen(true);
+            }}
           />
         </div>
         <div>
@@ -4131,6 +4135,11 @@ export default function Documents() {
         {renderTocContent()}
       </aside>
     );
+  };
+
+  const openTocDrawer = () => {
+    setTocOpen(true);
+    setMobileTocOpen(true);
   };
 
   const getBlockMeta = (block) => ({ ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) });
@@ -6137,8 +6146,7 @@ export default function Documents() {
                     <Button
                       size="small"
                       icon={<MenuOutlined />}
-                      disabled={!asSwitchValue(selectedDoc?.toc_enabled, true)}
-                      onClick={() => setMobileTocOpen(true)}
+                      onClick={openTocDrawer}
                     >
                       目录
                     </Button>
@@ -6181,8 +6189,7 @@ export default function Documents() {
                     <span>
                       <Button
                         icon={<MenuOutlined />}
-                        disabled={!asSwitchValue(selectedDoc?.toc_enabled, true)}
-                        onClick={() => setTocOpen(prev => !prev)}
+                        onClick={openTocDrawer}
                         aria-label="目录"
                       />
                     </span>
@@ -6294,7 +6301,7 @@ export default function Documents() {
         placement="right"
         open={mobileTocOpen}
         onClose={() => setMobileTocOpen(false)}
-        width="86vw"
+        width={isMobile ? '86vw' : 360}
         styles={{ body: { padding: 14 } }}
       >
         {renderTocContent({ compact: true })}

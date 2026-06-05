@@ -1127,7 +1127,7 @@ db.exec(`
     current_version TEXT DEFAULT 'V1.0',
     folder_id INTEGER,
     tags TEXT,
-    toc_enabled INTEGER DEFAULT 0,
+    toc_enabled INTEGER DEFAULT 1,
     width_mode TEXT DEFAULT 'full',
     custom_width INTEGER,
     small_font_enabled INTEGER DEFAULT 0,
@@ -1247,6 +1247,12 @@ db.prepare(`
   UPDATE documents
   SET width_mode = 'full'
   WHERE width_mode IS NULL OR width_mode = '' OR width_mode = 'standard'
+`).run();
+
+db.prepare(`
+  UPDATE documents
+  SET toc_enabled = 1
+  WHERE toc_enabled IS NULL
 `).run();
 
 addColumnIfMissing('document_change_logs', 'detail', 'TEXT DEFAULT NULL');
