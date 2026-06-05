@@ -5713,129 +5713,130 @@ export default function Documents() {
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
       >
-        <div style={{
-          position: 'absolute',
-          left: isMobile ? -24 : -32,
-          top: blankParagraph ? 4 : (block.type?.startsWith('heading') ? 8 : 6),
-          width: 24,
-          display: 'flex',
-          justifyContent: 'center',
-          zIndex: 2,
-        }}>
-          <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{handleTooltip}</span>} placement="left">
-            <Dropdown
-              trigger={['click']}
-              open={menuOpen}
-              overlayStyle={{
-                width: isMobile ? 300 : 340,
-                maxHeight: 'min(560px, calc(100vh - 96px))',
-                overflowY: 'hidden',
-                zIndex: 2600,
-              }}
-              overlayClassName="document-block-menu-dropdown"
-              dropdownRender={(menu) => (
-                <div
-                  onMouseDown={event => event.stopPropagation()}
-                  onClick={event => event.stopPropagation()}
-                  style={{
-                    width: isMobile ? 300 : 340,
-                    maxHeight: 'min(560px, calc(100vh - 96px))',
-                    overflow: 'hidden',
-                    background: '#fff',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 6,
-                    boxShadow: '0 12px 32px rgba(15, 23, 42, 0.18)',
-                    color: '#1f2937',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 6px', color: '#374151', fontWeight: 500 }}>
-                    <ReloadOutlined />
-                    <span>{blankParagraph ? '添加内容' : '转换为'}</span>
-                  </div>
-                  {renderConvertBlockTypePanel(block)}
-                  <Divider style={{ margin: '4px 0' }} />
-                  <div style={{ background: '#fff' }}>{menu}</div>
-                </div>
-              )}
-              onOpenChange={(open) => {
-                if (open) {
-                  if (Date.now() < suppressBlockMenuOpenUntilRef.current) {
-                    setOpenBlockMenuId(null);
-                    return;
-                  }
-                  captureBlockMenuTargetIds(block.id);
-                  setOpenBlockMenuId(block.id);
-                  return;
-                }
-                pendingBlockMenuTargetIdsRef.current = [];
-                if (openBlockMenuId === block.id && !activeBlockMenuTargetIdsRef.current.includes(block.id)) {
-                  activeBlockMenuTargetIdsRef.current = [];
-                  setBlockMenuTargetIds([]);
-                }
-                setOpenBlockMenuId(prev => (prev === block.id ? null : prev));
-              }}
-              placement="bottomLeft"
-              menu={{
-                items: buildBlockMenuItems(block, blockMenuTargetIds),
-                onClick: ({ key, domEvent }) => {
-                  domEvent.stopPropagation();
-                  let targetIds = [];
-                  if (blockMenuTargetIds.includes(block.id)) {
-                    targetIds = [...blockMenuTargetIds];
-                  } else if (activeBlockMenuTargetIdsRef.current.includes(block.id)) {
-                    targetIds = [...activeBlockMenuTargetIdsRef.current];
-                  } else {
-                    targetIds = captureBlockMenuTargetIds(block.id);
-                  }
-                  setOpenBlockMenuId(null);
-                  handleBlockMenuAction(block, key, targetIds);
-                },
-              }}
-            >
-              <Button
-                type="text"
-                size="small"
-                icon={handleIcon}
-                aria-label={handleLabel}
-                onMouseDown={event => {
-                  if (blankParagraph) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    return;
-                  }
-                  event.stopPropagation();
-                  startBlockHandleSelection(event, block.id);
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minWidth: 0 }}>
+          <div style={{
+            width: 24,
+            minWidth: 24,
+            display: 'flex',
+            justifyContent: 'center',
+            paddingTop: blankParagraph ? 0 : (block.type?.startsWith('heading') ? 5 : 2),
+            zIndex: 2,
+          }}>
+            <Tooltip title={<span style={{ whiteSpace: 'pre-line' }}>{handleTooltip}</span>} placement="left">
+              <Dropdown
+                trigger={['click']}
+                open={menuOpen}
+                overlayStyle={{
+                  width: isMobile ? 300 : 340,
+                  maxHeight: 'min(560px, calc(100vh - 96px))',
+                  overflowY: 'hidden',
+                  zIndex: 2600,
                 }}
-                onClick={event => {
-                  event.stopPropagation();
-                  if (Date.now() < suppressBlockMenuOpenUntilRef.current) return;
-                  if (blankParagraph) {
+                overlayClassName="document-block-menu-dropdown"
+                dropdownRender={(menu) => (
+                  <div
+                    onMouseDown={event => event.stopPropagation()}
+                    onClick={event => event.stopPropagation()}
+                    style={{
+                      width: isMobile ? 300 : 340,
+                      maxHeight: 'min(560px, calc(100vh - 96px))',
+                      overflow: 'hidden',
+                      background: '#fff',
+                      border: '1px solid #e5e7eb',
+                      borderRadius: 6,
+                      boxShadow: '0 12px 32px rgba(15, 23, 42, 0.18)',
+                      color: '#1f2937',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 6px', color: '#374151', fontWeight: 500 }}>
+                      <ReloadOutlined />
+                      <span>{blankParagraph ? '添加内容' : '转换为'}</span>
+                    </div>
+                    {renderConvertBlockTypePanel(block)}
+                    <Divider style={{ margin: '4px 0' }} />
+                    <div style={{ background: '#fff' }}>{menu}</div>
+                  </div>
+                )}
+                onOpenChange={(open) => {
+                  if (open) {
+                    if (Date.now() < suppressBlockMenuOpenUntilRef.current) {
+                      setOpenBlockMenuId(null);
+                      return;
+                    }
                     captureBlockMenuTargetIds(block.id);
                     setOpenBlockMenuId(block.id);
                     return;
                   }
-                  if (event.metaKey || event.ctrlKey || event.shiftKey) {
-                    selectBlockFromHandle(event, block.id);
-                    return;
+                  pendingBlockMenuTargetIdsRef.current = [];
+                  if (openBlockMenuId === block.id && !activeBlockMenuTargetIdsRef.current.includes(block.id)) {
+                    activeBlockMenuTargetIdsRef.current = [];
+                    setBlockMenuTargetIds([]);
                   }
-                  captureBlockMenuTargetIds(block.id);
+                  setOpenBlockMenuId(prev => (prev === block.id ? null : prev));
                 }}
-                style={{
-                  width: 24,
-                  height: 24,
-                  minWidth: 24,
-                  opacity: blankParagraph || handleVisible ? 1 : 0,
-                  pointerEvents: blankParagraph || handleVisible ? 'auto' : 'none',
-                  color: '#6b7280',
-                  background: menuOpen ? '#eef2ff' : 'transparent',
+                placement="bottomLeft"
+                menu={{
+                  items: buildBlockMenuItems(block, blockMenuTargetIds),
+                  onClick: ({ key, domEvent }) => {
+                    domEvent.stopPropagation();
+                    let targetIds = [];
+                    if (blockMenuTargetIds.includes(block.id)) {
+                      targetIds = [...blockMenuTargetIds];
+                    } else if (activeBlockMenuTargetIdsRef.current.includes(block.id)) {
+                      targetIds = [...activeBlockMenuTargetIdsRef.current];
+                    } else {
+                      targetIds = captureBlockMenuTargetIds(block.id);
+                    }
+                    setOpenBlockMenuId(null);
+                    handleBlockMenuAction(block, key, targetIds);
+                  },
                 }}
-              />
-            </Dropdown>
-          </Tooltip>
-        </div>
-        <div style={{ minWidth: 0 }}>
-          {renderBlockInput(block, index, heading)}
-          {isMobile && renderInlineCommentPanel(block)}
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  icon={handleIcon}
+                  aria-label={handleLabel}
+                  onMouseDown={event => {
+                    if (blankParagraph) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      return;
+                    }
+                    event.stopPropagation();
+                    startBlockHandleSelection(event, block.id);
+                  }}
+                  onClick={event => {
+                    event.stopPropagation();
+                    if (Date.now() < suppressBlockMenuOpenUntilRef.current) return;
+                    if (blankParagraph) {
+                      captureBlockMenuTargetIds(block.id);
+                      setOpenBlockMenuId(block.id);
+                      return;
+                    }
+                    if (event.metaKey || event.ctrlKey || event.shiftKey) {
+                      selectBlockFromHandle(event, block.id);
+                      return;
+                    }
+                    captureBlockMenuTargetIds(block.id);
+                  }}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    minWidth: 24,
+                    opacity: blankParagraph || handleVisible ? 1 : 0,
+                    pointerEvents: blankParagraph || handleVisible ? 'auto' : 'none',
+                    color: '#6b7280',
+                    background: menuOpen ? '#eef2ff' : 'transparent',
+                  }}
+                />
+              </Dropdown>
+            </Tooltip>
+          </div>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            {renderBlockInput(block, index, heading)}
+            {isMobile && renderInlineCommentPanel(block)}
+          </div>
         </div>
         {comments.length > 0 && !isMobile && (
           <Tooltip title={commentsOpen ? '收起评论' : '展开评论'}>
