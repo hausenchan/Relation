@@ -29,6 +29,7 @@ import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
+import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.URLUtil;
@@ -50,6 +51,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+
 public class MainActivity extends Activity {
     private static final int TAB_TASKS = 0;
     private static final int TAB_OPPORTUNITIES = 1;
@@ -59,6 +63,7 @@ public class MainActivity extends Activity {
     private static final int FILE_CHOOSER_REQUEST = 7001;
     private static final String WEB_BASE_URL = "https://relation.midongtech.com";
     private static final String LOGIN_ROUTE = "/login";
+    private static final String SESSION_INIT_ROUTE = "/android-session-init";
 
     private SessionStore session;
     private LinearLayout topBar;
@@ -70,11 +75,16 @@ public class MainActivity extends Activity {
     private WebView webView;
     private Handler searchHandler;
     private Runnable searchRunnable;
+    private Runnable sessionSyncRunnable;
     private boolean suppressSearchChange = false;
     private int currentTab = TAB_TASKS;
     private boolean showingMoreHome = false;
     private String lastRoute = "/";
     private String moreSearchQuery = "";
+    private LinearLayout.LayoutParams topBarParams;
+    private LinearLayout.LayoutParams bottomNavParams;
+    private int topInset = 0;
+    private int bottomInset = 0;
     private ValueCallback<Uri[]> filePathCallback;
 
     @Override
@@ -88,7 +98,7 @@ public class MainActivity extends Activity {
 
     private void tuneSystemBars() {
         Window window = getWindow();
-        window.setStatusBarColor(Ui.PAGE);
+        window.setStatusBarColor(Ui.BAR);
         window.setNavigationBarColor(Color.WHITE);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
@@ -113,20 +123,27 @@ public class MainActivity extends Activity {
         bottomNav.setPadding(Ui.dp(this, 2), Ui.dp(this, 3), Ui.dp(this, 2), Ui.dp(this, 2));
         bottomNav.setBackground(Ui.strokeBg(this, Color.WHITE, 0, Color.rgb(226, 226, 226)));
 
-        root.addView(topBar, new LinearLayout.LayoutParams(-1, Ui.dp(this, 54)));
+        topBarParams = new LinearLayout.LayoutParams(-1, Ui.dp(this, 46));
+        bottomNavParams = new LinearLayout.LayoutParams(-1, Ui.dp(this, 58));
+        root.addView(topBar, topBarParams);
         root.addView(contentFrame, new LinearLayout.LayoutParams(-1, 0, 1));
-        root.addView(bottomNav, new LinearLayout.LayoutParams(-1, Ui.dp(this, 58)));
+        root.addView(bottomNav, bottomNavParams);
         setContentView(root);
+        installSystemInsets(root);
 
         renderBottomNav();
         updateTopBarForTab();
-        switchTab(TAB_TASKS);
+        if (session.isLoggedIn()) {
+            switchTab(TAB_TASKS);
+        } else {
+            loadLoginPage();
+        }
     }
 
     private LinearLayout buildTopBar() {
         LinearLayout bar = Ui.horizontal(this);
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(Ui.dp(this, 12), Ui.dp(this, 7), Ui.dp(this, 10), Ui.dp(this, 7));
+        bar.setPadding(Ui.dp(this, 12), Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
         bar.setBackgroundColor(Ui.BAR);
 
         LinearLayout searchBox = Ui.horizontal(this);
@@ -140,7 +157,7 @@ public class MainActivity extends Activity {
 
         searchInput = new EditText(this);
         searchInput.setSingleLine(true);
-        searchInput.setTextSize(14);
+        searchInput.setTextSize(15);
         searchInput.setTextColor(Ui.TEXT);
         searchInput.setHintTextColor(Ui.TERTIARY);
         searchInput.setPadding(Ui.dp(this, 7), 0, 0, 0);
@@ -165,16 +182,44 @@ public class MainActivity extends Activity {
         bar.addView(searchBox, new LinearLayout.LayoutParams(0, -1, 1));
 
         addAction = new FrameLayout(this);
-        addAction.setPadding(Ui.dp(this, 7), Ui.dp(this, 7), Ui.dp(this, 7), Ui.dp(this, 7));
+        addAction.setPadding(Ui.dp(this, 5), Ui.dp(this, 5), Ui.dp(this, 5), Ui.dp(this, 5));
         RelationIconView plus = new RelationIconView(this, RelationIconView.PLUS);
         plus.setIconColor(Ui.TEXT);
-        addAction.addView(plus, new FrameLayout.LayoutParams(Ui.dp(this, 26), Ui.dp(this, 26), Gravity.CENTER));
+        addAction.addView(plus, new FrameLayout.LayoutParams(Ui.dp(this, 28), Ui.dp(this, 28), Gravity.CENTER));
         addAction.setOnClickListener(v -> performTopAddAction());
-        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(Ui.dp(this, 42), -1);
-        addParams.leftMargin = Ui.dp(this, 6);
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(Ui.dp(this, 38), -1);
+        addParams.leftMargin = Ui.dp(this, 4);
         bar.addView(addAction, addParams);
 
         return bar;
+    }
+
+    private void installSystemInsets(View root) {
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            topInset = insets.getSystemWindowInsetTop();
+            bottomInset = insets.getSystemWindowInsetBottom();
+            applyShellInsets();
+            return insets;
+        });
+        root.requestApplyInsets();
+        applyShellInsets();
+    }
+
+    private void applyShellInsets() {
+        if (topBar != null) {
+            topBar.setPadding(Ui.dp(this, 12), topInset + Ui.dp(this, 6), Ui.dp(this, 8), Ui.dp(this, 6));
+            if (topBarParams != null) {
+                topBarParams.height = topInset + Ui.dp(this, 46);
+                topBar.setLayoutParams(topBarParams);
+            }
+        }
+        if (bottomNav != null) {
+            bottomNav.setPadding(Ui.dp(this, 2), Ui.dp(this, 3), Ui.dp(this, 2), bottomInset + Ui.dp(this, 2));
+            if (bottomNavParams != null) {
+                bottomNavParams.height = bottomInset + Ui.dp(this, 58);
+                bottomNav.setLayoutParams(bottomNavParams);
+            }
+        }
     }
 
     private void renderBottomNav() {
@@ -238,7 +283,30 @@ public class MainActivity extends Activity {
 
         String route = normalizeRoute(path);
         lastRoute = route;
-        webView.loadUrl(WEB_BASE_URL + route);
+        webView.loadUrl(session.isLoggedIn() ? buildSessionInitUrl(route) : WEB_BASE_URL + route);
+    }
+
+    private void loadLoginPage() {
+        showingMoreHome = false;
+        currentTab = TAB_TASKS;
+        renderBottomNav();
+        updateTopBarForTab();
+        setShellBarsVisible(false);
+        ensureWebView();
+        clearWebLoginState();
+        contentFrame.removeAllViews();
+        contentFrame.addView(webView, new FrameLayout.LayoutParams(-1, -1));
+        contentFrame.addView(pageProgress, new FrameLayout.LayoutParams(-1, Ui.dp(this, 2), Gravity.TOP));
+        lastRoute = LOGIN_ROUTE;
+        webView.loadUrl(WEB_BASE_URL + LOGIN_ROUTE);
+    }
+
+    private void clearWebLoginState() {
+        if (webView == null) return;
+        CookieManager.getInstance().removeAllCookies(null);
+        CookieManager.getInstance().flush();
+        WebStorage.getInstance().deleteAllData();
+        webView.clearCache(true);
     }
 
     private void updateTopBarForTab() {
@@ -360,6 +428,12 @@ public class MainActivity extends Activity {
 
     private final class RelationWebViewClient extends WebViewClient {
         @Override
+        public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+            super.onPageStarted(view, url, favicon);
+            injectStoredSession();
+        }
+
+        @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             return handleUrl(request.getUrl());
         }
@@ -372,6 +446,8 @@ public class MainActivity extends Activity {
         @Override
         public void onPageFinished(WebView view, String url) {
             super.onPageFinished(view, url);
+            if (isSessionInitUrl(url)) return;
+            injectStoredSession();
             handleRouteChanged(url);
             injectMobileShellCss();
             syncWebSession();
@@ -393,6 +469,14 @@ public class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && request != null && !request.isForMainFrame()) return;
             int statusCode = errorResponse == null ? 0 : errorResponse.getStatusCode();
             if (statusCode >= 500) renderWebError("服务器响应异常 (" + statusCode + ")");
+        }
+
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            if (request != null && isSessionInitUrl(String.valueOf(request.getUrl()))) {
+                return buildSessionInitResponse(request.getUrl());
+            }
+            return super.shouldInterceptRequest(view, request);
         }
     }
 
@@ -472,9 +556,20 @@ public class MainActivity extends Activity {
     }
 
     private void handleRouteChanged(String url) {
+        if (isSessionInitUrl(url)) return;
         boolean loginUrl = isLoginUrl(url);
         setShellBarsVisible(!loginUrl);
-        if (!loginUrl) updateTabFromUrl(url);
+        if (!loginUrl) {
+            updateTabFromUrl(url);
+            scheduleSessionSync();
+        }
+    }
+
+    private void scheduleSessionSync() {
+        if (searchHandler == null || webView == null) return;
+        if (sessionSyncRunnable != null) searchHandler.removeCallbacks(sessionSyncRunnable);
+        sessionSyncRunnable = this::syncWebSession;
+        searchHandler.postDelayed(sessionSyncRunnable, 160);
     }
 
     private void injectMobileShellCss() {
@@ -589,6 +684,46 @@ public class MainActivity extends Activity {
         webView.evaluateJavascript(js, null);
     }
 
+    private void injectStoredSession() {
+        if (webView == null || !session.isLoggedIn()) return;
+        JSONObject user = session.user();
+        String js = "(function(){"
+            + "try{"
+            + "var token=" + JSONObject.quote(session.token()) + ";"
+            + "var user=" + JSONObject.quote(user == null ? "{}" : user.toString()) + ";"
+            + "if(token&&localStorage.getItem('token')!==token){localStorage.setItem('token',token);}"
+            + "if(user&&user!=='{}'&&localStorage.getItem('user')!==user){localStorage.setItem('user',user);}"
+            + "}catch(e){}"
+            + "})();";
+        webView.evaluateJavascript(js, null);
+    }
+
+    private String buildSessionInitUrl(String route) {
+        return Uri.parse(WEB_BASE_URL + SESSION_INIT_ROUTE)
+            .buildUpon()
+            .appendQueryParameter("target", normalizeRoute(route))
+            .build()
+            .toString();
+    }
+
+    private WebResourceResponse buildSessionInitResponse(Uri uri) {
+        String target = normalizeRoute(uri == null ? "/" : uri.getQueryParameter("target"));
+        JSONObject user = session.user();
+        String html = "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            + "<title>小智</title></head><body>"
+            + "<script>"
+            + "try{localStorage.setItem('token'," + JSONObject.quote(session.token()) + ");"
+            + "localStorage.setItem('user'," + JSONObject.quote(user == null ? "{}" : user.toString()) + ");}catch(e){}"
+            + "location.replace(" + JSONObject.quote(target) + ");"
+            + "</script>"
+            + "</body></html>";
+        return new WebResourceResponse(
+            "text/html",
+            "UTF-8",
+            new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8))
+        );
+    }
+
     private void syncWebSession() {
         if (webView == null) return;
         String js = "(function(){return JSON.stringify({token:localStorage.getItem('token')||'',user:localStorage.getItem('user')||''});})();";
@@ -603,11 +738,13 @@ public class MainActivity extends Activity {
                 if (token.isEmpty()) {
                     session.clearLogin();
                     refreshBottomNavForPermissions();
+                    if (currentTab == TAB_MORE && showingMoreHome) renderMoreHome();
                     return;
                 }
                 JSONObject user = userRaw.isEmpty() ? null : new JSONObject(userRaw);
                 session.saveLogin(token, user);
                 refreshBottomNavForPermissions();
+                if (currentTab == TAB_MORE && showingMoreHome) renderMoreHome();
             } catch (Exception ignored) {
             }
         });
@@ -725,8 +862,15 @@ public class MainActivity extends Activity {
     }
 
     private boolean isLoginUrl(String url) {
+        if (url == null || url.trim().isEmpty()) return false;
         Uri uri = Uri.parse(url);
         return "relation.midongtech.com".equals(uri.getHost()) && uri.getPath() != null && uri.getPath().startsWith("/login");
+    }
+
+    private boolean isSessionInitUrl(String url) {
+        if (url == null || url.trim().isEmpty()) return false;
+        Uri uri = Uri.parse(url);
+        return "relation.midongtech.com".equals(uri.getHost()) && SESSION_INIT_ROUTE.equals(uri.getPath());
     }
 
     private void renderMoreHome() {
@@ -750,7 +894,7 @@ public class MainActivity extends Activity {
         account.setPadding(Ui.dp(this, 14), 0, 0, 0);
         account.setGravity(Gravity.CENTER_VERTICAL);
         account.addView(Ui.text(this, session.displayName(), 19, Ui.TEXT, Typeface.BOLD));
-        TextView subtitle = Ui.text(this, "幂动组织中台", 13, Ui.SECONDARY, Typeface.NORMAL);
+        TextView subtitle = Ui.text(this, "小智", 13, Ui.SECONDARY, Typeface.NORMAL);
         LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(-2, -2);
         subtitleParams.topMargin = Ui.dp(this, 7);
         account.addView(subtitle, subtitleParams);
