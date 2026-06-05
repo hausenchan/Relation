@@ -847,6 +847,7 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
       nodeType: 'document',
       documentId: doc.id,
       folderId: folder.id,
+      document: doc,
     }));
     projectNode.deptMap.get(deptKey).children.push({
       title: folder.name,
@@ -3356,6 +3357,12 @@ export default function Documents() {
       y: event.clientY,
       doc: item,
     });
+  };
+
+  const openTreeDocContextMenu = ({ event, node }) => {
+    if (node?.nodeType !== 'document') return;
+    const doc = node.document || getDocumentSummaryById(node.documentId) || { id: node.documentId, title: node.title };
+    openDocContextMenu(event, doc);
   };
 
   const closeDocContextMenu = () => {
@@ -5995,6 +6002,7 @@ export default function Documents() {
                       return <DownOutlined />;
                     }}
                     onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
+                    onRightClick={openTreeDocContextMenu}
                     onSelect={(keys, info) => {
                       const key = keys[0] || info?.node?.key;
                       if (typeof key === 'string' && key.startsWith('folder-')) {
