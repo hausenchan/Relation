@@ -2760,7 +2760,7 @@ export default function Documents() {
       .filter(isImageAttachment)
       .map(attachment => createEditorBlock('image', {
         content: attachment.filename || '',
-        meta: attachmentToMediaMeta(attachment),
+        meta: { ...attachmentToMediaMeta(attachment), embedOnly: true },
       }));
     if (!imageBlocks.length) return;
 
@@ -5013,10 +5013,14 @@ export default function Documents() {
     const selectedColumnIndex = selectedCell ? selectedCell.columnIndex : -1;
     const selectedRowIndex = selectedCell?.rowIndex ?? -1;
     const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
+    const horizontalCenter = Boolean(meta.horizontalCenter);
+    const verticalCenter = Boolean(meta.verticalCenter);
     const persistTableMeta = (patch) => updateBlockMeta(block.id, {
       columns,
       rows: normalizedRows,
       columnWidths,
+      horizontalCenter,
+      verticalCenter,
       ...patch,
     });
     const updateColumn = (index, value) => {
@@ -5054,8 +5058,36 @@ export default function Documents() {
       persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
       setSelectedTableCell({ blockId: block.id, rowIndex: Math.max(0, selectedRowIndex), columnIndex: insertIndex });
     };
-    const addRow = () => insertRow(normalizedRows.length - 1, 'after');
-    const addColumn = () => insertColumn(columns.length - 1, 'after');
+    const clearSelectedCell = () => {
+      if (!selectedCell) return;
+      updateCell(selectedRowIndex, selectedColumnIndex, '');
+    };
+    const deleteSelectedRow = () => {
+      if (!selectedCell || normalizedRows.length <= 1) return;
+      const nextRows = normalizedRows.filter((_, index) => index !== selectedRowIndex);
+      persistTableMeta({ rows: nextRows });
+      setSelectedTableCell({
+        blockId: block.id,
+        rowIndex: Math.max(0, Math.min(selectedRowIndex, nextRows.length - 1)),
+        columnIndex: selectedColumnIndex,
+      });
+    };
+    const deleteSelectedColumn = () => {
+      if (!selectedCell || columns.length <= 1) return;
+      const nextColumns = columns.filter((_, index) => index !== selectedColumnIndex);
+      const nextRows = normalizedRows.map(row => row.filter((_, index) => index !== selectedColumnIndex));
+      const nextWidths = columnWidths.filter((_, index) => index !== selectedColumnIndex);
+      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
+      setSelectedTableCell({
+        blockId: block.id,
+        rowIndex: selectedRowIndex,
+        columnIndex: Math.max(0, Math.min(selectedColumnIndex, nextColumns.length - 1)),
+      });
+    };
+    const distributeSelectedColumnWidths = () => {
+      const averageWidth = Math.max(80, Math.round(tableWidth / columns.length));
+      persistTableMeta({ columnWidths: columns.map(() => averageWidth) });
+    };
     const selectTableCell = (rowIndex, columnIndex) => {
       setSelectedBlockId(block.id);
       setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
@@ -5094,8 +5126,106 @@ export default function Documents() {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     };
-    const toolbarColumnIndex = selectedColumnIndex >= 0 ? selectedColumnIndex : 0;
-    const toolbarRowIndex = selectedRowIndex >= 0 ? selectedRowIndex : 0;
+    const menuColumnIndex = selectedColumnIndex >= 0 ? selectedColumnIndex : 0;
+    const menuRowIndex = selectedRowIndex >= 0 ? selectedRowIndex : 0;
+    const selectedColumnLeft = columnWidths.slice(0, menuColumnIndex).reduce((sum, width) => sum + width, 0);
+    const tableMenuLeft = Math.max(12, Math.min(selectedColumnLeft + columnWidths[menuColumnIndex] / 2 + 8, Math.max(12, tableWidth - 260)));
+    const tableMenuTop = 44 + Math.max(0, menuRowIndex) * 42;
+    const renderTableMenuIcon = (icon) => (
+      <span style={{ width: 28, minWidth: 28, color: '#7a7a7a', fontSize: 20, lineHeight: 1, textAlign: 'center' }}>{icon}</span>
+    );
+    const renderTableMenuItem = ({ icon, label, onClick, trailing, danger = false, disabled = false, active = false }) => (
+      <button
+        type="button"
+        disabled={disabled}
+        onMouseDown={event => event.preventDefault()}
+        onClick={event => {
+          event.stopPropagation();
+          if (!disabled && onClick) onClick();
+        }}
+        style={{
+          width: '100%',
+          border: 0,
+          background: active ? '#f0f0f0' : 'transparent',
+          color: disabled ? '#b9b9b9' : (danger ? '#333' : '#242424'),
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          minHeight: 42,
+          padding: '7px 12px',
+          fontSize: 16,
+          lineHeight: 1.25,
+          textAlign: 'left',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {renderTableMenuIcon(icon)}
+        <span style={{ flex: 1 }}>{label}</span>
+        {trailing}
+      </button>
+    );
+    const renderTableSwitch = (checked) => (
+      <span style={{
+        width: 44,
+        height: 24,
+        borderRadius: 999,
+        background: checked ? '#6366f1' : '#cfcfcf',
+        padding: 3,
+        display: 'inline-flex',
+        justifyContent: checked ? 'flex-end' : 'flex-start',
+      }}>
+        <span style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', display: 'block' }} />
+      </span>
+    );
+    const tableMenu = selectedCell ? (
+      <div
+        onMouseDown={event => event.preventDefault()}
+        style={{
+          position: 'absolute',
+          left: tableMenuLeft,
+          top: tableMenuTop,
+          width: 300,
+          background: '#fff',
+          border: '1px solid #e4e4e7',
+          borderRadius: 6,
+          boxShadow: '0 14px 36px rgba(15, 23, 42, 0.18)',
+          zIndex: 20,
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ padding: '8px 10px' }}>
+          {renderTableMenuItem({
+            icon: '☰',
+            label: '单元格文字居中',
+            active: horizontalCenter,
+            trailing: renderTableSwitch(horizontalCenter),
+            onClick: () => persistTableMeta({ horizontalCenter: !horizontalCenter }),
+          })}
+          {renderTableMenuItem({
+            icon: '≡',
+            label: '单元格垂直居中',
+            trailing: renderTableSwitch(verticalCenter),
+            onClick: () => persistTableMeta({ verticalCenter: !verticalCenter }),
+          })}
+          {renderTableMenuItem({ icon: '🖌', label: '颜色', trailing: <span style={{ color: '#9ca3af', fontSize: 26 }}>›</span>, onClick: () => message.info('颜色设置即将支持') })}
+          {renderTableMenuItem({ icon: '|||', label: '均分选中列宽', onClick: distributeSelectedColumnWidths })}
+        </div>
+        <Divider style={{ margin: 0 }} />
+        <div style={{ padding: '8px 10px' }}>
+          {renderTableMenuItem({ icon: '▭', label: '在上方插入一行', onClick: () => insertRow(menuRowIndex, 'before') })}
+          {renderTableMenuItem({ icon: '▭', label: '在下方插入一行', onClick: () => insertRow(menuRowIndex, 'after') })}
+          {renderTableMenuItem({ icon: '▯', label: '在左边插入一列', onClick: () => insertColumn(menuColumnIndex, 'before') })}
+          {renderTableMenuItem({ icon: '▯', label: '在右边插入一列', onClick: () => insertColumn(menuColumnIndex, 'after') })}
+          {renderTableMenuItem({ icon: '▣', label: '合并单元格', disabled: true })}
+        </div>
+        <Divider style={{ margin: 0 }} />
+        <div style={{ padding: '8px 10px' }}>
+          {renderTableMenuItem({ icon: '◇', label: '清空选中单元格', onClick: clearSelectedCell })}
+          {renderTableMenuItem({ icon: '▭×', label: '删除当前行', disabled: normalizedRows.length <= 1, onClick: deleteSelectedRow })}
+          {renderTableMenuItem({ icon: '▯×', label: '删除当前列', disabled: columns.length <= 1, onClick: deleteSelectedColumn })}
+        </div>
+      </div>
+    ) : null;
     return (
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
         <Input
@@ -5104,15 +5234,8 @@ export default function Documents() {
           onChange={event => updateBlock(block.id, { content: event.target.value })}
           style={{ fontWeight: 600 }}
         />
-        {selectedCell && (
-          <Space size={4} wrap style={{ padding: '4px 0' }}>
-            <Button size="small" onClick={() => insertColumn(toolbarColumnIndex, 'before')}>左侧加列</Button>
-            <Button size="small" onClick={() => insertColumn(toolbarColumnIndex, 'after')}>右侧加列</Button>
-            <Button size="small" onClick={() => insertRow(toolbarRowIndex, 'before')}>上方加行</Button>
-            <Button size="small" onClick={() => insertRow(toolbarRowIndex, 'after')}>下方加行</Button>
-          </Space>
-        )}
-        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+        <div style={{ overflowX: 'auto', maxWidth: '100%', position: 'relative', paddingBottom: selectedCell ? 8 : 0 }}>
+          {tableMenu}
           <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
@@ -5126,7 +5249,7 @@ export default function Documents() {
                     style={{
                       position: 'relative',
                       border: '1px solid #e5e7eb',
-                      background: selectedColumnIndex === columnIndex ? '#eef2ff' : '#f8fafc',
+                      background: selectedColumnIndex === columnIndex ? '#fde2e2' : '#f8fafc',
                       padding: 4,
                     }}
                   >
@@ -5164,8 +5287,9 @@ export default function Documents() {
                       style={{
                         border: '1px solid #e5e7eb',
                         padding: 4,
-                        verticalAlign: 'top',
-                        background: selectedRowIndex === rowIndex || selectedColumnIndex === columnIndex ? '#f8fafc' : '#fff',
+                        verticalAlign: verticalCenter ? 'middle' : 'top',
+                        textAlign: horizontalCenter ? 'center' : 'left',
+                        background: selectedColumnIndex === columnIndex ? '#fde2e2' : (selectedRowIndex === rowIndex ? '#f8fafc' : '#fff'),
                         boxShadow: selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex ? 'inset 0 0 0 1px #6366f1' : 'none',
                       }}
                     >
@@ -5175,7 +5299,7 @@ export default function Documents() {
                         autoSize={{ minRows: 1 }}
                         onFocus={() => selectTableCell(rowIndex, columnIndex)}
                         onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
-                        style={{ resize: 'none', padding: 4, lineHeight: 1.55 }}
+                        style={{ resize: 'none', padding: 4, lineHeight: 1.55, textAlign: horizontalCenter ? 'center' : 'left' }}
                       />
                     </td>
                   ))}
@@ -5184,10 +5308,6 @@ export default function Documents() {
             </tbody>
           </table>
         </div>
-        <Space size={8}>
-          <Button size="small" onClick={addRow}>添加行</Button>
-          <Button size="small" onClick={addColumn}>添加列</Button>
-        </Space>
       </Space>
     );
   };
@@ -5266,6 +5386,21 @@ export default function Documents() {
     const kind = getMediaKind(block.type);
     const url = meta.url || block.content || '';
     const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
+    if (kind === 'image' && url && meta.embedOnly) {
+      return (
+        <img
+          src={url}
+          alt={meta.filename || block.content || '图片'}
+          style={{
+            display: 'block',
+            maxWidth: '100%',
+            maxHeight: 520,
+            borderRadius: 6,
+            objectFit: 'contain',
+          }}
+        />
+      );
+    }
     return (
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
         <Input
