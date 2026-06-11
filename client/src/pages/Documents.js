@@ -1947,6 +1947,18 @@ export default function Documents() {
   }, []);
 
   useEffect(() => {
+    if (!selectedTableCell) return undefined;
+    const handleTableOutsidePointerDown = (event) => {
+      const target = event.target;
+      if (target?.closest?.('[data-document-table-menu="true"]')) return;
+      if (target?.closest?.('[data-document-table-shell="true"]')) return;
+      setSelectedTableCell(null);
+    };
+    document.addEventListener('pointerdown', handleTableOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleTableOutsidePointerDown, true);
+  }, [selectedTableCell]);
+
+  useEffect(() => {
     if (!selectedAreaBlockIdsRef.current.length) return;
     const validIds = normalizeBlockSelectionIds(selectedAreaBlockIdsRef.current);
     if (validIds.length !== selectedAreaBlockIdsRef.current.length) {
@@ -5179,6 +5191,7 @@ export default function Documents() {
     );
     const tableMenu = selectedCell ? (
       <div
+        data-document-table-menu="true"
         onMouseDown={event => event.preventDefault()}
         style={{
           position: 'absolute',
@@ -5236,7 +5249,7 @@ export default function Documents() {
           onChange={event => updateBlock(block.id, { content: event.target.value })}
           style={{ fontWeight: 600 }}
         />
-        <div style={{ maxWidth: '100%', position: 'relative', paddingBottom: selectedCell ? 8 : 0, overflow: 'visible' }}>
+        <div data-document-table-shell="true" style={{ maxWidth: '100%', position: 'relative', paddingBottom: selectedCell ? 8 : 0, overflow: 'visible' }}>
           {tableMenu}
           <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
             <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}>
