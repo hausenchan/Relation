@@ -245,11 +245,12 @@ const blockTypeGroups = [
 
 const blockTypeOptions = blockTypeGroups.flatMap(group => group.children);
 const hierarchicalListTypes = new Set(['bullet', 'numbered', 'fold-list']);
-const listIndentWidth = 30;
-const listMarkerBoxWidth = 24;
-const listMarkerCenterOffset = 12;
-const listMarkerColor = '#111827';
-const listGuideColor = '#eef0f2';
+const listIndentWidth = 28;
+const listMarkerBoxWidth = 20;
+const listMarkerCenterOffset = 10;
+const listMarkerColor = '#1f1f1f';
+const listGuideColor = '#eeeeee';
+const listLineHeight = 1.32;
 const maxListIndent = 6;
 const blockActionSelectedBackground = '#f7e3e6';
 const blockActionSelectedBorder = '#f2c9d0';
@@ -267,6 +268,14 @@ const mediaAcceptMap = {
   image: '.jpg,.jpeg,.png,.gif,.webp',
   video: '.mp4,.mov,.avi',
   audio: '.mp3,.wav,.m4a,.aac,.ogg',
+};
+const clipboardImagePasteLimit = 10;
+const clipboardImageExtByMime = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
 };
 const documentLinkParamKeys = ['doc', 'document_id', 'documentId', 'docId'];
 const documentAutoSaveDelay = 3000;
@@ -328,6 +337,30 @@ function attachmentToMediaMeta(attachment) {
     url: attachment.filepath ? `/uploads/${attachment.filepath}` : '',
     mimetype: attachment.mimetype || '',
   };
+}
+
+function getClipboardImageFiles(event) {
+  const clipboardData = event?.clipboardData;
+  if (!clipboardData) return [];
+  const itemFiles = Array.from(clipboardData.items || []).map(item => {
+    if (item.kind !== 'file' || !String(item.type || '').startsWith('image/')) return;
+    return item.getAsFile();
+  }).filter(Boolean);
+  if (itemFiles.length) return itemFiles;
+  return Array.from(clipboardData.files || [])
+    .filter(file => String(file?.type || '').startsWith('image/'));
+}
+
+function normalizeClipboardImageFile(file, index = 0) {
+  const currentExt = getFileExt(file?.name);
+  if (currentExt && imageExts.includes(currentExt)) return file;
+  const mime = String(file?.type || 'image/png').toLowerCase();
+  const ext = clipboardImageExtByMime[mime] || 'png';
+  const timestamp = dayjs().format('YYYYMMDD-HHmmss');
+  return new File([file], `clipboard-image-${timestamp}-${index + 1}.${ext}`, {
+    type: mime,
+    lastModified: file?.lastModified || Date.now(),
+  });
 }
 
 function createBlock(type = 'paragraph', content = '', extra = {}) {
@@ -1155,6 +1188,7 @@ export default function Documents() {
   const [editorTitle, setEditorTitle] = useState('');
   const [editorBlocks, setEditorBlocks] = useState([createBlock()]);
   const [selectedBlockId, setSelectedBlockId] = useState(null);
+  const [selectedTableCell, setSelectedTableCell] = useState(null);
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
@@ -1227,6 +1261,7 @@ export default function Documents() {
   const suppressBlockMenuOpenUntilRef = useRef(0);
   const suppressEditorClickRef = useRef(false);
   const inlineToolbarHideTimerRef = useRef(null);
+  const tableResizeRef = useRef(null);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -1904,6 +1939,7 @@ export default function Documents() {
   useEffect(() => () => {
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     if (autoSaveIntervalRef.current) window.clearInterval(autoSaveIntervalRef.current);
+    if (tableResizeRef.current?.cleanup) tableResizeRef.current.cleanup();
     saveCurrentDocumentRef.current?.({ silent: true }).catch(() => {});
     editorAreaSelectionRef.current?.cleanup?.();
     blockHandleSelectionRef.current?.cleanup?.();
@@ -2716,6 +2752,91 @@ export default function Documents() {
       });
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '读取最近上传图片失败');
+    }
+  };
+
+  const insertImageBlocksFromAttachments = (attachments = [], targetBlockId = null) => {
+    const imageBlocks = attachments
+      .filter(isImageAttachment)
+      .map(attachment => createEditorBlock('image', {
+        content: attachment.filename || '',
+        meta: attachmentToMediaMeta(attachment),
+      }));
+    if (!imageBlocks.length) return;
+
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => {
+      const targetIndex = prev.findIndex(block => block.id === targetBlockId);
+      if (targetIndex < 0) return [...prev, ...imageBlocks];
+      const targetBlock = prev[targetIndex];
+      const next = [...prev];
+      if (targetBlock.type === 'paragraph' && isBlankBlock(targetBlock)) {
+        next.splice(targetIndex, 1, ...imageBlocks);
+      } else {
+        next.splice(targetIndex + 1, 0, ...imageBlocks);
+      }
+      return next;
+    });
+    setSelectedBlockId(imageBlocks[0].id);
+    clearAreaBlockSelection();
+    setOpenBlockMenuId(null);
+    setHoveredBlockId(null);
+    window.setTimeout(() => {
+      document.getElementById(`doc-block-${imageBlocks[0].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 0);
+  };
+
+  const handleEditorPaste = async (event) => {
+    if (event.target?.closest?.('[data-inline-comment-panel="true"]')) return;
+    const pastedImageFiles = getClipboardImageFiles(event);
+    if (!pastedImageFiles.length) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!selectedDoc?.id) {
+      message.warning('请先保存文档，再粘贴截图');
+      return;
+    }
+    if (!canManageDoc(selectedDoc)) {
+      message.warning('你没有编辑该文档的权限');
+      return;
+    }
+
+    const supportedFiles = pastedImageFiles.filter(file => {
+      const ext = getFileExt(file.name);
+      const mime = String(file.type || '').toLowerCase();
+      return imageExts.includes(ext) || Boolean(clipboardImageExtByMime[mime]);
+    });
+    if (!supportedFiles.length) {
+      message.warning('剪贴板图片格式暂不支持，请粘贴 JPG、PNG、GIF 或 WebP');
+      return;
+    }
+
+    const files = supportedFiles.slice(0, clipboardImagePasteLimit).map(normalizeClipboardImageFile);
+    if (supportedFiles.length > clipboardImagePasteLimit) {
+      message.info(`一次最多粘贴 ${clipboardImagePasteLimit} 张图片，已处理前 ${clipboardImagePasteLimit} 张`);
+    }
+
+    const targetBlockId = event.target?.closest?.('[data-doc-block-id]')?.getAttribute('data-doc-block-id')
+      || selectedBlockId
+      || editorBlocks[editorBlocks.length - 1]?.id
+      || null;
+    const hideLoading = message.loading(files.length > 1 ? `正在上传 ${files.length} 张图片` : '正在上传截图', 0);
+    try {
+      const formData = new FormData();
+      formData.append('source_type', 'document');
+      formData.append('source_id', selectedDoc.id);
+      files.forEach(file => formData.append('files', file));
+      const rows = await attachmentsApi.upload(formData);
+      const uploadedImages = (rows || []).filter(isImageAttachment);
+      if (!uploadedImages.length) throw new Error('图片上传失败');
+      insertImageBlocksFromAttachments(uploadedImages, targetBlockId);
+      message.success(uploadedImages.length > 1 ? `已粘贴 ${uploadedImages.length} 张图片` : '截图已粘贴');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '截图粘贴失败');
+    } finally {
+      hideLoading();
     }
   };
 
@@ -4522,6 +4643,7 @@ export default function Documents() {
     if (!comments.length || activeCommentBlockId !== block.id) return null;
     return (
       <div
+        data-inline-comment-panel="true"
         onClick={event => event.stopPropagation()}
         style={{
           position: isMobile ? 'static' : 'absolute',
@@ -4715,14 +4837,12 @@ export default function Documents() {
     const meta = getBlockMeta(block);
     const indent = getListIndent(block);
     const collapsed = Boolean(meta.collapsed);
-    const markerColor = block.type === 'fold-list'
-      ? (collapsed ? '#9ca3af' : listMarkerColor)
-      : listMarkerColor;
+    const markerColor = listMarkerColor;
     const marker = block.type === 'bullet'
       ? getBulletListMarker(indent)
       : numberedListMarkers.get(block.id);
     const hasChildren = Boolean(hierarchicalGuideMap.get(block.id)?.hasChildren);
-    const markerLineHeight = (Number(commonProps.style.fontSize) || 15) * (Number(commonProps.style.lineHeight) || 1.75);
+    const markerLineHeight = (Number(commonProps.style.fontSize) || 15) * listLineHeight;
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
       minWidth: listMarkerBoxWidth,
@@ -4739,7 +4859,7 @@ export default function Documents() {
       <Button
         type="text"
         size="small"
-        icon={collapsed ? <CaretRightFilled style={{ fontSize: 12 }} /> : <CaretDownFilled style={{ fontSize: 12 }} />}
+        icon={collapsed ? <CaretRightFilled style={{ fontSize: 12, color: listMarkerColor }} /> : <CaretDownFilled style={{ fontSize: 12, color: listMarkerColor }} />}
         onClick={(event) => {
           event.stopPropagation();
           updateBlockMeta(block.id, { collapsed: !collapsed });
@@ -4749,7 +4869,7 @@ export default function Documents() {
           minWidth: listMarkerBoxWidth,
           height: markerLineHeight,
           padding: 0,
-          color: markerColor,
+          color: listMarkerColor,
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -4773,8 +4893,8 @@ export default function Documents() {
 
     return (
       <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
-        {renderListGuides(block, { centerY: markerLineHeight / 2 })}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        {renderListGuides(block, { top: -2, bottom: -2, centerY: markerLineHeight / 2 })}
+        <div style={{ display: 'flex', gap: 5, alignItems: 'flex-start' }}>
           {markerNode}
           <TextArea
             {...commonProps}
@@ -4782,7 +4902,10 @@ export default function Documents() {
             placeholder={selectedBlockId === block.id ? (block.type === 'fold-list' ? '点击创建内容' : '输入列表项') : ''}
             style={{
               ...commonProps.style,
-              fontWeight: block.type === 'fold-list' ? 600 : commonProps.style.fontWeight,
+              lineHeight: listLineHeight,
+              fontWeight: block.type === 'fold-list' ? 500 : commonProps.style.fontWeight,
+              minHeight: markerLineHeight,
+              padding: '0',
             }}
           />
         </div>
@@ -4885,9 +5008,20 @@ export default function Documents() {
     const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
     const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
+    const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
+    const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
+    const selectedColumnIndex = selectedCell ? selectedCell.columnIndex : -1;
+    const selectedRowIndex = selectedCell?.rowIndex ?? -1;
+    const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
+    const persistTableMeta = (patch) => updateBlockMeta(block.id, {
+      columns,
+      rows: normalizedRows,
+      columnWidths,
+      ...patch,
+    });
     const updateColumn = (index, value) => {
       const nextColumns = columns.map((item, columnIndex) => (columnIndex === index ? value : item));
-      updateBlockMeta(block.id, { columns: nextColumns, rows: normalizedRows });
+      persistTableMeta({ columns: nextColumns });
     };
     const updateCell = (rowIndex, columnIndex, value) => {
       const nextRows = normalizedRows.map((row, currentRowIndex) => (
@@ -4895,13 +5029,73 @@ export default function Documents() {
           ? row.map((cell, currentColumnIndex) => (currentColumnIndex === columnIndex ? value : cell))
           : row
       ));
-      updateBlockMeta(block.id, { columns, rows: nextRows });
+      persistTableMeta({ rows: nextRows });
     };
-    const addRow = () => updateBlockMeta(block.id, { columns, rows: [...normalizedRows, columns.map(() => '')] });
-    const addColumn = () => updateBlockMeta(block.id, {
-      columns: [...columns, `字段 ${columns.length + 1}`],
-      rows: normalizedRows.map(row => [...row, '']),
-    });
+    const insertRow = (targetIndex = normalizedRows.length - 1, position = 'after') => {
+      const safeIndex = Math.max(0, Math.min(normalizedRows.length - 1, Number(targetIndex) || 0));
+      const insertIndex = position === 'before' ? safeIndex : safeIndex + 1;
+      const nextRows = [...normalizedRows];
+      nextRows.splice(insertIndex, 0, columns.map(() => ''));
+      persistTableMeta({ rows: nextRows });
+      setSelectedTableCell({ blockId: block.id, rowIndex: insertIndex, columnIndex: Math.max(0, selectedColumnIndex) });
+    };
+    const insertColumn = (targetIndex = columns.length - 1, position = 'after') => {
+      const safeIndex = Math.max(0, Math.min(columns.length - 1, Number(targetIndex) || 0));
+      const insertIndex = position === 'before' ? safeIndex : safeIndex + 1;
+      const nextColumns = [...columns];
+      nextColumns.splice(insertIndex, 0, `字段 ${columns.length + 1}`);
+      const nextRows = normalizedRows.map(row => {
+        const nextRow = [...row];
+        nextRow.splice(insertIndex, 0, '');
+        return nextRow;
+      });
+      const nextWidths = [...columnWidths];
+      nextWidths.splice(insertIndex, 0, columnWidths[safeIndex] || 160);
+      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
+      setSelectedTableCell({ blockId: block.id, rowIndex: Math.max(0, selectedRowIndex), columnIndex: insertIndex });
+    };
+    const addRow = () => insertRow(normalizedRows.length - 1, 'after');
+    const addColumn = () => insertColumn(columns.length - 1, 'after');
+    const selectTableCell = (rowIndex, columnIndex) => {
+      setSelectedBlockId(block.id);
+      setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
+    };
+    const beginColumnResize = (event, columnIndex) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const startX = event.clientX;
+      const startWidth = columnWidths[columnIndex] || 160;
+      pushEditorUndoSnapshot();
+      const handleMouseMove = moveEvent => {
+        const nextWidth = Math.max(80, Math.round(startWidth + moveEvent.clientX - startX));
+        setEditorBlocks(prev => prev.map(item => {
+          if (item.id !== block.id) return item;
+          const currentMeta = { ...getDefaultBlockMeta(item.type), ...cloneMeta(item.meta) };
+          const nextWidths = columns.map((_, index) => (
+            index === columnIndex
+              ? nextWidth
+              : Math.max(80, Number(currentMeta.columnWidths?.[index]) || columnWidths[index] || 160)
+          ));
+          return { ...item, meta: { ...currentMeta, columns, rows: normalizedRows, columnWidths: nextWidths } };
+        }));
+      };
+      const handleMouseUp = () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        tableResizeRef.current = null;
+      };
+      if (tableResizeRef.current?.cleanup) tableResizeRef.current.cleanup();
+      tableResizeRef.current = {
+        cleanup: () => {
+          window.removeEventListener('mousemove', handleMouseMove);
+          window.removeEventListener('mouseup', handleMouseUp);
+        },
+      };
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    };
+    const toolbarColumnIndex = selectedColumnIndex >= 0 ? selectedColumnIndex : 0;
+    const toolbarRowIndex = selectedRowIndex >= 0 ? selectedRowIndex : 0;
     return (
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
         <Input
@@ -4910,13 +5104,52 @@ export default function Documents() {
           onChange={event => updateBlock(block.id, { content: event.target.value })}
           style={{ fontWeight: 600 }}
         />
+        {selectedCell && (
+          <Space size={4} wrap style={{ padding: '4px 0' }}>
+            <Button size="small" onClick={() => insertColumn(toolbarColumnIndex, 'before')}>左侧加列</Button>
+            <Button size="small" onClick={() => insertColumn(toolbarColumnIndex, 'after')}>右侧加列</Button>
+            <Button size="small" onClick={() => insertRow(toolbarRowIndex, 'before')}>上方加行</Button>
+            <Button size="small" onClick={() => insertRow(toolbarRowIndex, 'after')}>下方加行</Button>
+          </Space>
+        )}
         <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: isMobile ? 320 : 360 }}>
+          <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}>
+            <colgroup>
+              {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
+            </colgroup>
             <thead>
               <tr>
                 {columns.map((column, columnIndex) => (
-                  <th key={`col-${columnIndex}`} style={{ border: '1px solid #e5e7eb', background: '#f8fafc', padding: 4 }}>
-                    <Input value={column} bordered={false} onChange={event => updateColumn(columnIndex, event.target.value)} />
+                  <th
+                    key={`col-${columnIndex}`}
+                    onClick={() => selectTableCell(0, columnIndex)}
+                    style={{
+                      position: 'relative',
+                      border: '1px solid #e5e7eb',
+                      background: selectedColumnIndex === columnIndex ? '#eef2ff' : '#f8fafc',
+                      padding: 4,
+                    }}
+                  >
+                    <Input
+                      value={column}
+                      bordered={false}
+                      onFocus={() => selectTableCell(0, columnIndex)}
+                      onChange={event => updateColumn(columnIndex, event.target.value)}
+                      style={{ fontWeight: 600 }}
+                    />
+                    <span
+                      role="presentation"
+                      onMouseDown={event => beginColumnResize(event, columnIndex)}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        right: -4,
+                        width: 8,
+                        height: '100%',
+                        cursor: 'col-resize',
+                        zIndex: 3,
+                      }}
+                    />
                   </th>
                 ))}
               </tr>
@@ -4925,13 +5158,24 @@ export default function Documents() {
               {normalizedRows.map((row, rowIndex) => (
                 <tr key={`row-${rowIndex}`}>
                   {row.map((cell, columnIndex) => (
-                    <td key={`cell-${rowIndex}-${columnIndex}`} style={{ border: '1px solid #e5e7eb', padding: 4, verticalAlign: 'top' }}>
+                    <td
+                      key={`cell-${rowIndex}-${columnIndex}`}
+                      onClick={() => selectTableCell(rowIndex, columnIndex)}
+                      style={{
+                        border: '1px solid #e5e7eb',
+                        padding: 4,
+                        verticalAlign: 'top',
+                        background: selectedRowIndex === rowIndex || selectedColumnIndex === columnIndex ? '#f8fafc' : '#fff',
+                        boxShadow: selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex ? 'inset 0 0 0 1px #6366f1' : 'none',
+                      }}
+                    >
                       <TextArea
                         value={cell}
                         bordered={false}
                         autoSize={{ minRows: 1 }}
+                        onFocus={() => selectTableCell(rowIndex, columnIndex)}
                         onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
-                        style={{ resize: 'none' }}
+                        style={{ resize: 'none', padding: 4, lineHeight: 1.55 }}
                       />
                     </td>
                   ))}
@@ -5064,13 +5308,20 @@ export default function Documents() {
     const meta = getBlockMeta(block);
     const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : [];
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [];
+    const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
+    const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
     if (!columns.length && !rows.length) {
       return <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{block.content}</div>;
     }
     return (
       <div style={{ overflowX: 'auto' }}>
         {block.content && <Text strong style={{ display: 'block', marginBottom: 10, fontSize: isMobile ? 18 : 22 }}>{block.content}</Text>}
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: isMobile ? 16 : 20 }}>
+        <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: isMobile ? 16 : 20 }}>
+          {columns.length > 0 && (
+            <colgroup>
+              {columnWidths.map((width, index) => <col key={`presentation-col-${index}`} style={{ width }} />)}
+            </colgroup>
+          )}
           {columns.length > 0 && (
             <thead>
               <tr>
@@ -5195,8 +5446,8 @@ export default function Documents() {
     if (block.type === 'divider') return <Divider style={{ margin: '18px 0', borderColor: '#cbd5e1' }} />;
     if (block.type === 'bullet' || block.type === 'numbered' || block.type === 'fold-list') {
       const presentationIndentWidth = isMobile ? 22 : listIndentWidth;
-      const presentationMarkerWidth = 28;
-      const presentationLineHeight = (isMobile ? 18 : 24) * 1.7;
+      const presentationMarkerWidth = isMobile ? 22 : listMarkerBoxWidth;
+      const presentationLineHeight = (isMobile ? 18 : 24) * listLineHeight;
       const marker = block.type === 'bullet'
         ? getBulletListMarker(indent)
         : block.type === 'numbered'
@@ -5215,17 +5466,17 @@ export default function Documents() {
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: block.type === 'numbered' ? 'flex-end' : 'center',
-            color: block.type === 'fold-list' ? (meta.collapsed ? '#9ca3af' : listMarkerColor) : listMarkerColor,
-            fontWeight: block.type === 'fold-list' ? 700 : 500,
+            color: listMarkerColor,
+            fontWeight: block.type === 'fold-list' ? 600 : 500,
           }}
         >
           {block.type === 'fold-list'
-            ? (meta.collapsed ? <CaretRightFilled style={{ fontSize: 13 }} /> : <CaretDownFilled style={{ fontSize: 13 }} />)
+            ? (meta.collapsed ? <CaretRightFilled style={{ fontSize: 13, color: listMarkerColor }} /> : <CaretDownFilled style={{ fontSize: 13, color: listMarkerColor }} />)
             : marker}
         </span>
       );
       return (
-        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: 14 }}>
+        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: 8, lineHeight: listLineHeight }}>
           {renderListGuides(block, {
             top: -4,
             bottom: -4,
@@ -5234,7 +5485,7 @@ export default function Documents() {
             indentWidth: presentationIndentWidth,
           })}
           {markerNode}
-          <span style={{ fontWeight: block.type === 'fold-list' ? 700 : 400 }}>{block.content}</span>
+          <span style={{ fontWeight: block.type === 'fold-list' ? 600 : 400 }}>{block.content}</span>
         </div>
       );
     }
@@ -5711,6 +5962,7 @@ export default function Documents() {
     const comments = getBlockInlineComments(block);
     const commentsOpen = activeCommentBlockId === block.id && comments.length > 0;
     const blankParagraph = block.type === 'paragraph' && isBlankBlock(block);
+    const hierarchicalListBlock = isHierarchicalListBlock(block);
     const handleIcon = blankParagraph ? <BlockAddIcon /> : <BlockHandleIcon />;
     const handleLabel = blankParagraph ? '添加各种样式内容' : '块菜单';
     const handleTooltip = blankParagraph
@@ -5736,8 +5988,8 @@ export default function Documents() {
           border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
           background: commentsOpen ? '#f8fbff' : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent')),
           borderRadius: 6,
-          padding: isMobile ? '5px 6px' : `3px ${comments.length ? 34 : 8}px 3px 0`,
-          marginBottom: isMobile ? 4 : 2,
+          padding: hierarchicalListBlock ? (isMobile ? '1px 6px' : `0 ${comments.length ? 34 : 8}px 0 0`) : (isMobile ? '5px 6px' : `3px ${comments.length ? 34 : 8}px 3px 0`),
+          marginBottom: hierarchicalListBlock ? 0 : (isMobile ? 4 : 2),
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
       >
@@ -6269,7 +6521,7 @@ export default function Documents() {
                 alignItems: 'flex-start',
                 flexDirection: isMobile ? 'column' : 'row',
               }}>
-                <section id="document-editor-blocks" onMouseDown={handleEditorAreaMouseDown} style={{
+                <section id="document-editor-blocks" onMouseDown={handleEditorAreaMouseDown} onPaste={handleEditorPaste} style={{
                   flex: 1,
                   minWidth: 0,
                   maxWidth: isMobile ? '100%' : getEditorMaxWidth(selectedDoc),
