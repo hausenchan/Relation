@@ -5130,7 +5130,7 @@ export default function Documents() {
     const menuRowIndex = selectedRowIndex >= 0 ? selectedRowIndex : 0;
     const selectedColumnLeft = columnWidths.slice(0, menuColumnIndex).reduce((sum, width) => sum + width, 0);
     const tableMenuLeft = Math.max(12, Math.min(selectedColumnLeft + columnWidths[menuColumnIndex] / 2 + 8, Math.max(12, tableWidth - 260)));
-    const tableMenuTop = 44 + Math.max(0, menuRowIndex) * 42;
+    const tableMenuTop = Math.max(0, Math.min(44 + Math.max(0, menuRowIndex) * 42, 24));
     const renderTableMenuIcon = (icon) => (
       <span style={{ width: 28, minWidth: 28, color: '#7a7a7a', fontSize: 20, lineHeight: 1, textAlign: 'center' }}>{icon}</span>
     );
@@ -5190,7 +5190,9 @@ export default function Documents() {
           borderRadius: 6,
           boxShadow: '0 14px 36px rgba(15, 23, 42, 0.18)',
           zIndex: 20,
-          overflow: 'hidden',
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          maxHeight: 'min(560px, calc(100vh - 180px))',
         }}
       >
         <div style={{ padding: '8px 10px' }}>
@@ -5234,9 +5236,10 @@ export default function Documents() {
           onChange={event => updateBlock(block.id, { content: event.target.value })}
           style={{ fontWeight: 600 }}
         />
-        <div style={{ overflowX: 'auto', maxWidth: '100%', position: 'relative', paddingBottom: selectedCell ? 8 : 0 }}>
+        <div style={{ maxWidth: '100%', position: 'relative', paddingBottom: selectedCell ? 8 : 0, overflow: 'visible' }}>
           {tableMenu}
-          <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}>
+          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+            <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}>
             <colgroup>
               {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
             </colgroup>
@@ -5306,7 +5309,8 @@ export default function Documents() {
                 </tr>
               ))}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
       </Space>
     );
