@@ -2034,6 +2034,8 @@ function AllProductsView() {
       p.entity_name,
       p.category,
       p.product_category,
+      p.contact_phone,
+      p.domain,
       p.discovery_source,
       p.notes,
     ].some(v => String(v || '').toLowerCase().includes(keyword));
@@ -2142,6 +2144,20 @@ function AllProductsView() {
       render: v => v ? <Tag color="cyan">{v}</Tag> : '-',
     },
     {
+      title: '联系电话',
+      dataIndex: 'contact_phone',
+      width: 130,
+      ellipsis: true,
+      render: v => v || '-',
+    },
+    {
+      title: '域名',
+      dataIndex: 'domain',
+      width: 160,
+      ellipsis: true,
+      render: v => v || '-',
+    },
+    {
       title: '状态',
       dataIndex: 'status',
       width: 90,
@@ -2194,6 +2210,8 @@ function AllProductsView() {
           <Text type="secondary">公司主体：{renderSubject(record)}</Text>
           {record.product_category && <Tag color="cyan" style={{ width: 'fit-content' }}>{record.product_category}</Tag>}
           {record.product_link && <div onClick={e => e.stopPropagation()}>{renderProductLink(record.product_link)}</div>}
+          {record.contact_phone && <Text type="secondary">联系电话：{record.contact_phone}</Text>}
+          {record.domain && <Text type="secondary" style={{ wordBreak: 'break-all' }}>域名：{record.domain}</Text>}
           <Space size={[6, 6]} wrap>
             <Tag color={productStatusMap[record.status]?.color}>{productStatusMap[record.status]?.label || record.status || '-'}</Tag>
             {(record.attachment_count || 0) > 0 && <Tag icon={<PaperClipOutlined />}>附件 {record.attachment_count}</Tag>}
