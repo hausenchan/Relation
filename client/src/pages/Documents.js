@@ -67,6 +67,7 @@ import dayjs from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
+import DOMPurify from 'dompurify';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -666,6 +667,40 @@ function plainTextToBlocks(text) {
   return blocks.length ? blocks : [createBlock()];
 }
 
+const inlineHtmlAllowedTags = ['strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del', 'code', 'span', 'mark', 'a', 'br'];
+const inlineHtmlAllowedAttrs = ['style', 'href', 'target', 'rel'];
+
+function sanitizeInlineHtml(value) {
+  if (!value) return '';
+  return DOMPurify.sanitize(String(value), {
+    ALLOWED_TAGS: inlineHtmlAllowedTags,
+    ALLOWED_ATTR: inlineHtmlAllowedAttrs,
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'img', 'video', 'audio'],
+    FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus', 'src', 'srcset'],
+  });
+}
+
+function inlineHtmlToPlain(value) {
+  if (!value) return '';
+  if (typeof document === 'undefined') return String(value).replace(/<[^>]+>/g, '');
+  const div = document.createElement('div');
+  div.innerHTML = sanitizeInlineHtml(value);
+  return (div.textContent || div.innerText || '').replace(/\u00a0/g, ' ');
+}
+
+function InlineHtmlView({ value, as: TagName = 'span', style }) {
+  return (
+    <TagName
+      style={style}
+      dangerouslySetInnerHTML={{ __html: sanitizeInlineHtml(value || '') }}
+    />
+  );
+}
+
+function isInlineHtmlContent(value) {
+  return /<\/?(strong|b|em|i|u|s|strike|del|code|span|mark|a|br)\b/i.test(String(value || ''));
+}
+
 function normalizeBlock(block) {
   if (!block || typeof block !== 'object') return createBlock();
   const type = validBlockTypes.has(block.type) ? block.type : 'paragraph';
@@ -687,7 +722,7 @@ function isBlankBlock(block) {
   if (meta.url || meta.filename || meta.body || meta.value) return false;
   if (Array.isArray(meta.cells) && meta.cells.some(cell => String(cell || '').trim())) return false;
   if (Array.isArray(meta.rows) && meta.rows.some(row => row.some(cell => String(cell || '').trim()))) return false;
-  return !String(block.content || '').trim();
+  return !inlineHtmlToPlain(block.content || '').trim();
 }
 
 function contentToBlocks(content) {
@@ -768,8 +803,9 @@ function blocksToText(blocks) {
   return blocks
     .map(block => {
       if (block.type === 'divider') return '';
-      if (block.type === 'todo') return `${block.checked ? '[x]' : '[ ]'} ${block.content || ''}`.trim();
-      return [block.content || '', blockMetaToText(block.meta)].filter(Boolean).join('\n');
+      const text = inlineHtmlToPlain(block.content || '');
+      if (block.type === 'todo') return `${block.checked ? '[x]' : '[ ]'} ${text}`.trim();
+      return [text, blockMetaToText(block.meta)].filter(Boolean).join('\n');
     })
     .filter(Boolean)
     .join('\n');
@@ -784,7 +820,7 @@ function buildPresentationSections(blocks, fallbackTitle) {
     if (block?.type === 'page') {
       if (current.blocks.length) sections.push(current);
       current = {
-        title: String(block.content || '').trim() || docTitle,
+        title: inlineHtmlToPlain(block.content || '').trim() || docTitle,
         blocks: [],
       };
       return;
@@ -916,7 +952,7 @@ function buildHeadingMeta(blocks, numberingEnabled) {
         : block.type === 'heading3' ? 3
           : block.type === 'heading4' ? 4
             : 0;
-    const title = String(block.content || '').trim();
+    const title = inlineHtmlToPlain(block.content || '').trim();
     if (!level || !title) return;
     counters[level - 1] += 1;
     for (let index = level; index < counters.length; index += 1) counters[index] = 0;
@@ -1069,6 +1105,87 @@ function normalizeInlineComments(comments = []) {
 
 function makeInlineCommentId() {
   return `c_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function InlineRichTextEditor({
+  id,
+  value,
+  placeholder,
+  onChange,
+  onFocus,
+  onBlur,
+  onMouseUp,
+  onKeyUp,
+  onKeyDown,
+  onPaste,
+  style,
+}) {
+  const editorRef = useRef(null);
+  const focusedRef = useRef(false);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || focusedRef.current) return;
+    const html = sanitizeInlineHtml(value || '');
+    if (editor.innerHTML !== html) editor.innerHTML = html;
+  }, [value]);
+
+  const emitChange = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    onChange?.(sanitizeInlineHtml(editor.innerHTML));
+  };
+
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      {!inlineHtmlToPlain(value).trim() && placeholder && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: style?.paddingLeft || 0,
+            top: style?.paddingTop || 0,
+            color: '#bfbfbf',
+            pointerEvents: 'none',
+            lineHeight: style?.lineHeight || 1.75,
+            fontSize: style?.fontSize || 15,
+          }}
+        >
+          {placeholder}
+        </span>
+      )}
+      <div
+        id={id}
+        ref={editorRef}
+        contentEditable
+        suppressContentEditableWarning
+        role="textbox"
+        aria-multiline="true"
+        onFocus={(event) => {
+          focusedRef.current = true;
+          onFocus?.(event);
+        }}
+        onBlur={(event) => {
+          focusedRef.current = false;
+          emitChange();
+          onBlur?.(event);
+        }}
+        onInput={emitChange}
+        onMouseUp={onMouseUp}
+        onKeyUp={onKeyUp}
+        onKeyDown={onKeyDown}
+        onPaste={onPaste}
+        dangerouslySetInnerHTML={{ __html: sanitizeInlineHtml(value || '') }}
+        style={{
+          minHeight: 24,
+          outline: 'none',
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          ...style,
+        }}
+      />
+    </div>
+  );
 }
 
 function parseEditRecordDiff(record) {
@@ -1581,9 +1698,10 @@ export default function Documents() {
     }
   };
 
-  const openDocumentTab = (docOrId) => {
+  const openDocumentTab = (docOrId, options = {}) => {
     const docId = getDocTabId(typeof docOrId === 'object' ? docOrId?.id : docOrId);
     if (!docId) return;
+    if (!options.keepContextMenu) closeDocContextMenu();
     if (isMobile) setMobileLibraryVisible(false);
     if (getDocumentIdFromSearch(searchParams) !== docId) {
       replaceDocumentLinkParam(docId);
@@ -1935,6 +2053,18 @@ export default function Documents() {
     document.addEventListener('pointerdown', handleTableOutsidePointerDown, true);
     return () => document.removeEventListener('pointerdown', handleTableOutsidePointerDown, true);
   }, [selectedTableCell]);
+
+  useEffect(() => {
+    if (!docContextMenu.open) return undefined;
+    const handleDocContextOutsidePointerDown = (event) => {
+      const target = event.target;
+      if (target?.closest?.('[data-document-context-menu="true"]')) return;
+      if (target?.closest?.('.document-context-menu-dropdown')) return;
+      closeDocContextMenu();
+    };
+    document.addEventListener('pointerdown', handleDocContextOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleDocContextOutsidePointerDown, true);
+  }, [docContextMenu.open]);
 
   useEffect(() => {
     if (!selectedAreaBlockIdsRef.current.length) return;
@@ -3033,9 +3163,14 @@ export default function Documents() {
 
   const splitBlockAtCursor = (event, block, index) => {
     const input = event.target;
-    const content = String(block.content || '');
-    const selectionStart = typeof input?.selectionStart === 'number' ? input.selectionStart : content.length;
-    const selectionEnd = typeof input?.selectionEnd === 'number' ? input.selectionEnd : selectionStart;
+    const content = input?.isContentEditable ? inlineHtmlToPlain(input.innerHTML) : String(block.content || '');
+    const editableSelection = input?.isContentEditable ? getContentEditableSelectionRange(input) : null;
+    const selectionStart = editableSelection
+      ? editableSelection.start
+      : (typeof input?.selectionStart === 'number' ? input.selectionStart : content.length);
+    const selectionEnd = editableSelection
+      ? editableSelection.end
+      : (typeof input?.selectionEnd === 'number' ? input.selectionEnd : selectionStart);
     const start = Math.max(0, Math.min(selectionStart, selectionEnd, content.length));
     const end = Math.max(start, Math.min(Math.max(selectionStart, selectionEnd), content.length));
     const leftContent = content.slice(0, start);
@@ -3470,7 +3605,7 @@ export default function Documents() {
   const openDocContextMenu = (event, item) => {
     event.preventDefault();
     event.stopPropagation();
-    openDocumentTab(item);
+    openDocumentTab(item, { keepContextMenu: true });
     setDocContextMenu({
       open: true,
       x: event.clientX,
@@ -4301,7 +4436,8 @@ export default function Documents() {
 
   const placeInlineToolbar = (block, input, start, end) => {
     if (!input || start === end) return;
-    const selectedText = String(input.value || '').slice(start, end);
+    const inputText = input.isContentEditable ? (input.textContent || '') : (input.value || '');
+    const selectedText = String(inputText).slice(start, end);
     if (!selectedText.trim()) {
       setInlineToolbar(prev => (prev?.blockId === block.id ? null : prev));
       return;
@@ -4326,12 +4462,38 @@ export default function Documents() {
     });
   };
 
+  const getContentEditableSelectionRange = (element) => {
+    if (!element || typeof window === 'undefined') return null;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return null;
+    const range = selection.getRangeAt(0);
+    if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return null;
+    const beforeRange = document.createRange();
+    beforeRange.selectNodeContents(element);
+    beforeRange.setEnd(range.startContainer, range.startOffset);
+    const selectedRange = range.cloneRange();
+    const start = beforeRange.toString().length;
+    const end = start + selectedRange.toString().length;
+    return {
+      start: Math.min(start, end),
+      end: Math.max(start, end),
+      text: selectedRange.toString(),
+    };
+  };
+
   const handleInlineTextSelection = (block, event) => {
     const input = event?.target;
-    if (!input || typeof input.selectionStart !== 'number' || typeof input.selectionEnd !== 'number') return;
+    if (!input) return;
     window.setTimeout(() => {
-      const start = Math.min(input.selectionStart, input.selectionEnd);
-      const end = Math.max(input.selectionStart, input.selectionEnd);
+      const selectionRange = input.isContentEditable
+        ? getContentEditableSelectionRange(input)
+        : (
+          typeof input.selectionStart === 'number' && typeof input.selectionEnd === 'number'
+            ? { start: Math.min(input.selectionStart, input.selectionEnd), end: Math.max(input.selectionStart, input.selectionEnd) }
+            : null
+        );
+      if (!selectionRange) return;
+      const { start, end } = selectionRange;
       if (start === end) {
         if (!commentComposer) setInlineToolbar(prev => (prev?.blockId === block.id ? null : prev));
         return;
@@ -4441,6 +4603,33 @@ export default function Documents() {
   const applyInlineWrap = (kind) => {
     const selection = inlineToolbar;
     if (!selection) return;
+    const editor = document.getElementById(`doc-block-input-${selection.blockId}`);
+    if (editor?.isContentEditable) {
+      editor.focus();
+      const commandMap = {
+        bold: 'bold',
+        italic: 'italic',
+        underline: 'underline',
+        strike: 'strikeThrough',
+        code: 'formatBlock',
+        formula: 'insertText',
+      };
+      if (kind === 'link') {
+        const url = window.prompt('请输入链接地址', 'https://');
+        if (!url) return;
+        document.execCommand('createLink', false, url);
+      } else if (kind === 'code') {
+        document.execCommand('fontName', false, 'monospace');
+      } else if (kind === 'formula') {
+        document.execCommand('insertText', false, `$${selection.text || ''}$`);
+      } else if (commandMap[kind]) {
+        document.execCommand(commandMap[kind], false, null);
+      }
+      const block = editorBlocks.find(item => item.id === selection.blockId);
+      updateBlock(selection.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
+      if (block) handleInlineTextSelection(block, { target: editor });
+      return;
+    }
     const selected = selection.text || '';
     if (kind === 'link') {
       const url = window.prompt('请输入链接地址', 'https://');
@@ -4452,6 +4641,20 @@ export default function Documents() {
     if (!prefix && !suffix) return;
     if (applyInlineTextUnwrap(selection, prefix, suffix)) return;
     applyInlineTextReplace(selection, `${prefix}${selected}${suffix}`, prefix.length);
+  };
+
+  const applyInlineColor = (color) => {
+    if (!inlineToolbar?.blockId || !color) return;
+    const editor = document.getElementById(`doc-block-input-${inlineToolbar.blockId}`);
+    if (editor?.isContentEditable) {
+      editor.focus();
+      document.execCommand('foreColor', false, color);
+      updateBlock(inlineToolbar.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
+      const block = editorBlocks.find(item => item.id === inlineToolbar.blockId);
+      if (block) handleInlineTextSelection(block, { target: editor });
+      return;
+    }
+    applyInlineWrap('color');
   };
 
   const openInlineCommentComposer = () => {
@@ -4561,7 +4764,7 @@ export default function Documents() {
       window.clearTimeout(inlineToolbarHideTimerRef.current);
       inlineToolbarHideTimerRef.current = null;
     }
-    if (!event.target?.closest?.('textarea, input')) event.preventDefault();
+    if (!event.target?.closest?.('textarea, input, [contenteditable="true"]')) event.preventDefault();
   };
 
   const renderInlineStyleMenu = () => {
@@ -4623,7 +4826,6 @@ export default function Documents() {
             ['strike', 'S', '删除线'],
             ['code', '{}', '代码'],
             ['formula', 'ƒ', '公式'],
-            ['color', 'A', '标记颜色'],
             ['link', <LinkOutlined />, '链接'],
           ].map(([key, label, title]) => (
             <Tooltip key={key} title={title}>
@@ -4645,6 +4847,50 @@ export default function Documents() {
               </Button>
             </Tooltip>
           ))}
+          <Dropdown
+            trigger={['click']}
+            dropdownRender={() => (
+              <div
+                onMouseDown={event => event.preventDefault()}
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(6, 24px)',
+                  gap: 6,
+                  padding: 8,
+                  background: '#fff',
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  boxShadow: '0 12px 32px rgba(15, 23, 42, 0.16)',
+                }}
+              >
+                {['#111827', '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#64748b', '#ffffff', '#fef3c7'].map(color => (
+                  <button
+                    key={color}
+                    type="button"
+                    aria-label={`文字颜色 ${color}`}
+                    onClick={() => applyInlineColor(color)}
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: 4,
+                      border: color === '#ffffff' ? '1px solid #d1d5db' : '1px solid transparent',
+                      background: color,
+                      cursor: 'pointer',
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+          >
+            <Button
+              size="small"
+              type="text"
+              aria-label="文字颜色"
+              style={{ width: 28, minWidth: 28, padding: 0, fontWeight: 700 }}
+            >
+              A
+            </Button>
+          </Dropdown>
           <Divider type="vertical" style={{ marginInline: 4 }} />
           <Tooltip title="添加评论">
             <Button size="small" type="text" onClick={openInlineCommentComposer} style={{ paddingInline: 8 }}>
@@ -4979,12 +5225,12 @@ export default function Documents() {
         {renderListGuides(block, { top: -2, bottom: -2, centerY: markerLineHeight / 2 })}
         <div style={{ display: 'flex', gap: 5, alignItems: 'flex-start' }}>
           {markerNode}
-          <TextArea
+          <InlineRichTextEditor
             {...commonProps}
-            autoSize={{ minRows: 1 }}
             placeholder={selectedBlockId === block.id
               ? (block.type === 'fold-list' ? '折叠列表标题' : block.type === 'numbered' ? '数字列表项' : '列表项')
               : ''}
+            onChange={value => commonProps.onChange(value)}
             style={{
               ...commonProps.style,
               lineHeight: listLineHeight,
@@ -5023,12 +5269,12 @@ export default function Documents() {
               style={{ paddingTop: 4 }}
             />
           )}
-          <TextArea
+          <InlineRichTextEditor
             {...commonProps}
-            autoSize={{ minRows: 1 }}
             placeholder={selectedBlockId === block.id
               ? (block.type === 'fold-todo' ? '折叠待办事项' : block.type === 'fold-advanced-todo' ? '高级待办事项' : '')
               : ''}
+            onChange={value => commonProps.onChange(value)}
             style={{
               ...commonProps.style,
               fontSize: headingLevel === 2 ? 24 : headingLevel === 3 ? 19 : headingLevel === 4 ? 16 : commonProps.style.fontSize,
@@ -5712,7 +5958,7 @@ export default function Documents() {
             indentWidth: presentationIndentWidth,
           })}
           {markerNode}
-          <span style={{ fontWeight: block.type === 'fold-list' ? 600 : 400 }}>{block.content}</span>
+          <InlineHtmlView value={block.content} style={{ fontWeight: block.type === 'fold-list' ? 600 : 400 }} />
         </div>
       );
     }
@@ -5720,12 +5966,12 @@ export default function Documents() {
       return (
         <div style={{ ...blockStyle, display: 'flex', gap: 14, alignItems: 'flex-start' }}>
           <Checkbox checked={Boolean(block.checked)} disabled style={{ paddingTop: 5 }} />
-          <span>{block.content}</span>
+          <InlineHtmlView value={block.content} />
         </div>
       );
     }
     if (block.type === 'quote') {
-      return <div style={{ ...blockStyle, borderLeft: '5px solid #94a3b8', paddingLeft: 18, color: '#475569', fontStyle: 'italic' }}>{block.content}</div>;
+      return <InlineHtmlView as="div" value={block.content} style={{ ...blockStyle, borderLeft: '5px solid #94a3b8', paddingLeft: 18, color: '#475569', fontStyle: 'italic' }} />;
     }
     if (block.type === 'code' || block.type === 'mermaid' || block.type === 'mindmap') {
       return (
@@ -5736,12 +5982,12 @@ export default function Documents() {
       );
     }
     if (block.type === 'emphasis' || block.type === 'marquee') {
-      return <div style={{ ...blockStyle, padding: '16px 18px', borderRadius: 8, background: '#fef3c7', color: '#92400e', fontWeight: 700 }}>{block.content}</div>;
+      return <InlineHtmlView as="div" value={block.content} style={{ ...blockStyle, padding: '16px 18px', borderRadius: 8, background: '#fef3c7', color: '#92400e', fontWeight: 700 }} />;
     }
     if (block.type?.startsWith('fold-heading') || block.type === 'meeting') {
       return (
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
-          <div style={{ ...blockStyle, fontWeight: 700 }}>{block.content}</div>
+          <InlineHtmlView as="div" value={block.content} style={{ ...blockStyle, fontWeight: 700 }} />
           {meta.body && <div style={{ ...blockStyle, color: '#475569' }}>{meta.body}</div>}
         </Space>
       );
@@ -5761,7 +6007,7 @@ export default function Documents() {
     if (block.type === 'chart') {
       return (
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          {block.content && <Text strong style={{ fontSize: isMobile ? 18 : 22 }}>{block.content.split('\n')[0]}</Text>}
+          {block.content && <Text strong style={{ fontSize: isMobile ? 18 : 22 }}>{inlineHtmlToPlain(block.content).split('\n')[0]}</Text>}
           {renderChartPreview(block.content)}
         </Space>
       );
@@ -5770,7 +6016,7 @@ export default function Documents() {
       const value = Math.max(0, Math.min(Number(meta.value) || 0, 100));
       return (
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <Text style={{ fontSize: isMobile ? 18 : 24 }}>{block.content}</Text>
+          <InlineHtmlView value={block.content} style={{ fontSize: isMobile ? 18 : 24 }} />
           <div style={{ height: 14, background: '#e5e7eb', borderRadius: 999, overflow: 'hidden' }}>
             <div style={{ width: `${value}%`, height: '100%', background: '#2563eb' }} />
           </div>
@@ -5781,7 +6027,7 @@ export default function Documents() {
     if (block.type === 'metric') {
       return (
         <Space direction="vertical" size={6}>
-          <Text type="secondary" style={{ fontSize: isMobile ? 16 : 18 }}>{block.content}</Text>
+          <Text type="secondary" style={{ fontSize: isMobile ? 16 : 18 }}>{inlineHtmlToPlain(block.content)}</Text>
           <Text strong style={{ fontSize: isMobile ? 42 : 64, lineHeight: 1 }}>{meta.value ?? 0}{meta.unit || ''}</Text>
         </Space>
       );
@@ -5789,7 +6035,7 @@ export default function Documents() {
     if (block.type === 'button' || block.type === 'external-link') {
       return (
         <Button size="large" href={meta.url || block.content || undefined} target={(meta.url || block.content) ? '_blank' : undefined} icon={<RightOutlined />}>
-          {block.content || meta.url || blockTypeMap[block.type]?.label}
+          {inlineHtmlToPlain(block.content) || meta.url || blockTypeMap[block.type]?.label}
         </Button>
       );
     }
@@ -5805,7 +6051,7 @@ export default function Documents() {
         </Space>
       );
     }
-    return <div style={blockStyle}>{block.content}</div>;
+    return <InlineHtmlView as="div" value={block.content} style={blockStyle} />;
   };
 
   const renderPresentationMode = () => {
@@ -5909,7 +6155,12 @@ export default function Documents() {
         setSelectedBlockId(block.id);
         clearAreaBlockSelection();
       },
-      onChange: event => updateBlock(block.id, { content: normalizeTransientBlockInput(block, event.target.value) }),
+      onChange: valueOrEvent => {
+        const nextValue = typeof valueOrEvent === 'string'
+          ? valueOrEvent
+          : valueOrEvent.target.value;
+        updateBlock(block.id, { content: normalizeTransientBlockInput(block, nextValue) });
+      },
       onCompositionStart: () => {
         composingBlockIdsRef.current.add(block.id);
       },
@@ -5936,6 +6187,22 @@ export default function Documents() {
       },
     };
 
+    const renderRichTextInput = (props = {}, stylePatch = {}) => (
+      <InlineRichTextEditor
+        {...commonProps}
+        {...props}
+        onChange={value => commonProps.onChange(value)}
+        onMouseUp={event => handleInlineTextSelection(block, event)}
+        onKeyUp={event => handleInlineTextSelection(block, event)}
+        onKeyDown={event => handleBlockKeyDown(event, block, index)}
+        style={{
+          ...commonProps.style,
+          ...stylePatch,
+          ...(props.style || {}),
+        }}
+      />
+    );
+
     if (block.type === 'divider') {
       return <Divider style={{ margin: '10px 0' }} />;
     }
@@ -5952,9 +6219,9 @@ export default function Documents() {
 
     if (block.type === 'emphasis' || block.type === 'marquee') {
       return (
-        <TextArea
+        <InlineRichTextEditor
           {...commonProps}
-          autoSize={{ minRows: 1 }}
+          onChange={value => commonProps.onChange(value)}
           style={{
             ...commonProps.style,
             fontWeight: 700,
@@ -6016,9 +6283,9 @@ export default function Documents() {
       return (
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           {heading?.number && <Text type="secondary" style={{ paddingTop: 4, minWidth: 28 }}>{heading.number}</Text>}
-          <TextArea
+          <InlineRichTextEditor
             {...commonProps}
-            autoSize={{ minRows: 1 }}
+            onChange={value => commonProps.onChange(value)}
             style={{
               ...commonProps.style,
               fontSize: isMobile
@@ -6040,7 +6307,7 @@ export default function Documents() {
             onChange={event => updateBlock(block.id, { checked: event.target.checked })}
             style={{ paddingTop: 4 }}
           />
-          <TextArea {...commonProps} />
+          <InlineRichTextEditor {...commonProps} onChange={value => commonProps.onChange(value)} />
         </div>
       );
     }
@@ -6048,8 +6315,9 @@ export default function Documents() {
     if (block.type === 'quote') {
       return (
         <div style={{ borderLeft: '3px solid #94a3b8', paddingLeft: 12 }}>
-          <TextArea
+          <InlineRichTextEditor
             {...commonProps}
+            onChange={value => commonProps.onChange(value)}
             style={{
               ...commonProps.style,
               color: '#475569',
@@ -6096,17 +6364,17 @@ export default function Documents() {
           background: '#f8fafc',
         }}>
           <FileTextOutlined style={{ color: '#64748b' }} />
-          <TextArea
+          <InlineRichTextEditor
             {...commonProps}
-            autoSize={{ minRows: 1 }}
             placeholder={active ? '页面标题' : ''}
+            onChange={value => commonProps.onChange(value)}
             style={{ ...commonProps.style, fontWeight: 600 }}
           />
         </div>
       );
     }
 
-    return <TextArea {...commonProps} />;
+    return <InlineRichTextEditor {...commonProps} onChange={value => commonProps.onChange(value)} />;
   };
 
   const renderAppendBlockShortcut = () => {
@@ -6530,6 +6798,7 @@ export default function Documents() {
                 <Dropdown
                   open={docContextMenu.open}
                   trigger={[]}
+                  overlayClassName="document-context-menu-dropdown"
                   onOpenChange={(open) => {
                     if (!open) closeDocContextMenu();
                   }}
@@ -6549,11 +6818,11 @@ export default function Documents() {
                 >
                   <span style={{
                     position: 'fixed',
+                    pointerEvents: 'none',
                     left: docContextMenu.x,
                     top: docContextMenu.y,
                     width: 1,
                     height: 1,
-                    pointerEvents: 'none',
                   }} />
                 </Dropdown>
               </div>
