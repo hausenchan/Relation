@@ -399,15 +399,15 @@ function getDefaultBlockContent(type) {
   if (type === 'heading3') return '中标题';
   if (type === 'heading4') return '小标题';
   if (type === 'page') return '页面标题';
-  if (type === 'bullet') return '列表项';
-  if (type === 'numbered') return '数字列表项';
-  if (type === 'fold-list') return '折叠列表标题';
+  if (type === 'bullet') return '';
+  if (type === 'numbered') return '';
+  if (type === 'fold-list') return '';
   if (type === 'quote') return '引述文字';
   if (type === 'emphasis') return '着重文字';
   if (type === 'marquee') return '重点提示';
-  if (type === 'todo') return '待办事项';
-  if (type === 'fold-todo') return '折叠待办事项';
-  if (type === 'fold-advanced-todo') return '高级待办事项';
+  if (type === 'todo') return '';
+  if (type === 'fold-todo') return '';
+  if (type === 'fold-advanced-todo') return '';
   if (type === 'fold-heading2') return '折叠大标题';
   if (type === 'fold-heading3') return '折叠中标题';
   if (type === 'fold-heading4') return '折叠小标题';
@@ -425,6 +425,25 @@ function getDefaultBlockContent(type) {
   if (type === 'external-link') return '外部链接';
   if (getMediaKind(type)) return '';
   return '';
+}
+
+function getTransientBlockPlaceholder(type) {
+  if (type === 'bullet') return '列表项';
+  if (type === 'numbered') return '数字列表项';
+  if (type === 'fold-list') return '折叠列表标题';
+  if (type === 'todo') return '待办事项';
+  if (type === 'fold-todo') return '折叠待办事项';
+  if (type === 'fold-advanced-todo') return '高级待办事项';
+  return '';
+}
+
+function normalizeTransientBlockInput(block, nextValue) {
+  const placeholder = getTransientBlockPlaceholder(block?.type);
+  const currentValue = String(block?.content || '');
+  if (!placeholder || currentValue !== placeholder) return nextValue;
+  const value = String(nextValue || '');
+  if (value === placeholder) return value;
+  return value.replace(placeholder, '');
 }
 
 function getDefaultBlockMeta(type) {
@@ -4877,7 +4896,9 @@ export default function Documents() {
           <TextArea
             {...commonProps}
             autoSize={{ minRows: 1 }}
-            placeholder={selectedBlockId === block.id ? (block.type === 'fold-list' ? '点击创建内容' : '输入列表项') : ''}
+            placeholder={selectedBlockId === block.id
+              ? (block.type === 'fold-list' ? '折叠列表标题' : block.type === 'numbered' ? '数字列表项' : '列表项')
+              : ''}
             style={{
               ...commonProps.style,
               lineHeight: listLineHeight,
@@ -4919,6 +4940,9 @@ export default function Documents() {
           <TextArea
             {...commonProps}
             autoSize={{ minRows: 1 }}
+            placeholder={selectedBlockId === block.id
+              ? (block.type === 'fold-todo' ? '折叠待办事项' : block.type === 'fold-advanced-todo' ? '高级待办事项' : '')
+              : ''}
             style={{
               ...commonProps.style,
               fontSize: headingLevel === 2 ? 24 : headingLevel === 3 ? 19 : headingLevel === 4 ? 16 : commonProps.style.fontSize,
@@ -5799,7 +5823,7 @@ export default function Documents() {
         setSelectedBlockId(block.id);
         clearAreaBlockSelection();
       },
-      onChange: event => updateBlock(block.id, { content: event.target.value }),
+      onChange: event => updateBlock(block.id, { content: normalizeTransientBlockInput(block, event.target.value) }),
       onCompositionStart: () => {
         composingBlockIdsRef.current.add(block.id);
       },
