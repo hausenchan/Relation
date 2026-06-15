@@ -497,57 +497,15 @@ function getBulletListMarker(indent) {
   return markers[clampListIndent(indent) % markers.length];
 }
 
-function renderBulletListMarker(indent, scale = 1, hasChildren = false) {
+function renderBulletListMarker(indent, scale = 1) {
   const markerLevel = clampListIndent(indent) % 3;
-  const markerSize = hasChildren ? 6 : (markerLevel === 1 ? 5 : 4);
+  const markerSize = markerLevel === 1 ? 5 : 4;
   const baseStyle = {
     display: 'block',
     width: markerSize * scale,
     height: markerSize * scale,
     boxSizing: 'border-box',
   };
-
-  if (hasChildren) {
-    if (markerLevel === 1) {
-      return (
-        <span
-          aria-hidden="true"
-          style={{
-            ...baseStyle,
-            borderRadius: 2,
-            background: listMarkerColor,
-          }}
-        />
-      );
-    }
-
-    if (markerLevel === 2) {
-      return (
-        <span
-          aria-hidden="true"
-          style={{
-            ...baseStyle,
-            border: `${Math.max(1, scale)}px solid ${listMarkerColor}`,
-            borderRadius: 2,
-            background: 'transparent',
-            transform: 'rotate(45deg)',
-          }}
-        />
-      );
-    }
-
-    return (
-      <span
-        aria-hidden="true"
-        style={{
-          ...baseStyle,
-          borderRadius: 2,
-          background: listMarkerColor,
-          transform: 'rotate(45deg)',
-        }}
-      />
-    );
-  }
 
   if (markerLevel === 1) {
     return (
@@ -1262,6 +1220,7 @@ export default function Documents() {
   const suppressEditorClickRef = useRef(false);
   const inlineToolbarHideTimerRef = useRef(null);
   const tableResizeRef = useRef(null);
+  const composingBlockIdsRef = useRef(new Set());
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -3100,11 +3059,19 @@ export default function Documents() {
   };
 
   const handleBlockKeyDown = (event, block, index) => {
+    const composing = Boolean(
+      event.nativeEvent?.isComposing
+      || event.isComposing
+      || event.keyCode === 229
+      || event.nativeEvent?.keyCode === 229
+      || composingBlockIdsRef.current.has(block.id)
+    );
     if (event.key === 'Tab' && isHierarchicalListBlock(block)) {
       event.preventDefault();
       updateListIndent(block, index, event.shiftKey ? -1 : 1);
       return;
     }
+    if (composing) return;
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       splitBlockAtCursor(event, block, index);
@@ -4853,7 +4820,6 @@ export default function Documents() {
     const marker = block.type === 'bullet'
       ? getBulletListMarker(indent)
       : numberedListMarkers.get(block.id);
-    const hasChildren = Boolean(hierarchicalGuideMap.get(block.id)?.hasChildren);
     const markerLineHeight = (Number(commonProps.style.fontSize) || 15) * listLineHeight;
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
@@ -4889,7 +4855,7 @@ export default function Documents() {
       />
     ) : block.type === 'bullet' ? (
       <span style={markerContainerStyle}>
-        {renderBulletListMarker(indent, 1, hasChildren)}
+        {renderBulletListMarker(indent)}
       </span>
     ) : (
       <Text style={{
@@ -5605,10 +5571,9 @@ export default function Documents() {
         : block.type === 'numbered'
           ? numberedListMarkers.get(block.id)
           : null;
-      const hasChildren = Boolean(hierarchicalGuideMap.get(block.id)?.hasChildren);
       const markerNode = block.type === 'bullet' ? (
         <span style={{ minWidth: presentationMarkerWidth, height: '1.8em', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
-          {renderBulletListMarker(indent, isMobile ? 1 : 1.1, hasChildren)}
+          {renderBulletListMarker(indent, isMobile ? 1 : 1.1)}
         </span>
       ) : (
         <span
@@ -5835,6 +5800,12 @@ export default function Documents() {
         clearAreaBlockSelection();
       },
       onChange: event => updateBlock(block.id, { content: event.target.value }),
+      onCompositionStart: () => {
+        composingBlockIdsRef.current.add(block.id);
+      },
+      onCompositionEnd: () => {
+        composingBlockIdsRef.current.delete(block.id);
+      },
       onSelect: event => handleInlineTextSelection(block, event),
       onMouseUp: event => handleInlineTextSelection(block, event),
       onKeyUp: event => handleInlineTextSelection(block, event),
