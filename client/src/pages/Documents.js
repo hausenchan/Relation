@@ -3514,11 +3514,11 @@ export default function Documents() {
       onContextMenu={event => openDocContextMenu(event, item)}
       style={{
         cursor: 'pointer',
-        padding: isMobile ? '14px 12px' : '10px 8px',
-        borderRadius: 8,
+        padding: isMobile ? '9px 10px' : '7px 8px',
+        borderRadius: 7,
         background: selectedDocId === item.id ? '#eef2ff' : 'transparent',
         border: selectedDocId === item.id ? '1px solid #c7d2fe' : '1px solid transparent',
-        marginBottom: isMobile ? 8 : 6,
+        marginBottom: isMobile ? 4 : 3,
       }}
       actions={[
         <Button
@@ -3535,18 +3535,15 @@ export default function Documents() {
     >
       <List.Item.Meta
         title={
-          <Space size={6} wrap>
-            <Text strong ellipsis style={{ maxWidth: isMobile ? 'calc(100vw - 172px)' : 170 }}>{item.title}</Text>
-            <Tag color="blue">{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
+          <Space size={6} wrap style={{ rowGap: 2, lineHeight: 1.25 }}>
+            <Text strong ellipsis style={{ maxWidth: isMobile ? 'calc(100vw - 164px)' : 170, lineHeight: '20px' }}>{item.title}</Text>
+            <Tag color="blue" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
           </Space>
         }
         description={
-          <Space direction="vertical" size={2} style={{ width: '100%' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>{item.document_no}</Text>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {item.updated_by_name || item.created_by_name || '-'} · {formatDocumentTimestamp(item.updated_at)}
-            </Text>
-          </Space>
+          <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.35 }}>
+            {item.updated_by_name || item.created_by_name || '-'} · {formatDocumentTimestamp(item.updated_at)}
+          </Text>
         }
       />
     </List.Item>
@@ -4356,6 +4353,17 @@ export default function Documents() {
     })
   );
 
+  const focusInlineSelection = (blockId, start, end) => {
+    window.setTimeout(() => {
+      const input = document.getElementById(`doc-block-input-${blockId}`);
+      if (input?.setSelectionRange) {
+        input.focus();
+        input.setSelectionRange(start, end);
+        placeInlineToolbar({ id: blockId }, input, start, end);
+      }
+    }, 0);
+  };
+
   const applyInlineTextReplace = (selection, nextSelectedText, prefixLength = 0) => {
     if (!selection?.blockId) return false;
     const block = editorBlocks.find(item => item.id === selection.blockId);
@@ -4380,14 +4388,53 @@ export default function Documents() {
         },
       };
     }));
-    window.setTimeout(() => {
-      const input = document.getElementById(`doc-block-input-${selection.blockId}`);
-      if (input?.setSelectionRange) {
-        input.focus();
-        input.setSelectionRange(nextSelectionStart, nextSelectionEnd);
-        placeInlineToolbar({ id: selection.blockId }, input, nextSelectionStart, nextSelectionEnd);
-      }
-    }, 0);
+    focusInlineSelection(selection.blockId, nextSelectionStart, nextSelectionEnd);
+    return true;
+  };
+
+  const getInlineWrapConfig = (kind) => ({
+    bold: ['**', '**'],
+    italic: ['*', '*'],
+    underline: ['<u>', '</u>'],
+    strike: ['~~', '~~'],
+    code: ['`', '`'],
+    formula: ['$', '$'],
+    color: ['<mark>', '</mark>'],
+  }[kind] || ['', '']);
+
+  const applyInlineTextUnwrap = (selection, prefix, suffix) => {
+    if (!selection?.blockId || (!prefix && !suffix)) return false;
+    const block = editorBlocks.find(item => item.id === selection.blockId);
+    if (!block) return false;
+    const content = String(block.content || '');
+    const selected = content.slice(selection.start, selection.end);
+    const wrappedSelection = selected.startsWith(prefix) && selected.endsWith(suffix);
+    const outerWrappedSelection = content.slice(selection.start - prefix.length, selection.start) === prefix
+      && content.slice(selection.end, selection.end + suffix.length) === suffix;
+    if (!wrappedSelection && !outerWrappedSelection) return false;
+
+    const replaceStart = wrappedSelection ? selection.start : selection.start - prefix.length;
+    const replaceEnd = wrappedSelection ? selection.end : selection.end + suffix.length;
+    const nextSelectedText = wrappedSelection
+      ? selected.slice(prefix.length, selected.length - suffix.length)
+      : selected;
+    const nextContent = `${content.slice(0, replaceStart)}${nextSelectedText}${content.slice(replaceEnd)}`;
+    const delta = nextContent.length - content.length;
+
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => prev.map(item => {
+      if (item.id !== selection.blockId) return item;
+      const meta = getBlockMeta(item);
+      return {
+        ...item,
+        content: nextContent,
+        meta: {
+          ...meta,
+          comments: shiftInlineCommentsForReplace(meta.comments, replaceStart, replaceEnd, delta, 0),
+        },
+      };
+    }));
+    focusInlineSelection(selection.blockId, replaceStart, replaceStart + nextSelectedText.length);
     return true;
   };
 
@@ -4395,20 +4442,16 @@ export default function Documents() {
     const selection = inlineToolbar;
     if (!selection) return;
     const selected = selection.text || '';
-    const wrapMap = {
-      bold: ['**', '**'],
-      italic: ['*', '*'],
-      underline: ['<u>', '</u>'],
-      strike: ['~~', '~~'],
-      code: ['`', '`'],
-      formula: ['$', '$'],
-      color: ['<mark>', '</mark>'],
-      link: ['[', '](https://)'],
-    };
-    const [prefix, suffix] = wrapMap[kind] || ['', ''];
+    if (kind === 'link') {
+      const url = window.prompt('请输入链接地址', 'https://');
+      if (!url) return;
+      applyInlineTextReplace(selection, `[${selected}](${url})`, 1);
+      return;
+    }
+    const [prefix, suffix] = getInlineWrapConfig(kind);
     if (!prefix && !suffix) return;
+    if (applyInlineTextUnwrap(selection, prefix, suffix)) return;
     applyInlineTextReplace(selection, `${prefix}${selected}${suffix}`, prefix.length);
-    if (kind === 'link') message.info('已插入链接格式，请替换链接地址');
   };
 
   const openInlineCommentComposer = () => {
@@ -4472,15 +4515,16 @@ export default function Documents() {
     setEditorBlocks(prev => prev.map(block => {
       if (block.id !== editingComment.blockId) return block;
       const meta = getBlockMeta(block);
+      const nextComments = normalizeInlineComments(meta.comments).map(comment => (
+        comment.id === editingComment.commentId
+          ? { ...comment, comment: draft, updatedAt: new Date().toISOString() }
+          : comment
+      ));
       return {
         ...block,
         meta: {
           ...meta,
-          comments: normalizeInlineComments(meta.comments).map(comment => (
-            comment.id === editingComment.commentId
-              ? { ...comment, comment: draft, updatedAt: new Date().toISOString() }
-              : comment
-          )),
+          comments: nextComments,
         },
       };
     }));
@@ -4495,12 +4539,16 @@ export default function Documents() {
     setEditorBlocks(prev => prev.map(item => {
       if (item.id !== blockId) return item;
       const meta = getBlockMeta(item);
+      const nextComments = normalizeInlineComments(meta.comments).filter(comment => comment.id !== commentId);
+      const nextMeta = { ...meta };
+      if (nextComments.length) {
+        nextMeta.comments = nextComments;
+      } else {
+        delete nextMeta.comments;
+      }
       return {
         ...item,
-        meta: {
-          ...meta,
-          comments: normalizeInlineComments(meta.comments).filter(comment => comment.id !== commentId),
-        },
+        meta: nextMeta,
       };
     }));
     if (!remainingCount) setActiveCommentBlockId(null);
@@ -4644,11 +4692,11 @@ export default function Documents() {
         data-inline-comment-panel="true"
         onClick={event => event.stopPropagation()}
         style={{
-          position: isMobile ? 'static' : 'absolute',
-          top: isMobile ? undefined : 0,
-          left: isMobile ? undefined : 'calc(100% + 12px)',
-          width: isMobile ? '100%' : 320,
-          marginTop: isMobile ? 8 : 0,
+          position: 'relative',
+          width: '100%',
+          marginTop: 10,
+          marginLeft: isMobile ? 0 : 28,
+          maxWidth: isMobile ? '100%' : 520,
           zIndex: 8,
           border: '1px solid #dbeafe',
           borderRadius: 8,
@@ -4732,6 +4780,44 @@ export default function Documents() {
             );
           })}
         </Space>
+      </div>
+    );
+  };
+
+  const renderInlineCommentHints = (block) => {
+    const comments = getBlockInlineComments(block);
+    if (!comments.length || activeCommentBlockId === block.id) return null;
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={(event) => {
+          event.stopPropagation();
+          setActiveCommentBlockId(block.id);
+        }}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          setActiveCommentBlockId(block.id);
+        }}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          marginTop: 6,
+          marginLeft: isMobile ? 0 : 28,
+          padding: '3px 8px',
+          borderRadius: 999,
+          background: '#eff6ff',
+          color: '#1d4ed8',
+          fontSize: 12,
+          cursor: 'pointer',
+        }}
+      >
+        <span>{comments.length} 条评论</span>
+        <span style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {comments[0].text || comments[0].comment}
+        </span>
       </div>
     );
   };
@@ -6135,7 +6221,7 @@ export default function Documents() {
           border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
           background: commentsOpen ? '#f8fbff' : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent')),
           borderRadius: 6,
-          padding: hierarchicalListBlock ? (isMobile ? '1px 6px' : `0 ${comments.length ? 34 : 8}px 0 0`) : (isMobile ? '5px 6px' : `3px ${comments.length ? 34 : 8}px 3px 0`),
+          padding: hierarchicalListBlock ? (isMobile ? '1px 6px' : '0 8px 0 0') : (isMobile ? '5px 6px' : '3px 8px 3px 0'),
           marginBottom: hierarchicalListBlock ? 0 : (isMobile ? 4 : 2),
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
@@ -6262,10 +6348,11 @@ export default function Documents() {
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
             {renderBlockInput(block, index, heading)}
-            {isMobile && renderInlineCommentPanel(block)}
+            {renderInlineCommentHints(block)}
+            {renderInlineCommentPanel(block)}
           </div>
         </div>
-        {comments.length > 0 && !isMobile && (
+        {comments.length > 0 && !commentsOpen && (
           <Tooltip title={commentsOpen ? '收起评论' : '展开评论'}>
             <Button
               type={commentsOpen ? 'primary' : 'default'}
@@ -6292,25 +6379,6 @@ export default function Documents() {
             </Button>
           </Tooltip>
         )}
-        {comments.length > 0 && isMobile && (
-          <Button
-            size="small"
-            type={commentsOpen ? 'primary' : 'default'}
-            onClick={event => {
-              event.stopPropagation();
-              setActiveCommentBlockId(prev => (prev === block.id ? null : block.id));
-            }}
-            style={{
-              gridColumn: '2 / 3',
-              justifySelf: 'flex-start',
-              marginTop: 6,
-              borderRadius: 12,
-            }}
-          >
-            {comments.length} 条评论
-          </Button>
-        )}
-        {!isMobile && renderInlineCommentPanel(block)}
       </div>
     );
   };
