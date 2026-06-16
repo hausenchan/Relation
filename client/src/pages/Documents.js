@@ -1065,6 +1065,21 @@ function cloneEditorBlocks(blocks = []) {
   }));
 }
 
+function areSerializedValuesEqual(left, right) {
+  if (left === right) return true;
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+function areEditorSnapshotContentsEqual(left, right) {
+  return Boolean(left && right)
+    && left.title === right.title
+    && areSerializedValuesEqual(left.blocks, right.blocks);
+}
+
 function getFolderPathLabel(folder) {
   if (!folder) return '';
   return [
@@ -1400,6 +1415,7 @@ export default function Documents() {
   const selectedAreaBlockIdsRef = useRef([]);
   const blockHandleSelectionRef = useRef(null);
   const activeEditorSnapshotRef = useRef(null);
+  const liveEditorSnapshotRef = useRef(null);
   const selectedDocIdRef = useRef(null);
   const docTabStatesRef = useRef({});
   const lastSavedSignatureRef = useRef({});
@@ -1488,6 +1504,11 @@ export default function Documents() {
   const showMobileEditor = isMobile && mobileHasEditorTarget && !mobileLibraryVisible;
   const showDocumentLibrary = !isMobile || !showMobileEditor;
   const showDocumentEditor = !isMobile || showMobileEditor;
+  liveEditorSnapshotRef.current = {
+    title: editorTitle,
+    blocks: editorBlocks,
+    selectedBlockId,
+  };
 
   const getDocTabId = (id) => Number(id);
 
@@ -1512,14 +1533,15 @@ export default function Documents() {
 
   const pushEditorUndoSnapshot = () => {
     if (applyingUndoRef.current || !selectedDoc?.id) return;
+    const liveSnapshot = liveEditorSnapshotRef.current || {};
     const snapshot = {
-      title: editorTitle,
-      blocks: cloneEditorBlocks(editorBlocks),
-      selectedBlockId,
+      title: liveSnapshot.title || '',
+      blocks: cloneEditorBlocks(liveSnapshot.blocks?.length ? liveSnapshot.blocks : editorBlocks),
+      selectedBlockId: liveSnapshot.selectedBlockId || selectedBlockId,
     };
     setEditorUndoStack(prev => {
       const last = prev[prev.length - 1];
-      if (last && last.title === snapshot.title && JSON.stringify(last.blocks) === JSON.stringify(snapshot.blocks)) {
+      if (areEditorSnapshotContentsEqual(last, snapshot)) {
         return prev;
       }
       const next = [...prev, snapshot].slice(-80);
@@ -1529,13 +1551,23 @@ export default function Documents() {
   };
 
   const undoLastEditorAction = () => {
-    const stack = editorUndoStackRef.current;
-    const snapshot = stack[stack.length - 1];
+    let nextStack = [...editorUndoStackRef.current];
+    const liveSnapshot = liveEditorSnapshotRef.current || {};
+    const currentSnapshot = {
+      title: liveSnapshot.title || '',
+      blocks: cloneEditorBlocks(liveSnapshot.blocks?.length ? liveSnapshot.blocks : editorBlocks),
+      selectedBlockId: liveSnapshot.selectedBlockId || selectedBlockId,
+    };
+    let snapshot = nextStack.pop();
+    while (snapshot && areEditorSnapshotContentsEqual(snapshot, currentSnapshot)) {
+      snapshot = nextStack.pop();
+    }
     if (!snapshot) {
+      editorUndoStackRef.current = nextStack;
+      setEditorUndoStack(nextStack);
       message.info('没有可撤回的操作');
       return;
     }
-    const nextStack = stack.slice(0, -1);
     editorUndoStackRef.current = nextStack;
     setEditorUndoStack(nextStack);
     applyingUndoRef.current = true;
@@ -2753,6 +2785,8 @@ export default function Documents() {
   };
 
   const updateBlock = (id, patch) => {
+    const currentBlock = editorBlocks.find(block => block.id === id);
+    if (!currentBlock || Object.entries(patch).every(([key, value]) => areSerializedValuesEqual(currentBlock[key], value))) return;
     pushEditorUndoSnapshot();
     setEditorBlocks(prev => prev.map(block => (block.id === id ? { ...block, ...patch } : block)));
   };
