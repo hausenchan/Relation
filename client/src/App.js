@@ -8,7 +8,7 @@ import {
   ApartmentOutlined, LockOutlined, ThunderboltOutlined, MenuOutlined,
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined, RadarChartOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined,
   AppstoreOutlined, HistoryOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
@@ -118,7 +118,7 @@ const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', read
 // 路由守卫
 function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
   const location = useLocation();
-  const { user, loading, canAccessModule, isExecutive } = useAuth();
+  const { user, loading, canAccessModule } = useAuth();
   if (loading) return null;
   if (!user) {
     const redirectPath = getLocationPath(location);
@@ -248,7 +248,7 @@ function AppLayout() {
   const [collapsed, setCollapsed] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'executive', 'system']);
+  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'system']);
 
   useEffect(() => {
     if (!user) return;
@@ -458,18 +458,6 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
-  // ── 公司经营（仅高管或admin）────────────────────────────────────────
-  const executiveChildren = ((isExecutive() || isAdmin(user)) ? [
-    { key: '/executive', icon: <DashboardOutlined />, label: <Link to="/executive">经营概览</Link> },
-    { key: '/executive/talents', icon: <UserOutlined />, label: <Link to="/executive/talents">高级人才</Link> },
-    { key: '/executive/dynamics', icon: <RiseOutlined />, label: <Link to="/executive/dynamics">竞品动态</Link> },
-    isExecutive() && { key: '/executive/recruit-radar', icon: <RadarChartOutlined />, label: <Link to="/executive/recruit-radar">招聘雷达</Link> },
-    isExecutive() && { key: '/executive/recruit-radar/config', icon: <SettingOutlined />, label: <Link to="/executive/recruit-radar/config">雷达配置</Link> },
-    { key: '/executive/customers', icon: <TeamOutlined />, label: <Link to="/executive/customers">重点客户</Link> },
-    { key: '/executive/strategic', icon: <AimOutlined />, label: <Link to="/executive/strategic">战略月会</Link> },
-    { key: '/executive/operational', icon: <FileTextOutlined />, label: <Link to="/executive/operational">经营周会</Link> },
-  ] : []).filter(Boolean);
-
   const menuItems = [
     // 工作台
     canAccessMenu('/') && { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
@@ -477,11 +465,6 @@ function AppLayout() {
     goalChildren.length > 0 && {
       key: 'goal-plan', icon: <AimOutlined />, label: '目标计划',
       children: goalChildren,
-    },
-    // 公司经营（仅高管）
-    executiveChildren.length > 0 && {
-      key: 'executive', icon: <BankOutlined />, label: '公司经营',
-      children: executiveChildren,
     },
     // 业务流转
     bizFlowChildren.length > 0 && {
