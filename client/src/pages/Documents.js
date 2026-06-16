@@ -688,6 +688,35 @@ function inlineHtmlToPlain(value) {
   return (div.textContent || div.innerText || '').replace(/\u00a0/g, ' ');
 }
 
+function setContentEditableCaretPosition(element, offset = 0) {
+  if (!element || typeof document === 'undefined') return false;
+  const selection = window.getSelection?.();
+  if (!selection) return false;
+  const targetOffset = Math.max(0, Number(offset) || 0);
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  let remaining = targetOffset;
+  while (node) {
+    const length = node.textContent?.length || 0;
+    if (remaining <= length) {
+      const range = document.createRange();
+      range.setStart(node, remaining);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return true;
+    }
+    remaining -= length;
+    node = walker.nextNode();
+  }
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  range.collapse(false);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
 function InlineHtmlView({ value, as: TagName = 'span', style }) {
   return (
     <TagName
@@ -1615,6 +1644,8 @@ export default function Documents() {
       input.focus();
       if (typeof cursorPosition === 'number' && typeof input.setSelectionRange === 'function') {
         input.setSelectionRange(cursorPosition, cursorPosition);
+      } else if (typeof cursorPosition === 'number' && input.isContentEditable) {
+        setContentEditableCaretPosition(input, cursorPosition);
       }
     }, 0);
   };
@@ -3189,7 +3220,17 @@ export default function Documents() {
 
   const splitBlockAtCursor = (event, block, index) => {
     const input = event.target;
-    const content = input?.isContentEditable ? inlineHtmlToPlain(input.innerHTML) : String(block.content || '');
+    const getCurrentContent = () => {
+      if (!input?.isContentEditable) return String(block.content || '');
+      const selection = window.getSelection?.();
+      if (!selection || selection.rangeCount === 0) return inlineHtmlToPlain(input.innerHTML);
+      const range = selection.getRangeAt(0);
+      if (!input.contains(range.startContainer) || !input.contains(range.endContainer)) {
+        return inlineHtmlToPlain(input.innerHTML);
+      }
+      return sanitizeInlineHtml(input.innerHTML);
+    };
+    const content = getCurrentContent();
     const editableSelection = input?.isContentEditable ? getContentEditableSelectionRange(input) : null;
     const selectionStart = editableSelection
       ? editableSelection.start
@@ -3197,10 +3238,30 @@ export default function Documents() {
     const selectionEnd = editableSelection
       ? editableSelection.end
       : (typeof input?.selectionEnd === 'number' ? input.selectionEnd : selectionStart);
-    const start = Math.max(0, Math.min(selectionStart, selectionEnd, content.length));
-    const end = Math.max(start, Math.min(Math.max(selectionStart, selectionEnd), content.length));
-    const leftContent = content.slice(0, start);
-    const rightContent = content.slice(end);
+    const plainContent = input?.isContentEditable ? inlineHtmlToPlain(content) : content;
+    const start = Math.max(0, Math.min(selectionStart, selectionEnd, plainContent.length));
+    const end = Math.max(start, Math.min(Math.max(selectionStart, selectionEnd), plainContent.length));
+    let leftContent = plainContent.slice(0, start);
+    let rightContent = plainContent.slice(end);
+    if (input?.isContentEditable) {
+      const selection = window.getSelection?.();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      if (range && input.contains(range.startContainer) && input.contains(range.endContainer)) {
+        const leftRange = document.createRange();
+        leftRange.selectNodeContents(input);
+        leftRange.setEnd(range.startContainer, range.startOffset);
+        const rightRange = document.createRange();
+        rightRange.selectNodeContents(input);
+        rightRange.setStart(range.endContainer, range.endOffset);
+        const container = document.createElement('div');
+        container.appendChild(leftRange.cloneContents());
+        leftContent = sanitizeInlineHtml(container.innerHTML);
+        container.innerHTML = '';
+        container.appendChild(rightRange.cloneContents());
+        rightContent = sanitizeInlineHtml(container.innerHTML);
+      }
+      input.innerHTML = leftContent;
+    }
     const nextType = getNextBlockTypeAfterEnter(block);
     const continuationExtra = buildContinuationBlockExtra(block);
     const meta = getBlockMeta(block);
