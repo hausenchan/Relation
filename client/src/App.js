@@ -118,7 +118,7 @@ const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', read
 // 路由守卫
 function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
   const location = useLocation();
-  const { user, loading, canAccessModule } = useAuth();
+  const { user, loading, canAccessModule, isExecutive } = useAuth();
   if (loading) return null;
   if (!user) {
     const redirectPath = getLocationPath(location);
