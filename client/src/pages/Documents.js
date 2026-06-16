@@ -3337,6 +3337,75 @@ export default function Documents() {
     focusBlock(nextBlock.id, 0);
   };
 
+  const mergeBlockWithPreviousAtStart = (event, block, index) => {
+    if (index <= 0) return false;
+    const input = event.target;
+    const selectionRange = input?.isContentEditable
+      ? getContentEditableSelectionRange(input)
+      : (
+        typeof input?.selectionStart === 'number' && typeof input?.selectionEnd === 'number'
+          ? { start: Math.min(input.selectionStart, input.selectionEnd), end: Math.max(input.selectionStart, input.selectionEnd) }
+          : null
+      );
+    if (!selectionRange || selectionRange.start !== 0 || selectionRange.end !== 0) return false;
+
+    const previousBlock = editorBlocks[index - 1];
+    if (!previousBlock) return false;
+
+    const previousInput = document.getElementById(`doc-block-input-${previousBlock.id}`);
+    const previousContent = previousInput?.isContentEditable
+      ? sanitizeInlineHtml(previousInput.innerHTML)
+      : String(previousBlock.content || '');
+    const currentContent = input?.isContentEditable
+      ? sanitizeInlineHtml(input.innerHTML)
+      : String(block.content || '');
+    const previousPlainLength = inlineHtmlToPlain(previousContent).length;
+    const mergedContent = sanitizeInlineHtml(`${previousContent}${currentContent}`);
+    const previousMeta = getBlockMeta(previousBlock);
+    const shiftedCurrentComments = normalizeInlineComments(getBlockMeta(block).comments).map(comment => ({
+      ...comment,
+      start: comment.start + previousPlainLength,
+      end: comment.end + previousPlainLength,
+    }));
+    const mergedComments = [
+      ...normalizeInlineComments(previousMeta.comments),
+      ...shiftedCurrentComments,
+    ];
+    const nextPreviousMeta = {
+      ...previousMeta,
+      ...(mergedComments.length ? { comments: mergedComments } : {}),
+    };
+    if (!mergedComments.length) delete nextPreviousMeta.comments;
+
+    if (previousInput?.isContentEditable) {
+      previousInput.innerHTML = mergedContent;
+    }
+
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => {
+      const blockIndex = prev.findIndex(item => item.id === block.id);
+      const previousIndex = blockIndex > 0 ? blockIndex - 1 : index - 1;
+      if (previousIndex < 0 || previousIndex >= prev.length) return prev;
+      const nextBlocks = [...prev];
+      nextBlocks[previousIndex] = {
+        ...nextBlocks[previousIndex],
+        content: mergedContent,
+        meta: nextPreviousMeta,
+      };
+      if (blockIndex >= 0) {
+        nextBlocks.splice(blockIndex, 1);
+      } else if (index >= 0 && index < nextBlocks.length) {
+        nextBlocks.splice(index, 1);
+      }
+      return nextBlocks;
+    });
+    setSelectedBlockId(previousBlock.id);
+    clearAreaBlockSelection();
+    setOpenBlockMenuId(null);
+    focusBlock(previousBlock.id, previousPlainLength);
+    return true;
+  };
+
   const handleBlockKeyDown = (event, block, index) => {
     const composing = Boolean(
       event.nativeEvent?.isComposing
@@ -3359,6 +3428,10 @@ export default function Documents() {
     if (event.key === 'Backspace' && !block.content && isHierarchicalListBlock(block) && getListIndent(block) > 0) {
       event.preventDefault();
       updateListIndent(block, index, -1);
+      return;
+    }
+    if ((event.key === 'Backspace' || event.key === 'Delete') && mergeBlockWithPreviousAtStart(event, block, index)) {
+      event.preventDefault();
       return;
     }
     if (event.key === 'Backspace' && !block.content && editorBlocks.length > 1) {
