@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Avatar,
@@ -1114,6 +1114,8 @@ function InlineRichTextEditor({
   onChange,
   onFocus,
   onBlur,
+  onCompositionStart,
+  onCompositionEnd,
   onMouseUp,
   onKeyUp,
   onKeyDown,
@@ -1122,23 +1124,32 @@ function InlineRichTextEditor({
 }) {
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
+  const composingRef = useRef(false);
+  const [draftHtml, setDraftHtml] = useState(() => sanitizeInlineHtml(value || ''));
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const editor = editorRef.current;
-    if (!editor || focusedRef.current) return;
+    if (!editor || focusedRef.current || composingRef.current) return;
     const html = sanitizeInlineHtml(value || '');
     if (editor.innerHTML !== html) editor.innerHTML = html;
+    setDraftHtml(prev => (prev === html ? prev : html));
   }, [value]);
 
-  const emitChange = () => {
+  const getEditorHtml = () => {
     const editor = editorRef.current;
-    if (!editor) return;
-    onChange?.(sanitizeInlineHtml(editor.innerHTML));
+    if (!editor) return draftHtml;
+    const html = sanitizeInlineHtml(editor.innerHTML);
+    setDraftHtml(prev => (prev === html ? prev : html));
+    return html;
+  };
+
+  const emitChange = () => {
+    onChange?.(getEditorHtml());
   };
 
   return (
     <div style={{ position: 'relative', width: '100%' }}>
-      {!inlineHtmlToPlain(value).trim() && placeholder && (
+      {!inlineHtmlToPlain(draftHtml).trim() && placeholder && (
         <span
           aria-hidden="true"
           style={{
@@ -1167,15 +1178,30 @@ function InlineRichTextEditor({
         }}
         onBlur={(event) => {
           focusedRef.current = false;
+          composingRef.current = false;
           emitChange();
           onBlur?.(event);
         }}
-        onInput={emitChange}
+        onCompositionStart={(event) => {
+          composingRef.current = true;
+          onCompositionStart?.(event);
+        }}
+        onCompositionEnd={(event) => {
+          composingRef.current = false;
+          emitChange();
+          onCompositionEnd?.(event);
+        }}
+        onInput={() => {
+          if (composingRef.current) {
+            getEditorHtml();
+            return;
+          }
+          emitChange();
+        }}
         onMouseUp={onMouseUp}
         onKeyUp={onKeyUp}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
-        dangerouslySetInnerHTML={{ __html: sanitizeInlineHtml(value || '') }}
         style={{
           minHeight: 24,
           outline: 'none',
