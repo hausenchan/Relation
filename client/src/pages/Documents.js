@@ -1154,13 +1154,16 @@ function InlineRichTextEditor({
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const composingRef = useRef(false);
+  const localHtmlRef = useRef(sanitizeInlineHtml(value || ''));
   const [draftHtml, setDraftHtml] = useState(() => sanitizeInlineHtml(value || ''));
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
-    if (!editor || focusedRef.current || composingRef.current) return;
+    if (!editor || composingRef.current) return;
     const html = sanitizeInlineHtml(value || '');
+    if (focusedRef.current && html === localHtmlRef.current) return;
     if (editor.innerHTML !== html) editor.innerHTML = html;
+    localHtmlRef.current = html;
     setDraftHtml(prev => (prev === html ? prev : html));
   }, [value]);
 
@@ -1168,6 +1171,7 @@ function InlineRichTextEditor({
     const editor = editorRef.current;
     if (!editor) return draftHtml;
     const html = sanitizeInlineHtml(editor.innerHTML);
+    localHtmlRef.current = html;
     setDraftHtml(prev => (prev === html ? prev : html));
     return html;
   };
