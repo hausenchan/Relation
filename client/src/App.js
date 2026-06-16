@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { BrowserRouter, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message, Watermark, Drawer, Grid } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
@@ -9,10 +9,11 @@ import {
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined,
-  AppstoreOutlined, HistoryOutlined, GlobalOutlined
+  AppstoreOutlined, HistoryOutlined, GlobalOutlined, CloseOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
+import './App.css';
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (user) => ADMIN_ROLES.has(user?.role || user) || ADMIN_ROLES.has(user?.executive_role);
@@ -23,6 +24,209 @@ const DS = {
   header: { height: 56, bg: '#ffffff', border: '#e8e8ed' },
   content: { bg: '#f0f2f5', padding: 24 },
 };
+
+const WORKSPACE_TABS_STORAGE_PREFIX = 'relation.workspaceTabs.v1';
+
+const PAGE_TITLE_MAP = {
+  '/': '工作台',
+  '/goals': '目标管理',
+  '/weekly-reports': '周报管理',
+  '/leads': '商机',
+  '/strategies': '策略',
+  '/dev-tasks': '需求',
+  '/company-subjects': '主体管理',
+  '/product-assets': '产品资产',
+  '/documents': '文档中心',
+  '/network-capture': '网络抓包',
+  '/persons': '人脉管理',
+  '/interactions': '互动记录',
+  '/reminders': '提醒事项',
+  '/companies': '公司研究',
+  '/follow-up-tasks': '待跟进任务',
+  '/my-tasks': '我的任务',
+  '/task-board': '任务看板',
+  '/gift-plans': '客户答谢',
+  '/gift-review': '审核与记录',
+  '/gifts': '礼品库',
+  '/trips': '出差申请',
+  '/trip-stats': '费用统计',
+  '/budgets': '预算管理',
+  '/executive': '经营概览',
+  '/executive/talents': '高级人才',
+  '/executive/dynamics': '竞品动态',
+  '/executive/recruit-radar': '招聘雷达',
+  '/executive/recruit-radar/config': '雷达配置',
+  '/executive/customers': '重点客户',
+  '/executive/strategic': '战略月会',
+  '/executive/operational': '经营周会',
+  '/users': '用户管理',
+  '/teams': '小组管理',
+  '/project-groups': '项目组管理',
+  '/menu-perms': '菜单权限管理',
+  '/cross-team-access': '跨团队权限',
+  '/operation-logs': '操作日志',
+  '/mobile-task-center': '手机采集',
+};
+
+const HOME_TAB = { key: '/', title: PAGE_TITLE_MAP['/'], path: '/' };
+
+const getSafeWorkspacePath = (path, fallback = '/') => {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) return fallback;
+  return path || fallback;
+};
+
+const getPathnameFromFullPath = (path) => getSafeWorkspacePath(path).split(/[?#]/)[0] || '/';
+
+const getRouteTabKey = (pathname) => {
+  const safePathname = getPathnameFromFullPath(pathname);
+  if (PAGE_TITLE_MAP[safePathname]) return safePathname;
+  if (safePathname === '/') return '/';
+
+  const firstSegment = `/${safePathname.split('/').filter(Boolean)[0] || ''}`;
+  return PAGE_TITLE_MAP[firstSegment] ? firstSegment : null;
+};
+
+const sanitizeTabPath = (path, key) => {
+  const safePath = getSafeWorkspacePath(path, key);
+  return getRouteTabKey(safePath) === key ? safePath : key;
+};
+
+const createWorkspaceTab = (key, path = key) => ({
+  key,
+  title: PAGE_TITLE_MAP[key],
+  path: sanitizeTabPath(path, key),
+});
+
+const normalizeWorkspaceTabs = (tabs = []) => {
+  const normalized = [];
+  const seen = new Set();
+  const source = Array.isArray(tabs) ? tabs : [];
+
+  source.forEach(item => {
+    const rawPath = item?.path || item?.key;
+    const key = getRouteTabKey(item?.key || rawPath);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    normalized.push(createWorkspaceTab(key, rawPath));
+  });
+
+  if (!seen.has('/')) {
+    normalized.unshift(HOME_TAB);
+  }
+
+  return normalized;
+};
+
+const areWorkspaceTabsEqual = (a, b) => (
+  a.length === b.length && a.every((tab, index) => (
+    tab.key === b[index].key && tab.title === b[index].title && tab.path === b[index].path
+  ))
+);
+
+const getStoredWorkspaceTabs = (storageKey) => {
+  try {
+    return normalizeWorkspaceTabs(JSON.parse(localStorage.getItem(storageKey)));
+  } catch {
+    return normalizeWorkspaceTabs();
+  }
+};
+
+function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onReorder }) {
+  const trackRef = React.useRef(null);
+  const [draggingKey, setDraggingKey] = useState(null);
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track || !activeKey) return;
+    const activeTab = Array.from(track.children).find(child => child.dataset.tabKey === activeKey);
+    activeTab?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+  }, [activeKey, tabs]);
+
+  const handleWheel = (event) => {
+    const track = event.currentTarget;
+    if (track.scrollWidth <= track.clientWidth || Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+    event.preventDefault();
+    track.scrollLeft += event.deltaY;
+  };
+
+  const handleDragStart = (event, key) => {
+    setDraggingKey(key);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', key);
+  };
+
+  const handleDrop = (event, targetKey) => {
+    event.preventDefault();
+    const sourceKey = event.dataTransfer.getData('text/plain') || draggingKey;
+    setDraggingKey(null);
+    if (!sourceKey || sourceKey === targetKey) return;
+    onReorder(sourceKey, targetKey);
+  };
+
+  const activateWithKeyboard = (event, tab) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect(tab);
+    }
+    if ((event.key === 'Backspace' || event.key === 'Delete') && tab.key !== '/') {
+      event.preventDefault();
+      onClose(tab.key);
+    }
+  };
+
+  return (
+    <div className="app-workspace-tabs" aria-label="已打开菜单标签">
+      <div
+        ref={trackRef}
+        className="workspace-tabs-track"
+        role="tablist"
+        aria-orientation="horizontal"
+        onWheel={handleWheel}
+      >
+        {tabs.map(tab => {
+          const active = tab.key === activeKey;
+          const closable = tab.key !== '/';
+          return (
+            <div
+              key={tab.key}
+              data-tab-key={tab.key}
+              role="tab"
+              aria-selected={active}
+              tabIndex={active ? 0 : -1}
+              title={tab.title}
+              draggable={tabs.length > 1}
+              className={`workspace-tab${active ? ' is-active' : ''}${draggingKey === tab.key ? ' is-dragging' : ''}`}
+              onClick={() => onSelect(tab)}
+              onKeyDown={(event) => activateWithKeyboard(event, tab)}
+              onDragStart={(event) => handleDragStart(event, tab.key)}
+              onDragEnd={() => setDraggingKey(null)}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => handleDrop(event, tab.key)}
+            >
+              <span className="workspace-tab-title">{tab.title}</span>
+              {closable && (
+                <button
+                  type="button"
+                  className="workspace-tab-close"
+                  aria-label={`关闭${tab.title}`}
+                  title={`关闭${tab.title}`}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onClose(tab.key);
+                  }}
+                >
+                  <CloseOutlined />
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {isMobile && <span className="workspace-tabs-mobile-spacer" aria-hidden="true" />}
+      </div>
+    </div>
+  );
+}
 
 const appTheme = {
   algorithm: theme.defaultAlgorithm,
@@ -236,7 +440,9 @@ function AppLayout() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const location = useLocation();
+  const navigate = useNavigate();
   const { user, logout, canAccessModule, canAccessMenu } = useAuth();
+  const tabStorageKey = `${WORKSPACE_TABS_STORAGE_PREFIX}.${user?.id || user?.username || 'guest'}`;
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingGiftCount, setPendingGiftCount] = useState(0);
   const [pendingTripCount, setPendingTripCount] = useState(0);
@@ -250,6 +456,48 @@ function AppLayout() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'common-tools', 'system']);
+  const [workspaceTabs, setWorkspaceTabs] = useState(() => getStoredWorkspaceTabs(tabStorageKey));
+  const [workspaceTabsStorageKey, setWorkspaceTabsStorageKey] = useState(tabStorageKey);
+  const currentFullPath = useMemo(
+    () => `${location.pathname}${location.search}${location.hash}`,
+    [location.pathname, location.search, location.hash]
+  );
+  const activeTabKey = getRouteTabKey(location.pathname) || '/';
+
+  useEffect(() => {
+    if (workspaceTabsStorageKey === tabStorageKey) return;
+    setWorkspaceTabs(getStoredWorkspaceTabs(tabStorageKey));
+    setWorkspaceTabsStorageKey(tabStorageKey);
+  }, [tabStorageKey, workspaceTabsStorageKey]);
+
+  useEffect(() => {
+    if (!user || workspaceTabsStorageKey !== tabStorageKey) return;
+    try {
+      localStorage.setItem(tabStorageKey, JSON.stringify(normalizeWorkspaceTabs(workspaceTabs)));
+    } catch {
+      // localStorage can be unavailable in private browsing; tabs still work in memory.
+    }
+  }, [workspaceTabs, workspaceTabsStorageKey, tabStorageKey, user]);
+
+  useEffect(() => {
+    if (!user || workspaceTabsStorageKey !== tabStorageKey) return;
+    const nextKey = getRouteTabKey(location.pathname);
+    if (!nextKey) return;
+
+    setWorkspaceTabs(prevTabs => {
+      const normalizedTabs = normalizeWorkspaceTabs(prevTabs);
+      const nextTab = createWorkspaceTab(nextKey, currentFullPath);
+      const existingIndex = normalizedTabs.findIndex(tab => tab.key === nextKey);
+
+      if (existingIndex === -1) {
+        return [...normalizedTabs, nextTab];
+      }
+
+      const nextTabs = [...normalizedTabs];
+      nextTabs[existingIndex] = nextTab;
+      return areWorkspaceTabsEqual(prevTabs, nextTabs) ? prevTabs : nextTabs;
+    });
+  }, [location.pathname, currentFullPath, user, workspaceTabsStorageKey, tabStorageKey]);
 
   useEffect(() => {
     if (!user) return;
@@ -316,51 +564,37 @@ function AppLayout() {
     }
   };
 
-  const selectedKey = '/' + location.pathname.split('/')[1];
+  const selectedKey = activeTabKey;
   const desktopSiderWidth = isMobile ? 0 : (collapsed ? DS.sidebar.collapsedWidth : DS.sidebar.width);
 
-  // 路由 → 页面标题映射
-  const pageTitleMap = {
-    '/': '工作台',
-    '/goals': '目标管理',
-    '/weekly-reports': '周报管理',
-    '/leads': '商机',
-    '/strategies': '策略',
-    '/dev-tasks': '需求',
-    '/company-subjects': '主体管理',
-    '/product-assets': '产品资产',
-    '/documents': '文档中心',
-    '/network-capture': '网络抓包',
-    '/persons': '人脉管理',
-    '/interactions': '互动记录',
-    '/reminders': '提醒事项',
-    '/companies': '公司研究',
-    '/follow-up-tasks': '待跟进任务',
-    '/my-tasks': '我的任务',
-    '/task-board': '任务看板',
-    '/gift-plans': '客户答谢',
-    '/gift-review': '审核与记录',
-    '/gifts': '礼品库',
-    '/trips': '出差申请',
-    '/trip-stats': '费用统计',
-    '/budgets': '预算管理',
-    '/executive': '经营概览',
-    '/executive/talents': '高级人才',
-    '/executive/dynamics': '竞品动态',
-    '/executive/recruit-radar': '招聘雷达',
-    '/executive/recruit-radar/config': '雷达配置',
-    '/executive/customers': '重点客户',
-    '/executive/strategic': '战略月会',
-    '/executive/operational': '经营周会',
-    '/users': '用户管理',
-    '/teams': '小组管理',
-    '/project-groups': '项目组管理',
-    '/menu-perms': '菜单权限管理',
-    '/cross-team-access': '跨团队权限',
-    '/operation-logs': '操作日志',
-    '/mobile-task-center': '手机采集',
+  const handleTabSelect = (tab) => {
+    navigate(tab.path || tab.key);
   };
-  const currentPageTitle = pageTitleMap[location.pathname] || '';
+
+  const handleTabClose = (key) => {
+    if (key === '/') return;
+
+    setWorkspaceTabs(prevTabs => {
+      const nextTabs = normalizeWorkspaceTabs(prevTabs).filter(tab => tab.key !== key);
+      return nextTabs.length > 0 ? nextTabs : [HOME_TAB];
+    });
+
+    if (key === activeTabKey) {
+      navigate('/');
+    }
+  };
+
+  const handleTabReorder = (sourceKey, targetKey) => {
+    setWorkspaceTabs(prevTabs => {
+      const nextTabs = normalizeWorkspaceTabs(prevTabs);
+      const sourceIndex = nextTabs.findIndex(tab => tab.key === sourceKey);
+      const targetIndex = nextTabs.findIndex(tab => tab.key === targetKey);
+      if (sourceIndex === -1 || targetIndex === -1 || sourceIndex === targetIndex) return prevTabs;
+      const [moved] = nextTabs.splice(sourceIndex, 1);
+      nextTabs.splice(targetIndex, 0, moved);
+      return nextTabs;
+    });
+  };
 
   // ── 目标与计划 ──────────────────────────────────────────────
   const goalChildren = [
@@ -757,23 +991,15 @@ function AppLayout() {
           >
             {isMobile ? <MenuOutlined /> : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
           </span>
-          {currentPageTitle && (
-            <span
-              style={{
-                fontSize: isMobile ? 14 : 15,
-                fontWeight: 600,
-                color: '#1f2937',
-                marginRight: 'auto',
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {currentPageTitle}
-            </span>
-          )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16 }}>
+          <WorkspaceTabs
+            tabs={workspaceTabs}
+            activeKey={activeTabKey}
+            isMobile={isMobile}
+            onSelect={handleTabSelect}
+            onClose={handleTabClose}
+            onReorder={handleTabReorder}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16, flexShrink: 0 }}>
             <NotificationBell />
             {!isMobile && <div style={{ width: 1, height: 20, background: '#e8e8ed' }} />}
             <Dropdown menu={{ items: userMenuItems, onClick: handleUserMenu }} placement="bottomRight" trigger={['click']}>
