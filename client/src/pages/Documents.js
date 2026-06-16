@@ -1497,9 +1497,6 @@ export default function Documents() {
   const deepLinkedDocId = useMemo(() => {
     return getDocumentIdFromSearch(searchParams);
   }, [searchParams]);
-  const canManageSelectedDoc = Boolean(
-    currentUser && selectedDoc && (isDocumentAdminUser(currentUser) || Number(selectedDoc.created_by) === Number(currentUser.id))
-  );
   const mobileHasEditorTarget = Boolean(selectedDocId || selectedDoc || shareLinkError);
   const showMobileEditor = isMobile && mobileHasEditorTarget && !mobileLibraryVisible;
   const showDocumentLibrary = !isMobile || !showMobileEditor;
@@ -1522,9 +1519,31 @@ export default function Documents() {
     setSearchParams(nextParams, { replace: true });
   };
 
+  const canUseDocumentWriteActions = Boolean(currentUser && !['readonly', 'guest'].includes(currentUser.role));
+
   const canManageDoc = (doc) => Boolean(
-    currentUser && doc && (isDocumentAdminUser(currentUser) || Number(doc.created_by) === Number(currentUser.id))
+    canUseDocumentWriteActions && doc && (
+      Number(doc.can_manage) === 1
+      || isDocumentAdminUser(currentUser)
+      || Number(doc.created_by) === Number(currentUser.id)
+    )
   );
+
+  const isDocumentSharedWithCurrentUser = (doc) => {
+    if (!currentUser || !doc) return false;
+    const accessUser = (doc.access_summary?.users || []).find(user => Number(user.id) === Number(currentUser.id));
+    return Boolean(accessUser?.is_shared);
+  };
+
+  const canEditDoc = (doc) => Boolean(
+    canUseDocumentWriteActions && doc && (
+      Number(doc.can_edit) === 1
+      || canManageDoc(doc)
+      || isDocumentSharedWithCurrentUser(doc)
+    )
+  );
+
+  const canManageSelectedDoc = canManageDoc(selectedDoc);
 
   const resetEditorUndoStack = () => {
     editorUndoStackRef.current = [];
@@ -1740,7 +1759,8 @@ export default function Documents() {
     if (!id) return;
     const docId = getDocTabId(id);
     const cachedTabState = docTabStates[docId];
-    if (!options.force && cachedTabState?.doc && Array.isArray(cachedTabState.editorBlocks)) {
+    const hasCachedPermissions = Object.prototype.hasOwnProperty.call(cachedTabState?.doc || {}, 'can_edit');
+    if (!options.force && hasCachedPermissions && cachedTabState?.doc && Array.isArray(cachedTabState.editorBlocks)) {
       applyDocTabState(cachedTabState);
       return;
     }
@@ -1939,7 +1959,7 @@ export default function Documents() {
       doc: docSnapshot,
       editorTitle,
       editorBlocks,
-      canManage: canManageDoc(docSnapshot),
+      canEdit: canEditDoc(docSnapshot),
     };
     setDocTabStates(prev => ({
       ...prev,
@@ -2052,7 +2072,7 @@ export default function Documents() {
   useEffect(() => {
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     const docId = getDocTabId(selectedDoc?.id);
-    if (!docId || !dirtyDocumentIdsRef.current.has(docId) || !canManageDoc(selectedDoc)) return undefined;
+    if (!docId || !dirtyDocumentIdsRef.current.has(docId) || !canEditDoc(selectedDoc)) return undefined;
     autoSaveTimerRef.current = window.setTimeout(() => {
       setAutoSaving(true);
       saveDirtyDocumentTabsRef.current?.()
@@ -2080,7 +2100,7 @@ export default function Documents() {
   useEffect(() => {
     const saveSnapshotImmediately = (snapshot) => {
       const doc = snapshot?.doc;
-      if (!doc?.id || !canManageDoc(doc)) return;
+      if (!doc?.id || !canEditDoc(doc)) return;
       const blocks = Array.isArray(snapshot.editorBlocks) ? snapshot.editorBlocks : contentToBlocks(doc.content);
       const title = snapshot.editorTitle ?? doc.title ?? '';
       const payload = buildDocumentSavePayload(title, blocks);
@@ -2267,7 +2287,7 @@ export default function Documents() {
   const saveCurrentDocument = async ({ silent = false, force = false } = {}) => {
     const snapshot = activeEditorSnapshotRef.current;
     const doc = snapshot?.doc || selectedDoc;
-    if (!doc?.id || !canManageDoc(doc)) return null;
+    if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot?.editorBlocks) ? snapshot.editorBlocks : editorBlocks;
     const title = snapshot?.editorTitle ?? editorTitle;
     const payload = buildDocumentSavePayload(title, blocks);
@@ -2317,7 +2337,7 @@ export default function Documents() {
 
   const saveDocumentSnapshot = async (snapshot, { force = false } = {}) => {
     const doc = snapshot?.doc;
-    if (!doc?.id || !canManageDoc(doc)) return null;
+    if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot.editorBlocks) ? snapshot.editorBlocks : contentToBlocks(doc.content);
     const title = snapshot.editorTitle ?? doc.title ?? '';
     const payload = buildDocumentSavePayload(title, blocks);
@@ -2398,15 +2418,11 @@ export default function Documents() {
   const saveDocTabSnapshot = async (docId) => {
     const snapshot = await getDocTabSnapshot(docId);
     const doc = snapshot?.doc;
-    if (!doc?.id || !canManageDoc(doc)) return null;
+    if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot.editorBlocks) && snapshot.editorBlocks.length
       ? snapshot.editorBlocks
       : contentToBlocks(doc.content);
-    const payload = {
-      title: snapshot.editorTitle || doc.title || '未命名文档',
-      content: blocksToContent(blocks),
-      content_text: blocksToText(blocks),
-    };
+    const payload = buildDocumentSavePayload(snapshot.editorTitle || doc.title || '未命名文档', blocks);
     return documentsApi.update(doc.id, payload);
   };
 
@@ -3013,7 +3029,7 @@ export default function Documents() {
       message.warning('请先保存文档，再粘贴截图');
       return;
     }
-    if (!canManageDoc(selectedDoc)) {
+    if (!canEditDoc(selectedDoc)) {
       message.warning('你没有编辑该文档的权限');
       return;
     }
