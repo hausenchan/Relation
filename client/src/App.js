@@ -9,7 +9,7 @@ import {
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined,
-  AppstoreOutlined, HistoryOutlined
+  AppstoreOutlined, HistoryOutlined, GlobalOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -100,6 +100,7 @@ import DevTasks from './pages/DevTasks';
 import ProductAssets from './pages/ProductAssets';
 import CompanySubjects from './pages/CompanySubjects';
 import Documents from './pages/Documents';
+import NetworkCapture from './pages/NetworkCapture';
 import ExecutiveDashboard from './pages/ExecutiveDashboard';
 import ExecutiveTalents from './pages/ExecutiveTalents';
 import ExecutiveDynamics from './pages/ExecutiveDynamics';
@@ -235,7 +236,7 @@ function AppLayout() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const location = useLocation();
-  const { user, logout, canAccessModule, canAccessMenu, isExecutive } = useAuth();
+  const { user, logout, canAccessModule, canAccessMenu } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingGiftCount, setPendingGiftCount] = useState(0);
   const [pendingTripCount, setPendingTripCount] = useState(0);
@@ -248,7 +249,7 @@ function AppLayout() {
   const [collapsed, setCollapsed] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'system']);
+  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'common-tools', 'system']);
 
   useEffect(() => {
     if (!user) return;
@@ -329,6 +330,7 @@ function AppLayout() {
     '/company-subjects': '主体管理',
     '/product-assets': '产品资产',
     '/documents': '文档中心',
+    '/network-capture': '网络抓包',
     '/persons': '人脉管理',
     '/interactions': '互动记录',
     '/reminders': '提醒事项',
@@ -458,6 +460,13 @@ function AppLayout() {
     },
   ].filter(Boolean);
 
+  // ── 常用工具 ────────────────────────────────────────────────
+  const commonToolChildren = [
+    canAccessMenu('/network-capture') && {
+      key: '/network-capture', icon: <GlobalOutlined />, label: <Link to="/network-capture">网络抓包</Link>,
+    },
+  ].filter(Boolean);
+
   const menuItems = [
     // 工作台
     canAccessMenu('/') && { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
@@ -485,6 +494,11 @@ function AppLayout() {
     teamChildren.length > 0 && {
       key: 'team-mgmt', icon: <TeamOutlined />, label: '团队管理',
       children: teamChildren,
+    },
+    // 常用工具
+    commonToolChildren.length > 0 && {
+      key: 'common-tools', icon: <ToolOutlined />, label: '常用工具',
+      children: commonToolChildren,
     },
     // 系统管理（仅 admin）
     isAdmin(user) && {
@@ -818,6 +832,7 @@ function AppLayout() {
             <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />
             <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
             <Route path="/documents" element={<PrivateRoute><Documents /></PrivateRoute>} />
+            <Route path="/network-capture" element={<PrivateRoute><NetworkCapture /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
             <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />

@@ -8,6 +8,7 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const { encryptRow, decryptRow, decryptRows } = require('./lib/cryptoDao');
 const { decrypt } = require('./lib/crypto');
+const NetworkCaptureManager = require('./lib/networkCapture');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -182,6 +183,7 @@ function uploadAttachments(req, res, next) {
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
+const networkCapture = new NetworkCaptureManager();
 
 const EXECUTIVE_ROLES = new Set(['ceo', 'coo', 'cto', 'cmo']);
 const ADMIN_ROLES = new Set(['admin', ...EXECUTIVE_ROLES]);
@@ -1758,6 +1760,7 @@ const OPERATION_LOG_BUSINESS_MAP = {
   'cross-team-access': '跨团队权限',
   'boss-watcher': '招聘雷达',
   'mobile-task-center': '手机任务中心采集',
+  'network-capture': '网络抓包',
 };
 
 const OPERATION_LOG_TABLE_MAP = {
@@ -1844,6 +1847,9 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/mobile-task-center\/records\/(\d+)\/review$/, businessType: '手机任务中心采集', table: 'mobile_task_records', idGroup: 1, action: '复核采集记录' },
   { pattern: /^\/mobile-task-center\/apps$/, businessType: '手机任务中心采集', table: 'mobile_task_apps', responseId: true, action: '保存采集 App' },
   { pattern: /^\/mobile-task-center\/apps\/(\d+)$/, businessType: '手机任务中心采集', table: 'mobile_task_apps', idGroup: 1 },
+  { pattern: /^\/network-capture\/start$/, businessType: '网络抓包', action: '启动代理' },
+  { pattern: /^\/network-capture\/stop$/, businessType: '网络抓包', action: '停止代理' },
+  { pattern: /^\/network-capture\/clear$/, businessType: '网络抓包', action: '清空记录' },
   { pattern: /^\/strategies\/(\d+)\/execution-logs$/, businessType: '策略执行', table: 'strategy_execution_logs', responseId: true },
   { pattern: /^\/strategies\/(\d+)\/review$/, businessType: '策略复盘', table: 'strategy_reviews', idGroup: 1, action: '保存复盘' },
   { pattern: /^\/company-subjects\/(\d+)\/attachments$/, businessType: '主体附件', table: 'company_subject_attachments', responseId: true, action: '上传附件' },
@@ -7804,6 +7810,52 @@ app.post('/api/mobile-task-center/records', canWrite, (req, res) => {
     console.error('手机任务中心采集入库失败:', err);
     res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : '手机任务中心采集入库失败' });
   }
+});
+
+// 网络抓包
+app.get('/api/network-capture/status', (req, res) => {
+  res.json(networkCapture.getStatus());
+});
+
+app.post('/api/network-capture/start', canWrite, async (req, res) => {
+  try {
+    const status = await networkCapture.start(req.body || {});
+    res.json(status);
+  } catch (err) {
+    console.error('启动网络抓包代理失败:', err);
+    res.status(500).json({ error: `启动网络抓包代理失败：${err.message}` });
+  }
+});
+
+app.post('/api/network-capture/stop', canWrite, async (req, res) => {
+  try {
+    const status = await networkCapture.stop();
+    res.json(status);
+  } catch (err) {
+    console.error('停止网络抓包代理失败:', err);
+    res.status(500).json({ error: `停止网络抓包代理失败：${err.message}` });
+  }
+});
+
+app.post('/api/network-capture/clear', canWrite, (req, res) => {
+  res.json(networkCapture.clear());
+});
+
+app.get('/api/network-capture/records', (req, res) => {
+  res.json(networkCapture.listRecords(req.query.limit));
+});
+
+app.get('/api/network-capture/records/:id', (req, res) => {
+  const record = networkCapture.getRecord(req.params.id);
+  if (!record) return res.status(404).json({ error: '抓包记录不存在' });
+  res.json(record);
+});
+
+app.get('/api/network-capture/export.har', (req, res) => {
+  const filename = `network-capture-${new Date().toISOString().replace(/[:.]/g, '-')}.har`;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.json(networkCapture.toHar());
 });
 
 // 动向

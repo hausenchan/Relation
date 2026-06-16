@@ -62,6 +62,13 @@ const MENU_TREE = [
       { title: '费用统计', key: '/trip-stats' },
     ],
   },
+  {
+    title: '常用工具',
+    key: 'common-tools',
+    children: [
+      { title: '网络抓包', key: '/network-capture' },
+    ],
+  },
 ];
 
 // 收集所有叶子节点的 key（以 / 开头的路由 key）

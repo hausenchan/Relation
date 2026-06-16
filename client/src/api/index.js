@@ -145,6 +145,16 @@ export const mobileTaskCenterApi = {
   downloadAttachment: (id, filename) => attachmentsApi.download(id, filename),
 };
 
+export const networkCaptureApi = {
+  status: () => api.get('/network-capture/status').then(r => r.data),
+  start: (data) => api.post('/network-capture/start', data).then(r => r.data),
+  stop: () => api.post('/network-capture/stop').then(r => r.data),
+  clear: () => api.post('/network-capture/clear').then(r => r.data),
+  records: (params) => api.get('/network-capture/records', { params }).then(r => r.data),
+  getRecord: (id) => api.get(`/network-capture/records/${id}`).then(r => r.data),
+  exportHar: () => api.get('/network-capture/export.har', { responseType: 'blob' }),
+};
+
 export const giftsApi = {
   list: () => api.get('/gifts').then(r => r.data),
   create: (data) => api.post('/gifts', data).then(r => r.data),
