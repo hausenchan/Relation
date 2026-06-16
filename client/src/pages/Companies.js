@@ -762,6 +762,11 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
 
   // entity_id -> 主体名称 map
   const entityNameMap = Object.fromEntries(entities.map(e => [e.id, e.name]));
+  const getProductEntityName = (product) => (
+    product.entity_name
+    || product.entity_reg_name
+    || (product.entity_id ? entityNameMap[product.entity_id] : null)
+  );
 
   return (
     <div>
@@ -772,7 +777,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
       {data.length === 0 ? <Empty description="暂无产品信息" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
         <Row gutter={[12, 12]}>
           {data.map(p => {
-            const entityName = p.entity_id ? entityNameMap[p.entity_id] : null;
+            const entityName = getProductEntityName(p);
             return (
               <Col xs={24} md={12} key={p.id}>
                 <Card
@@ -2100,6 +2105,10 @@ function AllProductsView() {
   };
 
   const renderSubject = (record) => record.entity_reg_name || record.entity_name || '-';
+  const renderSubjectTag = (record) => {
+    const subject = renderSubject(record);
+    return subject && subject !== '-' ? <Tag color="geekblue">{subject}</Tag> : null;
+  };
 
   const columns = [
     {
@@ -2109,7 +2118,10 @@ function AllProductsView() {
       sorter: (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN'),
       render: (v, r) => (
         <Button type="link" onClick={() => openProductDetail(r)} style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left' }}>
-          <Text strong style={{ color: '#1677ff' }}>{v}</Text>
+          <Space size={4} wrap>
+            <Text strong style={{ color: '#1677ff' }}>{v}</Text>
+            {renderSubjectTag(r)}
+          </Space>
         </Button>
       ),
     },
@@ -2201,6 +2213,7 @@ function AllProductsView() {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <Text strong style={{ color: '#1677ff', fontSize: 15, wordBreak: 'break-word' }}>{record.name}</Text>
+              {renderSubjectTag(record)}
               <div style={{ marginTop: 6 }}>
                 <Text type="secondary">集团：{record.company_name || '-'}</Text>
               </div>
