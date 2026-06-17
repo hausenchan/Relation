@@ -699,6 +699,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [fileList, setFileList] = useState([]);
+  const [productKeyword, setProductKeyword] = useState('');
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -772,16 +773,32 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
     if (entityName) return `主体：${entityName}`;
     return '未关联主体';
   };
+  const filteredProducts = data.filter(product => {
+    const keyword = productKeyword.trim().toLowerCase();
+    if (!keyword) return true;
+    return [
+      product.name,
+      getProductEntityName(product),
+      getProductEntityLabel(product),
+    ].some(value => String(value || '').toLowerCase().includes(keyword));
+  });
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        <Input.Search
+          placeholder="搜索产品或主体"
+          allowClear
+          value={productKeyword}
+          onChange={event => setProductKeyword(event.target.value)}
+          style={{ width: isMobile ? '100%' : 260 }}
+        />
         <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加产品</Button>
       </div>
 
-      {data.length === 0 ? <Empty description="暂无产品信息" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
+      {filteredProducts.length === 0 ? <Empty description={data.length ? '暂无匹配产品' : '暂无产品信息'} image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
         <Row gutter={[12, 12]}>
-          {data.map(p => {
+          {filteredProducts.map(p => {
             const entityLabel = getProductEntityLabel(p);
             const hasEntity = Boolean(getProductEntityName(p));
             return (
