@@ -770,7 +770,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
   );
   const getProductEntityLabel = (product) => {
     const entityName = getProductEntityName(product);
-    if (entityName) return `主体：${entityName}`;
+    if (entityName) return entityName;
     return '未关联主体';
   };
   const filteredProducts = data.filter(product => {
@@ -812,12 +812,12 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                       <Text strong style={{ wordBreak: 'break-word' }}>{p.name}</Text>
                       {p.category && <Tag>{p.category}</Tag>}
                       {p.product_category && <Tag color="cyan">{p.product_category}</Tag>}
-                      <Tag color={hasEntity ? 'geekblue' : 'default'} style={{ fontSize: 11 }}>{entityLabel}</Tag>
                     </Space>
                     <Space size={6} wrap style={{ justifyContent: 'flex-end', flex: '1 0 auto' }}>
                       {(p.attachment_count || 0) > 0 && (
                         <Tag icon={<PaperClipOutlined />} style={{ fontSize: 11 }}>附件 {p.attachment_count}</Tag>
                       )}
+                      <Tag color={hasEntity ? 'geekblue' : 'default'} style={{ fontSize: 11 }}>{entityLabel}</Tag>
                       <Tag color={productStatusMap[p.status]?.color}>{productStatusMap[p.status]?.label || p.status}</Tag>
                       <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(p)} />
                       <Popconfirm title="确认删除？" onConfirm={() => handleDelete(p.id)}>
