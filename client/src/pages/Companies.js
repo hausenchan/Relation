@@ -767,6 +767,11 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
     || product.entity_reg_name
     || (product.entity_id ? entityNameMap[product.entity_id] : null)
   );
+  const getProductEntityLabel = (product) => {
+    const entityName = getProductEntityName(product);
+    if (entityName) return `主体：${entityName}`;
+    return '未关联主体';
+  };
 
   return (
     <div>
@@ -777,7 +782,8 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
       {data.length === 0 ? <Empty description="暂无产品信息" image={Empty.PRESENTED_IMAGE_SIMPLE} /> : (
         <Row gutter={[12, 12]}>
           {data.map(p => {
-            const entityName = getProductEntityName(p);
+            const entityLabel = getProductEntityLabel(p);
+            const hasEntity = Boolean(getProductEntityName(p));
             return (
               <Col xs={24} md={12} key={p.id}>
                 <Card
@@ -789,9 +795,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                       <Text strong style={{ wordBreak: 'break-word' }}>{p.name}</Text>
                       {p.category && <Tag>{p.category}</Tag>}
                       {p.product_category && <Tag color="cyan">{p.product_category}</Tag>}
-                      {entityName && (
-                        <Tag color="geekblue" style={{ fontSize: 11 }}>{entityName}</Tag>
-                      )}
+                      <Tag color={hasEntity ? 'geekblue' : 'default'} style={{ fontSize: 11 }}>{entityLabel}</Tag>
                     </Space>
                     <Space size={6} wrap style={{ justifyContent: 'flex-end', flex: '1 0 auto' }}>
                       {(p.attachment_count || 0) > 0 && (
