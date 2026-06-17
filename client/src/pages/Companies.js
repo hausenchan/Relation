@@ -2139,10 +2139,7 @@ function AllProductsView() {
       sorter: (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN'),
       render: (v, r) => (
         <Button type="link" onClick={() => openProductDetail(r)} style={{ padding: 0, height: 'auto', whiteSpace: 'normal', textAlign: 'left' }}>
-          <Space size={4} wrap>
-            <Text strong style={{ color: '#1677ff' }}>{v}</Text>
-            {renderSubjectTag(r)}
-          </Space>
+          <Text strong style={{ color: '#1677ff' }}>{v}</Text>
         </Button>
       ),
     },
