@@ -558,6 +558,16 @@ export default function Dashboard() {
     return !value.isBefore(range[0], 'day') && !value.isAfter(range[1], 'day');
   };
 
+  const isTodayWithinTaskPlanRange = (task) => {
+    const startDate = task.plan_date || task.estimated_completion_date;
+    const endDate = task.estimated_completion_date || task.plan_date;
+    if (!startDate || !endDate) return false;
+    const start = dayjs(startDate).startOf('day');
+    const end = dayjs(endDate).endOf('day');
+    const today = dayjs();
+    return !today.isBefore(start) && !today.isAfter(end);
+  };
+
   const isTitleSearchHit = (task, keyword) => {
     const normalizedKeyword = String(keyword || '').trim().toLowerCase();
     if (!normalizedKeyword) return true;
@@ -941,7 +951,7 @@ export default function Dashboard() {
   const dashboardPersonalTasks = [...assignedTasks, ...executionTasks];
   const isCurrentMonthTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'month');
   const isCurrentWeekTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'week');
-  const isTodayTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'day');
+  const isTodayTask = (task) => isTodayWithinTaskPlanRange(task);
   const isCompletedTodayTask = (task) => (
     (task.display_status || task.status) === 'done'
     && (task.done_at || task.complete_date)
@@ -957,30 +967,37 @@ export default function Dashboard() {
 
   const isTaskStatFilterHit = (task, tabKey) => {
     const filterKey = taskStatFilterByTab[tabKey];
+    if (filterKey === TASK_STAT_FILTERS.today) {
+      return isTodayTask(task);
+    }
     if (filterKey === TASK_STAT_FILTERS.todayDone) {
       return isCompletedTodayTask(task);
     }
     return true;
   };
 
+  const shouldUseTaskStatDateFilter = (tabKey) => (
+    [TASK_STAT_FILTERS.today, TASK_STAT_FILTERS.todayDone].includes(taskStatFilterByTab[tabKey])
+  );
+
   const filteredAssignedTasks = assignedTasks.filter(t => {
     if (!isTitleSearchHit(t, assignedTaskTitleSearch)) return false;
     if (!assignedTaskStatusFilter.includes(t.display_status)) return false;
-    if (!isWithinRange(t.plan_date, assignedTaskDateRange)) return false;
+    if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.assigned) && !isWithinRange(t.plan_date, assignedTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.assigned);
   });
 
   const filteredExecutionTasks = executionTasks.filter(t => {
     if (!isTitleSearchHit(t, executionTaskTitleSearch)) return false;
     if (!executionTaskStatusFilter.includes(t.display_status)) return false;
-    if (!isWithinRange(t.plan_date, executionTaskDateRange)) return false;
+    if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.execution) && !isWithinRange(t.plan_date, executionTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.execution);
   });
 
   const filteredWatchedTasks = watchedTasks.filter(t => {
     if (!isTitleSearchHit(t, watchedTaskTitleSearch)) return false;
     if (!watchedTaskStatusFilter.includes(t.display_status)) return false;
-    if (!isWithinRange(t.plan_date, watchedTaskDateRange)) return false;
+    if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.watched) && !isWithinRange(t.plan_date, watchedTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.watched);
   });
 
@@ -989,7 +1006,7 @@ export default function Dashboard() {
     if (!teamTaskStatusFilter.includes(t.display_status)) return false;
     if (teamTaskAssignerFilter.length > 0 && !teamTaskAssignerFilter.includes(t.assigner_name)) return false;
     if (teamTaskFollowerFilter.length > 0 && !teamTaskFollowerFilter.includes(t.follower_name)) return false;
-    if (!isWithinRange(t.plan_date, teamTaskDateRange)) return false;
+    if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.team) && !isWithinRange(t.plan_date, teamTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.team);
   });
 
