@@ -367,6 +367,25 @@ function formatFileSize(bytes) {
   return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function clampUploadPercent(value, fallback = 0, max = 100) {
+  const percent = Number(value);
+  if (!Number.isFinite(percent)) return fallback;
+  return Math.max(0, Math.min(max, Math.round(percent)));
+}
+
+function normalizeUploadProgressPercent(progressEvent) {
+  const progress = Number(progressEvent?.progress);
+  if (Number.isFinite(progress)) return clampUploadPercent(progress * 100, 0, 99);
+
+  const loaded = Number(progressEvent?.loaded);
+  const total = Number(progressEvent?.total);
+  if (Number.isFinite(loaded) && Number.isFinite(total) && total > 0) {
+    return clampUploadPercent((loaded / total) * 100, 0, 99);
+  }
+
+  return null;
+}
+
 function attachmentToMediaMeta(attachment) {
   if (!attachment) return {};
   return {
@@ -3210,15 +3229,41 @@ export default function Documents() {
     });
   };
 
+  const setAttachmentUploadProgress = (blockId, percent) => {
+    const uploadPercent = clampUploadPercent(percent, 0, 99);
+    setEditorBlocks(prev => prev.map(block => {
+      if (block.id !== blockId) return block;
+      const currentMeta = { ...getDefaultBlockMeta('attachment'), ...cloneMeta(block.meta) };
+      return {
+        ...block,
+        meta: {
+          ...currentMeta,
+          upload_status: 'uploading',
+          upload_percent: uploadPercent,
+          upload_error: '',
+        },
+      };
+    }));
+  };
+
+  const getAttachmentUploadProgressConfig = (blockId) => ({
+    onUploadProgress: (progressEvent) => {
+      const percent = normalizeUploadProgressPercent(progressEvent);
+      if (percent !== null) setAttachmentUploadProgress(blockId, percent);
+    },
+  });
+
   const patchAttachmentBlockFromAttachment = (blockId, attachment, extraMeta = {}) => {
     const attachmentMeta = { ...attachmentToBlockMeta(attachment), ...extraMeta };
     setEditorBlocks(prev => prev.map(block => {
       if (block.id !== blockId) return block;
       const currentMeta = { ...getDefaultBlockMeta('attachment'), ...cloneMeta(block.meta) };
+      const nextUploadStatus = extraMeta.upload_status || 'done';
       const nextMeta = {
         ...currentMeta,
         ...attachmentMeta,
-        upload_status: extraMeta.upload_status || 'done',
+        upload_status: nextUploadStatus,
+        upload_percent: extraMeta.upload_percent ?? (nextUploadStatus === 'uploading' ? (currentMeta.upload_percent || 0) : 100),
         upload_error: extraMeta.upload_error || '',
       };
       const displayName = getAttachmentDisplayName(nextMeta);
@@ -3247,6 +3292,7 @@ export default function Documents() {
           file_ext: currentMeta.file_ext || getFileExt(file?.name || displayName),
           size: currentMeta.size || Number(file?.size || 0),
           upload_status: 'failed',
+          upload_percent: currentMeta.upload_percent || 0,
           upload_error: errorText || '上传失败',
         },
       };
@@ -3258,7 +3304,7 @@ export default function Documents() {
     formData.append('file', file);
     formData.append('block_id', blockId);
     if (displayName) formData.append('display_name', displayName);
-    return documentsApi.uploadAttachment(selectedDoc.id, formData);
+    return documentsApi.uploadAttachment(selectedDoc.id, formData, getAttachmentUploadProgressConfig(blockId));
   };
 
   const insertAttachmentBlocksFromFiles = async (files = [], targetBlockId = null) => {
@@ -3283,6 +3329,7 @@ export default function Documents() {
         size: Number(file.size || 0),
         mimetype: file.type || '',
         upload_status: 'uploading',
+        upload_percent: 0,
       },
     }));
     pushEditorUndoSnapshot();
@@ -3348,7 +3395,7 @@ export default function Documents() {
       file_ext: getFileExt(file.name),
       size: Number(file.size || 0),
       preview_status: 'unsupported',
-    }, { upload_status: 'uploading' });
+    }, { upload_status: 'uploading', upload_percent: 0 });
     try {
       const uploaded = await uploadDocumentAttachmentFile(file, block.id, file.name);
       patchAttachmentBlockFromAttachment(block.id, uploaded);
@@ -3570,15 +3617,17 @@ export default function Documents() {
     const attachment = blockMetaToAttachment(getBlockMeta(block));
     if (!attachment?.id) return;
     setAttachmentBlockUploading(block.id, true);
+    setAttachmentUploadProgress(block.id, 0);
     const hideLoading = message.loading('正在替换附件', 0);
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('display_name', getAttachmentDisplayName(attachment));
-      const replaced = await documentsApi.replaceAttachment(attachment.id, formData);
+      const replaced = await documentsApi.replaceAttachment(attachment.id, formData, getAttachmentUploadProgressConfig(block.id));
       patchAttachmentBlockFromAttachment(block.id, replaced);
       message.success('附件已替换');
     } catch (err) {
+      patchAttachmentBlockFromAttachment(block.id, attachment);
       message.error(err.response?.data?.error || err.message || '替换失败');
     } finally {
       setAttachmentBlockUploading(block.id, false);
@@ -6635,6 +6684,7 @@ export default function Documents() {
     const attachment = blockMetaToAttachment(meta);
     const displayName = getAttachmentDisplayName(attachment);
     const uploading = attachmentUploadingBlockIds.includes(block.id) || meta.upload_status === 'uploading';
+    const uploadPercent = clampUploadPercent(meta.upload_percent, 0, 100);
     const failed = meta.upload_status === 'failed';
     const hasAttachment = Boolean(attachment.id);
     const canEditAttachment = canEditDoc(selectedDoc);
@@ -6693,7 +6743,7 @@ export default function Documents() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <Text strong ellipsis style={{ maxWidth: '100%' }}>{displayName}</Text>
             {previewable && <Tag color="blue" style={{ marginInlineEnd: 0 }}>可预览</Tag>}
-            {uploading && <Tag color="processing" style={{ marginInlineEnd: 0 }}>上传中</Tag>}
+            {uploading && <Tag color="processing" style={{ marginInlineEnd: 0 }}>{`上传中 ${uploadPercent}%`}</Tag>}
             {failed && <Tag color="red" style={{ marginInlineEnd: 0 }}>失败</Tag>}
           </div>
           <Text type={failed ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
