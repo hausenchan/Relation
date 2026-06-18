@@ -312,6 +312,29 @@ export const documentsApi = {
   updateChangeLog: (logId, data) => api.put(`/document-change-logs/${logId}`, data).then(r => r.data),
   deleteChangeLog: (logId) => api.delete(`/document-change-logs/${logId}`).then(r => r.data),
   restoreEditRecord: (recordId) => api.post(`/document-edit-records/${recordId}/restore`).then(r => r.data),
+  uploadAttachment: (id, formData) => api.post(`/documents/${id}/attachments`, formData).then(r => r.data),
+  listAttachments: (id) => api.get(`/documents/${id}/attachments`).then(r => r.data),
+  previewAttachment: (id) => api.get(`/document-attachments/${id}/preview`).then(r => r.data),
+  renameAttachment: (id, data) => api.put(`/document-attachments/${id}/rename`, data).then(r => r.data),
+  replaceAttachment: (id, formData) => api.post(`/document-attachments/${id}/replace`, formData).then(r => r.data),
+  copyAttachmentLink: (id, data) => api.post(`/document-attachments/${id}/copy-link`, data).then(r => r.data),
+  deleteAttachment: (id) => api.delete(`/document-attachments/${id}`).then(r => r.data),
+  listBlockComments: (id, blockId) => api.get(`/documents/${id}/blocks/${blockId}/comments`).then(r => r.data),
+  createBlockComment: (id, blockId, data) => api.post(`/documents/${id}/blocks/${blockId}/comments`, data).then(r => r.data),
+  downloadAttachment: async (id, filename) => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(`/api/document-attachments/${id}/download`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error('下载失败');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };
 
 export const attachmentsApi = {

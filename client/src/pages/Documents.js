@@ -34,10 +34,13 @@ import {
   CheckOutlined,
   CloseOutlined,
   ClockCircleOutlined,
+  CommentOutlined,
   CopyOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   DownOutlined,
   EditOutlined,
+  EyeOutlined,
   FileTextOutlined,
   FolderOpenOutlined,
   FolderOutlined,
@@ -60,6 +63,7 @@ import {
   TeamOutlined,
   UndoOutlined,
   UpOutlined,
+  UploadOutlined,
   UserAddOutlined,
   UserOutlined,
 } from '@ant-design/icons';
@@ -236,6 +240,7 @@ const blockTypeGroups = [
       { value: 'recent-image', label: '最近上传图片', icon: blockIcon('近') },
       { value: 'video', label: '视频', icon: blockIcon('▶') },
       { value: 'audio', label: '音频', icon: blockIcon('♫') },
+      { value: 'attachment', label: '附件', icon: blockIcon('附') },
       { value: 'netease-music', label: '网易云音乐', icon: blockIcon('云', { color: '#dc2626' }) },
       { value: 'bilibili-video', label: '哔哩哔哩视频', icon: blockIcon('B', { color: '#0891b2' }) },
       { value: 'tencent-video', label: '腾讯视频', icon: blockIcon('腾', { color: '#16a34a' }) },
@@ -265,11 +270,13 @@ const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
 const blockTypeMap = Object.fromEntries(blockTypeOptions.map(item => [item.value, item]));
 const documentAdminRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+const textPreviewExts = ['txt', 'md', 'csv', 'json', 'log', 'xml'];
 const mediaAcceptMap = {
   image: '.jpg,.jpeg,.png,.gif,.webp',
   video: '.mp4,.mov,.avi',
   audio: '.mp3,.wav,.m4a,.aac,.ogg',
 };
+const attachmentAccept = '.jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.log,.xml,.zip,.rar,.7z,.mp4,.mov,.avi,.mp3,.wav,.m4a,.aac,.ogg';
 const clipboardImagePasteLimit = 10;
 const clipboardImageExtByMime = {
   'image/jpeg': 'jpg',
@@ -330,6 +337,23 @@ function isImageAttachment(attachment) {
   return mime.startsWith('image/') || imageExts.includes(getFileExt(attachment?.filename));
 }
 
+function getAttachmentDisplayName(attachment = {}) {
+  return attachment.display_name || attachment.filename || attachment.name || '未命名附件';
+}
+
+function getAttachmentUrl(attachment = {}) {
+  return attachment.preview_url || attachment.url || (attachment.filepath ? `/uploads/${attachment.filepath}` : '');
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes || 0);
+  if (!Number.isFinite(size) || size <= 0) return '-';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 1024 * 10 ? 1 : 0)} KB`;
+  if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(size < 1024 * 1024 * 10 ? 1 : 0)} MB`;
+  return `${(size / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
 function attachmentToMediaMeta(attachment) {
   if (!attachment) return {};
   return {
@@ -338,6 +362,53 @@ function attachmentToMediaMeta(attachment) {
     url: attachment.filepath ? `/uploads/${attachment.filepath}` : '',
     mimetype: attachment.mimetype || '',
   };
+}
+
+function attachmentToBlockMeta(attachment) {
+  if (!attachment) return getDefaultBlockMeta('attachment');
+  const displayName = getAttachmentDisplayName(attachment);
+  return {
+    attachment_id: attachment.id || null,
+    filename: attachment.filename || displayName,
+    display_name: displayName,
+    url: getAttachmentUrl(attachment),
+    filepath: attachment.filepath || '',
+    mimetype: attachment.mimetype || '',
+    file_ext: attachment.file_ext || getFileExt(displayName),
+    size: Number(attachment.size || 0),
+    preview_status: attachment.preview_status || 'unsupported',
+    created_by_name: attachment.creator_name || attachment.created_by_name || '',
+    created_at: attachment.created_at || '',
+    updated_at: attachment.updated_at || '',
+  };
+}
+
+function blockMetaToAttachment(meta = {}) {
+  const displayName = meta.display_name || meta.filename || '';
+  return {
+    id: meta.attachment_id || meta.id || null,
+    filename: meta.filename || displayName,
+    display_name: displayName,
+    url: meta.url || '',
+    filepath: meta.filepath || '',
+    mimetype: meta.mimetype || '',
+    file_ext: meta.file_ext || getFileExt(displayName),
+    size: Number(meta.size || 0),
+    preview_status: meta.preview_status || 'unsupported',
+    creator_name: meta.created_by_name || '',
+    created_at: meta.created_at || '',
+    updated_at: meta.updated_at || '',
+  };
+}
+
+function getAttachmentPreviewKind(attachment = {}) {
+  const mime = String(attachment.mimetype || '').toLowerCase();
+  const ext = String(attachment.file_ext || getFileExt(getAttachmentDisplayName(attachment))).toLowerCase();
+  if (mime.startsWith('image/') || imageExts.includes(ext)) return 'image';
+  if (mime.startsWith('video/') || ['mp4', 'mov', 'avi'].includes(ext)) return 'video';
+  if (mime === 'application/pdf' || ext === 'pdf') return 'pdf';
+  if (mime.startsWith('text/') || textPreviewExts.includes(ext)) return 'text';
+  return 'unsupported';
 }
 
 function getClipboardImageFiles(event) {
@@ -424,6 +495,7 @@ function getDefaultBlockContent(type) {
   if (type === 'database-kanban') return '看板视图';
   if (type === 'database-form') return '表单视图';
   if (type === 'external-link') return '外部链接';
+  if (type === 'attachment') return '';
   if (getMediaKind(type)) return '';
   return '';
 }
@@ -460,6 +532,22 @@ function getDefaultBlockMeta(type) {
   if (type?.startsWith('fold-')) return { collapsed: false, body: '' };
   if (type === 'chart') return { chartType: 'bar' };
   if (getMediaKind(type) || type === 'external-link') return { url: '', filename: '', attachment_id: null };
+  if (type === 'attachment') {
+    return {
+      attachment_id: null,
+      filename: '',
+      display_name: '',
+      url: '',
+      filepath: '',
+      mimetype: '',
+      file_ext: '',
+      size: 0,
+      preview_status: 'unsupported',
+      created_by_name: '',
+      created_at: '',
+      updated_at: '',
+    };
+  }
   return {};
 }
 
@@ -748,7 +836,7 @@ function isBlankBlock(block) {
   if (!block) return true;
   if (block.type === 'divider') return false;
   const meta = block.meta || {};
-  if (meta.url || meta.filename || meta.body || meta.value) return false;
+  if (meta.attachment_id || meta.display_name || meta.url || meta.filename || meta.body || meta.value) return false;
   if (Array.isArray(meta.cells) && meta.cells.some(cell => String(cell || '').trim())) return false;
   if (Array.isArray(meta.rows) && meta.rows.some(row => row.some(cell => String(cell || '').trim()))) return false;
   return !inlineHtmlToPlain(block.content || '').trim();
@@ -816,6 +904,7 @@ function saveDocumentDraftBeforeUnload(docId, payload) {
 function blockMetaToText(meta = {}) {
   const parts = [];
   if (meta.url) parts.push(meta.url);
+  if (meta.display_name) parts.push(meta.display_name);
   if (meta.filename) parts.push(meta.filename);
   if (meta.body) parts.push(meta.body);
   if (meta.value !== undefined && meta.value !== null && meta.value !== '') parts.push(`${meta.value}`);
@@ -1407,6 +1496,21 @@ export default function Documents() {
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
   const [shareLinkError, setShareLinkError] = useState(null);
   const [autoSaving, setAutoSaving] = useState(false);
+  const [attachmentDragOver, setAttachmentDragOver] = useState(false);
+  const [attachmentUploadingBlockIds, setAttachmentUploadingBlockIds] = useState([]);
+  const [attachmentPreviewState, setAttachmentPreviewState] = useState({ open: false, mode: 'modal', attachment: null, loading: false });
+  const [attachmentRenameTarget, setAttachmentRenameTarget] = useState(null);
+  const [attachmentRenameValue, setAttachmentRenameValue] = useState('');
+  const [attachmentRenameSaving, setAttachmentRenameSaving] = useState(false);
+  const [attachmentCommentState, setAttachmentCommentState] = useState({
+    open: false,
+    blockId: null,
+    attachment: null,
+    comments: [],
+    loading: false,
+    saving: false,
+  });
+  const [attachmentCommentDraft, setAttachmentCommentDraft] = useState('');
   const presentationRef = useRef(null);
   const autoOpenedDocIdRef = useRef(null);
   const editorUndoStackRef = useRef([]);
@@ -1432,6 +1536,8 @@ export default function Documents() {
   const inlineToolbarHideTimerRef = useRef(null);
   const tableResizeRef = useRef(null);
   const composingBlockIdsRef = useRef(new Set());
+  const replaceAttachmentInputRef = useRef(null);
+  const replaceAttachmentTargetRef = useRef(null);
   const [createForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -1944,6 +2050,17 @@ export default function Documents() {
     if (!activeDocId || activeDocId === deepLinkedDocId) return;
     replaceDocumentLinkParam(activeDocId);
   }, [selectedDocId, deepLinkedDocId]);
+
+  useEffect(() => {
+    if (!selectedDoc?.id || !editorBlocks.length) return;
+    const hash = decodeURIComponent(window.location.hash || '');
+    if (!hash.startsWith('#doc-block-')) return;
+    const blockId = hash.replace('#doc-block-', '');
+    if (!editorBlocks.some(block => block.id === blockId)) return;
+    window.setTimeout(() => {
+      scrollToBlock(blockId);
+    }, 120);
+  }, [selectedDoc?.id, editorBlocks.length]);
 
   useEffect(() => {
     if (!selectedDoc?.id || !selectedDocId) return;
@@ -3068,6 +3185,426 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '截图粘贴失败');
     } finally {
       hideLoading();
+    }
+  };
+
+  const setAttachmentBlockUploading = (blockId, uploading) => {
+    setAttachmentUploadingBlockIds(prev => {
+      const next = new Set(prev);
+      if (uploading) next.add(blockId);
+      else next.delete(blockId);
+      return [...next];
+    });
+  };
+
+  const patchAttachmentBlockFromAttachment = (blockId, attachment, extraMeta = {}) => {
+    const attachmentMeta = { ...attachmentToBlockMeta(attachment), ...extraMeta };
+    setEditorBlocks(prev => prev.map(block => {
+      if (block.id !== blockId) return block;
+      const currentMeta = { ...getDefaultBlockMeta('attachment'), ...cloneMeta(block.meta) };
+      const nextMeta = {
+        ...currentMeta,
+        ...attachmentMeta,
+        upload_status: extraMeta.upload_status || 'done',
+        upload_error: extraMeta.upload_error || '',
+      };
+      const displayName = getAttachmentDisplayName(nextMeta);
+      return {
+        ...block,
+        type: 'attachment',
+        content: displayName,
+        meta: nextMeta,
+      };
+    }));
+  };
+
+  const markAttachmentBlockFailed = (blockId, file, errorText) => {
+    setEditorBlocks(prev => prev.map(block => {
+      if (block.id !== blockId) return block;
+      const currentMeta = { ...getDefaultBlockMeta('attachment'), ...cloneMeta(block.meta) };
+      const displayName = currentMeta.display_name || file?.name || block.content || '上传失败';
+      return {
+        ...block,
+        type: 'attachment',
+        content: displayName,
+        meta: {
+          ...currentMeta,
+          display_name: displayName,
+          filename: currentMeta.filename || file?.name || displayName,
+          file_ext: currentMeta.file_ext || getFileExt(file?.name || displayName),
+          size: currentMeta.size || Number(file?.size || 0),
+          upload_status: 'failed',
+          upload_error: errorText || '上传失败',
+        },
+      };
+    }));
+  };
+
+  const uploadDocumentAttachmentFile = async (file, blockId, displayName) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('block_id', blockId);
+    if (displayName) formData.append('display_name', displayName);
+    return documentsApi.uploadAttachment(selectedDoc.id, formData);
+  };
+
+  const insertAttachmentBlocksFromFiles = async (files = [], targetBlockId = null) => {
+    const validFiles = Array.from(files || []).filter(Boolean);
+    if (!validFiles.length) return;
+    if (!selectedDoc?.id) {
+      message.warning('请先保存文档，再上传附件');
+      return;
+    }
+    if (!canEditDoc(selectedDoc)) {
+      message.warning('你没有编辑该文档的权限');
+      return;
+    }
+
+    const attachmentBlocks = validFiles.map(file => createEditorBlock('attachment', {
+      content: file.name || '',
+      meta: {
+        ...getDefaultBlockMeta('attachment'),
+        filename: file.name || '',
+        display_name: file.name || '',
+        file_ext: getFileExt(file.name),
+        size: Number(file.size || 0),
+        mimetype: file.type || '',
+        upload_status: 'uploading',
+      },
+    }));
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => {
+      const targetIndex = prev.findIndex(block => block.id === targetBlockId);
+      if (targetIndex < 0) return [...prev, ...attachmentBlocks];
+      const targetBlock = prev[targetIndex];
+      const next = [...prev];
+      if (targetBlock.type === 'paragraph' && isBlankBlock(targetBlock)) {
+        next.splice(targetIndex, 1, ...attachmentBlocks);
+      } else {
+        next.splice(targetIndex + 1, 0, ...attachmentBlocks);
+      }
+      return next;
+    });
+    setSelectedBlockId(attachmentBlocks[0].id);
+    clearAreaBlockSelection();
+    setOpenBlockMenuId(null);
+    attachmentBlocks.forEach(block => setAttachmentBlockUploading(block.id, true));
+
+    const hideLoading = message.loading(validFiles.length > 1 ? `正在上传 ${validFiles.length} 个附件` : '正在上传附件', 0);
+    let successCount = 0;
+    try {
+      for (let index = 0; index < attachmentBlocks.length; index += 1) {
+        const block = attachmentBlocks[index];
+        const file = validFiles[index];
+        try {
+          const uploaded = await uploadDocumentAttachmentFile(file, block.id, file.name);
+          patchAttachmentBlockFromAttachment(block.id, uploaded);
+          successCount += 1;
+        } catch (err) {
+          markAttachmentBlockFailed(block.id, file, err.response?.data?.error || err.message || '附件上传失败');
+        } finally {
+          setAttachmentBlockUploading(block.id, false);
+        }
+      }
+      if (successCount) message.success(successCount > 1 ? `已上传 ${successCount} 个附件` : '附件已上传');
+      if (successCount < validFiles.length) message.warning(`${validFiles.length - successCount} 个附件上传失败`);
+    } finally {
+      hideLoading();
+      window.setTimeout(() => {
+        document.getElementById(`doc-block-${attachmentBlocks[0].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 0);
+    }
+  };
+
+  const handleAttachmentBlockUpload = async (block, file) => {
+    if (!selectedDoc?.id) {
+      message.warning('请先保存文档，再上传附件');
+      return Upload.LIST_IGNORE;
+    }
+    if (!canEditDoc(selectedDoc)) {
+      message.warning('你没有编辑该文档的权限');
+      return Upload.LIST_IGNORE;
+    }
+    pushEditorUndoSnapshot();
+    setAttachmentBlockUploading(block.id, true);
+    patchAttachmentBlockFromAttachment(block.id, {
+      id: null,
+      filename: file.name || '',
+      display_name: file.name || '',
+      mimetype: file.type || '',
+      file_ext: getFileExt(file.name),
+      size: Number(file.size || 0),
+      preview_status: 'unsupported',
+    }, { upload_status: 'uploading' });
+    try {
+      const uploaded = await uploadDocumentAttachmentFile(file, block.id, file.name);
+      patchAttachmentBlockFromAttachment(block.id, uploaded);
+      message.success('附件已上传');
+    } catch (err) {
+      markAttachmentBlockFailed(block.id, file, err.response?.data?.error || err.message || '附件上传失败');
+      message.error(err.response?.data?.error || err.message || '附件上传失败');
+    } finally {
+      setAttachmentBlockUploading(block.id, false);
+    }
+    return Upload.LIST_IGNORE;
+  };
+
+  const handleEditorDragOver = (event) => {
+    const hasFiles = Array.from(event.dataTransfer?.types || []).includes('Files');
+    if (!hasFiles) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'copy';
+    setAttachmentDragOver(true);
+  };
+
+  const handleEditorDragLeave = (event) => {
+    if (event.currentTarget?.contains?.(event.relatedTarget)) return;
+    setAttachmentDragOver(false);
+  };
+
+  const handleEditorDrop = async (event) => {
+    const files = Array.from(event.dataTransfer?.files || []);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setAttachmentDragOver(false);
+    const targetBlockId = event.target?.closest?.('[data-doc-block-id]')?.getAttribute('data-doc-block-id')
+      || selectedBlockId
+      || editorBlocks[editorBlocks.length - 1]?.id
+      || null;
+    await insertAttachmentBlocksFromFiles(files, targetBlockId);
+  };
+
+  const downloadDocumentAttachment = async (attachment) => {
+    if (!attachment?.id) {
+      message.warning('附件尚未上传完成');
+      return;
+    }
+    try {
+      await documentsApi.downloadAttachment(attachment.id, getAttachmentDisplayName(attachment));
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '下载失败');
+    }
+  };
+
+  const openAttachmentPreview = async (block, mode = 'modal') => {
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    if (!attachment?.id) {
+      message.warning('附件尚未上传完成');
+      return;
+    }
+    setAttachmentPreviewState({ open: true, mode, attachment, loading: true });
+    try {
+      const preview = await documentsApi.previewAttachment(attachment.id);
+      setAttachmentPreviewState({
+        open: true,
+        mode,
+        attachment: { ...attachment, ...preview },
+        loading: false,
+      });
+    } catch (err) {
+      setAttachmentPreviewState({ open: true, mode, attachment, loading: false });
+      message.error(err.response?.data?.error || err.message || '预览失败');
+    }
+  };
+
+  const openAttachmentRename = (block) => {
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    setAttachmentRenameTarget({ blockId: block.id, attachment });
+    setAttachmentRenameValue(getAttachmentDisplayName(attachment));
+  };
+
+  const saveAttachmentRename = async () => {
+    const displayName = attachmentRenameValue.trim();
+    if (!attachmentRenameTarget?.blockId || !displayName) {
+      message.warning('请输入附件名称');
+      return;
+    }
+    if (!canEditDoc(selectedDoc)) {
+      message.warning('你没有编辑该文档的权限');
+      return;
+    }
+    setAttachmentRenameSaving(true);
+    try {
+      const attachment = attachmentRenameTarget.attachment;
+      const renamed = attachment?.id
+        ? await documentsApi.renameAttachment(attachment.id, { display_name: displayName })
+        : { ...attachment, display_name: displayName, filename: attachment?.filename || displayName };
+      patchAttachmentBlockFromAttachment(attachmentRenameTarget.blockId, renamed);
+      setAttachmentRenameTarget(null);
+      setAttachmentRenameValue('');
+      message.success('附件已重命名');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '重命名失败');
+    } finally {
+      setAttachmentRenameSaving(false);
+    }
+  };
+
+  const copyAttachmentLink = async (block) => {
+    if (!selectedDoc?.id) return;
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    let link = `${buildDocumentPageLink(selectedDoc.id)}#doc-block-${block.id}`;
+    if (attachment?.id) {
+      try {
+        const result = await documentsApi.copyAttachmentLink(attachment.id, { block_id: block.id });
+        if (result?.link) link = result.link.includes('#') ? result.link : link;
+      } catch {
+        // 本地锚点链接可兜底，不阻断复制。
+      }
+    }
+    try {
+      await copyTextToClipboard(link);
+      message.success('附件链接已复制');
+    } catch {
+      message.error('复制失败，请手动复制浏览器地址');
+    }
+  };
+
+  const openAttachmentComments = async (block) => {
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    setAttachmentCommentState({
+      open: true,
+      blockId: block.id,
+      attachment,
+      comments: [],
+      loading: true,
+      saving: false,
+    });
+    setAttachmentCommentDraft('');
+    try {
+      const comments = await documentsApi.listBlockComments(selectedDoc.id, block.id);
+      setAttachmentCommentState(prev => ({
+        ...prev,
+        comments: Array.isArray(comments) ? comments : [],
+        loading: false,
+      }));
+    } catch (err) {
+      setAttachmentCommentState(prev => ({ ...prev, loading: false }));
+      message.error(err.response?.data?.error || err.message || '读取评论失败');
+    }
+  };
+
+  const saveAttachmentComment = async () => {
+    const content = attachmentCommentDraft.trim();
+    if (!content) {
+      message.warning('请输入评论内容');
+      return;
+    }
+    if (!canEditDoc(selectedDoc)) {
+      message.warning('你没有编辑该文档的权限');
+      return;
+    }
+    const { blockId, attachment } = attachmentCommentState;
+    if (!selectedDoc?.id || !blockId) return;
+    setAttachmentCommentState(prev => ({ ...prev, saving: true }));
+    try {
+      const comment = await documentsApi.createBlockComment(selectedDoc.id, blockId, {
+        attachment_id: attachment?.id || null,
+        content,
+      });
+      setAttachmentCommentState(prev => ({
+        ...prev,
+        comments: [...prev.comments, comment],
+        saving: false,
+      }));
+      setAttachmentCommentDraft('');
+      message.success('评论已添加');
+    } catch (err) {
+      setAttachmentCommentState(prev => ({ ...prev, saving: false }));
+      message.error(err.response?.data?.error || err.message || '评论失败');
+    }
+  };
+
+  const confirmDeleteAttachmentBlock = (block) => {
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    Modal.confirm({
+      title: '删除附件块？',
+      content: attachment?.id ? '删除后，正文中的附件块和该附件入口都会被移除。' : '删除后，该附件块会从正文中移除。',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        if (attachment?.id) await documentsApi.deleteAttachment(attachment.id);
+        deleteBlock(block.id);
+        message.success('附件块已删除');
+      },
+    });
+  };
+
+  const triggerReplaceAttachment = (block) => {
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    if (!attachment?.id) {
+      message.warning('附件尚未上传完成');
+      return;
+    }
+    if (!canEditDoc(selectedDoc)) {
+      message.warning('你没有编辑该文档的权限');
+      return;
+    }
+    replaceAttachmentTargetRef.current = { block };
+    replaceAttachmentInputRef.current?.click();
+  };
+
+  const handleReplaceAttachmentInputChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    const target = replaceAttachmentTargetRef.current;
+    replaceAttachmentTargetRef.current = null;
+    if (!file || !target?.block) return;
+    const block = target.block;
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    if (!attachment?.id) return;
+    setAttachmentBlockUploading(block.id, true);
+    const hideLoading = message.loading('正在替换附件', 0);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('display_name', getAttachmentDisplayName(attachment));
+      const replaced = await documentsApi.replaceAttachment(attachment.id, formData);
+      patchAttachmentBlockFromAttachment(block.id, replaced);
+      message.success('附件已替换');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '替换失败');
+    } finally {
+      setAttachmentBlockUploading(block.id, false);
+      hideLoading();
+    }
+  };
+
+  const handleAttachmentMenuAction = (block, key) => {
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    if (key === 'download') {
+      downloadDocumentAttachment(attachment);
+      return;
+    }
+    if (key === 'preview-modal') {
+      openAttachmentPreview(block, 'modal');
+      return;
+    }
+    if (key === 'preview-side') {
+      openAttachmentPreview(block, 'side');
+      return;
+    }
+    if (key === 'copy-link') {
+      copyAttachmentLink(block);
+      return;
+    }
+    if (key === 'comment') {
+      openAttachmentComments(block);
+      return;
+    }
+    if (key === 'rename') {
+      openAttachmentRename(block);
+      return;
+    }
+    if (key === 'replace') {
+      triggerReplaceAttachment(block);
+      return;
+    }
+    if (key === 'delete') {
+      confirmDeleteAttachmentBlock(block);
     }
   };
 
@@ -5992,6 +6529,241 @@ export default function Documents() {
     );
   };
 
+  const renderAttachmentFileBadge = (attachment) => {
+    const ext = String(attachment.file_ext || getFileExt(getAttachmentDisplayName(attachment)) || 'file').slice(0, 4).toUpperCase();
+    const mime = String(attachment.mimetype || '').toLowerCase();
+    const background = mime.startsWith('image/') ? '#e0f2fe'
+      : mime.startsWith('video/') ? '#fee2e2'
+        : ext === 'PDF' ? '#fee2e2'
+          : ['XLS', 'XLSX', 'CSV'].includes(ext) ? '#dcfce7'
+            : ['DOC', 'DOCX'].includes(ext) ? '#dbeafe'
+              : ['PPT', 'PPTX'].includes(ext) ? '#ffedd5'
+                : '#f1f5f9';
+    const color = mime.startsWith('image/') ? '#0369a1'
+      : mime.startsWith('video/') ? '#b91c1c'
+        : ext === 'PDF' ? '#b91c1c'
+          : ['XLS', 'XLSX', 'CSV'].includes(ext) ? '#15803d'
+            : ['DOC', 'DOCX'].includes(ext) ? '#1d4ed8'
+              : ['PPT', 'PPTX'].includes(ext) ? '#c2410c'
+                : '#475569';
+    return (
+      <span style={{
+        width: 42,
+        height: 42,
+        minWidth: 42,
+        borderRadius: 8,
+        background,
+        color,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: ext.length > 3 ? 10 : 12,
+        fontWeight: 800,
+      }}>
+        {ext || 'FILE'}
+      </span>
+    );
+  };
+
+  const renderAttachmentPreviewContent = (attachment) => {
+    const normalized = attachment || {};
+    const url = getAttachmentUrl(normalized);
+    const previewKind = getAttachmentPreviewKind(normalized);
+    const canPreview = normalized.preview_status === 'supported' || previewKind !== 'unsupported';
+    if (attachmentPreviewState.loading) {
+      return <Spin tip="正在加载预览" style={{ width: '100%', padding: '80px 0' }} />;
+    }
+    if (!canPreview || !url) {
+      return (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="当前文件暂不支持在线预览，可下载后查看。"
+        >
+          {normalized.id && (
+            <Button icon={<DownloadOutlined />} onClick={() => downloadDocumentAttachment(normalized)}>
+              下载文件
+            </Button>
+          )}
+        </Empty>
+      );
+    }
+    if (previewKind === 'image') {
+      return (
+        <div style={{ textAlign: 'center' }}>
+          <img
+            src={url}
+            alt={getAttachmentDisplayName(normalized)}
+            style={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain', borderRadius: 6 }}
+          />
+        </div>
+      );
+    }
+    if (previewKind === 'video') {
+      return <video src={url} controls style={{ width: '100%', maxHeight: '70vh', borderRadius: 6, background: '#111827' }} />;
+    }
+    if (previewKind === 'pdf' || previewKind === 'text') {
+      return (
+        <iframe
+          title={getAttachmentDisplayName(normalized)}
+          src={url}
+          style={{ width: '100%', height: attachmentPreviewState.mode === 'side' ? 'calc(100vh - 230px)' : '70vh', border: '1px solid #e5e7eb', borderRadius: 6 }}
+        />
+      );
+    }
+    return (
+      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前文件暂不支持在线预览，可下载后查看。">
+        {normalized.id && <Button icon={<DownloadOutlined />} onClick={() => downloadDocumentAttachment(normalized)}>下载文件</Button>}
+      </Empty>
+    );
+  };
+
+  const renderAttachmentBlock = (block) => {
+    const meta = getBlockMeta(block);
+    const attachment = blockMetaToAttachment(meta);
+    const displayName = getAttachmentDisplayName(attachment);
+    const uploading = attachmentUploadingBlockIds.includes(block.id) || meta.upload_status === 'uploading';
+    const failed = meta.upload_status === 'failed';
+    const hasAttachment = Boolean(attachment.id);
+    const canEditAttachment = canEditDoc(selectedDoc);
+    const actionVisible = isMobile || selectedBlockId === block.id || hoveredBlockId === block.id;
+    const previewKind = getAttachmentPreviewKind(attachment);
+    const previewable = hasAttachment && (attachment.preview_status === 'supported' || previewKind !== 'unsupported');
+    const detailParts = [
+      formatFileSize(attachment.size),
+      attachment.creator_name ? `上传人：${attachment.creator_name}` : '',
+      attachment.created_at ? formatDocumentTimestamp(attachment.created_at) : '',
+    ].filter(Boolean);
+
+    const menuItems = [
+      { key: 'download', icon: <DownloadOutlined />, label: '下载', disabled: !hasAttachment },
+      { key: 'preview-modal', icon: <EyeOutlined />, label: '弹窗预览', disabled: !hasAttachment },
+      { key: 'preview-side', icon: <MenuUnfoldOutlined />, label: '右侧预览', disabled: !hasAttachment },
+      { key: 'copy-link', icon: <LinkOutlined />, label: '复制链接' },
+      { key: 'comment', icon: <CommentOutlined />, label: '评论', disabled: !hasAttachment },
+      { type: 'divider' },
+      { key: 'rename', icon: <EditOutlined />, label: '重命名', disabled: !canEditAttachment },
+      { key: 'replace', icon: <UploadOutlined />, label: '替换文件', disabled: !canEditAttachment || !hasAttachment },
+      { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除', disabled: !canEditAttachment },
+    ];
+
+    if (!hasAttachment && !uploading && !failed) {
+      return (
+        <Upload.Dragger
+          showUploadList={false}
+          accept={attachmentAccept}
+          beforeUpload={(file) => handleAttachmentBlockUpload(block, file)}
+          disabled={!canEditAttachment}
+          style={{ background: '#f8fafc', borderRadius: 8 }}
+        >
+          <Space direction="vertical" size={6}>
+            <UploadOutlined style={{ color: '#64748b', fontSize: 18 }} />
+            <Text type="secondary">{canEditAttachment ? '拖入或选择附件' : '暂无附件'}</Text>
+          </Space>
+        </Upload.Dragger>
+      );
+    }
+
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        minHeight: 58,
+        border: `1px solid ${failed ? '#fecaca' : '#e5e7eb'}`,
+        borderRadius: 8,
+        padding: '8px 10px',
+        background: failed ? '#fff1f2' : '#ffffff',
+        boxShadow: selectedBlockId === block.id ? '0 0 0 2px rgba(59, 130, 246, 0.08)' : 'none',
+      }}>
+        {renderAttachmentFileBadge(attachment)}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Text strong ellipsis style={{ maxWidth: '100%' }}>{displayName}</Text>
+            {previewable && <Tag color="blue" style={{ marginInlineEnd: 0 }}>可预览</Tag>}
+            {uploading && <Tag color="processing" style={{ marginInlineEnd: 0 }}>上传中</Tag>}
+            {failed && <Tag color="red" style={{ marginInlineEnd: 0 }}>失败</Tag>}
+          </div>
+          <Text type={failed ? 'danger' : 'secondary'} style={{ fontSize: 12 }}>
+            {failed ? (meta.upload_error || '上传失败') : detailParts.join(' · ')}
+          </Text>
+        </div>
+        <Space size={4} style={{ opacity: actionVisible ? 1 : 0.18, transition: 'opacity 0.15s ease' }}>
+          {failed && canEditAttachment && (
+            <Upload
+              showUploadList={false}
+              accept={attachmentAccept}
+              beforeUpload={(file) => handleAttachmentBlockUpload(block, file)}
+            >
+              <Tooltip title="重新上传">
+                <Button
+                  size="small"
+                  icon={<UploadOutlined />}
+                  aria-label="重新上传"
+                  onClick={event => event.stopPropagation()}
+                />
+              </Tooltip>
+            </Upload>
+          )}
+          <Tooltip title="下载文件">
+            <Button
+              size="small"
+              icon={<DownloadOutlined />}
+              aria-label="下载文件"
+              disabled={!hasAttachment}
+              onClick={event => {
+                event.stopPropagation();
+                downloadDocumentAttachment(attachment);
+              }}
+            />
+          </Tooltip>
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: menuItems,
+              onClick: ({ key, domEvent }) => {
+                domEvent.stopPropagation();
+                handleAttachmentMenuAction(block, key);
+              },
+            }}
+          >
+            <Button
+              size="small"
+              icon={<MoreOutlined />}
+              aria-label="附件更多操作"
+              onClick={event => event.stopPropagation()}
+            />
+          </Dropdown>
+        </Space>
+      </div>
+    );
+  };
+
+  const renderPresentationAttachmentBlock = (block) => {
+    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        border: '1px solid #e5e7eb',
+        borderRadius: 8,
+        padding: 12,
+        background: '#f8fafc',
+      }}>
+        {renderAttachmentFileBadge(attachment)}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <Text strong ellipsis style={{ display: 'block', fontSize: isMobile ? 16 : 20 }}>{getAttachmentDisplayName(attachment)}</Text>
+          <Text type="secondary" style={{ fontSize: isMobile ? 13 : 15 }}>{formatFileSize(attachment.size)}</Text>
+        </div>
+        {attachment.id && (
+          <Button icon={<DownloadOutlined />} onClick={() => downloadDocumentAttachment(attachment)}>
+            下载
+          </Button>
+        )}
+      </div>
+    );
+  };
+
   const renderPresentationTableBlock = (block) => {
     const meta = getBlockMeta(block);
     const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : [];
@@ -6253,6 +7025,7 @@ export default function Documents() {
         </Button>
       );
     }
+    if (block.type === 'attachment') return renderPresentationAttachmentBlock(block);
     if (getMediaKind(block.type)) return renderPresentationMediaBlock(block);
     if (block.type === 'toc') {
       return (
@@ -6427,6 +7200,7 @@ export default function Documents() {
     if (block.type?.startsWith('database-')) return renderTableBlock(block, blockTypeMap[block.type]?.label || '数据表格');
     if (block.type === 'progress') return renderProgressBlock(block);
     if (getColumnCount(block.type)) return renderColumnsBlock(block);
+    if (block.type === 'attachment') return renderAttachmentBlock(block);
     if (getMediaKind(block.type) || block.type === 'external-link') return renderMediaBlock(block);
     if (isHierarchicalListBlock(block)) return renderHierarchicalListBlock(block, commonProps);
     if (block.type?.startsWith('fold-')) return renderFoldBlock(block, commonProps);
@@ -7219,14 +7993,41 @@ export default function Documents() {
                 alignItems: 'flex-start',
                 flexDirection: isMobile ? 'column' : 'row',
               }}>
-                <section id="document-editor-blocks" onMouseDown={handleEditorAreaMouseDown} onPaste={handleEditorPaste} style={{
+                <section
+                  id="document-editor-blocks"
+                  onMouseDown={handleEditorAreaMouseDown}
+                  onPaste={handleEditorPaste}
+                  onDragOver={handleEditorDragOver}
+                  onDragLeave={handleEditorDragLeave}
+                  onDrop={handleEditorDrop}
+                  style={{
                   flex: 1,
                   minWidth: 0,
                   maxWidth: isMobile ? '100%' : getEditorMaxWidth(selectedDoc),
                   width: '100%',
+                  position: 'relative',
                   paddingBottom: isMobile ? 120 : 96,
                   minHeight: isMobile ? 'calc(100vh - 260px)' : 420,
                 }}>
+                  {attachmentDragOver && (
+                    <div style={{
+                      position: 'absolute',
+                      inset: 0,
+                      zIndex: 30,
+                      pointerEvents: 'none',
+                      border: '2px dashed #3b82f6',
+                      borderRadius: 10,
+                      background: 'rgba(239, 246, 255, 0.72)',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      justifyContent: 'center',
+                      paddingTop: 28,
+                      color: '#1d4ed8',
+                      fontWeight: 600,
+                    }}>
+                      松开上传附件
+                    </div>
+                  )}
                   {editorBlocks.map((block, index) => renderEditorBlock(block, index))}
                   {renderAppendBlockShortcut()}
                 </section>
@@ -7258,6 +8059,135 @@ export default function Documents() {
       {renderChangeLogDrawer()}
 
       {renderPresentationMode()}
+
+      <input
+        ref={replaceAttachmentInputRef}
+        type="file"
+        accept={attachmentAccept}
+        style={{ display: 'none' }}
+        onChange={handleReplaceAttachmentInputChange}
+      />
+
+      <Modal
+        title={getAttachmentDisplayName(attachmentPreviewState.attachment || {})}
+        open={attachmentPreviewState.open && attachmentPreviewState.mode === 'modal'}
+        onCancel={() => setAttachmentPreviewState(prev => ({ ...prev, open: false }))}
+        footer={[
+          <Button key="download" icon={<DownloadOutlined />} disabled={!attachmentPreviewState.attachment?.id} onClick={() => downloadDocumentAttachment(attachmentPreviewState.attachment)}>
+            下载文件
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setAttachmentPreviewState(prev => ({ ...prev, open: false }))}>
+            关闭
+          </Button>,
+        ]}
+        width={isMobile ? '100%' : 920}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        destroyOnClose
+      >
+        {renderAttachmentPreviewContent(attachmentPreviewState.attachment)}
+      </Modal>
+
+      <Drawer
+        title={getAttachmentDisplayName(attachmentPreviewState.attachment || {})}
+        placement="right"
+        open={attachmentPreviewState.open && attachmentPreviewState.mode === 'side'}
+        onClose={() => setAttachmentPreviewState(prev => ({ ...prev, open: false }))}
+        width={isMobile ? '92vw' : 560}
+        extra={(
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            disabled={!attachmentPreviewState.attachment?.id}
+            onClick={() => downloadDocumentAttachment(attachmentPreviewState.attachment)}
+          >
+            下载
+          </Button>
+        )}
+        destroyOnClose
+      >
+        {renderAttachmentPreviewContent(attachmentPreviewState.attachment)}
+      </Drawer>
+
+      <Modal
+        title="重命名附件"
+        open={Boolean(attachmentRenameTarget)}
+        onCancel={() => {
+          setAttachmentRenameTarget(null);
+          setAttachmentRenameValue('');
+        }}
+        onOk={saveAttachmentRename}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={attachmentRenameSaving}
+        destroyOnClose
+      >
+        <Input
+          value={attachmentRenameValue}
+          placeholder="附件名称"
+          onChange={event => setAttachmentRenameValue(event.target.value)}
+          onPressEnter={saveAttachmentRename}
+        />
+      </Modal>
+
+      <Drawer
+        title="附件评论"
+        placement="right"
+        open={attachmentCommentState.open}
+        onClose={() => setAttachmentCommentState(prev => ({ ...prev, open: false }))}
+        width={isMobile ? '92vw' : 420}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {attachmentCommentState.attachment && (
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', padding: 10, border: '1px solid #e5e7eb', borderRadius: 8, background: '#f8fafc' }}>
+              {renderAttachmentFileBadge(attachmentCommentState.attachment)}
+              <div style={{ minWidth: 0 }}>
+                <Text strong ellipsis style={{ display: 'block' }}>{getAttachmentDisplayName(attachmentCommentState.attachment)}</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>{formatFileSize(attachmentCommentState.attachment.size)}</Text>
+              </div>
+            </div>
+          )}
+          <Spin spinning={attachmentCommentState.loading}>
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              {attachmentCommentState.comments.length ? attachmentCommentState.comments.map(comment => (
+                <div key={comment.id} style={{ border: '1px solid #eef2f7', borderRadius: 8, padding: 10, background: '#fff' }}>
+                  <Space size={8} align="start">
+                    <Avatar size={26} style={{ background: '#1677ff' }}>{(comment.created_by_name || '用').slice(0, 1)}</Avatar>
+                    <div style={{ minWidth: 0 }}>
+                      <Text strong style={{ fontSize: 13 }}>{comment.created_by_name || '匿名用户'}</Text>
+                      <div><Text type="secondary" style={{ fontSize: 12 }}>{formatDocumentTimestamp(comment.created_at)}</Text></div>
+                      <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', marginTop: 6 }}>{comment.content}</div>
+                    </div>
+                  </Space>
+                </div>
+              )) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无评论" />
+              )}
+            </Space>
+          </Spin>
+          <Divider style={{ margin: '4px 0' }} />
+          <TextArea
+            value={attachmentCommentDraft}
+            disabled={!canEditDoc(selectedDoc)}
+            autoSize={{ minRows: 3, maxRows: 6 }}
+            placeholder={canEditDoc(selectedDoc) ? '输入评论' : '你没有评论权限'}
+            onChange={event => setAttachmentCommentDraft(event.target.value)}
+            onKeyDown={event => {
+              if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') saveAttachmentComment();
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button
+              type="primary"
+              disabled={!canEditDoc(selectedDoc)}
+              loading={attachmentCommentState.saving}
+              onClick={saveAttachmentComment}
+            >
+              评论
+            </Button>
+          </div>
+        </Space>
+      </Drawer>
 
       <Drawer
         title="标题目录"

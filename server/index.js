@@ -43,7 +43,7 @@ const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|mp4|mov|avi|mp3|wav|m4a|aac|ogg)$/i;
+    const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|json|log|xml|zip|rar|7z|mp4|mov|avi|mp3|wav|m4a|aac|ogg)$/i;
     if (!allowed.test(normalizeUploadedFilename(file.originalname))) {
       cb(new Error('不支持的文件类型'));
       return;
@@ -1234,15 +1234,36 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS document_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER NOT NULL,
+    block_id TEXT,
     filename TEXT NOT NULL,
+    display_name TEXT,
     filepath TEXT NOT NULL,
     mimetype TEXT,
+    file_ext TEXT,
     size INTEGER,
+    preview_status TEXT DEFAULT 'unsupported',
+    replaced_from_id INTEGER,
     created_by INTEGER,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
   CREATE INDEX IF NOT EXISTS idx_document_attachments_doc ON document_attachments(document_id);
+  CREATE INDEX IF NOT EXISTS idx_document_attachments_block ON document_attachments(document_id, block_id);
+
+  CREATE TABLE IF NOT EXISTS document_block_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    block_id TEXT NOT NULL,
+    attachment_id INTEGER,
+    content TEXT NOT NULL,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_document_block_comments_block ON document_block_comments(document_id, block_id);
 `);
 
 db.prepare(`
@@ -1263,6 +1284,12 @@ addColumnIfMissing('document_edit_records', 'content_before', 'TEXT DEFAULT NULL
 addColumnIfMissing('document_edit_records', 'content_after', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_before', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_after', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_attachments', 'block_id', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_attachments', 'display_name', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_attachments', 'file_ext', 'TEXT DEFAULT NULL');
+addColumnIfMissing('document_attachments', 'preview_status', "TEXT DEFAULT 'unsupported'");
+addColumnIfMissing('document_attachments', 'replaced_from_id', 'INTEGER DEFAULT NULL');
+addColumnIfMissing('document_attachments', 'updated_at', 'DATETIME DEFAULT NULL');
 
 // =========== 跨团队访问权限表 ===========
 db.exec(`
@@ -1749,6 +1776,8 @@ const OPERATION_LOG_BUSINESS_MAP = {
   'product-asset-reductions': '产品核减',
   documents: '文档中心',
   'document-folders': '文档目录',
+  'document-attachments': '文档附件',
+  'document-block-comments': '文档块评论',
   'document-change-logs': '文档改动历史',
   'document-edit-records': '页面编辑记录',
   strategies: '策略',
@@ -1797,6 +1826,8 @@ const OPERATION_LOG_TABLE_MAP = {
   'product-asset-reductions': 'product_asset_reductions',
   documents: 'documents',
   'document-folders': 'document_folders',
+  'document-attachments': 'document_attachments',
+  'document-block-comments': 'document_block_comments',
   'document-change-logs': 'document_change_logs',
   'document-edit-records': 'document_edit_records',
   strategies: 'strategies',
@@ -1835,8 +1866,14 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/documents\/(\d+)\/content$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存文档内容' },
   { pattern: /^\/documents\/(\d+)\/page-options$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存页面选项' },
   { pattern: /^\/documents\/(\d+)\/shares$/, businessType: '文档共享', table: 'document_shares', idGroup: 1, action: '保存共享范围' },
+  { pattern: /^\/documents\/(\d+)\/attachments$/, businessType: '文档附件', table: 'document_attachments', responseId: true, action: '上传附件' },
+  { pattern: /^\/documents\/(\d+)\/blocks\/([^/]+)\/comments$/, businessType: '文档块评论', table: 'document_block_comments', responseId: true, action: '新增块评论' },
   { pattern: /^\/documents\/(\d+)\/change-logs$/, businessType: '文档改动历史', table: 'document_change_logs', responseId: true, action: '新增改动历史' },
   { pattern: /^\/documents\/(\d+)\/favorite$/, businessType: '文档收藏', table: 'document_favorites', idGroup: 1 },
+  { pattern: /^\/document-attachments\/(\d+)\/rename$/, businessType: '文档附件', table: 'document_attachments', idGroup: 1, action: '重命名附件' },
+  { pattern: /^\/document-attachments\/(\d+)\/replace$/, businessType: '文档附件', table: 'document_attachments', idGroup: 1, action: '替换附件' },
+  { pattern: /^\/document-attachments\/(\d+)$/, businessType: '文档附件', table: 'document_attachments', idGroup: 1 },
+  { pattern: /^\/document-block-comments\/(\d+)$/, businessType: '文档块评论', table: 'document_block_comments', idGroup: 1 },
   { pattern: /^\/document-change-logs\/(\d+)$/, businessType: '文档改动历史', table: 'document_change_logs', idGroup: 1 },
   { pattern: /^\/document-edit-records\/(\d+)\/restore$/, businessType: '页面编辑记录', table: 'document_edit_records', idGroup: 1, action: '恢复页面版本' },
   { pattern: /^\/document-folders$/, businessType: '文档目录', table: 'document_folders', responseId: true, action: '保存目录' },
@@ -3643,6 +3680,45 @@ function canEditDocument(user, document) {
   return canUseDocumentWriteActions(user) && (canManageDocument(user, document) || isDocumentSharedWithUser(user, document));
 }
 
+function getFileExtFromName(filename = '') {
+  const parts = String(filename || '').split('.');
+  return parts.length > 1 ? parts.pop().toLowerCase() : '';
+}
+
+function getDocumentAttachmentPreviewStatus(mimetype = '', filename = '') {
+  const mime = String(mimetype || '').toLowerCase();
+  const ext = getFileExtFromName(filename);
+  if (mime.startsWith('image/')) return 'supported';
+  if (mime.startsWith('video/')) return 'supported';
+  if (mime.startsWith('text/')) return 'supported';
+  if (mime === 'application/pdf' || ext === 'pdf') return 'supported';
+  if (['txt', 'md', 'csv', 'json', 'log', 'xml'].includes(ext)) return 'supported';
+  return 'unsupported';
+}
+
+function serializeDocumentAttachment(row = {}) {
+  if (!row) return null;
+  const normalized = normalizeGenericAttachmentRow(row);
+  const displayName = normalized.display_name || normalized.filename;
+  return {
+    ...normalized,
+    filename: normalized.filename,
+    display_name: displayName,
+    file_ext: normalized.file_ext || getFileExtFromName(displayName),
+    preview_status: normalized.preview_status || getDocumentAttachmentPreviewStatus(normalized.mimetype, displayName),
+    url: normalized.filepath ? `/uploads/${normalized.filepath}` : '',
+  };
+}
+
+function getDocumentAttachment(id) {
+  return db.prepare(`
+    SELECT a.*, u.display_name as creator_name
+    FROM document_attachments a
+    LEFT JOIN users u ON a.created_by = u.id
+    WHERE a.id = ?
+  `).get(id);
+}
+
 function buildDocumentVisibilityFilter(user, alias = 'd') {
   if (isAdmin(user.role) || isExecutiveIdentity(user)) return { sql: '', params: [] };
 
@@ -4359,6 +4435,197 @@ app.delete('/api/document-change-logs/:logId', canWrite, (req, res) => {
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
   db.prepare('DELETE FROM document_change_logs WHERE id = ?').run(log.id);
   res.json({ success: true });
+});
+
+function handleDocumentAttachmentUpload(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: '单个文件不能超过 50MB' });
+      return res.status(400).json({ error: err.message || '附件上传失败' });
+    }
+    return res.status(400).json({ error: err.message || '附件上传失败' });
+  });
+}
+
+app.post('/api/documents/:id/attachments', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员、高管或被共享用户可以编辑文档' });
+  if (!req.file) return res.status(400).json({ error: '未收到文件' });
+
+  const filename = normalizeUploadedFilename(req.file.originalname);
+  const displayName = String(req.body.display_name || filename).trim() || filename;
+  const fileExt = getFileExtFromName(filename);
+  const previewStatus = getDocumentAttachmentPreviewStatus(req.file.mimetype, filename);
+  const result = db.prepare(`
+    INSERT INTO document_attachments (
+      document_id, block_id, filename, display_name, filepath, mimetype, file_ext, size, preview_status, created_by, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(
+    doc.id,
+    req.body.block_id || null,
+    filename,
+    displayName,
+    req.file.filename,
+    req.file.mimetype,
+    fileExt,
+    req.file.size,
+    previewStatus,
+    req.user.id
+  );
+  res.json(serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid)));
+});
+
+app.get('/api/documents/:id/attachments', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  const rows = db.prepare(`
+    SELECT a.*, u.display_name as creator_name
+    FROM document_attachments a
+    LEFT JOIN users u ON a.created_by = u.id
+    WHERE a.document_id = ?
+    ORDER BY a.created_at ASC, a.id ASC
+  `).all(doc.id);
+  res.json(rows.map(serializeDocumentAttachment));
+});
+
+app.get('/api/document-attachments/:id/download', (req, res) => {
+  const row = serializeDocumentAttachment(getDocumentAttachment(req.params.id));
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  const doc = getVisibleDocument(row.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  const filePath = path.join(UPLOADS_DIR, row.filepath);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
+
+  res.setHeader('Content-Type', row.mimetype || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.display_name || row.filename)}`);
+  res.setHeader('Content-Length', row.size || fs.statSync(filePath).size);
+
+  const fileStream = fs.createReadStream(filePath);
+  fileStream.pipe(res);
+  fileStream.on('error', (err) => {
+    console.error('文档附件文件流错误:', err);
+    if (!res.headersSent) res.status(500).json({ error: '文件读取失败' });
+  });
+});
+
+app.get('/api/document-attachments/:id/preview', (req, res) => {
+  const row = serializeDocumentAttachment(getDocumentAttachment(req.params.id));
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  const doc = getVisibleDocument(row.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  const previewStatus = getDocumentAttachmentPreviewStatus(row.mimetype, row.display_name || row.filename);
+  res.json({
+    ...row,
+    preview_status: previewStatus,
+    preview_url: previewStatus === 'supported' ? row.url : null,
+    download_url: `/api/document-attachments/${row.id}/download`,
+  });
+});
+
+app.post('/api/document-attachments/:id/copy-link', (req, res) => {
+  const row = serializeDocumentAttachment(getDocumentAttachment(req.params.id));
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  const doc = getVisibleDocument(row.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  const origin = `${req.protocol}://${req.get('host')}`;
+  const link = `${origin}/documents?doc=${encodeURIComponent(row.document_id)}${row.block_id ? `#doc-block-${encodeURIComponent(row.block_id)}` : ''}`;
+  res.json({ link });
+});
+
+app.put('/api/document-attachments/:id/rename', canWrite, (req, res) => {
+  const row = getDocumentAttachment(req.params.id);
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  const doc = getVisibleDocument(row.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有文档编辑者可以重命名附件' });
+  const displayName = String(req.body.display_name || '').trim();
+  if (!displayName) return res.status(400).json({ error: '附件名称不能为空' });
+  db.prepare('UPDATE document_attachments SET display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(displayName, row.id);
+  res.json(serializeDocumentAttachment(getDocumentAttachment(row.id)));
+});
+
+app.post('/api/document-attachments/:id/replace', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+  const row = getDocumentAttachment(req.params.id);
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  const doc = getVisibleDocument(row.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有文档编辑者可以替换附件' });
+  if (!req.file) return res.status(400).json({ error: '未收到文件' });
+
+  const oldFilePath = row.filepath ? path.join(UPLOADS_DIR, row.filepath) : null;
+  const filename = normalizeUploadedFilename(req.file.originalname);
+  const displayName = String(req.body.display_name || row.display_name || filename).trim() || filename;
+  const previewStatus = getDocumentAttachmentPreviewStatus(req.file.mimetype, filename);
+  db.prepare(`
+    UPDATE document_attachments SET
+      filename = ?, display_name = ?, filepath = ?, mimetype = ?, file_ext = ?, size = ?,
+      preview_status = ?, replaced_from_id = COALESCE(replaced_from_id, id), updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    filename,
+    displayName,
+    req.file.filename,
+    req.file.mimetype,
+    getFileExtFromName(filename),
+    req.file.size,
+    previewStatus,
+    row.id
+  );
+  if (oldFilePath) {
+    try { fs.unlinkSync(oldFilePath); } catch {}
+  }
+  res.json(serializeDocumentAttachment(getDocumentAttachment(row.id)));
+});
+
+app.delete('/api/document-attachments/:id', canWrite, (req, res) => {
+  const row = getDocumentAttachment(req.params.id);
+  if (!row) return res.status(404).json({ error: '附件不存在' });
+  const doc = getVisibleDocument(row.document_id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有文档编辑者可以删除附件' });
+  try { fs.unlinkSync(path.join(UPLOADS_DIR, row.filepath)); } catch {}
+  db.prepare('DELETE FROM document_block_comments WHERE attachment_id = ?').run(row.id);
+  db.prepare('DELETE FROM document_attachments WHERE id = ?').run(row.id);
+  res.json({ success: true });
+});
+
+app.get('/api/documents/:id/blocks/:blockId/comments', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  const rows = db.prepare(`
+    SELECT c.*, u.display_name as created_by_name
+    FROM document_block_comments c
+    LEFT JOIN users u ON c.created_by = u.id
+    WHERE c.document_id = ? AND c.block_id = ? AND c.deleted_at IS NULL
+    ORDER BY c.created_at ASC, c.id ASC
+  `).all(doc.id, req.params.blockId);
+  res.json(rows);
+});
+
+app.post('/api/documents/:id/blocks/:blockId/comments', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有文档编辑者可以评论附件块' });
+  const content = String(req.body.content || '').trim();
+  if (!content) return res.status(400).json({ error: '评论内容不能为空' });
+  const attachmentId = req.body.attachment_id ? Number(req.body.attachment_id) : null;
+  if (attachmentId) {
+    const attachment = getDocumentAttachment(attachmentId);
+    if (!attachment || Number(attachment.document_id) !== Number(doc.id)) return res.status(400).json({ error: '附件不存在' });
+  }
+  const result = db.prepare(`
+    INSERT INTO document_block_comments (document_id, block_id, attachment_id, content, created_by)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(doc.id, req.params.blockId, attachmentId, content, req.user.id);
+  const row = db.prepare(`
+    SELECT c.*, u.display_name as created_by_name
+    FROM document_block_comments c
+    LEFT JOIN users u ON c.created_by = u.id
+    WHERE c.id = ?
+  `).get(result.lastInsertRowid);
+  res.json(row);
 });
 
 // 获取某个 sales_director 管辖的小组
