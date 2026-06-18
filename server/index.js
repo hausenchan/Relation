@@ -39,12 +39,27 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
   },
 });
+const allowedUploadExtensions = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp',
+  'pdf', 'ofd', 'caj', 'ceb',
+  'doc', 'docx', 'dot', 'dotx', 'rtf', 'wps', 'wpt', 'odt', 'pages',
+  'xls', 'xlsx', 'xlsm', 'xlsb', 'csv', 'tsv', 'et', 'ett', 'ods', 'numbers',
+  'ppt', 'pptx', 'pps', 'ppsx', 'dps', 'dpt', 'odp', 'key',
+  'txt', 'md', 'markdown', 'json', 'log', 'xml', 'yaml', 'yml',
+  'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2',
+  'mp4', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'webm', 'm4v',
+  'mp3', 'wav', 'm4a', 'aac', 'ogg', 'flac',
+  'apk', 'aab', 'ipa',
+  'vsdx', 'drawio', 'xmind', 'mind', 'mm',
+  'eml', 'msg',
+]);
+const documentTextPreviewExtensions = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'xml', 'yaml', 'yml']);
 const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = /\.(jpg|jpeg|png|gif|webp|pdf|doc|docx|xls|xlsx|ppt|pptx|txt|md|csv|json|log|xml|zip|rar|7z|mp4|mov|avi|mp3|wav|m4a|aac|ogg)$/i;
-    if (!allowed.test(normalizeUploadedFilename(file.originalname))) {
+    const ext = path.extname(normalizeUploadedFilename(file.originalname)).slice(1).toLowerCase();
+    if (!allowedUploadExtensions.has(ext)) {
       cb(new Error('不支持的文件类型'));
       return;
     }
@@ -3695,7 +3710,7 @@ function getDocumentAttachmentPreviewStatus(mimetype = '', filename = '') {
   if (mime.startsWith('video/')) return 'supported';
   if (mime.startsWith('text/')) return 'supported';
   if (mime === 'application/pdf' || ext === 'pdf') return 'supported';
-  if (['txt', 'md', 'csv', 'json', 'log', 'xml'].includes(ext)) return 'supported';
+  if (documentTextPreviewExtensions.has(ext)) return 'supported';
   return 'unsupported';
 }
 

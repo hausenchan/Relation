@@ -276,7 +276,20 @@ const mediaAcceptMap = {
   video: '.mp4,.mov,.avi',
   audio: '.mp3,.wav,.m4a,.aac,.ogg',
 };
-const attachmentAccept = '.jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.md,.csv,.json,.log,.xml,.zip,.rar,.7z,.mp4,.mov,.avi,.mp3,.wav,.m4a,.aac,.ogg';
+const attachmentAccept = [
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+  '.pdf', '.ofd', '.caj', '.ceb',
+  '.doc', '.docx', '.dot', '.dotx', '.rtf', '.wps', '.wpt', '.odt', '.pages',
+  '.xls', '.xlsx', '.xlsm', '.xlsb', '.csv', '.tsv', '.et', '.ett', '.ods', '.numbers',
+  '.ppt', '.pptx', '.pps', '.ppsx', '.dps', '.dpt', '.odp', '.key',
+  '.txt', '.md', '.markdown', '.json', '.log', '.xml', '.yaml', '.yml',
+  '.zip', '.rar', '.7z', '.tar', '.gz', '.tgz', '.bz2',
+  '.mp4', '.mov', '.avi', '.mkv', '.wmv', '.flv', '.webm', '.m4v',
+  '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac',
+  '.apk', '.aab', '.ipa',
+  '.vsdx', '.drawio', '.xmind', '.mind', '.mm',
+  '.eml', '.msg',
+].join(',');
 const clipboardImagePasteLimit = 10;
 const clipboardImageExtByMime = {
   'image/jpeg': 'jpg',
