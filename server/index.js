@@ -1249,7 +1249,6 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_document_attachments_doc ON document_attachments(document_id);
-  CREATE INDEX IF NOT EXISTS idx_document_attachments_block ON document_attachments(document_id, block_id);
 
   CREATE TABLE IF NOT EXISTS document_block_comments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1290,6 +1289,10 @@ addColumnIfMissing('document_attachments', 'file_ext', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'preview_status', "TEXT DEFAULT 'unsupported'");
 addColumnIfMissing('document_attachments', 'replaced_from_id', 'INTEGER DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'updated_at', 'DATETIME DEFAULT NULL');
+
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_document_attachments_block ON document_attachments(document_id, block_id);
+`);
 
 // =========== 跨团队访问权限表 ===========
 db.exec(`
