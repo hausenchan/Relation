@@ -268,7 +268,7 @@ const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
 const blockTypeMap = Object.fromEntries(blockTypeOptions.map(item => [item.value, item]));
-const documentAdminRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
+const documentAdminRoles = new Set(['admin']);
 const imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
 const textPreviewExts = ['txt', 'md', 'csv', 'json', 'log', 'xml'];
 const mediaAcceptMap = {
@@ -1144,7 +1144,7 @@ function draftToShares(draft) {
 
 const accessSourceLabel = {
   creator: '创建人',
-  default: '管理员/高管默认可访问',
+  default: '超级管理员默认可访问',
   project_group: '项目组共享',
   department: '部门共享',
   team: '小组共享',
@@ -1193,7 +1193,7 @@ function getFolderPathLabel(folder) {
 }
 
 function isDocumentAdminUser(user) {
-  return documentAdminRoles.has(user?.role) || documentAdminRoles.has(user?.executive_role);
+  return documentAdminRoles.has(user?.role);
 }
 
 function parseSqliteUtcTimestamp(value) {
@@ -4657,7 +4657,7 @@ export default function Documents() {
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
               <Space size={8} wrap>
                 <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
-                <Text type="secondary">创建人、管理员和高管默认可访问；下方用于追加共享范围。</Text>
+                <Text type="secondary">新建文档默认仅创建人可访问；超级管理员可查看所有文档权限。下方用于追加共享范围。</Text>
               </Space>
               {accessUsers.length > 0 && (
                 <div>

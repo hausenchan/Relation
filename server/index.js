@@ -3657,7 +3657,7 @@ function getNextDocumentSequence() {
 
 function canManageDocument(user, document) {
   if (!user || !document) return false;
-  return isAdmin(user.role) || isExecutiveIdentity(user) || Number(document.created_by) === Number(user.id);
+  return user.role === 'admin' || Number(document.created_by) === Number(user.id);
 }
 
 function canUseDocumentWriteActions(user) {
@@ -3738,7 +3738,7 @@ function getDocumentAttachment(id) {
 }
 
 function buildDocumentVisibilityFilter(user, alias = 'd') {
-  if (isAdmin(user.role) || isExecutiveIdentity(user)) return { sql: '', params: [] };
+  if (user.role === 'admin') return { sql: '', params: [] };
 
   const clauses = [`${alias}.created_by = ?`];
   const params = [user.id];
@@ -3844,12 +3844,6 @@ function getDocumentAccessMap(document) {
   const accessMap = new Map();
   if (!document) return accessMap;
   if (document.created_by) addDocumentAccessUser(accessMap, document.created_by, 'creator');
-
-  db.prepare(`
-    SELECT id FROM users
-    WHERE role IN ('admin', 'ceo', 'coo', 'cto', 'cmo')
-       OR executive_role IN ('ceo', 'coo', 'cto', 'cmo')
-  `).all().forEach(row => addDocumentAccessUser(accessMap, row.id, 'default'));
 
   const shares = db.prepare('SELECT target_type, target_id, target_key FROM document_shares WHERE document_id = ?').all(document.id);
   shares.forEach(share => {
@@ -4153,14 +4147,14 @@ app.get('/api/documents/:id', (req, res) => {
 app.put('/api/documents/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员、高管或被共享用户可以编辑文档' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
   const canManageCurrentDocument = canManageDocument(req.user, doc);
   const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
   const nextFolderId = hasBodyField('folder_id') ? (req.body.folder_id || null) : doc.folder_id;
   const updatingManagedFields = ['folder_id', 'domain', 'project_group_id', 'department_key', 'doc_type', 'project_code', 'current_version', 'tags']
     .some(key => hasBodyField(key));
   if (updatingManagedFields && !canManageCurrentDocument) {
-    return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档属性' });
+    return res.status(403).json({ error: '只有创建人或超级管理员可以编辑文档属性' });
   }
   const folder = canManageCurrentDocument && nextFolderId
     ? db.prepare('SELECT * FROM document_folders WHERE id = ?').get(nextFolderId)
@@ -4225,7 +4219,7 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
 app.put('/api/documents/:id/content', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员、高管或被共享用户可以编辑文档' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
   const content = req.body.content ?? JSON.stringify({ blocks: [] });
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
   const contentText = extractDocumentText(content, req.body.content_text);
@@ -4258,7 +4252,7 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
   if (!record) return res.status(404).json({ error: '页面编辑记录不存在' });
   const doc = getVisibleDocument(record.document_id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以恢复文档版本' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以恢复文档版本' });
   const restoreSnapshot = resolveDocumentEditRecordRestoreSnapshot(record, doc);
   if (!restoreSnapshot) return res.status(400).json({ error: '该页面编辑记录缺少可恢复快照，无法恢复' });
 
@@ -4296,7 +4290,7 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
 app.put('/api/documents/:id/page-options', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以编辑文档' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以编辑文档' });
   db.prepare(`
     UPDATE documents SET
       toc_enabled = ?, width_mode = ?, custom_width = ?, small_font_enabled = ?,
@@ -4317,8 +4311,8 @@ app.put('/api/documents/:id/page-options', canWrite, (req, res) => {
 app.post('/api/documents/:id/renumber', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!(isAdmin(req.user.role) || isExecutiveIdentity(req.user))) {
-    return res.status(403).json({ error: '仅管理员或高管可以刷新文档编号业务字段' });
+  if (!canManageDocument(req.user, doc)) {
+    return res.status(403).json({ error: '只有创建人或超级管理员可以刷新文档编号业务字段' });
   }
   if (!String(req.body.reason || '').trim()) return res.status(400).json({ error: '请填写重新编号原因' });
   const domain = normalizeDocumentDomain(req.body.domain || doc.domain);
@@ -4344,7 +4338,7 @@ app.post('/api/documents/:id/renumber', canWrite, (req, res) => {
 app.delete('/api/documents/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以删除文档' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以删除文档' });
   db.prepare('UPDATE documents SET is_deleted = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.user.id, doc.id);
   res.json({ success: true });
 });
@@ -4358,7 +4352,7 @@ app.get('/api/documents/:id/shares', (req, res) => {
 app.put('/api/documents/:id/shares', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以调整共享范围' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以调整共享范围' });
   const shares = replaceDocumentShares(doc.id, req.body.shares || [], req.user.id);
   res.json({ success: true, shares, access_summary: getDocumentAccessSummary(doc) });
 });
@@ -4396,7 +4390,7 @@ app.get('/api/documents/:id/change-logs', (req, res) => {
 app.post('/api/documents/:id/change-logs', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以维护改动历史' });
   if (!String(req.body.summary || '').trim()) return res.status(400).json({ error: '改动摘要必填' });
   const version = req.body.version || doc.current_version || 'V1.0';
   const changeDetail = normalizeDocumentChangeLogDetail(req.body);
@@ -4424,7 +4418,7 @@ app.put('/api/document-change-logs/:logId', canWrite, (req, res) => {
   const doc = getVisibleDocument(log.document_id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!(canManageDocument(req.user, doc) || Number(log.changed_by) === Number(req.user.id))) {
-    return res.status(403).json({ error: '只有创建人、管理员、高管或记录创建人可以维护改动历史' });
+    return res.status(403).json({ error: '只有创建人、超级管理员或记录创建人可以维护改动历史' });
   }
   if (!String(req.body.summary || '').trim()) return res.status(400).json({ error: '改动摘要必填' });
   const changeDetail = normalizeDocumentChangeLogDetail(req.body, log.detail, log.detail_text);
@@ -4450,7 +4444,7 @@ app.delete('/api/document-change-logs/:logId', canWrite, (req, res) => {
   if (!log) return res.status(404).json({ error: '改动历史不存在' });
   const doc = getVisibleDocument(log.document_id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员或高管可以维护改动历史' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以维护改动历史' });
   db.prepare('DELETE FROM document_change_logs WHERE id = ?').run(log.id);
   res.json({ success: true });
 });
@@ -4469,7 +4463,7 @@ function handleDocumentAttachmentUpload(req, res, next) {
 app.post('/api/documents/:id/attachments', canWrite, handleDocumentAttachmentUpload, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、管理员、高管或被共享用户可以编辑文档' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
   if (!req.file) return res.status(400).json({ error: '未收到文件' });
 
   const filename = normalizeUploadedFilename(req.file.originalname);
