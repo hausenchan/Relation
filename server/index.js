@@ -2610,6 +2610,28 @@ function syncTaskSharedUsers(taskId, sharedUserIds = []) {
   return uniqueIds;
 }
 
+function buildExecutiveSelfAssignedTaskPrivacyFilter(userId, tableAlias, creatorColumn, assigneeColumn) {
+  const prefix = tableAlias ? `${tableAlias}.` : '';
+  const executiveRoles = [...EXECUTIVE_ROLES];
+  const placeholders = executiveRoles.map(() => '?').join(',');
+  return {
+    sql: ` AND NOT (
+      ${prefix}${creatorColumn} = ${prefix}${assigneeColumn}
+      AND ${prefix}${assigneeColumn} != ?
+      AND EXISTS (
+        SELECT 1
+        FROM users task_owner
+        WHERE task_owner.id = ${prefix}${assigneeColumn}
+          AND (
+            task_owner.role IN (${placeholders})
+            OR task_owner.executive_role IN (${placeholders})
+          )
+      )
+    )`,
+    params: [userId, ...executiveRoles, ...executiveRoles],
+  };
+}
+
 function getTaskVisibleScope(userId, role, executiveRole = null) {
   if (hasTaskFullVisibility(role, executiveRole)) return { all: true, teamIds: null, userIds: null };
 
@@ -2621,7 +2643,8 @@ function getTaskVisibleScope(userId, role, executiveRole = null) {
 
 function buildTaskVisibilityFilter(userId, role, executiveRole = null) {
   const scope = getTaskVisibleScope(userId, role, executiveRole);
-  if (scope.all) return { sql: '', params: [] };
+  const selfAssignedPrivacy = buildExecutiveSelfAssignedTaskPrivacyFilter(userId, 't', 'created_by', 'assigned_to');
+  if (scope.all) return selfAssignedPrivacy;
 
   const conditions = [
     't.assigned_to = ?',
@@ -2645,8 +2668,8 @@ function buildTaskVisibilityFilter(userId, role, executiveRole = null) {
   }
 
   return {
-    sql: ` AND (${conditions.join(' OR ')})`,
-    params,
+    sql: ` AND (${conditions.join(' OR ')})${selfAssignedPrivacy.sql}`,
+    params: [...params, ...selfAssignedPrivacy.params],
   };
 }
 
@@ -5770,6 +5793,9 @@ app.get('/api/follow-up-tasks', (req, res) => {
   const personPrivacy = buildPersonPrivacyFilter(me, 'p');
   query += personPrivacy.sql;
   params.push(...personPrivacy.params);
+  const selfAssignedPrivacy = buildExecutiveSelfAssignedTaskPrivacyFilter(me, 'f', 'assigned_by', 'assigned_to');
+  query += selfAssignedPrivacy.sql;
+  params.push(...selfAssignedPrivacy.params);
   if (all === '1' && hasTaskFullVisibility(role, executive_role)) {
     // 管理员和高管查看全量跟进任务。
   } else if (all === '1' && ['leader', 'sales_director'].includes(role)) {
