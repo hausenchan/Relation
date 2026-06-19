@@ -670,7 +670,7 @@ export default function Persons() {
   useEffect(() => { load(); }, [load]);
 
   useEffect(() => {
-    usersApi.listSimple({ include_readonly: true })
+    usersApi.listSimple({ include_readonly: true, include_departed: true })
       .then(setCreatorUsers)
       .catch(() => {
         setCreatorUsers(currentUser ? [currentUser] : []);
@@ -1597,7 +1597,7 @@ export default function Persons() {
             value: u.id,
             label: u.id === currentUser?.id
               ? `${u.display_name || u.username || '我'}（我）`
-              : (u.display_name || u.username),
+              : `${u.display_name || u.username}${u.account_status === 'departed' ? '（已离职）' : ''}`,
           }))}
         />
         <Select

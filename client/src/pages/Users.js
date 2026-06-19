@@ -3,7 +3,7 @@ import {
   Table, Button, Modal, Form, Input, Select, Space, Tag, Popconfirm,
   message, Typography, Checkbox, Divider, Tooltip, Grid, List, Card
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, KeyOutlined, UserOutlined, LockOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, LockOutlined, StopOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { usersApi, teamsApi, projectGroupsApi } from '../api';
 import { useAuth } from '../AuthContext';
 
@@ -22,6 +22,19 @@ const roleMap = {
   coo:            { label: 'COO',        color: 'gold' },
   cto:            { label: 'CTO',        color: 'gold' },
   cmo:            { label: 'CMO',        color: 'gold' },
+};
+
+const accountStatusMap = {
+  active: { label: '在职', color: 'green' },
+  departed: { label: '已离职', color: 'default' },
+};
+
+const getAccountStatus = (record) => record?.account_status || 'active';
+
+const renderAccountStatus = (record) => {
+  const status = getAccountStatus(record);
+  const item = accountStatusMap[status] || accountStatusMap.active;
+  return <Tag color={item.color}>{item.label}</Tag>;
 };
 
 const departmentOptions = [
@@ -157,6 +170,23 @@ export default function UsersPage() {
     }
   };
 
+  const handleAccountStatusChange = async (record, accountStatus) => {
+    try {
+      await usersApi.updateAccountStatus(record.id, {
+        account_status: accountStatus,
+        disabled_reason: accountStatus === 'departed' ? '员工离职，回收账号' : null,
+      });
+      if (accountStatus === 'departed') {
+        message.success(`已回收 ${record.display_name || record.username} 的账号`);
+      } else {
+        message.success(`已恢复 ${record.display_name || record.username} 的账号，请重置密码后交付使用`);
+      }
+      load();
+    } catch (e) {
+      message.error(e.response?.data?.error || '账号状态更新失败');
+    }
+  };
+
   // 根据部门过滤小组
   const filteredTeams = department ? teams.filter(t => t.department === department) : teams;
 
@@ -166,6 +196,11 @@ export default function UsersPage() {
     {
       title: '角色', dataIndex: 'role',
       render: v => { const m = roleMap[v]; return m ? <Tag color={m.color}>{m.label}</Tag> : v; },
+    },
+    {
+      title: '账号状态',
+      dataIndex: 'account_status',
+      render: (_, record) => renderAccountStatus(record),
     },
     {
       title: '部门',
@@ -197,72 +232,99 @@ export default function UsersPage() {
     { title: '最近登录', dataIndex: 'last_login', render: v => v?.slice(0, 16) || '从未登录' },
     {
       title: '操作',
-      render: (_, r) => (
-        <Space>
-          <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
-          {r.id !== currentUser?.id && (
-            <Tooltip title="重置该用户密码">
-              <Button size="small" icon={<LockOutlined />} onClick={() => setResetPwdTarget(r)}>重置密码</Button>
-            </Tooltip>
-          )}
-          {r.id !== currentUser?.id && (
-            <Popconfirm title="确认删除该用户？" onConfirm={() => handleDelete(r.id)}>
-              <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-            </Popconfirm>
-          )}
-        </Space>
-      ),
-    },
-  ];
-
-  const renderUserCard = (record) => (
-    <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
-      <Card size="small" style={{ width: '100%' }}>
-        <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.display_name || record.username}</div>
-              <Text type="secondary">用户名：{record.username}</Text>
-            </div>
-            <Tag color={roleMap[record.role]?.color}>{roleMap[record.role]?.label || record.role}</Tag>
-          </div>
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <Text type="secondary">部门：{departmentOptions.find(o => o.value === record.department)?.label || '-'}</Text>
-            <Text type="secondary">最近登录：{record.last_login?.slice(0, 16) || '从未登录'}</Text>
-          </div>
-          <div>
-            <Text type="secondary">所属小组：</Text>
-            <Space wrap size={[4, 4]}>
-              {(record.team_names?.length
-                ? record.team_names
-                : (record.team_name ? [record.team_name] : [])
-              ).map(name => <Tag key={`${record.id}-${name}`}>{name}</Tag>)}
-              {!(record.team_names?.length || record.team_name) && <Text type="secondary">-</Text>}
-            </Space>
-          </div>
-          <div>
-            <Text type="secondary">所属项目组：</Text>
-            <Space wrap size={[4, 4]}>
-              {record.project_group_names?.length
-                ? record.project_group_names.map(name => <Tag key={`${record.id}-pg-${name}`} color="blue">{name}</Tag>)
-                : <Text type="secondary">-</Text>}
-            </Space>
-          </div>
-          <Space size="small" wrap>
-            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
-            {record.id !== currentUser?.id && (
-              <Button size="small" icon={<LockOutlined />} onClick={() => setResetPwdTarget(record)}>重置密码</Button>
+      render: (_, r) => {
+        const isDeparted = getAccountStatus(r) === 'departed';
+        return (
+          <Space>
+            <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)}>编辑</Button>
+            {r.id !== currentUser?.id && (
+              <Tooltip title={isDeparted ? '恢复后请重置密码再交付使用' : '重置该用户密码'}>
+                <Button size="small" icon={<LockOutlined />} disabled={isDeparted} onClick={() => setResetPwdTarget(r)}>重置密码</Button>
+              </Tooltip>
             )}
-            {record.id !== currentUser?.id && (
-              <Popconfirm title="确认删除该用户？" onConfirm={() => handleDelete(record.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+            {r.id !== currentUser?.id && (isDeparted ? (
+              <Popconfirm title="确认恢复该账号登录资格？恢复后需重置密码。" onConfirm={() => handleAccountStatusChange(r, 'active')}>
+                <Button size="small" icon={<CheckCircleOutlined />}>恢复启用</Button>
+              </Popconfirm>
+            ) : (
+              <Popconfirm title="确认回收该账号？该用户将无法登录，历史记录会保留。" onConfirm={() => handleAccountStatusChange(r, 'departed')}>
+                <Button size="small" icon={<StopOutlined />}>回收账号</Button>
+              </Popconfirm>
+            ))}
+            {r.id !== currentUser?.id && (
+              <Popconfirm title="仅误建账号才建议删除。确认永久删除该用户？" onConfirm={() => handleDelete(r.id)}>
+                <Button size="small" danger icon={<DeleteOutlined />}>误建删除</Button>
               </Popconfirm>
             )}
           </Space>
-        </Space>
-      </Card>
-    </List.Item>
-  );
+        );
+      },
+    },
+  ];
+
+  const renderUserCard = (record) => {
+    const isDeparted = getAccountStatus(record) === 'departed';
+    return (
+      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+        <Card size="small" style={{ width: '100%' }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.display_name || record.username}</div>
+                <Text type="secondary">用户名：{record.username}</Text>
+              </div>
+              <Space size={4} wrap style={{ justifyContent: 'flex-end' }}>
+                {renderAccountStatus(record)}
+                <Tag color={roleMap[record.role]?.color}>{roleMap[record.role]?.label || record.role}</Tag>
+              </Space>
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <Text type="secondary">部门：{departmentOptions.find(o => o.value === record.department)?.label || '-'}</Text>
+              <Text type="secondary">最近登录：{record.last_login?.slice(0, 16) || '从未登录'}</Text>
+            </div>
+            <div>
+              <Text type="secondary">所属小组：</Text>
+              <Space wrap size={[4, 4]}>
+                {(record.team_names?.length
+                  ? record.team_names
+                  : (record.team_name ? [record.team_name] : [])
+                ).map(name => <Tag key={`${record.id}-${name}`}>{name}</Tag>)}
+                {!(record.team_names?.length || record.team_name) && <Text type="secondary">-</Text>}
+              </Space>
+            </div>
+            <div>
+              <Text type="secondary">所属项目组：</Text>
+              <Space wrap size={[4, 4]}>
+                {record.project_group_names?.length
+                  ? record.project_group_names.map(name => <Tag key={`${record.id}-pg-${name}`} color="blue">{name}</Tag>)
+                  : <Text type="secondary">-</Text>}
+              </Space>
+            </div>
+            <Space size="small" wrap>
+              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
+              {record.id !== currentUser?.id && (
+                <Button size="small" icon={<LockOutlined />} disabled={isDeparted} onClick={() => setResetPwdTarget(record)}>重置密码</Button>
+              )}
+              {record.id !== currentUser?.id && (isDeparted ? (
+                <Popconfirm title="确认恢复该账号登录资格？恢复后需重置密码。" onConfirm={() => handleAccountStatusChange(record, 'active')}>
+                  <Button size="small" icon={<CheckCircleOutlined />}>恢复启用</Button>
+                </Popconfirm>
+              ) : (
+                <Popconfirm title="确认回收该账号？该用户将无法登录，历史记录会保留。" onConfirm={() => handleAccountStatusChange(record, 'departed')}>
+                  <Button size="small" icon={<StopOutlined />}>回收账号</Button>
+                </Popconfirm>
+              ))}
+              {record.id !== currentUser?.id && (
+                <Popconfirm title="仅误建账号才建议删除。确认永久删除该用户？" onConfirm={() => handleDelete(record.id)}>
+                  <Button size="small" danger icon={<DeleteOutlined />}>误建删除</Button>
+                </Popconfirm>
+              )}
+            </Space>
+          </Space>
+        </Card>
+      </List.Item>
+    );
+  };
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>

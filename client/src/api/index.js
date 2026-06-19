@@ -37,6 +37,7 @@ export const usersApi = {
   update: (id, data) => api.put(`/users/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/users/${id}`).then(r => r.data),
   resetPassword: (id, data) => api.put(`/users/${id}/reset-password`, data).then(r => r.data),
+  updateAccountStatus: (id, data) => api.put(`/users/${id}/account-status`, data).then(r => r.data),
   getDirectorTeams: (id) => api.get(`/users/${id}/director-teams`).then(r => r.data),
 };
 

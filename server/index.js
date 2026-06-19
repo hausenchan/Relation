@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -30,6 +31,10 @@ function normalizeGenericAttachmentRow(row) {
 
 function normalizeSubjectAttachmentRow(row) {
   return row ? { ...row, file_name: normalizeUploadedFilename(row.file_name) } : row;
+}
+
+function isDepartedUser(user) {
+  return (user?.account_status || 'active') === 'departed';
 }
 
 const storage = multer.diskStorage({
@@ -345,12 +350,15 @@ function auth(req, res, next) {
     const decoded = jwt.verify(token, JWT_SECRET);
     // 验证 password_version，改密码后旧 token 失效
     const user = db.prepare(`
-      SELECT id, username, display_name, role, department, team_id, executive_role, password_version
+      SELECT id, username, display_name, role, department, team_id, executive_role, password_version, account_status
       FROM users
       WHERE id = ?
     `).get(decoded.id);
     if (!user || (user.password_version || 0) !== (decoded.pwv || 0)) {
       return res.status(401).json({ error: '登录已失效，请重新登录' });
+    }
+    if (isDepartedUser(user)) {
+      return res.status(401).json({ error: '账号已停用，请联系管理员' });
     }
     req.user = { ...decoded, ...user, pwv: user.password_version || 0 };
     next();
@@ -398,6 +406,10 @@ db.exec(`
     password_hash TEXT NOT NULL,
     display_name TEXT,
     role TEXT NOT NULL DEFAULT 'member',
+    account_status TEXT DEFAULT 'active',
+    disabled_at DATETIME,
+    disabled_by INTEGER,
+    disabled_reason TEXT,
     need_weekly_report INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     last_login DATETIME
@@ -1558,7 +1570,20 @@ if (userCols.length > 0) {
   if (!userCols.includes('password_version')) {
     db.exec("ALTER TABLE users ADD COLUMN password_version INTEGER DEFAULT 0");
   }
+  if (!userCols.includes('account_status')) {
+    db.exec("ALTER TABLE users ADD COLUMN account_status TEXT DEFAULT 'active'");
+  }
+  if (!userCols.includes('disabled_at')) {
+    db.exec("ALTER TABLE users ADD COLUMN disabled_at DATETIME DEFAULT NULL");
+  }
+  if (!userCols.includes('disabled_by')) {
+    db.exec("ALTER TABLE users ADD COLUMN disabled_by INTEGER DEFAULT NULL");
+  }
+  if (!userCols.includes('disabled_reason')) {
+    db.exec("ALTER TABLE users ADD COLUMN disabled_reason TEXT DEFAULT NULL");
+  }
   db.prepare('UPDATE users SET need_weekly_report = 0 WHERE need_weekly_report IS NULL').run();
+  db.prepare("UPDATE users SET account_status = 'active' WHERE account_status IS NULL OR account_status = ''").run();
 }
 
 // 公司经营模块：经营周会 / 战略月会报表表
@@ -1861,6 +1886,7 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/auth\/password$/, businessType: '账号安全', table: 'users', action: '修改密码', userTarget: true },
   { pattern: /^\/auth\/logout$/, businessType: '账号安全', action: '退出登录' },
   { pattern: /^\/users\/(\d+)\/reset-password$/, businessType: '用户管理', table: 'users', idGroup: 1, action: '重置密码' },
+  { pattern: /^\/users\/(\d+)\/account-status$/, businessType: '用户管理', table: 'users', idGroup: 1, action: '账号状态变更' },
   { pattern: /^\/users\/(\d+)\/weekly-report$/, businessType: '周报管理', table: 'users', idGroup: 1, action: '配置周报权限' },
   { pattern: /^\/admin\/menu-perms\/(\d+)$/, businessType: '菜单权限管理', table: 'users', idGroup: 1, action: '保存菜单权限' },
   { pattern: /^\/persons\/(\d+)\/assign$/, businessType: '人脉管理', table: 'persons', idGroup: 1, action: '分配人脉' },
@@ -2978,6 +3004,23 @@ app.post('/api/auth/login', (req, res) => {
     });
     return res.status(401).json({ error: '用户名或密码错误' });
   }
+  if (isDepartedUser(user)) {
+    writeOperationLog({
+      req,
+      operator: user,
+      business_type: '账号安全',
+      business_id: String(user.id),
+      business_name: user.display_name || user.username,
+      action: '登录失败',
+      method: 'POST',
+      path: req.originalUrl,
+      target_table: 'users',
+      success: false,
+      error_message: '账号已停用',
+      details_json: safeJsonStringifyForLog({ body: sanitizeLogPayload({ username }) }),
+    });
+    return res.status(403).json({ error: '账号已停用，请联系管理员' });
+  }
   db.prepare("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
   const token = jwt.sign(
     { id: user.id, username: user.username, display_name: user.display_name, role: user.role, pwv: user.password_version || 0 },
@@ -3011,6 +3054,7 @@ app.post('/api/auth/login', (req, res) => {
       username: user.username,
       display_name: user.display_name,
       role: user.role,
+      account_status: user.account_status || 'active',
       department: user.department || null,
       team_id: user.team_id || null,
       team_ids: teamIds,
@@ -3024,7 +3068,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/auth/me', auth, (req, res) => {
-  const user = db.prepare('SELECT id, username, display_name, role, department, team_id, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
+  const user = db.prepare('SELECT id, username, display_name, role, account_status, department, team_id, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
   const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(req.user.id);
   const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(req.user.id).map(r => r.menu_key);
   res.json({
@@ -3059,12 +3103,56 @@ app.put('/api/users/:id/reset-password', auth, adminOnly, (req, res) => {
   res.json({ success: true });
 });
 
+app.put('/api/users/:id/account-status', auth, adminOnly, (req, res) => {
+  const targetId = Number(req.params.id);
+  const { account_status, disabled_reason } = req.body || {};
+  if (!['active', 'departed'].includes(account_status)) {
+    return res.status(400).json({ error: '账号状态不合法' });
+  }
+  if (targetId === req.user.id && account_status === 'departed') {
+    return res.status(400).json({ error: '不能回收自己的账号' });
+  }
+
+  const target = db.prepare('SELECT id FROM users WHERE id = ?').get(targetId);
+  if (!target) return res.status(404).json({ error: '用户不存在' });
+
+  if (account_status === 'departed') {
+    const randomPasswordHash = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), 10);
+    db.prepare(`
+      UPDATE users
+      SET account_status = 'departed',
+          password_hash = ?,
+          password_version = COALESCE(password_version, 0) + 1,
+          disabled_at = CURRENT_TIMESTAMP,
+          disabled_by = ?,
+          disabled_reason = ?
+      WHERE id = ?
+    `).run(randomPasswordHash, req.user.id, disabled_reason || null, targetId);
+  } else {
+    db.prepare(`
+      UPDATE users
+      SET account_status = 'active',
+          password_version = COALESCE(password_version, 0) + 1,
+          disabled_at = NULL,
+          disabled_by = NULL,
+          disabled_reason = NULL
+      WHERE id = ?
+    `).run(targetId);
+  }
+
+  res.json({ success: true });
+});
+
 // 所有登录用户可访问（用于指派选人下拉）
 app.get('/api/users/simple', auth, (req, res) => {
-  const { department, include_readonly } = req.query;
+  const { department, include_readonly, include_departed } = req.query;
   const where = [];
   const params = [];
 
+  if (!['1', 'true'].includes(String(include_departed))) {
+    where.push("COALESCE(account_status, 'active') = ?");
+    params.push('active');
+  }
   if (!['1', 'true'].includes(String(include_readonly))) {
     where.push('role != ?');
     params.push('readonly');
@@ -3076,15 +3164,16 @@ app.get('/api/users/simple', auth, (req, res) => {
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   const users = db.prepare(`
-    SELECT id, username, display_name, role, team_id, leader_id, department
+    SELECT id, username, display_name, role, account_status, team_id, leader_id, department
     FROM users
     ${whereSql}
-    ORDER BY display_name ASC
+    ORDER BY COALESCE(account_status, 'active') ASC, display_name ASC
   `).all(...params);
   const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
   const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
   res.json(users.map(u => ({
     ...u,
+    account_status: u.account_status || 'active',
     team_ids: [...new Set([
       ...(u.team_id ? [u.team_id] : []),
       ...userTeams.filter(row => row.user_id === u.id).map(row => row.team_id),
@@ -3097,7 +3186,7 @@ app.get('/api/users/simple', auth, (req, res) => {
 
 // =========== 用户管理 API（admin only）===========
 app.get('/api/users', auth, adminOnly, (req, res) => {
-  const users = db.prepare('SELECT id, username, display_name, role, department, team_id, created_at, last_login FROM users ORDER BY created_at ASC').all();
+  const users = db.prepare("SELECT id, username, display_name, role, account_status, department, team_id, created_at, last_login, disabled_at, disabled_by, disabled_reason FROM users ORDER BY COALESCE(account_status, 'active') ASC, created_at ASC").all();
   const perms = db.prepare('SELECT * FROM user_module_perms').all();
   const teams = db.prepare('SELECT * FROM teams').all();
   const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
@@ -3137,7 +3226,7 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
   try {
     const normalizedTeamIds = [...new Set((team_ids?.length ? team_ids : (team_id ? [team_id] : [])).map(id => Number(id)).filter(Boolean))];
     const primaryTeamId = normalizedTeamIds[0] || null;
-    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, leader_id, department, team_id) VALUES (?,?,?,?,?,?,?)").run(username, hash, display_name, role || 'member', leader_id || null, department || null, primaryTeamId);
+    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, account_status, leader_id, department, team_id) VALUES (?,?,?,?,?,?,?,?)").run(username, hash, display_name, role || 'member', 'active', leader_id || null, department || null, primaryTeamId);
     syncUserTeams(r.lastInsertRowid, normalizedTeamIds);
     syncUserProjectGroups(r.lastInsertRowid, project_group_ids || []);
     if (role === 'guest' && modulePerms?.length) {

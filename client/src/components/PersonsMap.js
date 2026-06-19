@@ -621,7 +621,7 @@ export default function PersonsMap() {
   }, []);
 
   useEffect(() => {
-    usersApi.listSimple({ include_readonly: true })
+    usersApi.listSimple({ include_readonly: true, include_departed: true })
       .then(setCreatorUsers)
       .catch(() => {
         setCreatorUsers(currentUser ? [currentUser] : []);
@@ -1087,7 +1087,7 @@ export default function PersonsMap() {
               value: u.id,
               label: u.id === currentUser?.id
                 ? `${u.display_name || u.username || '我'}（我）`
-                : (u.display_name || u.username || `用户${u.id}`),
+                : `${u.display_name || u.username || `用户${u.id}`}${u.account_status === 'departed' ? '（已离职）' : ''}`,
             }))}
           />
           <Space>

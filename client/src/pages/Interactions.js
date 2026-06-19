@@ -108,7 +108,7 @@ export default function Interactions() {
   useEffect(() => {
     personsApi.list({}).then(setPersons);
     usersApi.listSimple().then(setUsers).catch(() => {});
-    usersApi.listSimple({ include_readonly: true })
+    usersApi.listSimple({ include_readonly: true, include_departed: true })
       .then(setCreatorUsers)
       .catch(() => setCreatorUsers(user ? [user] : []));
   }, [user]);
@@ -338,7 +338,7 @@ export default function Interactions() {
             value: u.id,
             label: u.id === user?.id
               ? `${u.display_name || u.username || '我'}（我）`
-              : (u.display_name || u.username),
+              : `${u.display_name || u.username}${u.account_status === 'departed' ? '（已离职）' : ''}`,
           }))}
         />
         {canFilterVisibility && (
