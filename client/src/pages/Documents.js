@@ -1478,6 +1478,7 @@ export default function Documents() {
   const [editorBlocks, setEditorBlocks] = useState([createBlock()]);
   const [selectedBlockId, setSelectedBlockId] = useState(null);
   const [selectedTableCell, setSelectedTableCell] = useState(null);
+  const [selectedTableRange, setSelectedTableRange] = useState(null);
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
@@ -1567,6 +1568,7 @@ export default function Documents() {
   const suppressEditorClickRef = useRef(false);
   const inlineToolbarHideTimerRef = useRef(null);
   const tableResizeRef = useRef(null);
+  const tableCellSelectionRef = useRef(null);
   const composingBlockIdsRef = useRef(new Set());
   const replaceAttachmentInputRef = useRef(null);
   const replaceAttachmentTargetRef = useRef(null);
@@ -2298,6 +2300,7 @@ export default function Documents() {
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     if (autoSaveIntervalRef.current) window.clearInterval(autoSaveIntervalRef.current);
     if (tableResizeRef.current?.cleanup) tableResizeRef.current.cleanup();
+    if (tableCellSelectionRef.current?.cleanup) tableCellSelectionRef.current.cleanup();
     saveCurrentDocumentRef.current?.({ silent: true }).catch(() => {});
     editorAreaSelectionRef.current?.cleanup?.();
     blockHandleSelectionRef.current?.cleanup?.();
@@ -2305,16 +2308,17 @@ export default function Documents() {
   }, []);
 
   useEffect(() => {
-    if (!selectedTableCell) return undefined;
+    if (!selectedTableCell && !selectedTableRange) return undefined;
     const handleTableOutsidePointerDown = (event) => {
       const target = event.target;
       if (target?.closest?.('[data-document-table-menu="true"]')) return;
       if (target?.closest?.('[data-document-table-shell="true"]')) return;
       setSelectedTableCell(null);
+      setSelectedTableRange(null);
     };
     document.addEventListener('pointerdown', handleTableOutsidePointerDown, true);
     return () => document.removeEventListener('pointerdown', handleTableOutsidePointerDown, true);
-  }, [selectedTableCell]);
+  }, [selectedTableCell, selectedTableRange]);
 
   useEffect(() => {
     if (!docContextMenu.open) return undefined;
@@ -6157,8 +6161,40 @@ export default function Documents() {
     const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
-    const selectedColumnIndex = selectedCell ? selectedCell.columnIndex : -1;
-    const selectedRowIndex = selectedCell?.rowIndex ?? -1;
+    const selectedTableCellIsBody = selectedCell?.type !== 'header' && Number.isInteger(selectedCell?.rowIndex);
+    const selectedColumnIndex = Number.isInteger(selectedCell?.columnIndex) ? selectedCell.columnIndex : -1;
+    const selectedRowIndex = selectedTableCellIsBody ? selectedCell.rowIndex : -1;
+    const activeTableRange = selectedTableRange?.blockId === block.id ? selectedTableRange : null;
+    const normalizeTableRange = (range) => {
+      if (!range) return null;
+      const clampRow = (rowIndex) => Math.max(0, Math.min(normalizedRows.length - 1, Number(rowIndex) || 0));
+      const clampColumn = (columnIndex) => Math.max(0, Math.min(columns.length - 1, Number(columnIndex) || 0));
+      const startRowIndex = clampRow(range.startRowIndex);
+      const endRowIndex = clampRow(range.endRowIndex);
+      const startColumnIndex = clampColumn(range.startColumnIndex);
+      const endColumnIndex = clampColumn(range.endColumnIndex);
+      return {
+        startRowIndex: Math.min(startRowIndex, endRowIndex),
+        endRowIndex: Math.max(startRowIndex, endRowIndex),
+        startColumnIndex: Math.min(startColumnIndex, endColumnIndex),
+        endColumnIndex: Math.max(startColumnIndex, endColumnIndex),
+      };
+    };
+    const selectedRangeBounds = normalizeTableRange(activeTableRange);
+    const hasSelectedRange = Boolean(
+      selectedRangeBounds
+      && (
+        selectedRangeBounds.startRowIndex !== selectedRangeBounds.endRowIndex
+        || selectedRangeBounds.startColumnIndex !== selectedRangeBounds.endColumnIndex
+      )
+    );
+    const isCellInSelectedRange = (rowIndex, columnIndex) => (
+      hasSelectedRange
+      && rowIndex >= selectedRangeBounds.startRowIndex
+      && rowIndex <= selectedRangeBounds.endRowIndex
+      && columnIndex >= selectedRangeBounds.startColumnIndex
+      && columnIndex <= selectedRangeBounds.endColumnIndex
+    );
     const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
     const horizontalCenter = Boolean(meta.horizontalCenter);
     const verticalCenter = Boolean(meta.verticalCenter);
@@ -6188,7 +6224,8 @@ export default function Documents() {
       const nextRows = [...normalizedRows];
       nextRows.splice(insertIndex, 0, columns.map(() => ''));
       persistTableMeta({ rows: nextRows });
-      setSelectedTableCell({ blockId: block.id, rowIndex: insertIndex, columnIndex: Math.max(0, selectedColumnIndex) });
+      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: insertIndex, columnIndex: Math.max(0, selectedColumnIndex) });
+      setSelectedTableRange(null);
     };
     const insertColumn = (targetIndex = columns.length - 1, position = 'after') => {
       const safeIndex = Math.max(0, Math.min(columns.length - 1, Number(targetIndex) || 0));
@@ -6203,33 +6240,49 @@ export default function Documents() {
       const nextWidths = [...columnWidths];
       nextWidths.splice(insertIndex, 0, columnWidths[safeIndex] || 160);
       persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
-      setSelectedTableCell({ blockId: block.id, rowIndex: Math.max(0, selectedRowIndex), columnIndex: insertIndex });
+      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: Math.max(0, selectedRowIndex), columnIndex: insertIndex });
+      setSelectedTableRange(null);
     };
     const clearSelectedCell = () => {
-      if (!selectedCell) return;
+      if (hasSelectedRange) {
+        const nextRows = normalizedRows.map((row, rowIndex) => (
+          row.map((cell, columnIndex) => (
+            isCellInSelectedRange(rowIndex, columnIndex) ? '' : cell
+          ))
+        ));
+        persistTableMeta({ rows: nextRows });
+        return;
+      }
+      if (!selectedTableCellIsBody) return;
       updateCell(selectedRowIndex, selectedColumnIndex, '');
     };
     const deleteSelectedRow = () => {
-      if (!selectedCell || normalizedRows.length <= 1) return;
-      const nextRows = normalizedRows.filter((_, index) => index !== selectedRowIndex);
+      const targetRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : selectedRowIndex;
+      if (targetRowIndex < 0 || normalizedRows.length <= 1) return;
+      const nextRows = normalizedRows.filter((_, index) => index !== targetRowIndex);
       persistTableMeta({ rows: nextRows });
       setSelectedTableCell({
         blockId: block.id,
-        rowIndex: Math.max(0, Math.min(selectedRowIndex, nextRows.length - 1)),
-        columnIndex: selectedColumnIndex,
+        type: 'body',
+        rowIndex: Math.max(0, Math.min(targetRowIndex, nextRows.length - 1)),
+        columnIndex: Math.max(0, selectedColumnIndex),
       });
+      setSelectedTableRange(null);
     };
     const deleteSelectedColumn = () => {
-      if (!selectedCell || columns.length <= 1) return;
-      const nextColumns = columns.filter((_, index) => index !== selectedColumnIndex);
-      const nextRows = normalizedRows.map(row => row.filter((_, index) => index !== selectedColumnIndex));
-      const nextWidths = columnWidths.filter((_, index) => index !== selectedColumnIndex);
+      const targetColumnIndex = hasSelectedRange ? selectedRangeBounds.startColumnIndex : selectedColumnIndex;
+      if (targetColumnIndex < 0 || columns.length <= 1) return;
+      const nextColumns = columns.filter((_, index) => index !== targetColumnIndex);
+      const nextRows = normalizedRows.map(row => row.filter((_, index) => index !== targetColumnIndex));
+      const nextWidths = columnWidths.filter((_, index) => index !== targetColumnIndex);
       persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
       setSelectedTableCell({
         blockId: block.id,
-        rowIndex: selectedRowIndex,
-        columnIndex: Math.max(0, Math.min(selectedColumnIndex, nextColumns.length - 1)),
+        type: 'body',
+        rowIndex: Math.max(0, selectedRowIndex),
+        columnIndex: Math.max(0, Math.min(targetColumnIndex, nextColumns.length - 1)),
       });
+      setSelectedTableRange(null);
     };
     const distributeSelectedColumnWidths = () => {
       const averageWidth = Math.max(80, Math.round(tableWidth / columns.length));
@@ -6237,7 +6290,77 @@ export default function Documents() {
     };
     const selectTableCell = (rowIndex, columnIndex) => {
       setSelectedBlockId(block.id);
-      setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
+      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex, columnIndex });
+      setSelectedTableRange(null);
+    };
+    const selectTableHeader = (columnIndex) => {
+      setSelectedBlockId(block.id);
+      setSelectedTableCell({ blockId: block.id, type: 'header', rowIndex: -1, columnIndex });
+      setSelectedTableRange(null);
+    };
+    const getTableCellFromPoint = (clientX, clientY) => {
+      const target = document.elementFromPoint(clientX, clientY);
+      const cell = target?.closest?.('[data-document-table-cell="true"]');
+      if (!cell || cell.dataset.tableBlockId !== block.id) return null;
+      const rowIndex = Number(cell.dataset.rowIndex);
+      const columnIndex = Number(cell.dataset.columnIndex);
+      if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return null;
+      return { rowIndex, columnIndex };
+    };
+    const beginTableCellSelection = (event, rowIndex, columnIndex) => {
+      if (event.button !== 0) return;
+      setSelectedBlockId(block.id);
+      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex, columnIndex });
+      setSelectedTableRange(null);
+      const selectionState = {
+        blockId: block.id,
+        startRowIndex: rowIndex,
+        startColumnIndex: columnIndex,
+        startX: event.clientX,
+        startY: event.clientY,
+        dragging: false,
+        cleanup: null,
+      };
+      const applyRange = (targetCell) => {
+        setSelectedTableCell({
+          blockId: block.id,
+          type: 'body',
+          rowIndex: targetCell.rowIndex,
+          columnIndex: targetCell.columnIndex,
+        });
+        setSelectedTableRange({
+          blockId: block.id,
+          startRowIndex: selectionState.startRowIndex,
+          startColumnIndex: selectionState.startColumnIndex,
+          endRowIndex: targetCell.rowIndex,
+          endColumnIndex: targetCell.columnIndex,
+        });
+      };
+      const handleMouseMove = moveEvent => {
+        const targetCell = getTableCellFromPoint(moveEvent.clientX, moveEvent.clientY);
+        if (!targetCell) return;
+        const movedDistance = Math.hypot(moveEvent.clientX - selectionState.startX, moveEvent.clientY - selectionState.startY);
+        const sameCell = targetCell.rowIndex === rowIndex && targetCell.columnIndex === columnIndex;
+        if (!selectionState.dragging) {
+          if (movedDistance < 6 || sameCell) return;
+          selectionState.dragging = true;
+        }
+        applyRange(targetCell);
+        moveEvent.preventDefault();
+      };
+      const handleMouseUp = () => {
+        if (!selectionState.dragging) setSelectedTableRange(null);
+        selectionState.cleanup?.();
+      };
+      selectionState.cleanup = () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        if (tableCellSelectionRef.current === selectionState) tableCellSelectionRef.current = null;
+      };
+      if (tableCellSelectionRef.current?.cleanup) tableCellSelectionRef.current.cleanup();
+      tableCellSelectionRef.current = selectionState;
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
     };
     const beginColumnResize = (event, columnIndex) => {
       event.preventDefault();
@@ -6273,8 +6396,8 @@ export default function Documents() {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     };
-    const menuColumnIndex = selectedColumnIndex >= 0 ? selectedColumnIndex : 0;
-    const menuRowIndex = selectedRowIndex >= 0 ? selectedRowIndex : 0;
+    const menuColumnIndex = hasSelectedRange ? selectedRangeBounds.startColumnIndex : (selectedColumnIndex >= 0 ? selectedColumnIndex : 0);
+    const menuRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : (selectedRowIndex >= 0 ? selectedRowIndex : 0);
     const selectedColumnLeft = columnWidths.slice(0, menuColumnIndex).reduce((sum, width) => sum + width, 0);
     const tableMenuLeft = Math.max(12, Math.min(selectedColumnLeft + columnWidths[menuColumnIndex] / 2 + 8, Math.max(12, tableWidth - 260)));
     const tableMenuTop = Math.max(0, Math.min(44 + Math.max(0, menuRowIndex) * 42, 24));
@@ -6324,7 +6447,7 @@ export default function Documents() {
         <span style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', display: 'block' }} />
       </span>
     );
-    const tableMenu = selectedCell ? (
+    const tableMenu = hasSelectedRange ? (
       <div
         data-document-table-menu="true"
         onMouseDown={event => event.preventDefault()}
@@ -6384,7 +6507,7 @@ export default function Documents() {
           onChange={event => updateBlock(block.id, { content: event.target.value })}
           style={{ fontWeight: 600 }}
         />
-        <div data-document-table-shell="true" style={{ maxWidth: '100%', position: 'relative', paddingBottom: selectedCell ? 8 : 0, overflow: 'visible' }}>
+        <div data-document-table-shell="true" style={{ maxWidth: '100%', position: 'relative', paddingBottom: hasSelectedRange ? 8 : 0, overflow: 'visible' }}>
           {tableMenu}
           <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
             <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}>
@@ -6396,18 +6519,18 @@ export default function Documents() {
                 {columns.map((column, columnIndex) => (
                   <th
                     key={`col-${columnIndex}`}
-                    onClick={() => selectTableCell(0, columnIndex)}
+                    onMouseDown={() => selectTableHeader(columnIndex)}
                     style={{
                       position: 'relative',
                       border: '1px solid #e5e7eb',
-                      background: selectedColumnIndex === columnIndex ? '#fde2e2' : '#f8fafc',
+                      background: selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? '#eef2ff' : '#f8fafc',
                       padding: 4,
                     }}
                   >
                     <Input
                       value={column}
                       bordered={false}
-                      onFocus={() => selectTableCell(0, columnIndex)}
+                      onFocus={() => selectTableHeader(columnIndex)}
                       onChange={event => updateColumn(columnIndex, event.target.value)}
                       style={{ fontWeight: 600 }}
                     />
@@ -6432,16 +6555,24 @@ export default function Documents() {
               {normalizedRows.map((row, rowIndex) => (
                 <tr key={`row-${rowIndex}`}>
                   {row.map((cell, columnIndex) => (
+                    (() => {
+                      const selectedInRange = isCellInSelectedRange(rowIndex, columnIndex);
+                      const activeCell = selectedTableCellIsBody && selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex;
+                      return (
                     <td
                       key={`cell-${rowIndex}-${columnIndex}`}
-                      onClick={() => selectTableCell(rowIndex, columnIndex)}
+                      data-document-table-cell="true"
+                      data-table-block-id={block.id}
+                      data-row-index={rowIndex}
+                      data-column-index={columnIndex}
+                      onMouseDown={event => beginTableCellSelection(event, rowIndex, columnIndex)}
                       style={{
                         border: '1px solid #e5e7eb',
                         padding: 4,
                         verticalAlign: verticalCenter ? 'middle' : 'top',
                         textAlign: horizontalCenter ? 'center' : 'left',
-                        background: selectedColumnIndex === columnIndex ? '#fde2e2' : (selectedRowIndex === rowIndex ? '#f8fafc' : '#fff'),
-                        boxShadow: selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex ? 'inset 0 0 0 1px #6366f1' : 'none',
+                        background: selectedInRange ? '#fde2e2' : '#fff',
+                        boxShadow: activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none'),
                       }}
                     >
                       <TextArea
@@ -6453,6 +6584,8 @@ export default function Documents() {
                         style={{ resize: 'none', padding: 4, lineHeight: 1.55, textAlign: horizontalCenter ? 'center' : 'left' }}
                       />
                     </td>
+                      );
+                    })()
                   ))}
                 </tr>
               ))}
