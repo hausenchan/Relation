@@ -2838,6 +2838,42 @@ function getVisibleGoalOwnerIds(userId, role) {
   return [userId];
 }
 
+function canViewOperationTeamGoals(user) {
+  return user?.role === 'leader' && String(user?.department || '').toLowerCase() === 'commercial';
+}
+
+function isOperationTeamGoal(goal) {
+  const scopeType = String(goal?.scope_type || '').toLowerCase();
+  const department = String(goal?.department || goal?.team_department || goal?.owner_department || '').toLowerCase();
+  return scopeType === 'team' && department === 'operation';
+}
+
+function buildGoalVisibilityFilter(user) {
+  const visibleOwnerIds = getVisibleGoalOwnerIds(user.id, user.role);
+  if (visibleOwnerIds === null) return { sql: '', params: [] };
+
+  const conditions = [];
+  const params = [];
+  if (visibleOwnerIds.length > 0) {
+    conditions.push(`g.owner_id IN (${visibleOwnerIds.map(() => '?').join(',')})`);
+    params.push(...visibleOwnerIds);
+  }
+
+  if (canViewOperationTeamGoals(user)) {
+    conditions.push("(g.scope_type = 'team' AND COALESCE(g.department, tm.department, u.department) = 'operation')");
+  }
+
+  if (!conditions.length) return { sql: ' AND 1=0', params: [] };
+  return { sql: ` AND (${conditions.join(' OR ')})`, params };
+}
+
+function canAccessGoal(user, goal) {
+  const visibleOwnerIds = getVisibleGoalOwnerIds(user.id, user.role);
+  if (visibleOwnerIds === null) return true;
+  if (visibleOwnerIds.includes(Number(goal.owner_id))) return true;
+  return canViewOperationTeamGoals(user) && isOperationTeamGoal(goal);
+}
+
 function canManageGoalForOwner(actor, ownerId) {
   if (isAdmin(actor.role)) return true;
   if (Number(ownerId) === actor.id) return true;
@@ -8841,7 +8877,6 @@ app.get('/api/trips/stats/summary', (req, res) => {
 // 获取目标列表
 app.get('/api/goals', (req, res) => {
   const { department, status, goal_type, scope_type, period, parent_id, owner_id, owner_role, project_group_id, team_id } = req.query;
-  const { id: userId, role } = req.user;
 
   let q = `
     SELECT
@@ -8851,7 +8886,8 @@ app.get('/api/goals', (req, res) => {
       u.department as owner_department,
       p.title as parent_title,
       pg.name as project_group_name,
-      tm.name as team_name
+      tm.name as team_name,
+      tm.department as team_department
     FROM goals g
     LEFT JOIN users u ON g.owner_id = u.id
     LEFT JOIN goals p ON g.parent_id = p.id
@@ -8861,17 +8897,12 @@ app.get('/api/goals', (req, res) => {
   `;
   const params = [];
 
-  const visibleOwnerIds = getVisibleGoalOwnerIds(userId, role);
-  if (visibleOwnerIds !== null) {
-    if (visibleOwnerIds.length === 0) {
-      return res.json([]);
-    }
-    q += ` AND g.owner_id IN (${visibleOwnerIds.map(() => '?').join(',')})`;
-    params.push(...visibleOwnerIds);
-  }
+  const visibility = buildGoalVisibilityFilter(req.user);
+  q += visibility.sql;
+  params.push(...visibility.params);
 
   if (department) {
-    q += ' AND COALESCE(g.department, u.department) = ?';
+    q += ' AND COALESCE(g.department, tm.department, u.department) = ?';
     params.push(department);
   }
   if (status) {
@@ -8935,7 +8966,7 @@ app.get('/api/goals', (req, res) => {
   goals.forEach(g => {
     const childCount = db.prepare('SELECT COUNT(*) as cnt FROM goals WHERE parent_id = ?').get(g.id);
     g.child_count = childCount.cnt;
-    g.department = g.department || g.owner_department || null;
+    g.department = g.department || g.team_department || g.owner_department || null;
   });
 
   res.json(goals);
@@ -8943,7 +8974,6 @@ app.get('/api/goals', (req, res) => {
 
 app.get('/api/goals/:id', (req, res) => {
   const { id } = req.params;
-  const { id: userId, role } = req.user;
   const goal = db.prepare(`
     SELECT
       g.*,
@@ -8952,7 +8982,8 @@ app.get('/api/goals/:id', (req, res) => {
       u.department as owner_department,
       p.title as parent_title,
       pg.name as project_group_name,
-      tm.name as team_name
+      tm.name as team_name,
+      tm.department as team_department
     FROM goals g
     LEFT JOIN users u ON g.owner_id = u.id
     LEFT JOIN goals p ON g.parent_id = p.id
@@ -8963,8 +8994,7 @@ app.get('/api/goals/:id', (req, res) => {
 
   if (!goal) return res.status(404).json({ error: '目标不存在' });
 
-  const visibleOwnerIds = getVisibleGoalOwnerIds(userId, role);
-  if (visibleOwnerIds !== null && !visibleOwnerIds.includes(goal.owner_id)) {
+  if (!canAccessGoal(req.user, goal)) {
     return res.status(403).json({ error: '无权限查看该目标' });
   }
 
@@ -8988,7 +9018,7 @@ app.get('/api/goals/:id', (req, res) => {
   decGoal.parent_title = decrypt(decGoal.parent_title);
   res.json({
     ...decGoal,
-    department: decGoal.department || decGoal.owner_department || null,
+    department: decGoal.department || decGoal.team_department || decGoal.owner_department || null,
     children,
   });
 });
