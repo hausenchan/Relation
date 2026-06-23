@@ -566,13 +566,13 @@ export default function WeeklyReports() {
             <RangePicker style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="completed" label="本周完成" rules={[{ required: true, message: '请填写本周完成内容' }]} valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="本周完成的主要工作..." minHeight={140} />
+            <RichTextEditor placeholder="本周完成的主要工作..." minHeight={140} enableTables />
           </Form.Item>
           <Form.Item name="next_week_plan" label="下周计划" rules={[{ required: true, message: '请填写下周计划' }]} valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="下周计划的主要工作..." minHeight={140} />
+            <RichTextEditor placeholder="下周计划的主要工作..." minHeight={140} enableTables />
           </Form.Item>
           <Form.Item name="risks" label="风险与问题" valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="遇到的风险、问题或需要协调的事项..." minHeight={120} />
+            <RichTextEditor placeholder="遇到的风险、问题或需要协调的事项..." minHeight={120} enableTables />
           </Form.Item>
         </Form>
       </Modal>

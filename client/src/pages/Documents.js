@@ -837,6 +837,43 @@ function setContentEditableCaretPosition(element, offset = 0) {
   return true;
 }
 
+function setContentEditableSelectionRange(element, start = 0, end = start) {
+  if (!element || typeof document === 'undefined') return false;
+  const selection = window.getSelection?.();
+  if (!selection) return false;
+  const safeStart = Math.max(0, Number(start) || 0);
+  const safeEnd = Math.max(safeStart, Number(end) || safeStart);
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  const textNodes = [];
+  let node = walker.nextNode();
+  while (node) {
+    textNodes.push(node);
+    node = walker.nextNode();
+  }
+
+  const resolvePosition = (targetOffset) => {
+    let remaining = targetOffset;
+    for (const textNode of textNodes) {
+      const length = textNode.textContent?.length || 0;
+      if (remaining <= length) return { node: textNode, offset: remaining };
+      remaining -= length;
+    }
+    const lastNode = textNodes[textNodes.length - 1];
+    return lastNode
+      ? { node: lastNode, offset: lastNode.textContent?.length || 0 }
+      : { node: element, offset: element.childNodes.length };
+  };
+
+  const startPosition = resolvePosition(safeStart);
+  const endPosition = resolvePosition(safeEnd);
+  const range = document.createRange();
+  range.setStart(startPosition.node, startPosition.offset);
+  range.setEnd(endPosition.node, endPosition.offset);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  return true;
+}
+
 function InlineHtmlView({ value, as: TagName = 'span', style }) {
   return (
     <TagName
@@ -944,7 +981,7 @@ function blockMetaToText(meta = {}) {
   if (Array.isArray(meta.columns)) parts.push(meta.columns.join(' / '));
   if (Array.isArray(meta.rows)) parts.push(...meta.rows.map(row => row.join(' / ')));
   return parts
-    .map(item => String(item || '').trim())
+    .map(item => inlineHtmlToPlain(item).trim())
     .filter(Boolean)
     .join('\n');
 }
@@ -5279,6 +5316,50 @@ export default function Documents() {
     });
   };
 
+  const getInlineSelectionElementId = (selection) => {
+    if (!selection?.blockId) return '';
+    if (selection.tableCell) {
+      const { type, rowIndex, columnIndex } = selection.tableCell;
+      return `doc-table-cell-input-${selection.blockId}-${type}-${rowIndex}-${columnIndex}`;
+    }
+    return `doc-block-input-${selection.blockId}`;
+  };
+
+  const placeTableCellInlineToolbar = (block, input, tableCell, start, end) => {
+    if (!input || start === end) return;
+    const inputText = input.textContent || '';
+    const selectedText = String(inputText).slice(start, end);
+    if (!selectedText.trim()) {
+      setInlineToolbar(prev => (prev?.blockId === block.id && prev?.tableCell ? null : prev));
+      return;
+    }
+    const selection = window.getSelection?.();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    const rangeRect = range?.getBoundingClientRect?.();
+    const inputRect = input.getBoundingClientRect();
+    const anchorRect = rangeRect && (rangeRect.width || rangeRect.height) ? rangeRect : inputRect;
+    const toolbarWidth = Math.min(inlineToolbarWidth, Math.max(280, window.innerWidth - 24));
+    const left = Math.min(
+      Math.max(12, anchorRect.left + (anchorRect.width / 2) - (toolbarWidth / 2)),
+      Math.max(12, window.innerWidth - toolbarWidth - 12)
+    );
+    const top = Math.max(8, anchorRect.top - 48);
+    setSelectedBlockId(block.id);
+    clearAreaBlockSelection();
+    setSelectedTableCell({ blockId: block.id, ...tableCell });
+    setSelectedTableRange(null);
+    setInlineToolbar({
+      blockId: block.id,
+      tableCell,
+      start,
+      end,
+      text: selectedText,
+      top,
+      left,
+      width: toolbarWidth,
+    });
+  };
+
   const getContentEditableSelectionRange = (element) => {
     if (!element || typeof window === 'undefined') return null;
     const selection = window.getSelection();
@@ -5319,6 +5400,23 @@ export default function Documents() {
     }, 0);
   };
 
+  const handleTableCellTextSelection = (block, tableCell, event) => {
+    const input = event?.target;
+    if (!input?.isContentEditable) return;
+    window.setTimeout(() => {
+      const selectionRange = getContentEditableSelectionRange(input);
+      if (!selectionRange) return;
+      const { start, end } = selectionRange;
+      if (start === end) {
+        if (!commentComposer) {
+          setInlineToolbar(prev => (prev?.blockId === block.id && prev?.tableCell ? null : prev));
+        }
+        return;
+      }
+      placeTableCellInlineToolbar(block, input, tableCell, start, end);
+    }, 0);
+  };
+
   const shiftInlineCommentsForReplace = (comments, start, end, delta, prefixLength = 0) => (
     normalizeInlineComments(comments).map(comment => {
       if (comment.end <= start) return comment;
@@ -5343,10 +5441,78 @@ export default function Documents() {
     }, 0);
   };
 
+  const focusTableCellInlineSelection = (selection, start, end) => {
+    if (!selection?.tableCell) return;
+    window.setTimeout(() => {
+      const input = document.getElementById(getInlineSelectionElementId(selection));
+      if (!input?.isContentEditable) return;
+      input.focus();
+      setContentEditableSelectionRange(input, start, end);
+      const block = editorBlocks.find(item => item.id === selection.blockId) || { id: selection.blockId };
+      placeTableCellInlineToolbar(block, input, selection.tableCell, start, end);
+    }, 0);
+  };
+
+  const getTableCellValue = (block, tableCell) => {
+    const meta = getBlockMeta(block);
+    if (tableCell?.type === 'header') {
+      const columns = Array.isArray(meta.columns) ? meta.columns : [];
+      return String(columns[tableCell.columnIndex] || '');
+    }
+    const rows = Array.isArray(meta.rows) ? meta.rows : [];
+    return String(rows[tableCell?.rowIndex]?.[tableCell?.columnIndex] || '');
+  };
+
+  const updateTableCellInlineContent = (blockId, tableCell, value, shouldPushUndo = true) => {
+    const currentBlock = editorBlocks.find(item => item.id === blockId);
+    if (!currentBlock || !tableCell) return false;
+    const meta = getBlockMeta(currentBlock);
+    const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
+    const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
+    const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
+    const safeColumnIndex = Math.max(0, Math.min(columns.length - 1, Number(tableCell.columnIndex) || 0));
+    const nextMeta = { ...meta };
+
+    if (tableCell.type === 'header') {
+      const currentValue = columns[safeColumnIndex] || '';
+      if (areSerializedValuesEqual(currentValue, value)) return false;
+      if (shouldPushUndo) pushEditorUndoSnapshot();
+      nextMeta.columns = columns.map((column, index) => (index === safeColumnIndex ? value : column));
+      nextMeta.rows = normalizedRows;
+    } else {
+      const safeRowIndex = Math.max(0, Math.min(normalizedRows.length - 1, Number(tableCell.rowIndex) || 0));
+      const currentValue = normalizedRows[safeRowIndex]?.[safeColumnIndex] || '';
+      if (areSerializedValuesEqual(currentValue, value)) return false;
+      if (shouldPushUndo) pushEditorUndoSnapshot();
+      nextMeta.columns = columns;
+      nextMeta.rows = normalizedRows.map((row, rowIndex) => (
+        rowIndex === safeRowIndex
+          ? row.map((cell, columnIndex) => (columnIndex === safeColumnIndex ? value : cell))
+          : row
+      ));
+    }
+
+    setEditorBlocks(prev => prev.map(item => (
+      item.id === blockId ? { ...item, meta: nextMeta } : item
+    )));
+    return true;
+  };
+
   const applyInlineTextReplace = (selection, nextSelectedText, prefixLength = 0) => {
     if (!selection?.blockId) return false;
     const block = editorBlocks.find(item => item.id === selection.blockId);
     if (!block || typeof selection.start !== 'number' || typeof selection.end !== 'number') return false;
+    if (selection.tableCell) {
+      const content = getTableCellValue(block, selection.tableCell);
+      const selected = content.slice(selection.start, selection.end);
+      if (!selected) return false;
+      const nextContent = `${content.slice(0, selection.start)}${nextSelectedText}${content.slice(selection.end)}`;
+      const nextSelectionStart = selection.start + prefixLength;
+      const nextSelectionEnd = nextSelectionStart + selected.length;
+      updateTableCellInlineContent(selection.blockId, selection.tableCell, nextContent);
+      focusTableCellInlineSelection(selection, nextSelectionStart, nextSelectionEnd);
+      return true;
+    }
     const content = String(block.content || '');
     const selected = content.slice(selection.start, selection.end);
     if (!selected) return false;
@@ -5385,7 +5551,7 @@ export default function Documents() {
     if (!selection?.blockId || (!prefix && !suffix)) return false;
     const block = editorBlocks.find(item => item.id === selection.blockId);
     if (!block) return false;
-    const content = String(block.content || '');
+    const content = selection.tableCell ? getTableCellValue(block, selection.tableCell) : String(block.content || '');
     const selected = content.slice(selection.start, selection.end);
     const wrappedSelection = selected.startsWith(prefix) && selected.endsWith(suffix);
     const outerWrappedSelection = content.slice(selection.start - prefix.length, selection.start) === prefix
@@ -5399,6 +5565,12 @@ export default function Documents() {
       : selected;
     const nextContent = `${content.slice(0, replaceStart)}${nextSelectedText}${content.slice(replaceEnd)}`;
     const delta = nextContent.length - content.length;
+
+    if (selection.tableCell) {
+      updateTableCellInlineContent(selection.blockId, selection.tableCell, nextContent);
+      focusTableCellInlineSelection(selection, replaceStart, replaceStart + nextSelectedText.length);
+      return true;
+    }
 
     pushEditorUndoSnapshot();
     setEditorBlocks(prev => prev.map(item => {
@@ -5420,7 +5592,7 @@ export default function Documents() {
   const applyInlineWrap = (kind) => {
     const selection = inlineToolbar;
     if (!selection) return;
-    const editor = document.getElementById(`doc-block-input-${selection.blockId}`);
+    const editor = document.getElementById(getInlineSelectionElementId(selection));
     if (editor?.isContentEditable) {
       editor.focus();
       const commandMap = {
@@ -5443,8 +5615,13 @@ export default function Documents() {
         document.execCommand(commandMap[kind], false, null);
       }
       const block = editorBlocks.find(item => item.id === selection.blockId);
-      updateBlock(selection.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
-      if (block) handleInlineTextSelection(block, { target: editor });
+      if (selection.tableCell) {
+        updateTableCellInlineContent(selection.blockId, selection.tableCell, sanitizeInlineHtml(editor.innerHTML));
+        if (block) handleTableCellTextSelection(block, selection.tableCell, { target: editor });
+      } else {
+        updateBlock(selection.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
+        if (block) handleInlineTextSelection(block, { target: editor });
+      }
       return;
     }
     const selected = selection.text || '';
@@ -5462,13 +5639,18 @@ export default function Documents() {
 
   const applyInlineColor = (color) => {
     if (!inlineToolbar?.blockId || !color) return;
-    const editor = document.getElementById(`doc-block-input-${inlineToolbar.blockId}`);
+    const editor = document.getElementById(getInlineSelectionElementId(inlineToolbar));
     if (editor?.isContentEditable) {
       editor.focus();
       document.execCommand('foreColor', false, color);
-      updateBlock(inlineToolbar.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
       const block = editorBlocks.find(item => item.id === inlineToolbar.blockId);
-      if (block) handleInlineTextSelection(block, { target: editor });
+      if (inlineToolbar.tableCell) {
+        updateTableCellInlineContent(inlineToolbar.blockId, inlineToolbar.tableCell, sanitizeInlineHtml(editor.innerHTML));
+        if (block) handleTableCellTextSelection(block, inlineToolbar.tableCell, { target: editor });
+      } else {
+        updateBlock(inlineToolbar.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
+        if (block) handleInlineTextSelection(block, { target: editor });
+      }
       return;
     }
     applyInlineWrap('color');
@@ -5634,8 +5816,12 @@ export default function Documents() {
         }}
       >
         <Space size={2} wrap style={{ width: '100%' }}>
-          {renderInlineStyleMenu()}
-          <Divider type="vertical" style={{ marginInline: 4 }} />
+          {!inlineToolbar.tableCell && (
+            <>
+              {renderInlineStyleMenu()}
+              <Divider type="vertical" style={{ marginInline: 4 }} />
+            </>
+          )}
           {[
             ['bold', 'B', '加粗'],
             ['italic', 'I', '斜体'],
@@ -5708,12 +5894,16 @@ export default function Documents() {
               A
             </Button>
           </Dropdown>
-          <Divider type="vertical" style={{ marginInline: 4 }} />
-          <Tooltip title="添加评论">
-            <Button size="small" type="text" onClick={openInlineCommentComposer} style={{ paddingInline: 8 }}>
-              评论
-            </Button>
-          </Tooltip>
+          {!inlineToolbar.tableCell && (
+            <>
+              <Divider type="vertical" style={{ marginInline: 4 }} />
+              <Tooltip title="添加评论">
+                <Button size="small" type="text" onClick={openInlineCommentComposer} style={{ paddingInline: 8 }}>
+                  评论
+                </Button>
+              </Tooltip>
+            </>
+          )}
         </Space>
         {commentComposer && (
           <div style={{ marginTop: 8, borderTop: '1px solid #f1f5f9', paddingTop: 8 }}>
@@ -6301,6 +6491,13 @@ export default function Documents() {
       setSelectedTableCell({ blockId: block.id, type: 'header', rowIndex: -1, columnIndex });
       setSelectedTableRange(null);
     };
+    const hideTableInlineToolbarOnBlur = () => {
+      inlineToolbarHideTimerRef.current = window.setTimeout(() => {
+        const activeElement = document.activeElement;
+        if (activeElement?.closest?.('[data-inline-text-toolbar="true"]')) return;
+        setInlineToolbar(null);
+      }, 180);
+    };
     const getTableCellFromPoint = (clientX, clientY) => {
       const target = document.elementFromPoint(clientX, clientY);
       const cell = target?.closest?.('[data-document-table-cell="true"]');
@@ -6537,12 +6734,24 @@ export default function Documents() {
                       boxShadow: selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? 'inset 0 0 0 1px #6366f1' : (isCellInSelectedRange(-1, columnIndex) ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none'),
                     }}
                   >
-                    <Input
+                    <InlineRichTextEditor
+                      id={`doc-table-cell-input-${block.id}-header--1-${columnIndex}`}
                       value={column}
-                      bordered={false}
+                      placeholder=""
                       onFocus={() => selectTableHeader(columnIndex)}
-                      onChange={event => updateColumn(columnIndex, event.target.value)}
-                      style={{ fontWeight: 600 }}
+                      onChange={value => updateColumn(columnIndex, value)}
+                      onMouseUp={event => handleTableCellTextSelection(block, { type: 'header', rowIndex: -1, columnIndex }, event)}
+                      onKeyUp={event => handleTableCellTextSelection(block, { type: 'header', rowIndex: -1, columnIndex }, event)}
+                      onBlur={hideTableInlineToolbarOnBlur}
+                      style={{
+                        minHeight: 26,
+                        padding: 4,
+                        lineHeight: 1.45,
+                        fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
+                        fontWeight: 600,
+                        background: 'transparent',
+                        textAlign: horizontalCenter ? 'center' : 'left',
+                      }}
                     />
                     <span
                       role="presentation"
@@ -6586,13 +6795,23 @@ export default function Documents() {
                         boxShadow: activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none'),
                       }}
                     >
-                      <TextArea
+                      <InlineRichTextEditor
+                        id={`doc-table-cell-input-${block.id}-body-${rowIndex}-${columnIndex}`}
                         value={cell}
-                        bordered={false}
-                        autoSize={{ minRows: 1 }}
+                        placeholder=""
                         onFocus={() => selectTableCell(rowIndex, columnIndex)}
-                        onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
-                        style={{ resize: 'none', padding: 4, lineHeight: 1.55, textAlign: horizontalCenter ? 'center' : 'left' }}
+                        onChange={value => updateCell(rowIndex, columnIndex, value)}
+                        onMouseUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
+                        onKeyUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
+                        onBlur={hideTableInlineToolbarOnBlur}
+                        style={{
+                          minHeight: 28,
+                          padding: 4,
+                          lineHeight: 1.55,
+                          fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
+                          background: 'transparent',
+                          textAlign: horizontalCenter ? 'center' : 'left',
+                        }}
                       />
                     </td>
                       );
@@ -6994,7 +7213,7 @@ export default function Documents() {
               <tr>
                 {columns.map((column, index) => (
                   <th key={`${column}-${index}`} style={{ borderBottom: '2px solid #d1d5db', padding: '10px 12px', textAlign: 'left' }}>
-                    {column}
+                    <InlineHtmlView value={column} />
                   </th>
                 ))}
               </tr>
@@ -7005,7 +7224,7 @@ export default function Documents() {
               <tr key={`row-${rowIndex}`}>
                 {(row || []).map((cell, cellIndex) => (
                   <td key={`cell-${rowIndex}-${cellIndex}`} style={{ borderBottom: '1px solid #e5e7eb', padding: '10px 12px', verticalAlign: 'top' }}>
-                    {cell}
+                    <InlineHtmlView value={cell} />
                   </td>
                 ))}
               </tr>

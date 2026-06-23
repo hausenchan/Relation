@@ -829,7 +829,7 @@ function Goals() {
           </Form.Item>
 
           <Form.Item name="description" label="目标描述" valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="请输入目标描述..." minHeight={140} />
+            <RichTextEditor placeholder="请输入目标描述..." minHeight={140} enableTables />
           </Form.Item>
 
           <Form.Item name="owner_id" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
@@ -906,7 +906,7 @@ function Goals() {
           </Form.Item>
 
           <Form.Item name="result" label="目标结果" valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="填写目标完成得怎么样..." minHeight={140} />
+            <RichTextEditor placeholder="填写目标完成得怎么样..." minHeight={140} enableTables />
           </Form.Item>
         </Form>
       </Modal>
