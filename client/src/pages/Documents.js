@@ -8137,6 +8137,8 @@ export default function Documents() {
     const comments = getBlockInlineComments(block);
     const commentsOpen = activeCommentBlockId === block.id && comments.length > 0;
     const blankParagraph = block.type === 'paragraph' && isBlankBlock(block);
+    const blankAddVisible = isMobile || menuOpen || blockSelected || hoveredBlockId === block.id;
+    const blockHandleVisible = blankParagraph ? blankAddVisible : handleVisible;
     const hierarchicalListBlock = isHierarchicalListBlock(block);
     const handleIcon = blankParagraph ? <BlockAddIcon /> : <BlockHandleIcon />;
     const handleLabel = blankParagraph ? '添加各种样式内容' : '块菜单';
@@ -8279,8 +8281,8 @@ export default function Documents() {
                     width: 24,
                     height: 24,
                     minWidth: 24,
-                    opacity: blankParagraph || handleVisible ? 1 : 0,
-                    pointerEvents: blankParagraph || handleVisible ? 'auto' : 'none',
+                    opacity: blockHandleVisible ? 1 : 0,
+                    pointerEvents: blockHandleVisible ? 'auto' : 'none',
                     color: '#6b7280',
                     background: menuOpen ? '#eef2ff' : 'transparent',
                   }}
