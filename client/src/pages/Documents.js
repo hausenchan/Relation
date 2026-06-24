@@ -301,6 +301,7 @@ const clipboardImageExtByMime = {
 const documentLinkParamKeys = ['doc', 'document_id', 'documentId', 'docId'];
 const documentAutoSaveDelay = 3000;
 const documentAutoSaveInterval = 30000;
+const documentClipboardBlocksMime = 'application/x-relation-document-blocks';
 
 function getDocumentIdFromSearch(searchParams) {
   for (const key of documentLinkParamKeys) {
@@ -1072,15 +1073,24 @@ function getTableRangeMatrix(block, range) {
 }
 
 function buildTableClipboardPayload(block, range = null) {
-  const title = normalizeClipboardCellText(block?.content || '');
   const tablePayload = range
     ? getTableRangeMatrix(block, range)
     : { matrix: getWholeTableMatrix(block), firstRowIsHeader: true };
   const tableText = tableMatrixToTsv(tablePayload.matrix);
   const tableHtml = tableMatrixToHtml(tablePayload.matrix, { firstRowIsHeader: tablePayload.firstRowIsHeader });
+  const blocks = range ? [] : [{
+    type: block?.type || 'table-simple',
+    content: '',
+    meta: {
+      ...getDefaultBlockMeta(block?.type),
+      ...cloneMeta(block?.meta),
+      ...normalizeTableBlockData(block),
+    },
+  }];
   return {
-    text: [range ? '' : title, tableText].filter(Boolean).join('\n'),
-    html: `${range || !title ? '' : `<p><strong>${escapeHtml(title)}</strong></p>`}${tableHtml}`,
+    text: tableText,
+    html: tableHtml.replace('<table>', '<table data-document-table-block="true">'),
+    blocks,
   };
 }
 
@@ -1102,6 +1112,7 @@ function blocksToClipboardPayload(blocks = []) {
   return {
     text: payloads.map(payload => payload.text).filter(Boolean).join('\n\n'),
     html: payloads.map(payload => payload.html).filter(Boolean).join(''),
+    blocks: payloads.flatMap(payload => payload.blocks || []),
   };
 }
 
@@ -1118,11 +1129,59 @@ async function copyClipboardPayload({ text = '', html = '' } = {}) {
   await copyTextToClipboard(text);
 }
 
-function writeClipboardPayloadToEvent(event, { text = '', html = '' } = {}) {
+function writeClipboardPayloadToEvent(event, { text = '', html = '', blocks = [] } = {}) {
   if (!event?.clipboardData) return false;
   event.clipboardData.setData('text/plain', text);
   if (html) event.clipboardData.setData('text/html', html);
+  if (blocks.length) {
+    event.clipboardData.setData(documentClipboardBlocksMime, JSON.stringify({ blocks }));
+  }
   return true;
+}
+
+function parseClipboardDocumentBlocks(clipboardData) {
+  const raw = clipboardData?.getData?.(documentClipboardBlocksMime);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.blocks) ? parsed.blocks : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseClipboardHtmlTableBlocks(html) {
+  if (!html || typeof document === 'undefined') return [];
+  const container = document.createElement('div');
+  container.innerHTML = DOMPurify.sanitize(String(html), {
+    ALLOWED_TAGS: ['table', 'thead', 'tbody', 'tr', 'th', 'td', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del', 'code', 'span', 'mark', 'a', 'br'],
+    ALLOWED_ATTR: ['style', 'href', 'target', 'rel'],
+    FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus', 'src', 'srcset'],
+  });
+  return Array.from(container.querySelectorAll('table')).map(table => {
+    const rowNodes = Array.from(table.querySelectorAll('tr'));
+    const matrix = rowNodes
+      .map(row => Array.from(row.querySelectorAll('th,td')).map(cell => sanitizeInlineHtml(cell.innerHTML || '')))
+      .filter(row => row.length);
+    if (!matrix.length) return null;
+    const firstRowHasHeaders = Boolean(rowNodes[0]?.querySelector('th'));
+    const maxColumnCount = Math.max(...matrix.map(row => row.length), 1);
+    const columns = firstRowHasHeaders
+      ? matrix[0].map((cell, index) => cell || `字段 ${index + 1}`)
+      : Array.from({ length: maxColumnCount }, (_, index) => `字段 ${index + 1}`);
+    const sourceRows = firstRowHasHeaders ? matrix.slice(1) : matrix;
+    const rows = (sourceRows.length ? sourceRows : [Array.from({ length: columns.length }, () => '')])
+      .map(row => columns.map((_, index) => row[index] || ''));
+    return {
+      type: 'table-simple',
+      content: '',
+      meta: {
+        ...getDefaultBlockMeta('table-simple'),
+        columns,
+        rows,
+      },
+    };
+  }).filter(Boolean);
 }
 
 function buildPresentationSections(blocks, fallbackTitle) {
@@ -3403,8 +3462,64 @@ export default function Documents() {
     }, 0);
   };
 
+  const insertBlocksFromClipboard = (blockInputs = [], targetBlockId = null) => {
+    const nextBlocks = blockInputs
+      .map(input => createEditorBlock(input.type || 'paragraph', {
+        content: input.content || '',
+        checked: Boolean(input.checked),
+        highlight: input.highlight || '',
+        meta: cloneMeta(input.meta),
+      }))
+      .filter(Boolean);
+    if (!nextBlocks.length) return false;
+
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => {
+      const targetIndex = prev.findIndex(block => block.id === targetBlockId);
+      if (targetIndex < 0) return [...prev, ...nextBlocks];
+      const targetBlock = prev[targetIndex];
+      const next = [...prev];
+      if (targetBlock.type === 'paragraph' && isBlankBlock(targetBlock)) {
+        next.splice(targetIndex, 1, ...nextBlocks);
+      } else {
+        next.splice(targetIndex + 1, 0, ...nextBlocks);
+      }
+      return next;
+    });
+    setSelectedBlockId(nextBlocks[0].id);
+    setAreaBlockSelection(nextBlocks.map(block => block.id));
+    setSelectedTableCell(null);
+    setSelectedTableRange(null);
+    setOpenBlockMenuId(null);
+    setHoveredBlockId(null);
+    window.setTimeout(() => {
+      document.getElementById(`doc-block-${nextBlocks[0].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (nextBlocks.length === 1 && !isTableLikeBlock(nextBlocks[0])) focusBlock(nextBlocks[0].id);
+    }, 0);
+    return true;
+  };
+
   const handleEditorPaste = async (event) => {
     if (event.target?.closest?.('[data-inline-comment-panel="true"]')) return;
+    const clipboardData = event.clipboardData;
+    const targetBlockId = event.target?.closest?.('[data-doc-block-id]')?.getAttribute('data-doc-block-id')
+      || selectedBlockId
+      || editorBlocks[editorBlocks.length - 1]?.id
+      || null;
+    const documentBlocks = parseClipboardDocumentBlocks(clipboardData);
+    const htmlTableBlocks = documentBlocks.length ? [] : parseClipboardHtmlTableBlocks(clipboardData?.getData?.('text/html'));
+    const pastedBlocks = documentBlocks.length ? documentBlocks : htmlTableBlocks;
+    if (pastedBlocks.length) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!canEditDoc(selectedDoc)) {
+        message.warning('你没有编辑该文档的权限');
+        return;
+      }
+      if (insertBlocksFromClipboard(pastedBlocks, targetBlockId)) message.success(pastedBlocks.length > 1 ? `已粘贴 ${pastedBlocks.length} 个块` : '表格已粘贴');
+      return;
+    }
+
     const pastedImageFiles = getClipboardImageFiles(event);
     if (!pastedImageFiles.length) return;
 
@@ -3435,10 +3550,6 @@ export default function Documents() {
       message.info(`一次最多粘贴 ${clipboardImagePasteLimit} 张图片，已处理前 ${clipboardImagePasteLimit} 张`);
     }
 
-    const targetBlockId = event.target?.closest?.('[data-doc-block-id]')?.getAttribute('data-doc-block-id')
-      || selectedBlockId
-      || editorBlocks[editorBlocks.length - 1]?.id
-      || null;
     const hideLoading = message.loading(files.length > 1 ? `正在上传 ${files.length} 张图片` : '正在上传截图', 0);
     try {
       const formData = new FormData();
@@ -6561,7 +6672,7 @@ export default function Documents() {
     );
   };
 
-  const renderTableBlock = (block, label) => {
+  const renderTableBlock = (block) => {
     const meta = getBlockMeta(block);
     const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
@@ -6588,6 +6699,7 @@ export default function Documents() {
       };
     };
     const selectedRangeBounds = normalizeTableRange(activeTableRange);
+    const wholeTableSelected = selectedAreaBlockIds.includes(block.id);
     const hasSelectedRange = Boolean(
       selectedRangeBounds
       && (
@@ -6925,53 +7037,18 @@ export default function Documents() {
       </div>
     ) : null;
     return (
-      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-        {(selectedBlockId === block.id || hoveredBlockId === block.id || selectedAreaBlockIds.includes(block.id)) && (
-          <Space size={6} wrap>
-            <Tooltip title="在这个表格上方插入一行普通文本">
-              <Button
-                size="small"
-                icon={<PlusOutlined />}
-                onMouseDown={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                onClick={event => {
-                  event.stopPropagation();
-                  addBlockBefore(block.id, 'paragraph', { content: '' });
-                }}
-              >
-                上方文本
-              </Button>
-            </Tooltip>
-            <Tooltip title="选中整张表格后可直接复制">
-              <Button
-                size="small"
-                icon={<CopyOutlined />}
-                onMouseDown={event => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                onClick={event => {
-                  event.stopPropagation();
-                  selectWholeTable();
-                }}
-              >
-                选中整表
-              </Button>
-            </Tooltip>
-          </Space>
-        )}
-        <Input
-          value={block.content}
-          placeholder={label}
-          onChange={event => updateBlock(block.id, { content: event.target.value })}
-          style={{ fontWeight: 600 }}
-        />
+      <div style={{ width: '100%' }}>
         <div data-document-table-shell="true" style={{ maxWidth: '100%', position: 'relative', paddingBottom: hasSelectedRange ? 8 : 0, overflow: 'visible' }}>
           {tableMenu}
           <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
-            <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}>
+            <table
+              onMouseDown={(event) => {
+                if (wholeTableSelected && !event.target?.closest?.('[contenteditable="true"]')) {
+                  selectWholeTable();
+                }
+              }}
+              style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}
+            >
             <colgroup>
               {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
             </colgroup>
@@ -6989,9 +7066,9 @@ export default function Documents() {
                     style={{
                       position: 'relative',
                       border: '1px solid #e5e7eb',
-                      background: isCellInSelectedRange(-1, columnIndex) ? '#fde2e2' : (selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? '#eef2ff' : '#f8fafc'),
+                      background: wholeTableSelected || isCellInSelectedRange(-1, columnIndex) ? '#fde2e2' : (selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? '#eef2ff' : '#f8fafc'),
                       padding: 4,
-                      boxShadow: selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? 'inset 0 0 0 1px #6366f1' : (isCellInSelectedRange(-1, columnIndex) ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none'),
+                      boxShadow: wholeTableSelected ? 'none' : (selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? 'inset 0 0 0 1px #6366f1' : (isCellInSelectedRange(-1, columnIndex) ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
                     }}
                   >
                     <InlineRichTextEditor
@@ -7051,8 +7128,8 @@ export default function Documents() {
                         padding: 4,
                         verticalAlign: verticalCenter ? 'middle' : 'top',
                         textAlign: horizontalCenter ? 'center' : 'left',
-                        background: selectedInRange ? '#fde2e2' : '#fff',
-                        boxShadow: activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none'),
+                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : '#fff',
+                        boxShadow: wholeTableSelected ? 'none' : (activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
                       }}
                     >
                       <InlineRichTextEditor
@@ -7083,7 +7160,7 @@ export default function Documents() {
             </table>
           </div>
         </div>
-      </Space>
+      </div>
     );
   };
 
@@ -7882,8 +7959,8 @@ export default function Documents() {
 
     if (block.type === 'toc') return renderTocBlock();
     if (block.type === 'button') return renderButtonBlock(block, commonProps);
-    if (block.type === 'table-simple') return renderTableBlock(block, '简单表格');
-    if (block.type?.startsWith('database-')) return renderTableBlock(block, blockTypeMap[block.type]?.label || '数据表格');
+    if (block.type === 'table-simple') return renderTableBlock(block);
+    if (block.type?.startsWith('database-')) return renderTableBlock(block);
     if (block.type === 'progress') return renderProgressBlock(block);
     if (getColumnCount(block.type)) return renderColumnsBlock(block);
     if (block.type === 'attachment') return renderAttachmentBlock(block);
