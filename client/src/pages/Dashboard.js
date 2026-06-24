@@ -266,6 +266,18 @@ function ResizableTitle({ onResize, width, minWidth = 72, children, ...restProps
   );
 }
 
+const renderTaskDescriptionLine = (description) => (
+  description ? (
+    <Text
+      type="secondary"
+      ellipsis={{ tooltip: description }}
+      style={{ display: 'block', maxWidth: '100%', fontSize: 12 }}
+    >
+      {description}
+    </Text>
+  ) : null
+);
+
 export default function Dashboard() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -1089,7 +1101,7 @@ export default function Dashboard() {
       render: (text, record) => (
         <Space direction="vertical" size={0}>
           <Text strong>{text}</Text>
-          {record.description && <Text type="secondary" style={{ fontSize: 12 }}>{record.description}</Text>}
+          {renderTaskDescriptionLine(record.description)}
         </Space>
       ),
     },
@@ -1200,7 +1212,7 @@ export default function Dashboard() {
       render: (text, record) => (
         <Space direction="vertical" size={0}>
           <Text strong>{text}</Text>
-          {record.description && <Text type="secondary" style={{ fontSize: 12 }}>{record.description}</Text>}
+          {renderTaskDescriptionLine(record.description)}
         </Space>
       ),
     },
@@ -1286,9 +1298,7 @@ export default function Dashboard() {
       render: (text, record) => (
         <Space direction="vertical" size={0}>
           <Text strong>{text}</Text>
-          {(record.description || record.opportunity_note) && (
-            <Text type="secondary" style={{ fontSize: 12 }}>{record.description || record.opportunity_note}</Text>
-          )}
+          {renderTaskDescriptionLine(record.description || record.opportunity_note)}
         </Space>
       ),
     },
@@ -1376,7 +1386,7 @@ export default function Dashboard() {
       render: (text, record) => (
         <Space direction="vertical" size={0}>
           <Text strong>{text}</Text>
-          {record.description && <Text type="secondary" style={{ fontSize: 12 }}>{record.description}</Text>}
+          {renderTaskDescriptionLine(record.description)}
         </Space>
       ),
     },
