@@ -266,16 +266,46 @@ function ResizableTitle({ onResize, width, minWidth = 72, children, ...restProps
   );
 }
 
+const taskTitleCellStyle = {
+  width: '100%',
+  minWidth: 0,
+  overflow: 'hidden',
+};
+
+const taskTitleLineStyle = {
+  display: 'block',
+  maxWidth: '100%',
+  whiteSpace: 'normal',
+  overflowWrap: 'anywhere',
+};
+
+const taskDescriptionLineStyle = {
+  display: 'block',
+  width: '100%',
+  maxWidth: '100%',
+  fontSize: 12,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
+
 const renderTaskDescriptionLine = (description) => (
   description ? (
     <Text
       type="secondary"
       ellipsis={{ tooltip: description }}
-      style={{ display: 'block', maxWidth: '100%', fontSize: 12 }}
+      style={taskDescriptionLineStyle}
     >
       {description}
     </Text>
   ) : null
+);
+
+const renderTaskTitleCell = (title, description) => (
+  <div style={taskTitleCellStyle}>
+    <Text strong style={taskTitleLineStyle}>{title}</Text>
+    {renderTaskDescriptionLine(description)}
+  </div>
 );
 
 export default function Dashboard() {
@@ -1098,12 +1128,7 @@ export default function Dashboard() {
       title: '任务',
       dataIndex: 'title',
       key: 'title',
-      render: (text, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{text}</Text>
-          {renderTaskDescriptionLine(record.description)}
-        </Space>
-      ),
+      render: (text, record) => renderTaskTitleCell(text, record.description),
     },
     taskStatusColumn,
     {
@@ -1209,12 +1234,7 @@ export default function Dashboard() {
       title: '任务',
       dataIndex: 'title',
       key: 'title',
-      render: (text, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{text}</Text>
-          {renderTaskDescriptionLine(record.description)}
-        </Space>
-      ),
+      render: (text, record) => renderTaskTitleCell(text, record.description),
     },
     taskStatusColumn,
     {
@@ -1295,12 +1315,7 @@ export default function Dashboard() {
       title: '任务',
       dataIndex: 'title',
       key: 'title',
-      render: (text, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{text}</Text>
-          {renderTaskDescriptionLine(record.description || record.opportunity_note)}
-        </Space>
-      ),
+      render: (text, record) => renderTaskTitleCell(text, record.description || record.opportunity_note),
     },
     taskStatusColumn,
     {
@@ -1383,12 +1398,7 @@ export default function Dashboard() {
       title: '任务',
       dataIndex: 'title',
       key: 'title',
-      render: (text, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{text}</Text>
-          {renderTaskDescriptionLine(record.description)}
-        </Space>
-      ),
+      render: (text, record) => renderTaskTitleCell(text, record.description),
     },
     taskStatusColumn,
     {
