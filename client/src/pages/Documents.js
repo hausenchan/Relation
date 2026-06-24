@@ -998,6 +998,133 @@ function blocksToText(blocks) {
     .join('\n');
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isTableLikeBlock(block) {
+  return block?.type === 'table-simple' || String(block?.type || '').startsWith('database-');
+}
+
+function normalizeTableBlockData(block) {
+  const meta = { ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) };
+  const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
+  const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
+  return {
+    columns,
+    rows: rows.map(row => columns.map((_, index) => row?.[index] || '')),
+  };
+}
+
+function normalizeClipboardCellText(value) {
+  return inlineHtmlToPlain(value)
+    .replace(/\t/g, ' ')
+    .replace(/\r?\n/g, ' ')
+    .trim();
+}
+
+function tableMatrixToTsv(matrix = []) {
+  return matrix
+    .map(row => row.map(normalizeClipboardCellText).join('\t'))
+    .join('\n');
+}
+
+function tableMatrixToHtml(matrix = [], { firstRowIsHeader = true } = {}) {
+  const rows = matrix.map((row, rowIndex) => {
+    const CellTag = firstRowIsHeader && rowIndex === 0 ? 'th' : 'td';
+    const cells = row.map(cell => `<${CellTag}>${sanitizeInlineHtml(cell) || '&nbsp;'}</${CellTag}>`).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+  return `<table>${rows}</table>`;
+}
+
+function getWholeTableMatrix(block) {
+  const { columns, rows } = normalizeTableBlockData(block);
+  return [columns, ...rows];
+}
+
+function getTableRangeMatrix(block, range) {
+  const { columns, rows } = normalizeTableBlockData(block);
+  const clampRow = rowIndex => Math.max(-1, Math.min(rows.length - 1, Number(rowIndex) || 0));
+  const clampColumn = columnIndex => Math.max(0, Math.min(columns.length - 1, Number(columnIndex) || 0));
+  const startRowIndex = clampRow(range?.startRowIndex);
+  const endRowIndex = clampRow(range?.endRowIndex);
+  const startColumnIndex = clampColumn(range?.startColumnIndex);
+  const endColumnIndex = clampColumn(range?.endColumnIndex);
+  const fromRow = Math.min(startRowIndex, endRowIndex);
+  const toRow = Math.max(startRowIndex, endRowIndex);
+  const fromColumn = Math.min(startColumnIndex, endColumnIndex);
+  const toColumn = Math.max(startColumnIndex, endColumnIndex);
+  const matrix = [];
+  for (let rowIndex = fromRow; rowIndex <= toRow; rowIndex += 1) {
+    const sourceRow = rowIndex < 0 ? columns : rows[rowIndex];
+    matrix.push(sourceRow.slice(fromColumn, toColumn + 1));
+  }
+  return {
+    matrix,
+    firstRowIsHeader: fromRow < 0,
+  };
+}
+
+function buildTableClipboardPayload(block, range = null) {
+  const title = normalizeClipboardCellText(block?.content || '');
+  const tablePayload = range
+    ? getTableRangeMatrix(block, range)
+    : { matrix: getWholeTableMatrix(block), firstRowIsHeader: true };
+  const tableText = tableMatrixToTsv(tablePayload.matrix);
+  const tableHtml = tableMatrixToHtml(tablePayload.matrix, { firstRowIsHeader: tablePayload.firstRowIsHeader });
+  return {
+    text: [range ? '' : title, tableText].filter(Boolean).join('\n'),
+    html: `${range || !title ? '' : `<p><strong>${escapeHtml(title)}</strong></p>`}${tableHtml}`,
+  };
+}
+
+function blockToClipboardPayload(block) {
+  if (!block) return { text: '', html: '' };
+  if (isTableLikeBlock(block)) return buildTableClipboardPayload(block);
+  if (block.type === 'divider') return { text: '---', html: '<hr>' };
+  const text = blocksToText([block]);
+  const content = sanitizeInlineHtml(block.content || '');
+  const label = blockTypeMap[block.type]?.label || '';
+  return {
+    text,
+    html: content ? `<p>${content}</p>` : (text ? `<p>${escapeHtml(text)}</p>` : `<p>${escapeHtml(label)}</p>`),
+  };
+}
+
+function blocksToClipboardPayload(blocks = []) {
+  const payloads = blocks.map(blockToClipboardPayload).filter(payload => payload.text || payload.html);
+  return {
+    text: payloads.map(payload => payload.text).filter(Boolean).join('\n\n'),
+    html: payloads.map(payload => payload.html).filter(Boolean).join(''),
+  };
+}
+
+async function copyClipboardPayload({ text = '', html = '' } = {}) {
+  if (html && navigator.clipboard?.write && window.ClipboardItem && window.isSecureContext) {
+    await navigator.clipboard.write([
+      new window.ClipboardItem({
+        'text/plain': new Blob([text], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      }),
+    ]);
+    return;
+  }
+  await copyTextToClipboard(text);
+}
+
+function writeClipboardPayloadToEvent(event, { text = '', html = '' } = {}) {
+  if (!event?.clipboardData) return false;
+  event.clipboardData.setData('text/plain', text);
+  if (html) event.clipboardData.setData('text/html', html);
+  return true;
+}
+
 function buildPresentationSections(blocks, fallbackTitle) {
   const docTitle = String(fallbackTitle || '').trim() || '未命名文档';
   const sections = [];
@@ -2258,6 +2385,34 @@ export default function Documents() {
   }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
 
   useEffect(() => {
+    const handleDocumentCopy = (event) => {
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      const activeElement = document.activeElement;
+      const activeTextSelection = activeElement?.closest?.('textarea, input, [contenteditable="true"]')
+        && window.getSelection?.()?.toString?.();
+      if (activeTextSelection) return;
+      const payload = getActiveDocumentClipboardPayload();
+      if (!payload?.text && !payload?.html) return;
+      if (!writeClipboardPayloadToEvent(event, payload)) return;
+      event.preventDefault();
+      message.success('已复制');
+    };
+    document.addEventListener('copy', handleDocumentCopy);
+    return () => document.removeEventListener('copy', handleDocumentCopy);
+  }, [
+    selectedDoc?.id,
+    presentationOpen,
+    createOpen,
+    templateOpen,
+    shareOpen,
+    changeLogOpen,
+    moveFolderOpen,
+    editorBlocks,
+    selectedAreaBlockIds,
+    selectedTableRange,
+  ]);
+
+  useEffect(() => {
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     const docId = getDocTabId(selectedDoc?.id);
     if (!docId || !dirtyDocumentIdsRef.current.has(docId) || !canEditDoc(selectedDoc)) return undefined;
@@ -2898,6 +3053,29 @@ export default function Documents() {
     }
   };
 
+  const getTableSelectionClipboardPayload = () => {
+    if (!selectedTableRange) return null;
+    const blockId = selectedTableRange.blockId;
+    const block = editorBlocks.find(item => item.id === blockId);
+    if (!isTableLikeBlock(block)) return null;
+    return buildTableClipboardPayload(block, selectedTableRange);
+  };
+
+  const getSelectedBlocksClipboardPayload = () => {
+    const selectedBlockIds = normalizeBlockSelectionIds(
+      selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds
+    );
+    if (!selectedBlockIds.length) return null;
+    const selectedSet = new Set(selectedBlockIds);
+    const blocks = editorBlocks.filter(block => selectedSet.has(block.id));
+    if (!blocks.length) return null;
+    return blocksToClipboardPayload(blocks);
+  };
+
+  const getActiveDocumentClipboardPayload = () => (
+    getTableSelectionClipboardPayload() || getSelectedBlocksClipboardPayload()
+  );
+
   const handleDelete = async () => {
     if (!selectedDoc) return;
     const deletedDocId = getDocTabId(selectedDoc.id);
@@ -3008,6 +3186,24 @@ export default function Documents() {
     });
     setSelectedBlockId(nextBlock.id);
     focusBlock(nextBlock.id);
+  };
+
+  const addBlockBefore = (beforeId, type = 'paragraph', extra = {}) => {
+    const nextBlock = createEditorBlock(type, extra);
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => {
+      const index = prev.findIndex(block => block.id === beforeId);
+      const next = [...prev];
+      next.splice(index >= 0 ? index : 0, 0, nextBlock);
+      return next;
+    });
+    setSelectedBlockId(nextBlock.id);
+    clearAreaBlockSelection();
+    setSelectedTableCell(null);
+    setSelectedTableRange(null);
+    setOpenBlockMenuId(null);
+    focusBlock(nextBlock.id);
+    return nextBlock;
   };
 
   const openBlockMenuForId = (blockId) => {
@@ -3721,6 +3917,22 @@ export default function Documents() {
     pendingBlockMenuTargetIdsRef.current = [];
     activeBlockMenuTargetIdsRef.current = targetIds;
     setBlockMenuTargetIds(targetIds);
+    if (key === 'copy') {
+      const targetSet = new Set(targetIds);
+      const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
+      const payload = blocksToClipboardPayload(targetBlocks.length ? targetBlocks : [block]);
+      try {
+        await copyClipboardPayload(payload);
+        message.success(targetBlocks.length > 1 ? `已复制 ${targetBlocks.length} 个块` : '已复制');
+      } catch {
+        message.error('复制失败，请重试');
+      }
+      return;
+    }
+    if (key === 'insert-paragraph-before') {
+      addBlockBefore(block.id, 'paragraph', { content: '' });
+      return;
+    }
     if (key.startsWith('type:')) {
       const type = key.replace('type:', '');
       if (type === 'recent-image') {
@@ -3756,7 +3968,12 @@ export default function Documents() {
     const targetSet = new Set(targetIds);
     const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
     const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
+    const tableSelected = targetBlocks.some(isTableLikeBlock) || isTableLikeBlock(block);
     return [
+      { key: 'copy', icon: <CopyOutlined />, label: targetCount > 1 ? `复制 ${targetCount} 个块` : (isTableLikeBlock(block) ? '复制整个表格' : '复制') },
+      ...(tableSelected && targetCount === 1 ? [
+        { key: 'insert-paragraph-before', icon: <PlusOutlined />, label: '在表格上方插入文本' },
+      ] : []),
       { key: 'delete', danger: true, icon: <DeleteOutlined />, label: targetCount > 1 ? `删除 ${targetCount} 个块` : '删除' },
     ];
   };
@@ -6481,6 +6698,13 @@ export default function Documents() {
       const averageWidth = Math.max(80, Math.round(tableWidth / columns.length));
       persistTableMeta({ columnWidths: columns.map(() => averageWidth) });
     };
+    const selectWholeTable = () => {
+      clearNativeEditorSelection();
+      setSelectedBlockId(block.id);
+      setAreaBlockSelection([block.id]);
+      setSelectedTableCell(null);
+      setSelectedTableRange(null);
+    };
     const selectTableCell = (rowIndex, columnIndex) => {
       setSelectedBlockId(block.id);
       setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex, columnIndex });
@@ -6702,6 +6926,42 @@ export default function Documents() {
     ) : null;
     return (
       <Space direction="vertical" size={8} style={{ width: '100%' }}>
+        {(selectedBlockId === block.id || hoveredBlockId === block.id || selectedAreaBlockIds.includes(block.id)) && (
+          <Space size={6} wrap>
+            <Tooltip title="在这个表格上方插入一行普通文本">
+              <Button
+                size="small"
+                icon={<PlusOutlined />}
+                onMouseDown={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onClick={event => {
+                  event.stopPropagation();
+                  addBlockBefore(block.id, 'paragraph', { content: '' });
+                }}
+              >
+                上方文本
+              </Button>
+            </Tooltip>
+            <Tooltip title="选中整张表格后可直接复制">
+              <Button
+                size="small"
+                icon={<CopyOutlined />}
+                onMouseDown={event => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onClick={event => {
+                  event.stopPropagation();
+                  selectWholeTable();
+                }}
+              >
+                选中整表
+              </Button>
+            </Tooltip>
+          </Space>
+        )}
         <Input
           value={block.content}
           placeholder={label}
