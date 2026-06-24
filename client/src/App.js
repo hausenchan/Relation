@@ -699,6 +699,9 @@ function AppLayout() {
     canAccessMenu('/network-capture') && {
       key: '/network-capture', icon: <GlobalOutlined />, label: <Link to="/network-capture">网络抓包</Link>,
     },
+    canAccessMenu('/mobile-task-center') && {
+      key: '/mobile-task-center', icon: <AppstoreOutlined />, label: <Link to="/mobile-task-center">手机采集</Link>,
+    },
   ].filter(Boolean);
 
   const menuItems = [
@@ -743,7 +746,6 @@ function AppLayout() {
         { key: '/project-groups', icon: <ApartmentOutlined />, label: <Link to="/project-groups">项目组管理</Link> },
         { key: '/menu-perms', icon: <MenuOutlined />, label: <Link to="/menu-perms">菜单权限管理</Link> },
         { key: '/cross-team-access', icon: <TeamOutlined />, label: <Link to="/cross-team-access">跨团队权限</Link> },
-        { key: '/mobile-task-center', icon: <AppstoreOutlined />, label: <Link to="/mobile-task-center">手机采集</Link> },
         user?.role === 'admin' && { key: '/operation-logs', icon: <HistoryOutlined />, label: <Link to="/operation-logs">操作日志</Link> },
       ].filter(Boolean),
     },

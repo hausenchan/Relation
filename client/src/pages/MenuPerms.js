@@ -67,6 +67,7 @@ const MENU_TREE = [
     key: 'common-tools',
     children: [
       { title: '网络抓包', key: '/network-capture' },
+      { title: '手机采集', key: '/mobile-task-center' },
     ],
   },
 ];
