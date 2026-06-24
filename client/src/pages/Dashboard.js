@@ -1073,6 +1073,14 @@ export default function Dashboard() {
     render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
   };
 
+  const taskStatusColumn = {
+    title: '状态',
+    dataIndex: 'display_status_label',
+    key: 'display_status_label',
+    width: 100,
+    render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
+  };
+
   const executionTaskColumns = [
     {
       title: '任务',
@@ -1085,6 +1093,7 @@ export default function Dashboard() {
         </Space>
       ),
     },
+    taskStatusColumn,
     {
       title: '任务来源',
       dataIndex: 'task_source_label',
@@ -1132,13 +1141,6 @@ export default function Dashboard() {
       key: 'complete_date',
       width: 110,
       render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
-    },
-    {
-      title: '状态',
-      dataIndex: 'display_status_label',
-      key: 'display_status_label',
-      width: 100,
-      render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
     },
     {
       title: '任务进度/结果',
@@ -1202,6 +1204,7 @@ export default function Dashboard() {
         </Space>
       ),
     },
+    taskStatusColumn,
     {
       title: '任务来源',
       dataIndex: 'task_source_label',
@@ -1273,13 +1276,6 @@ export default function Dashboard() {
         </Space>
       ),
     },
-    {
-      title: '状态',
-      dataIndex: 'display_status_label',
-      key: 'display_status_label',
-      width: 100,
-      render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
-    },
   ];
 
   const watchedTaskColumns = [
@@ -1296,6 +1292,7 @@ export default function Dashboard() {
         </Space>
       ),
     },
+    taskStatusColumn,
     {
       title: '任务来源',
       dataIndex: 'task_source_label',
@@ -1348,13 +1345,6 @@ export default function Dashboard() {
       render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
     },
     {
-      title: '状态',
-      dataIndex: 'display_status_label',
-      key: 'display_status_label',
-      width: 100,
-      render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
-    },
-    {
       title: '任务进度/结果',
       dataIndex: 'display_result',
       key: 'display_result',
@@ -1390,6 +1380,7 @@ export default function Dashboard() {
         </Space>
       ),
     },
+    taskStatusColumn,
     {
       title: '任务来源',
       dataIndex: 'task_source_label',
@@ -1440,13 +1431,6 @@ export default function Dashboard() {
       key: 'complete_date',
       width: 110,
       render: (value) => value ? dayjs(value).format('MM-DD') : <Text type="secondary">-</Text>,
-    },
-    {
-      title: '状态',
-      dataIndex: 'display_status_label',
-      key: 'display_status_label',
-      width: 100,
-      render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
     },
     {
       title: '任务进度/结果',
