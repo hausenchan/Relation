@@ -6810,30 +6810,44 @@ export default function Documents() {
       updateCell(selectedRowIndex, selectedColumnIndex, '');
     };
     const deleteSelectedRow = () => {
-      const targetRowIndex = hasSelectedRange ? Math.max(0, selectedRangeBounds.startRowIndex) : selectedRowIndex;
-      if (targetRowIndex < 0 || normalizedRows.length <= 1) return;
-      const nextRows = normalizedRows.filter((_, index) => index !== targetRowIndex);
+      const startRowIndex = hasSelectedRange ? Math.max(0, selectedRangeBounds.startRowIndex) : selectedRowIndex;
+      const endRowIndex = hasSelectedRange ? Math.max(0, selectedRangeBounds.endRowIndex) : selectedRowIndex;
+      if (startRowIndex < 0 || normalizedRows.length <= 1) return;
+      const deleteCount = Math.max(1, endRowIndex - startRowIndex + 1);
+      if (deleteCount >= normalizedRows.length) return;
+      const nextRows = normalizedRows.filter((_, index) => (
+        index < startRowIndex || index > endRowIndex
+      ));
       persistTableMeta({ rows: nextRows });
       setSelectedTableCell({
         blockId: block.id,
         type: 'body',
-        rowIndex: Math.max(0, Math.min(targetRowIndex, nextRows.length - 1)),
+        rowIndex: Math.max(0, Math.min(startRowIndex, nextRows.length - 1)),
         columnIndex: Math.max(0, selectedColumnIndex),
       });
       setSelectedTableRange(null);
     };
     const deleteSelectedColumn = () => {
-      const targetColumnIndex = hasSelectedRange ? selectedRangeBounds.startColumnIndex : selectedColumnIndex;
-      if (targetColumnIndex < 0 || columns.length <= 1) return;
-      const nextColumns = columns.filter((_, index) => index !== targetColumnIndex);
-      const nextRows = normalizedRows.map(row => row.filter((_, index) => index !== targetColumnIndex));
-      const nextWidths = columnWidths.filter((_, index) => index !== targetColumnIndex);
+      const startColumnIndex = hasSelectedRange ? selectedRangeBounds.startColumnIndex : selectedColumnIndex;
+      const endColumnIndex = hasSelectedRange ? selectedRangeBounds.endColumnIndex : selectedColumnIndex;
+      if (startColumnIndex < 0 || columns.length <= 1) return;
+      const deleteCount = Math.max(1, endColumnIndex - startColumnIndex + 1);
+      if (deleteCount >= columns.length) return;
+      const nextColumns = columns.filter((_, index) => (
+        index < startColumnIndex || index > endColumnIndex
+      ));
+      const nextRows = normalizedRows.map(row => row.filter((_, index) => (
+        index < startColumnIndex || index > endColumnIndex
+      )));
+      const nextWidths = columnWidths.filter((_, index) => (
+        index < startColumnIndex || index > endColumnIndex
+      ));
       persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
       setSelectedTableCell({
         blockId: block.id,
         type: 'body',
         rowIndex: Math.max(0, selectedRowIndex),
-        columnIndex: Math.max(0, Math.min(targetColumnIndex, nextColumns.length - 1)),
+        columnIndex: Math.max(0, Math.min(startColumnIndex, nextColumns.length - 1)),
       });
       setSelectedTableRange(null);
     };
