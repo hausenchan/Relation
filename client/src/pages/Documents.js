@@ -302,6 +302,7 @@ const documentLinkParamKeys = ['doc', 'document_id', 'documentId', 'docId'];
 const documentAutoSaveDelay = 3000;
 const documentAutoSaveInterval = 30000;
 const documentClipboardBlocksMime = 'application/x-relation-document-blocks';
+const documentFolderSidebarCollapsedStorageKey = 'documents.folderSidebarCollapsed';
 
 function getDocumentIdFromSearch(searchParams) {
   for (const key of documentLinkParamKeys) {
@@ -1746,7 +1747,10 @@ export default function Documents() {
   const [moveFolderDoc, setMoveFolderDoc] = useState(null);
   const [moveFolderSaving, setMoveFolderSaving] = useState(false);
   const [editorUndoStack, setEditorUndoStack] = useState([]);
-  const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(false);
+  const [folderSidebarCollapsed, setFolderSidebarCollapsed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem(documentFolderSidebarCollapsedStorageKey) === '1';
+  });
   const [folderTreeExpandedKeys, setFolderTreeExpandedKeys] = useState([]);
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
@@ -1820,6 +1824,14 @@ export default function Documents() {
     document.head.appendChild(style);
     return () => {};
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      documentFolderSidebarCollapsedStorageKey,
+      folderSidebarCollapsed ? '1' : '0'
+    );
+  }, [folderSidebarCollapsed]);
 
   const selectedFolder = useMemo(
     () => folders.find(folder => Number(folder.id) === Number(selectedFolderId)),
