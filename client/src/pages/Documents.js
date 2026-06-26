@@ -641,7 +641,7 @@ function getBulletListMarker(indent) {
 
 function renderBulletListMarker(indent, scale = 1) {
   const markerLevel = clampListIndent(indent) % 3;
-  const markerSize = markerLevel === 1 ? 7 : markerLevel === 2 ? 7 : 6;
+  const markerSize = markerLevel === 1 ? 5.5 : markerLevel === 2 ? 5.5 : 5;
   const baseStyle = {
     display: 'block',
     width: markerSize * scale,
@@ -655,7 +655,7 @@ function renderBulletListMarker(indent, scale = 1) {
         aria-hidden="true"
         style={{
           ...baseStyle,
-          border: `${Math.max(1.6, 1.6 * scale)}px solid ${listMarkerColor}`,
+          border: `${Math.max(1.25, 1.25 * scale)}px solid ${listMarkerColor}`,
           borderRadius: '50%',
           background: 'transparent',
         }}
@@ -699,9 +699,9 @@ function renderFoldListTriangle(collapsed, scale = 1) {
           display: 'block',
           width: 0,
           height: 0,
-          borderTop: `${5 * scale}px solid transparent`,
-          borderBottom: `${5 * scale}px solid transparent`,
-          borderLeft: `${8 * scale}px solid ${color}`,
+          borderTop: `${4 * scale}px solid transparent`,
+          borderBottom: `${4 * scale}px solid transparent`,
+          borderLeft: `${6.5 * scale}px solid ${color}`,
           transform: `translateX(${1 * scale}px)`,
         }}
       />
@@ -714,10 +714,10 @@ function renderFoldListTriangle(collapsed, scale = 1) {
         display: 'block',
         width: 0,
         height: 0,
-        borderLeft: `${6 * scale}px solid transparent`,
-        borderRight: `${6 * scale}px solid transparent`,
-        borderTop: `${7 * scale}px solid ${color}`,
-        transform: `translateY(${2 * scale}px)`,
+        borderLeft: `${5 * scale}px solid transparent`,
+        borderRight: `${5 * scale}px solid transparent`,
+        borderTop: `${6 * scale}px solid ${color}`,
+        transform: `translateY(${1.5 * scale}px)`,
       }}
     />
   );
@@ -6978,7 +6978,7 @@ export default function Documents() {
     const marker = block.type === 'bullet'
       ? getBulletListMarker(indent)
       : numberedListMarkers.get(block.id);
-    const listFontSize = selectedDoc?.small_font_enabled ? 16 : 20;
+    const listFontSize = selectedDoc?.small_font_enabled ? 13 : 15;
     const markerLineHeight = listFontSize * listLineHeight;
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
@@ -8165,7 +8165,7 @@ export default function Documents() {
     if (block.type === 'bullet' || block.type === 'numbered' || block.type === 'fold-list') {
       const presentationIndentWidth = isMobile ? 26 : listIndentWidth;
       const presentationMarkerWidth = isMobile ? 24 : listMarkerBoxWidth;
-      const presentationFontSize = isMobile ? 18 : 24;
+      const presentationFontSize = isMobile ? 17 : 22;
       const presentationLineHeight = presentationFontSize * listLineHeight;
       const marker = block.type === 'bullet'
         ? getBulletListMarker(indent)
