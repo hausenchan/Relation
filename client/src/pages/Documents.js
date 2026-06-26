@@ -29,8 +29,6 @@ import {
   message,
 } from 'antd';
 import {
-  CaretDownFilled,
-  CaretRightFilled,
   CheckOutlined,
   CloseOutlined,
   ClockCircleOutlined,
@@ -252,11 +250,12 @@ const blockTypeGroups = [
 const blockTypeOptions = blockTypeGroups.flatMap(group => group.children);
 const hierarchicalListTypes = new Set(['bullet', 'numbered', 'fold-list']);
 const listIndentWidth = 28;
-const listMarkerBoxWidth = 20;
-const listMarkerCenterOffset = 10;
-const listMarkerColor = '#1f1f1f';
-const listGuideColor = '#eeeeee';
-const listLineHeight = 1.32;
+const listMarkerBoxWidth = 24;
+const listMarkerCenterOffset = 12;
+const listMarkerColor = '#202124';
+const listGuideColor = '#f0f0f0';
+const listGuideWidth = 2;
+const listLineHeight = 1.68;
 const maxListIndent = 9;
 const blockActionSelectedBackground = '#f7e3e6';
 const blockActionSelectedBorder = '#f2c9d0';
@@ -642,7 +641,7 @@ function getBulletListMarker(indent) {
 
 function renderBulletListMarker(indent, scale = 1) {
   const markerLevel = clampListIndent(indent) % 3;
-  const markerSize = markerLevel === 1 ? 5 : 4;
+  const markerSize = markerLevel === 1 ? 7 : markerLevel === 2 ? 7 : 6;
   const baseStyle = {
     display: 'block',
     width: markerSize * scale,
@@ -656,7 +655,7 @@ function renderBulletListMarker(indent, scale = 1) {
         aria-hidden="true"
         style={{
           ...baseStyle,
-          border: `${Math.max(1, scale)}px solid ${listMarkerColor}`,
+          border: `${Math.max(1.6, 1.6 * scale)}px solid ${listMarkerColor}`,
           borderRadius: '50%',
           background: 'transparent',
         }}
@@ -670,7 +669,7 @@ function renderBulletListMarker(indent, scale = 1) {
         aria-hidden="true"
         style={{
           ...baseStyle,
-          borderRadius: 1,
+          borderRadius: 1.2,
           background: listMarkerColor,
           transform: 'rotate(45deg)',
         }}
@@ -685,6 +684,40 @@ function renderBulletListMarker(indent, scale = 1) {
         ...baseStyle,
         borderRadius: '50%',
         background: listMarkerColor,
+      }}
+    />
+  );
+}
+
+function renderFoldListTriangle(collapsed, scale = 1) {
+  const color = listMarkerColor;
+  if (collapsed) {
+    return (
+      <span
+        aria-hidden="true"
+        style={{
+          display: 'block',
+          width: 0,
+          height: 0,
+          borderTop: `${5 * scale}px solid transparent`,
+          borderBottom: `${5 * scale}px solid transparent`,
+          borderLeft: `${8 * scale}px solid ${color}`,
+          transform: `translateX(${1 * scale}px)`,
+        }}
+      />
+    );
+  }
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'block',
+        width: 0,
+        height: 0,
+        borderLeft: `${6 * scale}px solid transparent`,
+        borderRight: `${6 * scale}px solid transparent`,
+        borderTop: `${7 * scale}px solid ${color}`,
+        transform: `translateY(${2 * scale}px)`,
       }}
     />
   );
@@ -6902,7 +6935,7 @@ export default function Documents() {
     } = options;
     const lineStyles = {
       position: 'absolute',
-      width: 1,
+      width: listGuideWidth,
       background: color,
       pointerEvents: 'none',
       zIndex: 0,
@@ -6923,20 +6956,6 @@ export default function Documents() {
             }}
           />
         ))}
-        {indent > 0 && (
-          <span
-            style={{
-              position: 'absolute',
-              left: (indent - 1) * indentWidth + lineOffset,
-              top: centerY,
-              width: indentWidth,
-              height: 1,
-              background: color,
-              pointerEvents: 'none',
-              zIndex: 0,
-            }}
-          />
-        )}
         {guideMeta?.hasChildren && (
           <span
             style={{
@@ -6959,7 +6978,8 @@ export default function Documents() {
     const marker = block.type === 'bullet'
       ? getBulletListMarker(indent)
       : numberedListMarkers.get(block.id);
-    const markerLineHeight = (Number(commonProps.style.fontSize) || 15) * listLineHeight;
+    const listFontSize = selectedDoc?.small_font_enabled ? 16 : 20;
+    const markerLineHeight = listFontSize * listLineHeight;
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
       minWidth: listMarkerBoxWidth,
@@ -6973,10 +6993,9 @@ export default function Documents() {
     };
 
     const markerNode = block.type === 'fold-list' ? (
-      <Button
-        type="text"
-        size="small"
-        icon={collapsed ? <CaretRightFilled style={{ fontSize: 12, color: listMarkerColor }} /> : <CaretDownFilled style={{ fontSize: 12, color: listMarkerColor }} />}
+      <button
+        type="button"
+        aria-label={collapsed ? '展开折叠列表' : '收起折叠列表'}
         onClick={(event) => {
           event.stopPropagation();
           updateBlockMeta(block.id, { collapsed: !collapsed });
@@ -6986,12 +7005,18 @@ export default function Documents() {
           minWidth: listMarkerBoxWidth,
           height: markerLineHeight,
           padding: 0,
+          border: 0,
+          background: 'transparent',
           color: listMarkerColor,
           display: 'inline-flex',
           alignItems: 'center',
           justifyContent: 'center',
+          cursor: 'pointer',
+          appearance: 'none',
         }}
-      />
+      >
+        {renderFoldListTriangle(collapsed)}
+      </button>
     ) : block.type === 'bullet' ? (
       <span style={markerContainerStyle}>
         {renderBulletListMarker(indent)}
@@ -7001,7 +7026,8 @@ export default function Documents() {
         ...markerContainerStyle,
         textAlign: 'right',
         color: markerColor,
-        fontWeight: 500,
+        fontWeight: 600,
+        fontSize: listFontSize,
         lineHeight: `${markerLineHeight}px`,
       }}>
         {marker}
@@ -7010,8 +7036,8 @@ export default function Documents() {
 
     return (
       <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
-        {renderListGuides(block, { top: -2, bottom: -2, centerY: markerLineHeight / 2 })}
-        <div style={{ display: 'flex', gap: 5, alignItems: 'flex-start' }}>
+        {renderListGuides(block, { top: -4, bottom: -4, centerY: markerLineHeight / 2 })}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
           {markerNode}
           <InlineRichTextEditor
             {...commonProps}
@@ -7021,8 +7047,10 @@ export default function Documents() {
             onChange={value => commonProps.onChange(value)}
             style={{
               ...commonProps.style,
+              fontSize: listFontSize,
               lineHeight: listLineHeight,
-              fontWeight: block.type === 'fold-list' ? 500 : commonProps.style.fontWeight,
+              color: '#202124',
+              fontWeight: block.type === 'fold-list' ? 500 : 400,
               minHeight: markerLineHeight,
               padding: '0',
             }}
@@ -8135,37 +8163,39 @@ export default function Documents() {
     }
     if (block.type === 'divider') return <Divider style={{ margin: '18px 0', borderColor: '#cbd5e1' }} />;
     if (block.type === 'bullet' || block.type === 'numbered' || block.type === 'fold-list') {
-      const presentationIndentWidth = isMobile ? 22 : listIndentWidth;
-      const presentationMarkerWidth = isMobile ? 22 : listMarkerBoxWidth;
-      const presentationLineHeight = (isMobile ? 18 : 24) * listLineHeight;
+      const presentationIndentWidth = isMobile ? 26 : listIndentWidth;
+      const presentationMarkerWidth = isMobile ? 24 : listMarkerBoxWidth;
+      const presentationFontSize = isMobile ? 18 : 24;
+      const presentationLineHeight = presentationFontSize * listLineHeight;
       const marker = block.type === 'bullet'
         ? getBulletListMarker(indent)
         : block.type === 'numbered'
           ? numberedListMarkers.get(block.id)
           : null;
       const markerNode = block.type === 'bullet' ? (
-        <span style={{ minWidth: presentationMarkerWidth, height: '1.8em', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ minWidth: presentationMarkerWidth, height: presentationLineHeight, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
           {renderBulletListMarker(indent, isMobile ? 1 : 1.1)}
         </span>
       ) : (
         <span
           style={{
             minWidth: presentationMarkerWidth,
-            height: '1.8em',
+            height: presentationLineHeight,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: block.type === 'numbered' ? 'flex-end' : 'center',
             color: listMarkerColor,
-            fontWeight: block.type === 'fold-list' ? 600 : 500,
+            fontSize: presentationFontSize,
+            fontWeight: block.type === 'fold-list' ? 600 : 600,
           }}
         >
           {block.type === 'fold-list'
-            ? (meta.collapsed ? <CaretRightFilled style={{ fontSize: 13, color: listMarkerColor }} /> : <CaretDownFilled style={{ fontSize: 13, color: listMarkerColor }} />)
+            ? renderFoldListTriangle(meta.collapsed, isMobile ? 1 : 1.1)
             : marker}
         </span>
       );
       return (
-        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: 8, lineHeight: listLineHeight }}>
+        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: 8, fontSize: presentationFontSize, lineHeight: listLineHeight }}>
           {renderListGuides(block, {
             top: -4,
             bottom: -4,
@@ -8174,7 +8204,7 @@ export default function Documents() {
             indentWidth: presentationIndentWidth,
           })}
           {markerNode}
-          <InlineHtmlView value={block.content} style={{ fontWeight: block.type === 'fold-list' ? 600 : 400 }} />
+          <InlineHtmlView value={block.content} style={{ color: '#202124', fontWeight: block.type === 'fold-list' ? 600 : 400 }} />
         </div>
       );
     }
@@ -8709,7 +8739,7 @@ export default function Documents() {
           border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
           background: commentsOpen ? '#f8fbff' : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent')),
           borderRadius: 6,
-          padding: hierarchicalListBlock ? (isMobile ? '1px 6px' : '0 8px 0 0') : (isMobile ? '5px 6px' : '3px 8px 3px 0'),
+          padding: hierarchicalListBlock ? (isMobile ? '0 6px' : '0 8px 0 0') : (isMobile ? '5px 6px' : '3px 8px 3px 0'),
           marginBottom: hierarchicalListBlock ? 0 : (isMobile ? 4 : 2),
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
