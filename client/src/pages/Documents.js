@@ -8706,10 +8706,15 @@ export default function Documents() {
 
               {!isMobile && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
                 <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
-                  <Space size={8} wrap>
+                  <Space size={[8, 8]} wrap>
                     <Tag color="geekblue">{selectedDoc.document_no}</Tag>
                     <Tag>{selectedDoc.current_version || 'V1.0'}</Tag>
                     <Tag color="cyan">{selectedDoc.access_summary?.label || '仅自己'}</Tag>
+                    <Tag>{domainLabel[selectedDoc.domain] || selectedDoc.domain}</Tag>
+                    <Tag>{selectedDoc.project_group_name || selectedDoc.project_code || '未关联项目组'}</Tag>
+                    <Tag>{departmentLabel[selectedDoc.department_key] || selectedDoc.department_key}</Tag>
+                    <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
+                    {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
                   </Space>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {formatDocumentTimestamp(selectedDoc.updated_at)}
@@ -8774,14 +8779,6 @@ export default function Documents() {
                   marginBottom: isMobile ? 6 : 8,
                 }}
               />
-
-              <Space size={8} wrap style={{ marginBottom: isMobile ? 12 : 16 }}>
-                <Tag>{domainLabel[selectedDoc.domain] || selectedDoc.domain}</Tag>
-                <Tag>{selectedDoc.project_group_name || selectedDoc.project_code || '未关联项目组'}</Tag>
-                <Tag>{departmentLabel[selectedDoc.department_key] || selectedDoc.department_key}</Tag>
-                <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
-                {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
-              </Space>
 
               <div style={{
                 display: 'flex',
