@@ -4269,10 +4269,24 @@ app.get('/api/documents/:id', (req, res) => {
   });
 });
 
+app.get('/api/documents/:id/live', (req, res) => {
+  const row = getVisibleDocument(req.params.id, req.user);
+  if (!row) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  res.json(serializeDocument(row, { withAccessSummary: true, user: req.user }));
+});
+
 app.put('/api/documents/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  const clientBaseUpdatedAt = req.body?.base_updated_at ? String(req.body.base_updated_at) : '';
+  if (clientBaseUpdatedAt && String(doc.updated_at || '') !== clientBaseUpdatedAt) {
+    return res.status(409).json({
+      error: '文档已被其他协作者更新，请先同步最新内容',
+      code: 'DOCUMENT_CONFLICT',
+      latest: serializeDocument(doc, { withAccessSummary: true, user: req.user }),
+    });
+  }
   const canManageCurrentDocument = canManageDocument(req.user, doc);
   const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
   const nextFolderId = hasBodyField('folder_id') ? (req.body.folder_id || null) : doc.folder_id;
@@ -4345,6 +4359,14 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  const clientBaseUpdatedAt = req.body?.base_updated_at ? String(req.body.base_updated_at) : '';
+  if (clientBaseUpdatedAt && String(doc.updated_at || '') !== clientBaseUpdatedAt) {
+    return res.status(409).json({
+      error: '文档已被其他协作者更新，请先同步最新内容',
+      code: 'DOCUMENT_CONFLICT',
+      latest: serializeDocument(doc, { withAccessSummary: true, user: req.user }),
+    });
+  }
   const content = req.body.content ?? JSON.stringify({ blocks: [] });
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
   const contentText = extractDocumentText(content, req.body.content_text);

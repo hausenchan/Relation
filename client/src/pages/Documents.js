@@ -301,6 +301,7 @@ const clipboardImageExtByMime = {
 const documentLinkParamKeys = ['doc', 'document_id', 'documentId', 'docId'];
 const documentAutoSaveDelay = 3000;
 const documentAutoSaveInterval = 30000;
+const documentLiveSyncInterval = 2000;
 const documentClipboardBlocksMime = 'application/x-relation-document-blocks';
 const documentFolderSidebarCollapsedStorageKey = 'documents.folderSidebarCollapsed';
 
@@ -959,8 +960,184 @@ function getDocumentSaveSignature(title, blocks) {
   return JSON.stringify(buildDocumentSavePayload(title, blocks));
 }
 
-function saveDocumentDraftBeforeUnload(docId, payload) {
+function buildDocumentWritePayload(title, blocks, baseUpdatedAt) {
+  const payload = buildDocumentSavePayload(title, blocks);
+  if (baseUpdatedAt) payload.base_updated_at = baseUpdatedAt;
+  return payload;
+}
+
+function cloneBlocksForSync(blocks = []) {
+  return contentToBlocks(blocksToContent(Array.isArray(blocks) ? blocks : []));
+}
+
+function cloneBlockForSync(block) {
+  return cloneBlocksForSync(block ? [block] : [])[0] || null;
+}
+
+function getSyncBlockSignature(block) {
+  if (!block) return '';
+  return JSON.stringify(blocksToContent([block]).blocks[0] || null);
+}
+
+function areSyncBlocksEqual(left, right) {
+  if (!left && !right) return true;
+  if (!left || !right) return false;
+  return getSyncBlockSignature(left) === getSyncBlockSignature(right);
+}
+
+function buildDocumentSyncSnapshot(title, blocks, extra = {}) {
+  return {
+    title: title || '',
+    blocks: cloneBlocksForSync(blocks),
+    updated_at: extra.updated_at || '',
+    updated_by: extra.updated_by || null,
+    updated_by_name: extra.updated_by_name || '',
+  };
+}
+
+function mergeCollaborativeBlockOrder(baseBlocks = [], localBlocks = [], remoteBlocks = [], survivingIds = new Set()) {
+  const result = [];
+  const seen = new Set();
+  const pushId = (id) => {
+    if (!id || seen.has(id) || !survivingIds.has(id)) return false;
+    result.push(id);
+    seen.add(id);
+    return true;
+  };
+
+  remoteBlocks.forEach(block => pushId(block?.id));
+
+  localBlocks.forEach((block, index) => {
+    const id = block?.id;
+    if (!id || seen.has(id) || !survivingIds.has(id)) return;
+    let inserted = false;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const prevId = localBlocks[cursor]?.id;
+      const prevIndex = result.indexOf(prevId);
+      if (prevIndex >= 0) {
+        result.splice(prevIndex + 1, 0, id);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      for (let cursor = index + 1; cursor < localBlocks.length; cursor += 1) {
+        const nextId = localBlocks[cursor]?.id;
+        const nextIndex = result.indexOf(nextId);
+        if (nextIndex >= 0) {
+          result.splice(nextIndex, 0, id);
+          inserted = true;
+          break;
+        }
+      }
+    }
+    if (!inserted) result.push(id);
+    seen.add(id);
+  });
+
+  baseBlocks.forEach(block => pushId(block?.id));
+  return result;
+}
+
+function mergeCollaborativeDocumentSnapshots(baseSnapshot, localSnapshot, remoteSnapshot) {
+  const base = buildDocumentSyncSnapshot(baseSnapshot?.title, baseSnapshot?.blocks || [], { updated_at: baseSnapshot?.updated_at });
+  const local = buildDocumentSyncSnapshot(localSnapshot?.title, localSnapshot?.blocks || [], { updated_at: localSnapshot?.updated_at });
+  const remote = buildDocumentSyncSnapshot(remoteSnapshot?.title, remoteSnapshot?.blocks || [], { updated_at: remoteSnapshot?.updated_at });
+
+  const baseSignature = getDocumentSaveSignature(base.title, base.blocks);
+  const localSignature = getDocumentSaveSignature(local.title, local.blocks);
+  const remoteSignature = getDocumentSaveSignature(remote.title, remote.blocks);
+  const localChanged = localSignature !== baseSignature;
+  const remoteChanged = remoteSignature !== baseSignature;
+
+  if (!remoteChanged) {
+    return { title: local.title, blocks: local.blocks, hadRemoteChanges: false, hadConflicts: false };
+  }
+  if (!localChanged) {
+    return { title: remote.title, blocks: remote.blocks, hadRemoteChanges: true, hadConflicts: false };
+  }
+
+  let hadConflicts = false;
+  let mergedTitle = local.title;
+  if (local.title === remote.title) {
+    mergedTitle = local.title;
+  } else if (local.title === base.title) {
+    mergedTitle = remote.title;
+  } else if (remote.title === base.title) {
+    mergedTitle = local.title;
+  } else {
+    mergedTitle = local.title || remote.title || base.title || '未命名文档';
+    hadConflicts = true;
+  }
+
+  const baseById = new Map(base.blocks.map(block => [block.id, block]));
+  const localById = new Map(local.blocks.map(block => [block.id, block]));
+  const remoteById = new Map(remote.blocks.map(block => [block.id, block]));
+  const mergedById = new Map();
+
+  Array.from(new Set([
+    ...base.blocks.map(block => block.id),
+    ...local.blocks.map(block => block.id),
+    ...remote.blocks.map(block => block.id),
+  ])).forEach(id => {
+    const baseBlock = baseById.get(id) || null;
+    const localBlock = localById.get(id) || null;
+    const remoteBlock = remoteById.get(id) || null;
+    const localBlockChanged = baseBlock ? !areSyncBlocksEqual(localBlock, baseBlock) : Boolean(localBlock);
+    const remoteBlockChanged = baseBlock ? !areSyncBlocksEqual(remoteBlock, baseBlock) : Boolean(remoteBlock);
+
+    let nextBlock = null;
+    if (!baseBlock) {
+      if (localBlock && remoteBlock) {
+        if (!areSyncBlocksEqual(localBlock, remoteBlock)) hadConflicts = true;
+        nextBlock = localBlock;
+      } else {
+        nextBlock = localBlock || remoteBlock;
+      }
+    } else if (localBlock && remoteBlock) {
+      if (localBlockChanged && remoteBlockChanged && !areSyncBlocksEqual(localBlock, remoteBlock)) {
+        hadConflicts = true;
+        nextBlock = localBlock;
+      } else if (remoteBlockChanged) {
+        nextBlock = remoteBlock;
+      } else {
+        nextBlock = localBlock;
+      }
+    } else if (localBlock && !remoteBlock) {
+      if (!localBlockChanged) {
+        nextBlock = null;
+      } else {
+        hadConflicts = true;
+        nextBlock = localBlock;
+      }
+    } else if (!localBlock && remoteBlock) {
+      if (!remoteBlockChanged) {
+        nextBlock = null;
+      } else {
+        hadConflicts = true;
+        nextBlock = null;
+      }
+    }
+
+    if (nextBlock) mergedById.set(id, cloneBlockForSync(nextBlock));
+  });
+
+  const mergedOrder = mergeCollaborativeBlockOrder(base.blocks, local.blocks, remote.blocks, new Set(mergedById.keys()));
+  const mergedBlocks = mergedOrder
+    .map(id => mergedById.get(id))
+    .filter(Boolean);
+
+  return {
+    title: mergedTitle,
+    blocks: mergedBlocks.length ? mergedBlocks : [createBlock()],
+    hadRemoteChanges: true,
+    hadConflicts,
+  };
+}
+
+function saveDocumentDraftBeforeUnload(docId, payload, baseUpdatedAt = '') {
   const token = localStorage.getItem('token');
+  const requestPayload = baseUpdatedAt ? { ...payload, base_updated_at: baseUpdatedAt } : payload;
   return fetch(`/api/documents/${docId}`, {
     method: 'PUT',
     keepalive: true,
@@ -968,7 +1145,7 @@ function saveDocumentDraftBeforeUnload(docId, payload) {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(requestPayload),
   }).catch(() => {});
 }
 
@@ -1756,6 +1933,8 @@ export default function Documents() {
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
   const [shareLinkError, setShareLinkError] = useState(null);
   const [autoSaving, setAutoSaving] = useState(false);
+  const [liveSyncing, setLiveSyncing] = useState(false);
+  const [remoteUpdateHint, setRemoteUpdateHint] = useState('');
   const [attachmentDragOver, setAttachmentDragOver] = useState(false);
   const [attachmentUploadingBlockIds, setAttachmentUploadingBlockIds] = useState([]);
   const [attachmentPreviewState, setAttachmentPreviewState] = useState({ open: false, mode: 'modal', attachment: null, loading: false });
@@ -1780,9 +1959,12 @@ export default function Documents() {
   const blockHandleSelectionRef = useRef(null);
   const activeEditorSnapshotRef = useRef(null);
   const liveEditorSnapshotRef = useRef(null);
+  const remoteDocumentSnapshotRef = useRef({});
   const selectedDocIdRef = useRef(null);
   const docTabStatesRef = useRef({});
   const lastSavedSignatureRef = useRef({});
+  const documentSyncTimerRef = useRef(null);
+  const liveSyncPendingDocIdsRef = useRef(new Set());
   const dirtyDocumentIdsRef = useRef(new Set());
   const autoSaveTimerRef = useRef(null);
   const autoSaveIntervalRef = useRef(null);
@@ -2004,6 +2186,9 @@ export default function Documents() {
   };
 
   const clearActiveDocument = ({ keepQuery = false } = {}) => {
+    if (selectedDocIdRef.current) {
+      clearRemoteDocumentSnapshot(selectedDocIdRef.current);
+    }
     setSelectedDocId(null);
     setSelectedDoc(null);
     activeEditorSnapshotRef.current = null;
@@ -2061,6 +2246,30 @@ export default function Documents() {
     upsertDocTab(doc);
     resetEditorUndoStack();
     return true;
+  };
+
+  const setRemoteDocumentSnapshot = (docId, snapshot) => {
+    const normalizedId = getDocTabId(docId);
+    if (!normalizedId || !snapshot) return;
+    remoteDocumentSnapshotRef.current[normalizedId] = buildDocumentSyncSnapshot(
+      snapshot.title,
+      snapshot.blocks,
+      {
+        updated_at: snapshot.updated_at,
+        updated_by: snapshot.updated_by,
+        updated_by_name: snapshot.updated_by_name,
+      }
+    );
+  };
+
+  const getRemoteDocumentSnapshot = (docId) => (
+    remoteDocumentSnapshotRef.current[getDocTabId(docId)] || null
+  );
+
+  const clearRemoteDocumentSnapshot = (docId) => {
+    const normalizedId = getDocTabId(docId);
+    if (!normalizedId) return;
+    delete remoteDocumentSnapshotRef.current[normalizedId];
   };
 
   const getDocumentSummaryById = (id) => {
@@ -2148,6 +2357,13 @@ export default function Documents() {
       const detail = await documentsApi.get(id);
       const blocks = contentToBlocks(detail.content);
       lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(detail.title || '', blocks);
+      setRemoteDocumentSnapshot(docId, {
+        title: detail.title || '',
+        blocks,
+        updated_at: detail.updated_at,
+        updated_by: detail.updated_by,
+        updated_by_name: detail.updated_by_name,
+      });
       const nextTabState = {
         doc: detail,
         editorTitle: detail.title || '',
@@ -2165,6 +2381,7 @@ export default function Documents() {
       setOpenBlockMenuId(null);
       setTocOpen(asSwitchValue(detail.toc_enabled, true));
       setShareLinkError(null);
+      setRemoteUpdateHint('');
       resetEditorUndoStack();
     } catch (err) {
       const isDeepLinkTarget = Number(deepLinkedDocId) === Number(docId);
@@ -2220,6 +2437,14 @@ export default function Documents() {
   const refreshSelectedDocMeta = async () => {
     if (!selectedDoc?.id) return;
     const detail = await documentsApi.get(selectedDoc.id);
+    const blocks = contentToBlocks(detail.content);
+    setRemoteDocumentSnapshot(detail.id, {
+      title: detail.title || '',
+      blocks,
+      updated_at: detail.updated_at,
+      updated_by: detail.updated_by,
+      updated_by_name: detail.updated_by_name,
+    });
     setSelectedDoc(prev => ({ ...prev, ...detail }));
     upsertDocTab(detail);
     setDocTabStates(prev => ({
@@ -2516,6 +2741,28 @@ export default function Documents() {
   }, []);
 
   useEffect(() => {
+    if (documentSyncTimerRef.current) window.clearInterval(documentSyncTimerRef.current);
+    if (!selectedDoc?.id || detailLoading || presentationOpen) return undefined;
+    documentSyncTimerRef.current = window.setInterval(() => {
+      const activeDocId = getDocTabId(selectedDocIdRef.current || selectedDoc?.id);
+      if (!activeDocId) return;
+      syncDocumentFromRemote(activeDocId).catch(() => {});
+    }, documentLiveSyncInterval);
+    return () => {
+      if (documentSyncTimerRef.current) {
+        window.clearInterval(documentSyncTimerRef.current);
+        documentSyncTimerRef.current = null;
+      }
+    };
+  }, [selectedDoc?.id, detailLoading, presentationOpen]);
+
+  useEffect(() => {
+    if (!remoteUpdateHint) return undefined;
+    const timer = window.setTimeout(() => setRemoteUpdateHint(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [remoteUpdateHint]);
+
+  useEffect(() => {
     const saveSnapshotImmediately = (snapshot) => {
       const doc = snapshot?.doc;
       if (!doc?.id || !canEditDoc(doc)) return;
@@ -2526,7 +2773,7 @@ export default function Documents() {
       if (lastSavedSignatureRef.current[doc.id] === signature) return;
       lastSavedSignatureRef.current[doc.id] = signature;
       dirtyDocumentIdsRef.current.delete(getDocTabId(doc.id));
-      saveDocumentDraftBeforeUnload(doc.id, payload);
+      saveDocumentDraftBeforeUnload(doc.id, payload, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at);
     };
 
     const saveDraftsImmediately = () => {
@@ -2566,6 +2813,7 @@ export default function Documents() {
   useEffect(() => () => {
     if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     if (autoSaveIntervalRef.current) window.clearInterval(autoSaveIntervalRef.current);
+    if (documentSyncTimerRef.current) window.clearInterval(documentSyncTimerRef.current);
     if (tableResizeRef.current?.cleanup) tableResizeRef.current.cleanup();
     if (tableCellSelectionRef.current?.cleanup) tableCellSelectionRef.current.cleanup();
     saveCurrentDocumentRef.current?.({ silent: true }).catch(() => {});
@@ -2710,8 +2958,8 @@ export default function Documents() {
     if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot?.editorBlocks) ? snapshot.editorBlocks : editorBlocks;
     const title = snapshot?.editorTitle ?? editorTitle;
-    const payload = buildDocumentSavePayload(title, blocks);
-    const signature = JSON.stringify(payload);
+    const payload = buildDocumentWritePayload(title, blocks, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at);
+    const signature = getDocumentSaveSignature(title, blocks);
     if (!force && lastSavedSignatureRef.current[doc.id] === signature) return null;
     if (pendingSavePromisesRef.current[doc.id]) return pendingSavePromisesRef.current[doc.id];
 
@@ -2723,9 +2971,17 @@ export default function Documents() {
       lastSavedSignatureRef.current[doc.id] = signature;
       const docId = getDocTabId(doc.id);
       dirtyDocumentIdsRef.current.delete(docId);
+      setRemoteDocumentSnapshot(docId, {
+        title,
+        blocks,
+        updated_at: updated.updated_at,
+        updated_by: updated.updated_by,
+        updated_by_name: updated.updated_by_name,
+      });
       const isActiveDoc = getDocTabId(selectedDocId) === docId;
       if (isActiveDoc) {
         setSelectedDoc(prev => ({ ...prev, ...updated }));
+        setRemoteUpdateHint('');
       }
       upsertDocTab(updated);
       setDocTabStates(prev => ({
@@ -2745,6 +3001,13 @@ export default function Documents() {
       }
       return updated;
     } catch (err) {
+      if (err?.response?.status === 409 && err?.response?.data?.code === 'DOCUMENT_CONFLICT') {
+        await syncDocumentFromRemote(doc.id);
+        if (!silent) {
+          message.warning('检测到协作者更新，已自动同步最新内容并保留你的本地修改');
+        }
+        return null;
+      }
       if (!silent) {
         message.error(err.response?.data?.error || err.message || '保存失败');
       }
@@ -2760,8 +3023,8 @@ export default function Documents() {
     if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot.editorBlocks) ? snapshot.editorBlocks : contentToBlocks(doc.content);
     const title = snapshot.editorTitle ?? doc.title ?? '';
-    const payload = buildDocumentSavePayload(title, blocks);
-    const signature = JSON.stringify(payload);
+    const payload = buildDocumentWritePayload(title, blocks, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at);
+    const signature = getDocumentSaveSignature(title, blocks);
     const docId = getDocTabId(doc.id);
     if (!force && lastSavedSignatureRef.current[doc.id] === signature) {
       dirtyDocumentIdsRef.current.delete(docId);
@@ -2774,9 +3037,17 @@ export default function Documents() {
       const updated = await savePromise;
       lastSavedSignatureRef.current[doc.id] = signature;
       dirtyDocumentIdsRef.current.delete(docId);
+      setRemoteDocumentSnapshot(docId, {
+        title,
+        blocks,
+        updated_at: updated.updated_at,
+        updated_by: updated.updated_by,
+        updated_by_name: updated.updated_by_name,
+      });
       const isActiveDoc = getDocTabId(selectedDocId) === docId;
       if (isActiveDoc) {
         setSelectedDoc(prev => ({ ...prev, ...updated }));
+        setRemoteUpdateHint('');
       }
       upsertDocTab(updated);
       setDocTabStates(prev => ({
@@ -2789,6 +3060,12 @@ export default function Documents() {
       setDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       return updated;
+    } catch (err) {
+      if (err?.response?.status === 409 && err?.response?.data?.code === 'DOCUMENT_CONFLICT') {
+        await syncDocumentFromRemote(doc.id);
+        return null;
+      }
+      throw err;
     } finally {
       delete pendingSavePromisesRef.current[doc.id];
     }
@@ -2807,6 +3084,120 @@ export default function Documents() {
   };
 
   saveDirtyDocumentTabsRef.current = saveDirtyDocumentTabs;
+
+  const syncDocumentFromRemote = async (docId) => {
+    const normalizedId = getDocTabId(docId);
+    if (!normalizedId || liveSyncPendingDocIdsRef.current.has(normalizedId)) return;
+    const activeDocId = getDocTabId(selectedDocIdRef.current || selectedDocId);
+    const isActiveDoc = activeDocId === normalizedId;
+    const localState = isActiveDoc
+      ? {
+          doc: activeEditorSnapshotRef.current?.doc || selectedDoc,
+          editorTitle: activeEditorSnapshotRef.current?.editorTitle ?? editorTitle,
+          editorBlocks: activeEditorSnapshotRef.current?.editorBlocks || editorBlocks,
+          selectedBlockId,
+          tocOpen,
+        }
+      : docTabStatesRef.current[normalizedId];
+    const localDoc = localState?.doc;
+    if (!localDoc?.id) return;
+
+    liveSyncPendingDocIdsRef.current.add(normalizedId);
+    if (isActiveDoc) setLiveSyncing(true);
+    try {
+      const liveData = await documentsApi.live(normalizedId);
+      const remoteSnapshot = buildDocumentSyncSnapshot(liveData.title || '', contentToBlocks(liveData.content), {
+        updated_at: liveData.updated_at,
+        updated_by: liveData.updated_by,
+        updated_by_name: liveData.updated_by_name,
+      });
+      const previousRemoteSnapshot = getRemoteDocumentSnapshot(normalizedId) || buildDocumentSyncSnapshot(
+        localDoc.title || '',
+        Array.isArray(localState?.editorBlocks) ? localState.editorBlocks : contentToBlocks(localDoc.content),
+        {
+          updated_at: localDoc.updated_at,
+          updated_by: localDoc.updated_by,
+          updated_by_name: localDoc.updated_by_name,
+        }
+      );
+
+      if (previousRemoteSnapshot.updated_at && previousRemoteSnapshot.updated_at === remoteSnapshot.updated_at) return;
+
+      const hasLocalDirty = dirtyDocumentIdsRef.current.has(normalizedId);
+      let nextTitle = remoteSnapshot.title;
+      let nextBlocks = remoteSnapshot.blocks;
+      let hadConflicts = false;
+
+      if (hasLocalDirty) {
+        const merged = mergeCollaborativeDocumentSnapshots(
+          previousRemoteSnapshot,
+          buildDocumentSyncSnapshot(localState?.editorTitle ?? localDoc.title ?? '', localState?.editorBlocks || [], {
+            updated_at: localDoc.updated_at,
+            updated_by: localDoc.updated_by,
+            updated_by_name: localDoc.updated_by_name,
+          }),
+          remoteSnapshot
+        );
+        nextTitle = merged.title;
+        nextBlocks = merged.blocks;
+        hadConflicts = merged.hadConflicts;
+        lastSavedSignatureRef.current[normalizedId] = getDocumentSaveSignature(remoteSnapshot.title, remoteSnapshot.blocks);
+        dirtyDocumentIdsRef.current.add(normalizedId);
+      } else {
+        lastSavedSignatureRef.current[normalizedId] = getDocumentSaveSignature(remoteSnapshot.title, remoteSnapshot.blocks);
+        dirtyDocumentIdsRef.current.delete(normalizedId);
+      }
+
+      const mergedDoc = {
+        ...(localDoc || {}),
+        ...liveData,
+        title: nextTitle,
+        content: blocksToContent(nextBlocks),
+        content_text: blocksToText(nextBlocks),
+      };
+      setRemoteDocumentSnapshot(normalizedId, {
+        title: remoteSnapshot.title,
+        blocks: remoteSnapshot.blocks,
+        updated_at: remoteSnapshot.updated_at,
+        updated_by: remoteSnapshot.updated_by,
+        updated_by_name: remoteSnapshot.updated_by_name,
+      });
+
+      setDocTabStates(prev => ({
+        ...prev,
+        [normalizedId]: {
+          ...(prev[normalizedId] || {}),
+          doc: mergedDoc,
+          editorTitle: nextTitle,
+          editorBlocks: nextBlocks,
+          selectedBlockId: prev[normalizedId]?.selectedBlockId ?? localState?.selectedBlockId ?? nextBlocks[0]?.id ?? null,
+          tocOpen: prev[normalizedId]?.tocOpen ?? localState?.tocOpen ?? asSwitchValue(mergedDoc.toc_enabled, true),
+        },
+      }));
+      upsertDocTab(mergedDoc);
+      setDocuments(prev => prev.map(item => (getDocTabId(item.id) === normalizedId ? { ...item, ...mergedDoc } : item)));
+      setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === normalizedId ? { ...item, ...mergedDoc } : item)));
+
+      if (isActiveDoc) {
+        setSelectedDoc(mergedDoc);
+        setEditorTitle(nextTitle);
+        setEditorBlocks(nextBlocks);
+        setSelectedBlockId(prev => prev ?? localState?.selectedBlockId ?? nextBlocks[0]?.id ?? null);
+        setRemoteUpdateHint(hadConflicts
+          ? `检测到他人更新，已自动合并本地修改与${remoteSnapshot.updated_by_name || '协作者'}的最新内容`
+          : `已同步${remoteSnapshot.updated_by_name || '协作者'}的最新修改`);
+      }
+    } catch (err) {
+      if (err?.status !== 404 && err?.status !== 403) {
+        console.error(err);
+      }
+    } finally {
+      liveSyncPendingDocIdsRef.current.delete(normalizedId);
+      if (isActiveDoc) {
+        setLiveSyncing(false);
+      }
+    }
+  };
 
   const handleSave = () => {
     saveCurrentDocument({ force: true }).catch(() => {});
@@ -2842,12 +3233,17 @@ export default function Documents() {
     const blocks = Array.isArray(snapshot.editorBlocks) && snapshot.editorBlocks.length
       ? snapshot.editorBlocks
       : contentToBlocks(doc.content);
-    const payload = buildDocumentSavePayload(snapshot.editorTitle || doc.title || '未命名文档', blocks);
+    const payload = buildDocumentWritePayload(
+      snapshot.editorTitle || doc.title || '未命名文档',
+      blocks,
+      getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at
+    );
     return documentsApi.update(doc.id, payload);
   };
 
   const removeDocTab = (docId) => {
     const normalizedId = getDocTabId(docId);
+    clearRemoteDocumentSnapshot(normalizedId);
     const closingIndex = openDocTabs.findIndex(tab => getDocTabId(tab.id) === normalizedId);
     const nextTabs = openDocTabs.filter(tab => getDocTabId(tab.id) !== normalizedId);
     setOpenDocTabs(nextTabs);
@@ -8772,6 +9168,8 @@ export default function Documents() {
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {formatDocumentTimestamp(selectedDoc.updated_at)}
                     {autoSaving && ' · 自动保存中'}
+                    {liveSyncing && ' · 同步中'}
+                    {!liveSyncing && remoteUpdateHint ? ` · ${remoteUpdateHint}` : ''}
                   </Text>
                 </Space>
                 <Space wrap size={6}>
