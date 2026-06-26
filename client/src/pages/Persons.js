@@ -17,6 +17,7 @@ import InteractionList from '../components/InteractionList';
 import ReminderList from '../components/ReminderList';
 import PersonsMap from '../components/PersonsMap';
 import ResizableTable from '../components/ResizableTable';
+import { RichTextEditor, RichTextView } from '../components/RichText';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -1956,8 +1957,8 @@ export default function Persons() {
           )}
 
           <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>备注</Divider>
-          <Form.Item name="notes">
-            <TextArea rows={3} placeholder="其他备注..." />
+          <Form.Item name="notes" valuePropName="value" trigger="onChange">
+            <RichTextEditor placeholder="其他备注..." minHeight={160} enableTables />
           </Form.Item>
           {canUsePrivatePersons && (
             <>
@@ -2182,7 +2183,9 @@ export default function Persons() {
 
                   {current.notes && (
                     <Descriptions column={1} size="small" bordered>
-                      <Descriptions.Item label="备注">{current.notes}</Descriptions.Item>
+                      <Descriptions.Item label="备注">
+                        <RichTextView value={current.notes} />
+                      </Descriptions.Item>
                     </Descriptions>
                   )}
                 </>
