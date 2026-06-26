@@ -260,6 +260,7 @@ const listMarkerTextGap = 6;
 const maxListIndent = 9;
 const blockActionSelectedBackground = '#f7e3e6';
 const blockActionSelectedBorder = '#f2c9d0';
+const listBlockSelectedBackground = '#f8e6e8';
 const inlineToolbarWidth = 420;
 
 const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, item.label]));
@@ -8714,6 +8715,7 @@ export default function Documents() {
     const blankAddVisible = isMobile || menuOpen || blockSelected || hoveredBlockId === block.id;
     const blockHandleVisible = blankParagraph ? blankAddVisible : handleVisible;
     const hierarchicalListBlock = isHierarchicalListBlock(block);
+    const listBlockSelectionActive = hierarchicalListBlock && blockSelected && !menuOpen;
     const handleIcon = blankParagraph ? <BlockAddIcon /> : <BlockHandleIcon />;
     const handleLabel = blankParagraph ? '添加各种样式内容' : '块菜单';
     const handleTooltip = blankParagraph
@@ -8736,9 +8738,13 @@ export default function Documents() {
         onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
         style={{
           position: 'relative',
-          border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
-          background: commentsOpen ? '#f8fbff' : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent')),
-          borderRadius: 6,
+          border: listBlockSelectionActive ? '1px solid transparent' : (blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent'),
+          background: commentsOpen
+            ? '#f8fbff'
+            : (listBlockSelectionActive
+              ? listBlockSelectedBackground
+              : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent'))),
+          borderRadius: listBlockSelectionActive ? 0 : 6,
           padding: hierarchicalListBlock ? (isMobile ? '1px 6px' : '1px 8px 1px 0') : (isMobile ? '5px 6px' : '3px 8px 3px 0'),
           marginBottom: hierarchicalListBlock ? 0 : (isMobile ? 4 : 2),
           transition: 'border-color 0.15s ease, background 0.15s ease',
