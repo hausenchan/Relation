@@ -8464,10 +8464,21 @@ export default function Documents() {
         minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : 320),
         borderRight: isMobile ? 'none' : '1px solid #f0f0f0',
         paddingRight: isMobile ? 0 : (isFolderSidebarCollapsed ? 0 : 16),
-        overflow: isMobile ? 'visible' : (isFolderSidebarCollapsed ? 'hidden' : 'auto'),
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
         transition: 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease',
       }}>
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <div
+          style={{
+            flex: '0 0 auto',
+            position: isMobile ? 'static' : 'sticky',
+            top: 0,
+            zIndex: 2,
+            background: '#fff',
+            paddingBottom: isFolderSidebarCollapsed ? 0 : 12,
+          }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <Space size={8} align="center" style={{ minWidth: 0 }}>
               {!isMobile && (
@@ -8502,9 +8513,11 @@ export default function Documents() {
               </Space>
             )}
           </div>
+        </div>
 
           {!isFolderSidebarCollapsed && (
-            <>
+            <div style={{ flex: 1, minHeight: 0, overflowY: isMobile ? 'visible' : 'auto' }}>
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
               <Select
                 value={domainFilter}
                 options={domainOptions}
@@ -8624,9 +8637,9 @@ export default function Documents() {
                   }} />
                 </Dropdown>
               </div>
-            </>
+            </Space>
+            </div>
           )}
-        </Space>
       </aside>
       )}
 
