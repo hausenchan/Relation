@@ -131,6 +131,29 @@ const getStoredWorkspaceTabs = (storageKey) => {
   }
 };
 
+const getStoredBoolean = (storageKey, fallbackValue) => {
+  try {
+    const storedValue = localStorage.getItem(storageKey);
+    if (storedValue === '1') return true;
+    if (storedValue === '0') return false;
+  } catch {
+    // localStorage can be unavailable in private browsing; fall back to memory defaults.
+  }
+  return fallbackValue;
+};
+
+const getStoredStringArray = (storageKey, fallbackValue) => {
+  try {
+    const storedValue = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (Array.isArray(storedValue)) {
+      return storedValue.filter(item => typeof item === 'string');
+    }
+  } catch {
+    // localStorage can be unavailable in private browsing; fall back to memory defaults.
+  }
+  return fallbackValue;
+};
+
 function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onReorder }) {
   const trackRef = React.useRef(null);
   const [draggingKey, setDraggingKey] = useState(null);
@@ -442,6 +465,10 @@ function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout, canAccessModule, canAccessMenu } = useAuth();
+  const sidebarCollapsedStorageKey = 'relation.appSidebarCollapsed.v1';
+  const mobileMenuOpenStorageKey = 'relation.appMobileMenuOpen.v1';
+  const menuOpenKeysStorageKey = 'relation.appMenuOpenKeys.v1';
+  const defaultMenuOpenKeys = ['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'common-tools', 'system'];
   const tabStorageKey = `${WORKSPACE_TABS_STORAGE_PREFIX}.${user?.id || user?.username || 'guest'}`;
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingGiftCount, setPendingGiftCount] = useState(0);
@@ -452,10 +479,11 @@ function AppLayout() {
   const [pwdForm] = Form.useForm();
   const [pwdLoading, setPwdLoading] = useState(false);
   const menuScrollRef = React.useRef(null);
-  const [collapsed, setCollapsed] = useState(true);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const hasInitializedMenuRouteState = React.useRef(false);
+  const [collapsed, setCollapsed] = useState(() => getStoredBoolean(sidebarCollapsedStorageKey, true));
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(() => getStoredBoolean(mobileMenuOpenStorageKey, false));
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [menuOpenKeys, setMenuOpenKeys] = useState(['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'common-tools', 'system']);
+  const [menuOpenKeys, setMenuOpenKeys] = useState(() => getStoredStringArray(menuOpenKeysStorageKey, defaultMenuOpenKeys));
   const [workspaceTabs, setWorkspaceTabs] = useState(() => getStoredWorkspaceTabs(tabStorageKey));
   const [workspaceTabsStorageKey, setWorkspaceTabsStorageKey] = useState(tabStorageKey);
   const currentFullPath = useMemo(
@@ -478,6 +506,30 @@ function AppLayout() {
       // localStorage can be unavailable in private browsing; tabs still work in memory.
     }
   }, [workspaceTabs, workspaceTabsStorageKey, tabStorageKey, user]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(sidebarCollapsedStorageKey, collapsed ? '1' : '0');
+    } catch {
+      // localStorage can be unavailable in private browsing; keep the in-memory state.
+    }
+  }, [collapsed, sidebarCollapsedStorageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(mobileMenuOpenStorageKey, mobileMenuOpen ? '1' : '0');
+    } catch {
+      // localStorage can be unavailable in private browsing; keep the in-memory state.
+    }
+  }, [mobileMenuOpen, mobileMenuOpenStorageKey]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(menuOpenKeysStorageKey, JSON.stringify(menuOpenKeys));
+    } catch {
+      // localStorage can be unavailable in private browsing; keep the in-memory state.
+    }
+  }, [menuOpenKeys, menuOpenKeysStorageKey]);
 
   useEffect(() => {
     if (!user || workspaceTabsStorageKey !== tabStorageKey) return;
@@ -521,14 +573,12 @@ function AppLayout() {
   }, [location, user]);
 
   useEffect(() => {
+    if (!hasInitializedMenuRouteState.current) {
+      hasInitializedMenuRouteState.current = true;
+      return;
+    }
     setMobileMenuOpen(false);
   }, [location.pathname]);
-
-  useEffect(() => {
-    if (isMobile) {
-      setCollapsed(false);
-    }
-  }, [isMobile]);
 
   useEffect(() => {
     if (!isMobile || !mobileMenuOpen) return undefined;
