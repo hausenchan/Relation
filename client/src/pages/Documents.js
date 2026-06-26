@@ -1857,6 +1857,10 @@ export default function Documents() {
   const activePresentationSlideIndex = Math.min(presentationSlideIndex, presentationSlideCount - 1);
   const activePresentationSection = presentationSections[activePresentationSlideIndex] || presentationSections[0];
   const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
+  const selectedDocDomainTag = domainLabel[selectedDoc?.domain] || selectedDoc?.domain || '';
+  const selectedDocProjectGroupTag = selectedDoc?.project_group_name || selectedDoc?.project_code || '未关联项目组';
+  const selectedDocDepartmentTag = departmentLabel[selectedDoc?.department_key] || selectedDoc?.department_key || '';
+  const selectedDocTypeTag = docTypeLabel[selectedDoc?.doc_type] || selectedDoc?.doc_type || '';
   const deepLinkedDocId = useMemo(() => {
     return getDocumentIdFromSearch(searchParams);
   }, [searchParams]);
@@ -8737,10 +8741,10 @@ export default function Documents() {
                     <Tag color="geekblue">{selectedDoc.document_no}</Tag>
                     <Tag>{selectedDoc.current_version || 'V1.0'}</Tag>
                     <Tag color="cyan">{selectedDoc.access_summary?.label || '仅自己'}</Tag>
-                    <Tag>{domainLabel[selectedDoc.domain] || selectedDoc.domain}</Tag>
-                    <Tag>{selectedDoc.project_group_name || selectedDoc.project_code || '未关联项目组'}</Tag>
-                    <Tag>{departmentLabel[selectedDoc.department_key] || selectedDoc.department_key}</Tag>
-                    <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
+                    {selectedDocDomainTag && <Tag>{selectedDocDomainTag}</Tag>}
+                    {selectedDocProjectGroupTag && selectedDocProjectGroupTag !== selectedDocDomainTag && <Tag>{selectedDocProjectGroupTag}</Tag>}
+                    {selectedDocDepartmentTag && <Tag>{selectedDocDepartmentTag}</Tag>}
+                    {selectedDocTypeTag && <Tag>{selectedDocTypeTag}</Tag>}
                     {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
                   </Space>
                   <Text type="secondary" style={{ fontSize: 12 }}>
