@@ -255,7 +255,8 @@ const listMarkerCenterOffset = 12;
 const listMarkerColor = '#202124';
 const listGuideColor = '#f0f0f0';
 const listGuideWidth = 2;
-const listLineHeight = 1.68;
+const listLineHeight = 1.96;
+const listMarkerTextGap = 6;
 const maxListIndent = 9;
 const blockActionSelectedBackground = '#f7e3e6';
 const blockActionSelectedBorder = '#f2c9d0';
@@ -6980,6 +6981,7 @@ export default function Documents() {
       : numberedListMarkers.get(block.id);
     const listFontSize = selectedDoc?.small_font_enabled ? 13 : 15;
     const markerLineHeight = listFontSize * listLineHeight;
+    const listGuideCenterY = markerLineHeight / 2 + 1;
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
       minWidth: listMarkerBoxWidth,
@@ -7036,8 +7038,8 @@ export default function Documents() {
 
     return (
       <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
-        {renderListGuides(block, { top: -4, bottom: -4, centerY: markerLineHeight / 2 })}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+        {renderListGuides(block, { top: -8, bottom: -8, centerY: listGuideCenterY })}
+        <div style={{ display: 'flex', gap: listMarkerTextGap, alignItems: 'flex-start' }}>
           {markerNode}
           <InlineRichTextEditor
             {...commonProps}
@@ -8167,6 +8169,7 @@ export default function Documents() {
       const presentationMarkerWidth = isMobile ? 24 : listMarkerBoxWidth;
       const presentationFontSize = isMobile ? 17 : 22;
       const presentationLineHeight = presentationFontSize * listLineHeight;
+      const presentationGuideCenterY = presentationLineHeight / 2 + 1;
       const marker = block.type === 'bullet'
         ? getBulletListMarker(indent)
         : block.type === 'numbered'
@@ -8195,11 +8198,11 @@ export default function Documents() {
         </span>
       );
       return (
-        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: 8, fontSize: presentationFontSize, lineHeight: listLineHeight }}>
+        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: listMarkerTextGap, fontSize: presentationFontSize, lineHeight: listLineHeight }}>
           {renderListGuides(block, {
-            top: -4,
-            bottom: -4,
-            centerY: presentationLineHeight / 2,
+            top: -8,
+            bottom: -8,
+            centerY: presentationGuideCenterY,
             lineOffset: presentationMarkerWidth / 2,
             indentWidth: presentationIndentWidth,
           })}
@@ -8739,7 +8742,7 @@ export default function Documents() {
           border: blockSelected || menuOpen ? `1px solid ${blockActionSelectedBorder}` : '1px solid transparent',
           background: commentsOpen ? '#f8fbff' : (blockSelected || menuOpen ? blockActionSelectedBackground : (block.highlight || 'transparent')),
           borderRadius: 6,
-          padding: hierarchicalListBlock ? (isMobile ? '0 6px' : '0 8px 0 0') : (isMobile ? '5px 6px' : '3px 8px 3px 0'),
+          padding: hierarchicalListBlock ? (isMobile ? '1px 6px' : '1px 8px 1px 0') : (isMobile ? '5px 6px' : '3px 8px 3px 0'),
           marginBottom: hierarchicalListBlock ? 0 : (isMobile ? 4 : 2),
           transition: 'border-color 0.15s ease, background 0.15s ease',
         }}
