@@ -4759,12 +4759,43 @@ export default function Documents() {
       && selectionStart !== selectionEnd;
   };
 
+  const getDeleteTargetBlockIds = () => {
+    const selectedBlockIds = selectedAreaBlockIdsRef.current.length
+      ? selectedAreaBlockIdsRef.current
+      : selectedAreaBlockIds;
+    if (selectedBlockIds.length) return selectedBlockIds;
+
+    const nativeSelectedBlockIds = getSelectedEditorBlockIds();
+    if (nativeSelectedBlockIds.length) return nativeSelectedBlockIds;
+
+    if (!selectedBlockId) return [];
+    const activeElement = document.activeElement;
+    const activeBlockId = activeElement?.closest?.('[data-doc-block-id]')?.getAttribute?.('data-doc-block-id') || null;
+    const selectedBlock = editorBlocks.find(block => block.id === selectedBlockId);
+    const activeBlock = editorBlocks.find(block => block.id === activeBlockId);
+    const targetBlock = selectedBlock || activeBlock;
+    if (!targetBlock) return [];
+
+    const activeInEditableInput = Boolean(
+      activeElement?.closest?.('textarea, input, [contenteditable="true"]')
+    );
+    const activeIsTargetBlock = !activeBlockId || activeBlockId === targetBlock.id;
+    const shouldSkipBlockDelete = activeInEditableInput
+      && activeIsTargetBlock
+      && !isTableLikeBlock(targetBlock)
+      && targetBlock.type !== 'divider'
+      && targetBlock.type !== 'attachment';
+    if (shouldSkipBlockDelete) return [];
+
+    return [targetBlock.id];
+  };
+
   useEffect(() => {
     const handleSelectionDeleteKeyDown = (event) => {
       if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
       if (!['Delete', 'Backspace'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
       if (hasActiveNativeTextSelection()) return;
-      const selectedBlockIds = selectedAreaBlockIds.length ? selectedAreaBlockIds : getSelectedEditorBlockIds();
+      const selectedBlockIds = getDeleteTargetBlockIds();
       if (!selectedBlockIds.length) return;
       event.preventDefault();
       event.stopPropagation();
