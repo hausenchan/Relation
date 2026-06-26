@@ -700,9 +700,9 @@ function renderFoldListTriangle(collapsed, scale = 1) {
           display: 'block',
           width: 0,
           height: 0,
-          borderTop: `${3.5 * scale}px solid transparent`,
-          borderBottom: `${3.5 * scale}px solid transparent`,
-          borderLeft: `${5.5 * scale}px solid ${color}`,
+          borderTop: `${4.5 * scale}px solid transparent`,
+          borderBottom: `${4.5 * scale}px solid transparent`,
+          borderLeft: `${7.5 * scale}px solid ${color}`,
           transform: `translateX(${1 * scale}px)`,
         }}
       />
@@ -715,9 +715,9 @@ function renderFoldListTriangle(collapsed, scale = 1) {
         display: 'block',
         width: 0,
         height: 0,
-        borderLeft: `${4.5 * scale}px solid transparent`,
-        borderRight: `${4.5 * scale}px solid transparent`,
-        borderTop: `${5.5 * scale}px solid ${color}`,
+        borderLeft: `${6 * scale}px solid transparent`,
+        borderRight: `${6 * scale}px solid transparent`,
+        borderTop: `${7.5 * scale}px solid ${color}`,
         transform: `translateY(${1.5 * scale}px)`,
       }}
     />
@@ -6980,7 +6980,9 @@ export default function Documents() {
       ? getBulletListMarker(indent)
       : numberedListMarkers.get(block.id);
     const listFontSize = selectedDoc?.small_font_enabled ? 13 : 15;
-    const markerLineHeight = listFontSize * listLineHeight;
+    const foldListFontSize = selectedDoc?.small_font_enabled ? 15 : 17;
+    const blockListFontSize = block.type === 'fold-list' ? foldListFontSize : listFontSize;
+    const markerLineHeight = blockListFontSize * listLineHeight;
     const listGuideCenterY = markerLineHeight / 2 + 1;
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
@@ -7040,7 +7042,7 @@ export default function Documents() {
     return (
       <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
         {renderListGuides(block, { top: -8, bottom: -8, centerY: listGuideCenterY })}
-        <div style={{ display: 'flex', gap: block.type === 'fold-list' ? 7 : listMarkerTextGap, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', gap: block.type === 'fold-list' ? 5 : listMarkerTextGap, alignItems: 'flex-start' }}>
           {markerNode}
           <InlineRichTextEditor
             {...commonProps}
@@ -7050,10 +7052,10 @@ export default function Documents() {
             onChange={value => commonProps.onChange(value)}
             style={{
               ...commonProps.style,
-              fontSize: listFontSize,
+              fontSize: blockListFontSize,
               lineHeight: listLineHeight,
               color: '#202124',
-              fontWeight: 400,
+              fontWeight: block.type === 'fold-list' ? 500 : 400,
               minHeight: markerLineHeight,
               padding: '0',
             }}
@@ -8169,7 +8171,8 @@ export default function Documents() {
       const presentationIndentWidth = isMobile ? 26 : listIndentWidth;
       const presentationMarkerWidth = isMobile ? 24 : listMarkerBoxWidth;
       const presentationFontSize = isMobile ? 17 : 22;
-      const presentationLineHeight = presentationFontSize * listLineHeight;
+      const presentationListFontSize = block.type === 'fold-list' ? (isMobile ? 18 : 23) : presentationFontSize;
+      const presentationLineHeight = presentationListFontSize * listLineHeight;
       const presentationGuideCenterY = presentationLineHeight / 2 + 1;
       const marker = block.type === 'bullet'
         ? getBulletListMarker(indent)
@@ -8190,17 +8193,17 @@ export default function Documents() {
             justifyContent: block.type === 'numbered' ? 'flex-end' : 'center',
             color: listMarkerColor,
             fontFamily: block.type === 'numbered' ? 'Arial, Helvetica, sans-serif' : undefined,
-            fontSize: presentationFontSize,
+            fontSize: presentationListFontSize,
             fontWeight: 400,
           }}
         >
           {block.type === 'fold-list'
-            ? renderFoldListTriangle(meta.collapsed, isMobile ? 1 : 1.05)
+            ? renderFoldListTriangle(meta.collapsed, isMobile ? 1.05 : 1.15)
             : marker}
         </span>
       );
       return (
-        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: block.type === 'fold-list' ? 7 : listMarkerTextGap, fontSize: presentationFontSize, lineHeight: listLineHeight }}>
+        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: block.type === 'fold-list' ? 5 : listMarkerTextGap, fontSize: presentationListFontSize, lineHeight: listLineHeight }}>
           {renderListGuides(block, {
             top: -8,
             bottom: -8,
@@ -8209,7 +8212,7 @@ export default function Documents() {
             indentWidth: presentationIndentWidth,
           })}
           {markerNode}
-          <InlineHtmlView value={block.content} style={{ color: '#202124', fontWeight: 400 }} />
+          <InlineHtmlView value={block.content} style={{ color: '#202124', fontWeight: block.type === 'fold-list' ? 500 : 400 }} />
         </div>
       );
     }
