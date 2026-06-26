@@ -700,9 +700,9 @@ function renderFoldListTriangle(collapsed, scale = 1) {
           display: 'block',
           width: 0,
           height: 0,
-          borderTop: `${4 * scale}px solid transparent`,
-          borderBottom: `${4 * scale}px solid transparent`,
-          borderLeft: `${6.5 * scale}px solid ${color}`,
+          borderTop: `${3.5 * scale}px solid transparent`,
+          borderBottom: `${3.5 * scale}px solid transparent`,
+          borderLeft: `${5.5 * scale}px solid ${color}`,
           transform: `translateX(${1 * scale}px)`,
         }}
       />
@@ -715,9 +715,9 @@ function renderFoldListTriangle(collapsed, scale = 1) {
         display: 'block',
         width: 0,
         height: 0,
-        borderLeft: `${5 * scale}px solid transparent`,
-        borderRight: `${5 * scale}px solid transparent`,
-        borderTop: `${6 * scale}px solid ${color}`,
+        borderLeft: `${4.5 * scale}px solid transparent`,
+        borderRight: `${4.5 * scale}px solid transparent`,
+        borderTop: `${5.5 * scale}px solid ${color}`,
         transform: `translateY(${1.5 * scale}px)`,
       }}
     />
@@ -7028,7 +7028,8 @@ export default function Documents() {
         ...markerContainerStyle,
         textAlign: 'right',
         color: markerColor,
-        fontWeight: 600,
+        fontFamily: 'Arial, Helvetica, sans-serif',
+        fontWeight: 400,
         fontSize: listFontSize,
         lineHeight: `${markerLineHeight}px`,
       }}>
@@ -7039,7 +7040,7 @@ export default function Documents() {
     return (
       <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
         {renderListGuides(block, { top: -8, bottom: -8, centerY: listGuideCenterY })}
-        <div style={{ display: 'flex', gap: listMarkerTextGap, alignItems: 'flex-start' }}>
+        <div style={{ display: 'flex', gap: block.type === 'fold-list' ? 7 : listMarkerTextGap, alignItems: 'flex-start' }}>
           {markerNode}
           <InlineRichTextEditor
             {...commonProps}
@@ -7052,7 +7053,7 @@ export default function Documents() {
               fontSize: listFontSize,
               lineHeight: listLineHeight,
               color: '#202124',
-              fontWeight: block.type === 'fold-list' ? 500 : 400,
+              fontWeight: 400,
               minHeight: markerLineHeight,
               padding: '0',
             }}
@@ -8188,17 +8189,18 @@ export default function Documents() {
             alignItems: 'center',
             justifyContent: block.type === 'numbered' ? 'flex-end' : 'center',
             color: listMarkerColor,
+            fontFamily: block.type === 'numbered' ? 'Arial, Helvetica, sans-serif' : undefined,
             fontSize: presentationFontSize,
-            fontWeight: block.type === 'fold-list' ? 600 : 600,
+            fontWeight: 400,
           }}
         >
           {block.type === 'fold-list'
-            ? renderFoldListTriangle(meta.collapsed, isMobile ? 1 : 1.1)
+            ? renderFoldListTriangle(meta.collapsed, isMobile ? 1 : 1.05)
             : marker}
         </span>
       );
       return (
-        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: listMarkerTextGap, fontSize: presentationFontSize, lineHeight: listLineHeight }}>
+        <div style={{ ...blockStyle, position: 'relative', paddingLeft: indent * presentationIndentWidth, display: 'flex', gap: block.type === 'fold-list' ? 7 : listMarkerTextGap, fontSize: presentationFontSize, lineHeight: listLineHeight }}>
           {renderListGuides(block, {
             top: -8,
             bottom: -8,
@@ -8207,7 +8209,7 @@ export default function Documents() {
             indentWidth: presentationIndentWidth,
           })}
           {markerNode}
-          <InlineHtmlView value={block.content} style={{ color: '#202124', fontWeight: block.type === 'fold-list' ? 600 : 400 }} />
+          <InlineHtmlView value={block.content} style={{ color: '#202124', fontWeight: 400 }} />
         </div>
       );
     }
