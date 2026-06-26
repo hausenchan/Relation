@@ -4768,11 +4768,18 @@ export default function Documents() {
 
   const hasActiveNativeTextSelection = () => {
     const activeElement = document.activeElement;
-    if (!activeElement || !['TEXTAREA', 'INPUT'].includes(activeElement.tagName)) return false;
-    const { selectionStart, selectionEnd } = activeElement;
-    return typeof selectionStart === 'number'
-      && typeof selectionEnd === 'number'
-      && selectionStart !== selectionEnd;
+    if (!activeElement) return false;
+    if (['TEXTAREA', 'INPUT'].includes(activeElement.tagName)) {
+      const { selectionStart, selectionEnd } = activeElement;
+      return typeof selectionStart === 'number'
+        && typeof selectionEnd === 'number'
+        && selectionStart !== selectionEnd;
+    }
+    if (!activeElement.isContentEditable) return false;
+    const selection = window.getSelection?.();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return false;
+    const range = selection.getRangeAt(0);
+    return activeElement.contains(range.startContainer) || activeElement.contains(range.endContainer);
   };
 
   const getDeleteTargetBlockIds = () => {
@@ -4795,10 +4802,13 @@ export default function Documents() {
     const activeInEditableInput = Boolean(
       activeElement?.closest?.('textarea, input, [contenteditable="true"]')
     );
+    const activeInTableCellEditor = Boolean(
+      activeElement?.isContentEditable && activeElement?.closest?.('[data-document-table-cell="true"]')
+    );
     const activeIsTargetBlock = !activeBlockId || activeBlockId === targetBlock.id;
     const shouldSkipBlockDelete = activeInEditableInput
       && activeIsTargetBlock
-      && !isTableLikeBlock(targetBlock)
+      && (!isTableLikeBlock(targetBlock) || activeInTableCellEditor)
       && targetBlock.type !== 'divider'
       && targetBlock.type !== 'attachment';
     if (shouldSkipBlockDelete) return [];
