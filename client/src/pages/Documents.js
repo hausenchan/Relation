@@ -7364,8 +7364,35 @@ export default function Documents() {
       updateCell(selectedRowIndex, selectedColumnIndex, '');
     };
     const deleteSelectedRow = () => {
-      const startRowIndex = hasSelectedRange ? Math.max(0, selectedRangeBounds.startRowIndex) : selectedRowIndex;
-      const endRowIndex = hasSelectedRange ? Math.max(0, selectedRangeBounds.endRowIndex) : selectedRowIndex;
+      const rawStartRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : selectedRowIndex;
+      const rawEndRowIndex = hasSelectedRange ? selectedRangeBounds.endRowIndex : selectedRowIndex;
+      if (rawStartRowIndex < 0) {
+        if (!normalizedRows.length) return;
+        const promotionSourceRowIndex = Math.max(0, Math.min(normalizedRows.length - 1, rawEndRowIndex + 1));
+        const nextColumns = columns.map((_, columnIndex) => normalizedRows[promotionSourceRowIndex]?.[columnIndex] || '');
+        const nextRows = normalizedRows.filter((_, index) => index > promotionSourceRowIndex);
+        const ensuredRows = nextRows.length ? nextRows : [columns.map(() => '')];
+        const removedBodyRowCount = promotionSourceRowIndex + 1;
+        const nextMergedCells = normalizeTableMergedCells(mergedCells.flatMap(merge => {
+          const mergeEnd = merge.rowIndex + merge.rowSpan - 1;
+          if (mergeEnd < removedBodyRowCount) return [];
+          if (merge.rowIndex >= removedBodyRowCount) {
+            return [{ ...merge, rowIndex: merge.rowIndex - removedBodyRowCount }];
+          }
+          return [];
+        }), ensuredRows.length, nextColumns.length);
+        persistTableMeta({ columns: nextColumns, rows: ensuredRows, mergedCells: nextMergedCells });
+        setSelectedTableCell({
+          blockId: block.id,
+          type: 'header',
+          rowIndex: -1,
+          columnIndex: Math.max(0, Math.min(selectedColumnIndex >= 0 ? selectedColumnIndex : 0, nextColumns.length - 1)),
+        });
+        setSelectedTableRange(null);
+        return;
+      }
+      const startRowIndex = rawStartRowIndex;
+      const endRowIndex = rawEndRowIndex;
       if (startRowIndex < 0 || normalizedRows.length <= 1) return;
       const deleteCount = Math.max(1, endRowIndex - startRowIndex + 1);
       if (deleteCount >= normalizedRows.length) return;
