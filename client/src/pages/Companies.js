@@ -255,8 +255,8 @@ function CompanyModal({ open, editing, projectGroups = [], onClose, onSuccess })
         <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>业务信息</Divider>
         <Row gutter={16}>
           <Col span={24}>
-            <Form.Item label="主营业务" name="business">
-              <TextArea rows={2} placeholder="简述核心业务方向..." />
+            <Form.Item label="主营业务" name="business" valuePropName="value" trigger="onChange">
+              <RichTextEditor placeholder="简述核心业务方向..." minHeight={140} enableTables />
             </Form.Item>
           </Col>
           <Col span={12}>
@@ -275,8 +275,8 @@ function CompanyModal({ open, editing, projectGroups = [], onClose, onSuccess })
             </Form.Item>
           </Col>
           <Col span={24}>
-            <Form.Item label="备注" name="notes">
-              <TextArea rows={2} />
+            <Form.Item label="备注" name="notes" valuePropName="value" trigger="onChange">
+              <RichTextEditor placeholder="请输入备注..." minHeight={140} enableTables />
             </Form.Item>
           </Col>
           <Col span={24}>
@@ -2536,7 +2536,7 @@ export default function Companies() {
       title: '主营业务',
       dataIndex: 'business',
       ellipsis: true,
-      render: v => v || '-',
+      render: v => richTextToPlain(v) || '-',
     },
     {
       title: '标签',
@@ -2622,7 +2622,7 @@ export default function Companies() {
           </div>
           {record.business && (
             <Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-              主营业务：{record.business}
+              主营业务：{richTextToPlain(record.business)}
             </Paragraph>
           )}
           {record.tags && (
@@ -2791,7 +2791,9 @@ export default function Companies() {
                               </Descriptions.Item>
                             )}
                             {current.business && (
-                              <Descriptions.Item label="主营业务" span={2}>{current.business}</Descriptions.Item>
+                              <Descriptions.Item label="主营业务" span={2}>
+                                <RichTextView value={current.business} />
+                              </Descriptions.Item>
                             )}
                             <Descriptions.Item label="商业模式">{current.business_model || '-'}</Descriptions.Item>
                             <Descriptions.Item label="营收规模">{current.revenue_scale || '-'}</Descriptions.Item>
@@ -2801,7 +2803,9 @@ export default function Companies() {
                               </Descriptions.Item>
                             )}
                             {current.notes && (
-                              <Descriptions.Item label="备注" span={2}>{current.notes}</Descriptions.Item>
+                              <Descriptions.Item label="备注" span={2}>
+                                <RichTextView value={current.notes} />
+                              </Descriptions.Item>
                             )}
                           </Descriptions>
                         ),
