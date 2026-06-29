@@ -7571,6 +7571,7 @@ export default function Documents() {
     const mergedLookup = buildTableMergedLookup(meta.mergedCells, normalizedRows.length, columns.length);
     const mergedCells = mergedLookup.normalized;
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
+    const selectedTableCellIsBody = !selectedCell?.type || selectedCell.type === 'body';
     const selectedColumnIndex = Number.isInteger(selectedCell?.columnIndex) ? selectedCell.columnIndex : -1;
     const selectedRowIndex = Number.isInteger(selectedCell?.rowIndex) ? selectedCell.rowIndex : -1;
     const activeTableRange = selectedTableRange?.blockId === block.id ? selectedTableRange : null;
