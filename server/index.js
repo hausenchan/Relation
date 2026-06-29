@@ -4201,13 +4201,69 @@ app.post('/api/document-folders/apply-template', canWrite, (req, res) => {
   res.json({ success: true, created });
 });
 
+function isTruthyQueryValue(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
+}
+
+function getDocumentSearchTerms(search, exact) {
+  const text = String(search || '').trim();
+  if (!text) return [];
+  return exact ? [text] : text.split(/\s+/).map(item => item.trim()).filter(Boolean);
+}
+
+function escapeSqlLikeTerm(value) {
+  return String(value || '').replace(/[\\%_]/g, match => `\\${match}`);
+}
+
+function buildDocumentSearchExcerpt(value, term) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const needle = String(term || '').trim();
+  if (!needle) return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+  const index = text.toLowerCase().indexOf(needle.toLowerCase());
+  if (index < 0) return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+  const start = Math.max(0, index - 40);
+  const end = Math.min(text.length, index + needle.length + 90);
+  return `${start > 0 ? '...' : ''}${text.slice(start, end)}${end < text.length ? '...' : ''}`;
+}
+
+function getDocumentSearchMatch(row, search, options = {}) {
+  const terms = getDocumentSearchTerms(search, options.exact);
+  const candidates = [
+    { type: 'title', label: '标题', text: row.title },
+  ];
+  if (!options.titleOnly) {
+    candidates.push(
+      { type: 'document_no', label: '编号', text: row.document_no },
+      { type: 'content', label: '正文', text: row.content_text },
+      { type: 'tags', label: '标签', text: row.tags }
+    );
+  }
+  for (const candidate of candidates) {
+    const text = String(candidate.text || '');
+    const matchedTerm = terms.find(term => text.toLowerCase().includes(String(term).toLowerCase()));
+    if (matchedTerm) {
+      return {
+        match_type: candidate.type,
+        match_label: candidate.label,
+        match_excerpt: buildDocumentSearchExcerpt(text, matchedTerm),
+      };
+    }
+  }
+  return { match_type: '', match_label: '', match_excerpt: '' };
+}
+
 app.get('/api/documents', (req, res) => {
-  const { search, domain, folder_id, project_group_id, department_key, doc_type, favorite, sop_only } = req.query;
+  const { search, domain, folder_id, project_group_id, department_key, doc_type, favorite, sop_only, title_only, exact, limit } = req.query;
+  const searchText = String(search || '').trim();
+  const titleOnlySearch = isTruthyQueryValue(title_only);
+  const exactSearch = isTruthyQueryValue(exact);
   const visibility = buildDocumentVisibilityFilter(req.user, 'd');
   let q = `
     SELECT d.id, d.document_no, d.global_seq, d.title, d.summary, d.domain, d.project_group_id,
       d.project_code, d.department_key, d.doc_type, d.current_version, d.folder_id,
       d.tags, d.created_by, d.updated_by, d.created_at, d.updated_at,
+      ${searchText ? 'd.content_text as search_content_text,' : ''}
       creator.display_name as created_by_name,
       updater.display_name as updated_by_name,
       pg.name as project_group_name,
@@ -4223,10 +4279,12 @@ app.get('/api/documents', (req, res) => {
     ${visibility.sql}
   `;
   const params = [req.user.id, ...visibility.params];
-  if (search) {
-    const kw = `%${String(search).trim()}%`;
-    q += ' AND (d.title LIKE ? OR d.document_no LIKE ? OR d.content_text LIKE ? OR d.tags LIKE ?)';
-    params.push(kw, kw, kw, kw);
+  if (searchText) {
+    const columns = titleOnlySearch ? ['d.title'] : ['d.title', 'd.document_no', 'd.content_text', 'd.tags'];
+    getDocumentSearchTerms(searchText, exactSearch).forEach(term => {
+      q += ` AND (${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')})`;
+      columns.forEach(() => params.push(`%${escapeSqlLikeTerm(term)}%`));
+    });
   }
   if (domain) { q += ' AND d.domain = ?'; params.push(domain); }
   if (folder_id) { q += ' AND d.folder_id = ?'; params.push(folder_id); }
@@ -4236,7 +4294,22 @@ app.get('/api/documents', (req, res) => {
   if (sop_only === '1' || sop_only === 'true') { q += " AND d.doc_type = 'SOP'"; }
   if (favorite === '1' || favorite === 'true') { q += ' AND fav.user_id IS NOT NULL'; }
   q += ' ORDER BY d.updated_at DESC, d.id DESC';
-  res.json(db.prepare(q).all(...params).map(row => serializeDocument(row, { user: req.user })));
+  const requestedLimit = Number(limit);
+  if (Number.isFinite(requestedLimit) && requestedLimit > 0) {
+    q += ' LIMIT ?';
+    params.push(Math.min(Math.round(requestedLimit), 300));
+  }
+  res.json(db.prepare(q).all(...params).map(row => {
+    const { search_content_text: searchContentText, ...documentRow } = row;
+    const document = serializeDocument(documentRow, { user: req.user });
+    if (searchText) {
+      Object.assign(document, getDocumentSearchMatch({
+        ...documentRow,
+        content_text: searchContentText,
+      }, searchText, { titleOnly: titleOnlySearch, exact: exactSearch }));
+    }
+    return document;
+  }));
 });
 
 app.post('/api/documents', canWrite, (req, res) => {
