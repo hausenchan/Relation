@@ -3861,6 +3861,10 @@ function canEditDocument(user, document) {
   return canUseDocumentWriteActions(user) && (canManageDocument(user, document) || isDocumentSharedWithUser(user, document));
 }
 
+function canPinDocument(user, document) {
+  return canEditDocument(user, document);
+}
+
 function getFileExtFromName(filename = '') {
   const parts = String(filename || '').split('.');
   return parts.length > 1 ? parts.pop().toLowerCase() : '';
@@ -4090,6 +4094,7 @@ function serializeDocument(row, options = {}) {
   if (options.user) {
     result.can_manage = canUseDocumentWriteActions(options.user) && canManageDocument(options.user, row) ? 1 : 0;
     result.can_edit = canEditDocument(options.user, row) ? 1 : 0;
+    result.can_pin = canPinDocument(options.user, row) ? 1 : 0;
   }
   return result;
 }
@@ -4636,7 +4641,7 @@ app.delete('/api/documents/:id/favorite', (req, res) => {
 app.post('/api/documents/:id/pin', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以置顶文档' });
+  if (!canPinDocument(req.user, doc)) return res.status(403).json({ error: '只有可编辑该文档的用户才可以置顶文档' });
   db.prepare('UPDATE documents SET pinned_at = ?, updated_by = ? WHERE id = ?').run(new Date().toISOString(), req.user.id, doc.id);
   res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true, user: req.user }));
 });
@@ -4644,7 +4649,7 @@ app.post('/api/documents/:id/pin', canWrite, (req, res) => {
 app.delete('/api/documents/:id/pin', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以取消置顶文档' });
+  if (!canPinDocument(req.user, doc)) return res.status(403).json({ error: '只有可编辑该文档的用户才可以取消置顶文档' });
   db.prepare('UPDATE documents SET pinned_at = NULL, updated_by = ? WHERE id = ?').run(req.user.id, doc.id);
   res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true, user: req.user }));
 });

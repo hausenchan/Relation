@@ -2787,7 +2787,8 @@ export default function Documents() {
   }, [searchParams, selectedDocId]);
 
   useEffect(() => {
-    if (selectedDocId) loadDetail(selectedDocId);
+    const normalizedSelectedDocId = getDocTabId(selectedDocId);
+    if (normalizedSelectedDocId) loadDetail(normalizedSelectedDocId);
   }, [selectedDocId]);
 
   useEffect(() => {
@@ -2826,6 +2827,7 @@ export default function Documents() {
   useEffect(() => {
     if (!selectedDoc?.id || !selectedDocId) return;
     const docId = getDocTabId(selectedDocId);
+    if (getDocTabId(selectedDoc.id) !== docId) return;
     const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
     const signature = getDocumentSaveSignature(editorTitle, editorBlocks);
     if (lastSavedSignatureRef.current[docId] && lastSavedSignatureRef.current[docId] !== signature) {
@@ -5642,7 +5644,7 @@ export default function Documents() {
                           cursor: 'pointer',
                           padding: isMobile ? '12px' : '13px 18px',
                           borderBottom: '1px solid #f3f4f6',
-                          background: Number(selectedDocId) === Number(item.id) ? '#f5f7ff' : '#fff',
+                          background: getDocTabId(selectedDocId) === getDocTabId(item.id) ? '#f5f7ff' : '#fff',
                         }}
                       >
                         <div style={{
@@ -5721,8 +5723,8 @@ export default function Documents() {
         cursor: 'pointer',
         padding: isMobile ? '9px 10px' : '7px 8px',
         borderRadius: 7,
-        background: selectedDocId === item.id ? '#eef2ff' : 'transparent',
-        border: selectedDocId === item.id ? '1px solid #c7d2fe' : '1px solid transparent',
+        background: getDocTabId(selectedDocId) === getDocTabId(item.id) ? '#eef2ff' : 'transparent',
+        border: getDocTabId(selectedDocId) === getDocTabId(item.id) ? '1px solid #c7d2fe' : '1px solid transparent',
         marginBottom: isMobile ? 4 : 3,
       }}
       actions={[
@@ -9579,7 +9581,7 @@ export default function Documents() {
                           ? <PushpinFilled style={{ color: '#f59e0b' }} />
                           : <PushpinOutlined />,
                         label: docContextMenu.doc?.pinned_at ? '取消置顶' : '置顶',
-                        disabled: !canManageDoc(docContextMenu.doc),
+                        disabled: !Number(docContextMenu.doc?.can_pin),
                       },
                       { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
                       {
