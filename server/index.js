@@ -405,6 +405,13 @@ function addColumnIfMissing(table, column, definition) {
   }
 }
 
+function createIndexIfColumnExists(table, column, indexName, columnsSql) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (cols.length > 0 && cols.includes(column)) {
+    db.exec(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${table}(${columnsSql})`);
+  }
+}
+
 // =========== 用户表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -1183,7 +1190,6 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_documents_department ON documents(department_key);
   CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
   CREATE INDEX IF NOT EXISTS idx_documents_created_by ON documents(created_by);
-  CREATE INDEX IF NOT EXISTS idx_documents_pinned_at ON documents(pinned_at);
 
   CREATE TABLE IF NOT EXISTS document_folders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1320,6 +1326,7 @@ addColumnIfMissing('document_edit_records', 'content_after', 'TEXT DEFAULT NULL'
 addColumnIfMissing('document_edit_records', 'content_text_before', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_after', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'pinned_at', 'DATETIME DEFAULT NULL');
+createIndexIfColumnExists('documents', 'pinned_at', 'idx_documents_pinned_at', 'pinned_at');
 addColumnIfMissing('document_attachments', 'block_id', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'display_name', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'file_ext', 'TEXT DEFAULT NULL');
