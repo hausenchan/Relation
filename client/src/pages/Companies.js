@@ -84,6 +84,68 @@ const companyDuplicateMatchText = {
   keyword_contains: '关键词命中',
 };
 
+const companyListEllipsisStyle = {
+  display: 'block',
+  maxWidth: '100%',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const companyListTagStyle = {
+  marginBottom: 0,
+  marginRight: 4,
+  maxWidth: '100%',
+  verticalAlign: 'middle',
+};
+
+function renderCompanyListText(value, options = {}) {
+  const text = value === null || value === undefined ? '' : String(value).trim();
+  if (!text) return '-';
+
+  return (
+    <Tooltip title={options.tooltip || text}>
+      <span style={companyListEllipsisStyle}>{text}</span>
+    </Tooltip>
+  );
+}
+
+function renderCompanyListTags(items, options = {}) {
+  const tags = (Array.isArray(items) ? items : [])
+    .map(item => {
+      if (typeof item === 'string') return { key: item, label: item };
+      return item;
+    })
+    .map(item => ({
+      ...item,
+      label: item?.label === null || item?.label === undefined ? '' : String(item.label).trim(),
+    }))
+    .filter(item => item.label);
+
+  if (tags.length === 0) return '-';
+
+  const tooltip = options.tooltip || tags.map(item => item.label).join('、');
+  return (
+    <Tooltip title={tooltip}>
+      <span style={companyListEllipsisStyle}>
+        {tags.map(item => (
+          <Tag
+            key={item.key || item.label}
+            color={item.color || options.color}
+            style={companyListTagStyle}
+          >
+            {item.label}
+          </Tag>
+        ))}
+      </span>
+    </Tooltip>
+  );
+}
+
+function splitCompanyTags(value) {
+  return value ? String(value).split(',').map(tag => tag.trim()).filter(Boolean) : [];
+}
+
 function getRecordTime(value) {
   const time = value ? dayjs(value).valueOf() : 0;
   return Number.isFinite(time) ? time : 0;
@@ -2510,60 +2572,85 @@ export default function Companies() {
     );
   };
 
+  const getProjectGroupListTags = (projectGroupIds) => {
+    const ids = parseIdList(projectGroupIds);
+    if (ids.length === 0) return null;
+    const groups = ids.map(id => projectGroups.find(group => Number(group.id) === Number(id))).filter(Boolean);
+    if (groups.length === 0) return null;
+    return renderCompanyListTags(
+      groups.map(group => ({ key: group.id, label: group.name, color: 'geekblue' })),
+    );
+  };
+
   const columns = [
     {
       title: '公司名称',
       dataIndex: 'name',
+      ellipsis: true,
       render: (v, r) => (
-        <Button type="link" onClick={() => openDetail(r)} style={{ padding: 0 }}>
-          <strong>{v}</strong>
+        <Button
+          type="link"
+          onClick={() => openDetail(r)}
+          title={v || ''}
+          style={{ padding: 0, maxWidth: '100%' }}
+        >
+          <strong style={companyListEllipsisStyle}>{v}</strong>
         </Button>
       ),
     },
     {
       title: '分类',
       dataIndex: 'category',
-      render: v => { const m = categoryMap[v]; return m ? <Tag color={m.color}>{m.label}</Tag> : '-'; },
+      ellipsis: true,
+      render: v => {
+        const m = categoryMap[v];
+        return m ? renderCompanyListTags([{ key: v, label: m.label, color: m.color }]) : '-';
+      },
     },
-    { title: '行业', dataIndex: 'industry', render: v => v || '-' },
+    { title: '行业', dataIndex: 'industry', ellipsis: true, render: v => renderCompanyListText(v) },
     {
       title: '规模',
       dataIndex: 'scale',
-      render: v => v ? <Text style={{ fontSize: 12 }}>{scaleMap[v] || v}</Text> : '-',
+      ellipsis: true,
+      render: v => renderCompanyListText(scaleMap[v] || v),
     },
-    { title: '总部', dataIndex: 'hq_city', render: v => v || '-' },
+    { title: '总部', dataIndex: 'hq_city', ellipsis: true, render: v => renderCompanyListText(v) },
     {
       title: '主营业务',
       dataIndex: 'business',
       ellipsis: true,
-      render: v => richTextToPlain(v) || '-',
+      render: v => renderCompanyListText(richTextToPlain(v)),
     },
     {
       title: '标签',
       dataIndex: 'tags',
-      render: v => v ? v.split(',').map(t => <Tag key={t} style={{ marginBottom: 2 }}>{t.trim()}</Tag>) : '-',
+      ellipsis: true,
+      render: v => renderCompanyListTags(splitCompanyTags(v)),
     },
     {
       title: '关联项目组',
       dataIndex: 'project_group_ids',
       width: 180,
-      render: v => getProjectGroupTags(v) || '-',
+      ellipsis: true,
+      render: v => getProjectGroupListTags(v) || '-',
     },
-    { title: '更新时间', dataIndex: 'updated_at', render: v => v?.slice(0, 10) },
+    { title: '更新时间', dataIndex: 'updated_at', ellipsis: true, render: v => renderCompanyListText(v?.slice(0, 10)) },
     {
       title: '创建人',
       dataIndex: 'created_by',
       width: 90,
+      ellipsis: true,
       render: (v) => {
         if (!v) return '-';
         const u = users.find(x => x.id === v);
-        return u ? (u.display_name || u.username) : '-';
+        return renderCompanyListText(u ? (u.display_name || u.username) : '');
       },
     },
     {
       title: '共享人',
       dataIndex: 'shared_with',
       width: 160,
+      ellipsis: true,
       render: (v) => {
         const ids = v ? String(v).split(',').filter(Boolean).map(Number) : [];
         if (ids.length === 0) return '-';
@@ -2571,18 +2658,7 @@ export default function Companies() {
           const u = users.find(x => x.id === id);
           return u ? (u.display_name || u.username) : `#${id}`;
         });
-        const visible = named.slice(0, 2);
-        const extra = named.slice(2);
-        return (
-          <Space size={4} wrap>
-            {visible.map((name, i) => <Tag key={i} style={{ margin: 0 }}>{name}</Tag>)}
-            {extra.length > 0 && (
-              <Tooltip title={extra.join('、')}>
-                <Tag style={{ margin: 0 }}>+{extra.length}</Tag>
-              </Tooltip>
-            )}
-          </Space>
-        );
+        return renderCompanyListTags(named.map((name, index) => ({ key: `${index}-${name}`, label: name })));
       },
     },
     {
