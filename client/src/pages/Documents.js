@@ -1280,15 +1280,47 @@ function isTableLikeBlock(block) {
   return block?.type === 'table-simple' || String(block?.type || '').startsWith('database-');
 }
 
+function serializeVisibleTableRows(visibleRows = [], fallbackColumns = []) {
+  const baseColumns = Array.isArray(fallbackColumns) && fallbackColumns.length ? fallbackColumns : ['名称', '说明'];
+  const sourceRows = Array.isArray(visibleRows) && visibleRows.length ? visibleRows : [baseColumns];
+  const columnCount = Math.max(
+    baseColumns.length,
+    ...sourceRows.map(row => (Array.isArray(row) ? row.length : 0)),
+    1
+  );
+  const normalizedVisibleRows = sourceRows.map(row => Array.from({ length: columnCount }, (_, index) => row?.[index] || ''));
+  return {
+    columns: normalizedVisibleRows[0] || Array.from({ length: columnCount }, () => ''),
+    rows: normalizedVisibleRows.slice(1),
+  };
+}
+
 function normalizeTableBlockData(block) {
   const meta = { ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) };
-  const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
-  const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
-  const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
+  const storedColumns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
+  const storedRows = Array.isArray(meta.rows) ? meta.rows : [['', '']];
+  const columnCount = Math.max(
+    storedColumns.length,
+    ...storedRows.map(row => (Array.isArray(row) ? row.length : 0)),
+    1
+  );
+  const normalizedColumns = Array.from({ length: columnCount }, (_, index) => storedColumns[index] || '');
+  const normalizedRows = [normalizedColumns, ...storedRows].map(row => (
+    Array.from({ length: columnCount }, (_, index) => row?.[index] || '')
+  ));
   return {
-    columns,
+    columns: normalizedColumns,
     rows: normalizedRows,
-    mergedCells: normalizeTableMergedCells(meta.mergedCells, normalizedRows.length, columns.length),
+    mergedCells: normalizeTableMergedCells(meta.mergedCells, normalizedRows.length, columnCount),
+  };
+}
+
+function buildStoredTableMetaFromVisibleRows(visibleRows, fallbackColumns, extra = {}) {
+  const serialized = serializeVisibleTableRows(visibleRows, fallbackColumns);
+  return {
+    columns: serialized.columns,
+    rows: serialized.rows,
+    ...extra,
   };
 }
 
@@ -1315,13 +1347,13 @@ function tableMatrixToHtml(matrix = [], { firstRowIsHeader = true } = {}) {
 }
 
 function getWholeTableMatrix(block) {
-  const { columns, rows } = normalizeTableBlockData(block);
-  return [columns, ...rows];
+  const { rows } = normalizeTableBlockData(block);
+  return rows;
 }
 
 function getTableRangeMatrix(block, range) {
   const { columns, rows } = normalizeTableBlockData(block);
-  const clampRow = rowIndex => Math.max(-1, Math.min(rows.length - 1, Number(rowIndex) || 0));
+  const clampRow = rowIndex => Math.max(0, Math.min(rows.length - 1, Number(rowIndex) || 0));
   const clampColumn = columnIndex => Math.max(0, Math.min(columns.length - 1, Number(columnIndex) || 0));
   const startRowIndex = clampRow(range?.startRowIndex);
   const endRowIndex = clampRow(range?.endRowIndex);
@@ -1333,19 +1365,19 @@ function getTableRangeMatrix(block, range) {
   const toColumn = Math.max(startColumnIndex, endColumnIndex);
   const matrix = [];
   for (let rowIndex = fromRow; rowIndex <= toRow; rowIndex += 1) {
-    const sourceRow = rowIndex < 0 ? columns : rows[rowIndex];
+    const sourceRow = rows[rowIndex];
     matrix.push(sourceRow.slice(fromColumn, toColumn + 1));
   }
   return {
     matrix,
-    firstRowIsHeader: fromRow < 0,
+    firstRowIsHeader: false,
   };
 }
 
 function buildTableClipboardPayload(block, range = null) {
   const tablePayload = range
     ? getTableRangeMatrix(block, range)
-    : { matrix: getWholeTableMatrix(block), firstRowIsHeader: true };
+    : { matrix: getWholeTableMatrix(block), firstRowIsHeader: false };
   const tableText = tableMatrixToTsv(tablePayload.matrix);
   const tableHtml = tableMatrixToHtml(tablePayload.matrix, { firstRowIsHeader: tablePayload.firstRowIsHeader });
   const blocks = range ? [] : [{
@@ -1434,13 +1466,9 @@ function parseClipboardHtmlTableBlocks(html) {
       .map(row => Array.from(row.querySelectorAll('th,td')).map(cell => sanitizeInlineHtml(cell.innerHTML || '')))
       .filter(row => row.length);
     if (!matrix.length) return null;
-    const firstRowHasHeaders = Boolean(rowNodes[0]?.querySelector('th'));
     const maxColumnCount = Math.max(...matrix.map(row => row.length), 1);
-    const columns = firstRowHasHeaders
-      ? matrix[0].map((cell, index) => cell || `字段 ${index + 1}`)
-      : Array.from({ length: maxColumnCount }, (_, index) => `字段 ${index + 1}`);
-    const sourceRows = firstRowHasHeaders ? matrix.slice(1) : matrix;
-    const rows = (sourceRows.length ? sourceRows : [Array.from({ length: columns.length }, () => '')])
+    const columns = Array.from({ length: maxColumnCount }, (_, index) => `字段 ${index + 1}`);
+    const rows = (matrix.length ? matrix : [Array.from({ length: columns.length }, () => '')])
       .map(row => columns.map((_, index) => row[index] || ''));
     return {
       type: 'table-simple',
@@ -6329,10 +6357,6 @@ export default function Documents() {
 
   const getTableCellValue = (block, tableCell) => {
     const meta = getBlockMeta(block);
-    if (tableCell?.type === 'header') {
-      const columns = Array.isArray(meta.columns) ? meta.columns : [];
-      return String(columns[tableCell.columnIndex] || '');
-    }
     const rows = Array.isArray(meta.rows) ? meta.rows : [];
     return String(rows[tableCell?.rowIndex]?.[tableCell?.columnIndex] || '');
   };
@@ -6344,27 +6368,27 @@ export default function Documents() {
     const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
     const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
+    const mergedLookup = buildTableMergedLookup(meta.mergedCells, normalizedRows.length, columns.length);
     const safeColumnIndex = Math.max(0, Math.min(columns.length - 1, Number(tableCell.columnIndex) || 0));
+    const safeRowIndex = Math.max(0, Math.min(normalizedRows.length - 1, Number(tableCell.rowIndex) || 0));
+    const mergedAnchor = mergedLookup.coveredMap.get(buildTableMergeKey(safeRowIndex, safeColumnIndex));
+    const targetRowIndex = mergedAnchor?.rowIndex ?? safeRowIndex;
+    const targetColumnIndex = mergedAnchor?.columnIndex ?? safeColumnIndex;
     const nextMeta = { ...meta };
-
-    if (tableCell.type === 'header') {
-      const currentValue = columns[safeColumnIndex] || '';
-      if (areSerializedValuesEqual(currentValue, value)) return false;
-      if (shouldPushUndo) pushEditorUndoSnapshot();
-      nextMeta.columns = columns.map((column, index) => (index === safeColumnIndex ? value : column));
-      nextMeta.rows = normalizedRows;
-    } else {
-      const safeRowIndex = Math.max(0, Math.min(normalizedRows.length - 1, Number(tableCell.rowIndex) || 0));
-      const currentValue = normalizedRows[safeRowIndex]?.[safeColumnIndex] || '';
-      if (areSerializedValuesEqual(currentValue, value)) return false;
-      if (shouldPushUndo) pushEditorUndoSnapshot();
-      nextMeta.columns = columns;
-      nextMeta.rows = normalizedRows.map((row, rowIndex) => (
-        rowIndex === safeRowIndex
-          ? row.map((cell, columnIndex) => (columnIndex === safeColumnIndex ? value : cell))
-          : row
-      ));
-    }
+    const currentValue = normalizedRows[targetRowIndex]?.[targetColumnIndex] || '';
+    if (areSerializedValuesEqual(currentValue, value)) return false;
+    if (shouldPushUndo) pushEditorUndoSnapshot();
+    const nextVisibleRows = normalizedRows.map((row, rowIndex) => (
+      rowIndex === targetRowIndex
+        ? row.map((cell, columnIndex) => (columnIndex === targetColumnIndex ? value : cell))
+        : row
+    ));
+    Object.assign(nextMeta, buildStoredTableMetaFromVisibleRows(nextVisibleRows, columns, {
+      mergedCells: meta.mergedCells,
+      columnWidths: meta.columnWidths,
+      horizontalCenter: meta.horizontalCenter,
+      verticalCenter: meta.verticalCenter,
+    }));
 
     setEditorBlocks(prev => prev.map(item => (
       item.id === blockId ? { ...item, meta: nextMeta } : item
@@ -7219,20 +7243,23 @@ export default function Documents() {
 
   const renderTableBlock = (block) => {
     const meta = getBlockMeta(block);
-    const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
-    const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
+    const columns = Array.isArray(meta.columns) && meta.columns.length
+      ? meta.columns
+      : ((Array.isArray(meta.rows) && meta.rows[0]?.length)
+        ? meta.rows[0].map((_, index) => `字段 ${index + 1}`)
+        : ['名称', '说明']);
+    const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [columns.map(() => '')];
     const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
     const mergedLookup = buildTableMergedLookup(meta.mergedCells, normalizedRows.length, columns.length);
     const mergedCells = mergedLookup.normalized;
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
-    const selectedTableCellIsBody = selectedCell?.type === 'body' && Number.isInteger(selectedCell?.rowIndex);
     const selectedColumnIndex = Number.isInteger(selectedCell?.columnIndex) ? selectedCell.columnIndex : -1;
-    const selectedRowIndex = selectedTableCellIsBody ? selectedCell.rowIndex : -1;
+    const selectedRowIndex = Number.isInteger(selectedCell?.rowIndex) ? selectedCell.rowIndex : -1;
     const activeTableRange = selectedTableRange?.blockId === block.id ? selectedTableRange : null;
     const normalizeTableRange = (range) => {
       if (!range) return null;
-      const clampRow = (rowIndex) => Math.max(-1, Math.min(normalizedRows.length - 1, Number(rowIndex) || 0));
+      const clampRow = (rowIndex) => Math.max(0, Math.min(normalizedRows.length - 1, Number(rowIndex) || 0));
       const clampColumn = (columnIndex) => Math.max(0, Math.min(columns.length - 1, Number(columnIndex) || 0));
       const startRowIndex = clampRow(range.startRowIndex);
       const endRowIndex = clampRow(range.endRowIndex);
@@ -7269,8 +7296,6 @@ export default function Documents() {
     const getAnchorCellValue = (rowIndex, columnIndex) => String(normalizedRows[rowIndex]?.[columnIndex] || '');
     const canMergeSelectedRange = Boolean(
       hasSelectedRange
-      && selectedRangeBounds.startRowIndex >= 0
-      && selectedRangeBounds.endRowIndex >= 0
       && selectedRangeBounds.startColumnIndex >= 0
       && selectedRangeBounds.endColumnIndex >= 0
       && mergedCells.every(merge => (
@@ -7280,15 +7305,20 @@ export default function Documents() {
         || merge.columnIndex > selectedRangeBounds.endColumnIndex
       ))
     );
-    const persistTableMeta = (patch) => updateBlockMeta(block.id, {
-      columns,
-      rows: normalizedRows,
-      columnWidths,
-      horizontalCenter,
-      verticalCenter,
-      mergedCells,
-      ...patch,
-    });
+    const persistTableMeta = (patch) => {
+      const nextVisibleRows = Array.isArray(patch?.rows) ? patch.rows : normalizedRows;
+      const nextColumnWidths = patch?.columnWidths ?? columnWidths;
+      const nextHorizontalCenter = patch?.horizontalCenter ?? horizontalCenter;
+      const nextVerticalCenter = patch?.verticalCenter ?? verticalCenter;
+      const nextMergedCells = patch?.mergedCells ?? mergedCells;
+      const stored = buildStoredTableMetaFromVisibleRows(nextVisibleRows, columns, {
+        columnWidths: nextColumnWidths,
+        horizontalCenter: nextHorizontalCenter,
+        verticalCenter: nextVerticalCenter,
+        mergedCells: nextMergedCells,
+      });
+      updateBlockMeta(block.id, stored);
+    };
     const updateColumn = (index, value) => {
       const nextColumns = columns.map((item, columnIndex) => (columnIndex === index ? value : item));
       persistTableMeta({ columns: nextColumns });
@@ -7349,50 +7379,20 @@ export default function Documents() {
     };
     const clearSelectedCell = () => {
       if (hasSelectedRange) {
-        const nextColumns = columns.map((column, columnIndex) => (
-          isCellInSelectedRange(-1, columnIndex) ? '' : column
-        ));
         const nextRows = normalizedRows.map((row, rowIndex) => row.map((cell, columnIndex) => {
           const anchor = getMergedCover(rowIndex, columnIndex);
           if (anchor && !anchor.isAnchor) return cell;
           return isCellInSelectedRange(rowIndex, columnIndex) ? '' : cell;
         }));
-        persistTableMeta({ columns: nextColumns, rows: nextRows });
+        persistTableMeta({ rows: nextRows });
         return;
       }
-      if (!selectedTableCellIsBody) return;
+      if (selectedRowIndex < 0) return;
       updateCell(selectedRowIndex, selectedColumnIndex, '');
     };
     const deleteSelectedRow = () => {
-      const rawStartRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : selectedRowIndex;
-      const rawEndRowIndex = hasSelectedRange ? selectedRangeBounds.endRowIndex : selectedRowIndex;
-      if (rawStartRowIndex < 0) {
-        if (!normalizedRows.length) return;
-        const promotionSourceRowIndex = Math.max(0, Math.min(normalizedRows.length - 1, rawEndRowIndex + 1));
-        const nextColumns = columns.map((_, columnIndex) => normalizedRows[promotionSourceRowIndex]?.[columnIndex] || '');
-        const nextRows = normalizedRows.filter((_, index) => index > promotionSourceRowIndex);
-        const ensuredRows = nextRows.length ? nextRows : [columns.map(() => '')];
-        const removedBodyRowCount = promotionSourceRowIndex + 1;
-        const nextMergedCells = normalizeTableMergedCells(mergedCells.flatMap(merge => {
-          const mergeEnd = merge.rowIndex + merge.rowSpan - 1;
-          if (mergeEnd < removedBodyRowCount) return [];
-          if (merge.rowIndex >= removedBodyRowCount) {
-            return [{ ...merge, rowIndex: merge.rowIndex - removedBodyRowCount }];
-          }
-          return [];
-        }), ensuredRows.length, nextColumns.length);
-        persistTableMeta({ columns: nextColumns, rows: ensuredRows, mergedCells: nextMergedCells });
-        setSelectedTableCell({
-          blockId: block.id,
-          type: 'header',
-          rowIndex: -1,
-          columnIndex: Math.max(0, Math.min(selectedColumnIndex >= 0 ? selectedColumnIndex : 0, nextColumns.length - 1)),
-        });
-        setSelectedTableRange(null);
-        return;
-      }
-      const startRowIndex = rawStartRowIndex;
-      const endRowIndex = rawEndRowIndex;
+      const startRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : selectedRowIndex;
+      const endRowIndex = hasSelectedRange ? selectedRangeBounds.endRowIndex : selectedRowIndex;
       if (startRowIndex < 0 || normalizedRows.length <= 1) return;
       const deleteCount = Math.max(1, endRowIndex - startRowIndex + 1);
       if (deleteCount >= normalizedRows.length) return;
@@ -7496,7 +7496,7 @@ export default function Documents() {
         },
       ], nextRows.length, columns.length);
       persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells });
-      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: anchorRowIndex, columnIndex: anchorColumnIndex });
+      setSelectedTableCell({ blockId: block.id, rowIndex: anchorRowIndex, columnIndex: anchorColumnIndex });
       setSelectedTableRange(null);
     };
     const distributeSelectedColumnWidths = () => {
@@ -7515,12 +7515,7 @@ export default function Documents() {
       const nextRowIndex = anchor?.rowIndex ?? rowIndex;
       const nextColumnIndex = anchor?.columnIndex ?? columnIndex;
       setSelectedBlockId(block.id);
-      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: nextRowIndex, columnIndex: nextColumnIndex });
-      setSelectedTableRange(null);
-    };
-    const selectTableHeader = (columnIndex) => {
-      setSelectedBlockId(block.id);
-      setSelectedTableCell({ blockId: block.id, type: 'header', rowIndex: -1, columnIndex });
+      setSelectedTableCell({ blockId: block.id, rowIndex: nextRowIndex, columnIndex: nextColumnIndex });
       setSelectedTableRange(null);
     };
     const hideTableInlineToolbarOnBlur = () => {
@@ -7537,21 +7532,16 @@ export default function Documents() {
       const rowIndex = Number(cell.dataset.rowIndex);
       const columnIndex = Number(cell.dataset.columnIndex);
       if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return null;
-      const type = cell.dataset.cellType === 'header' || rowIndex < 0 ? 'header' : 'body';
-      if (type === 'body') {
-        const anchor = getMergedCover(rowIndex, columnIndex);
-        return {
-          type,
-          rowIndex: anchor?.rowIndex ?? rowIndex,
-          columnIndex: anchor?.columnIndex ?? columnIndex,
-        };
-      }
-      return { type, rowIndex, columnIndex };
+      const anchor = getMergedCover(rowIndex, columnIndex);
+      return {
+        rowIndex: anchor?.rowIndex ?? rowIndex,
+        columnIndex: anchor?.columnIndex ?? columnIndex,
+      };
     };
-    const beginTableCellSelection = (event, type, rowIndex, columnIndex) => {
+    const beginTableCellSelection = (event, rowIndex, columnIndex) => {
       if (event.button !== 0) return;
       setSelectedBlockId(block.id);
-      setSelectedTableCell({ blockId: block.id, type, rowIndex, columnIndex });
+      setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
       setSelectedTableRange(null);
       const selectionState = {
         blockId: block.id,
@@ -7619,14 +7609,17 @@ export default function Documents() {
               ? nextWidth
               : Math.max(80, Number(currentMeta.columnWidths?.[index]) || columnWidths[index] || 160)
           ));
+          const stored = buildStoredTableMetaFromVisibleRows(normalizedRows, columns, {
+            mergedCells,
+            columnWidths: nextWidths,
+            horizontalCenter: currentMeta.horizontalCenter,
+            verticalCenter: currentMeta.verticalCenter,
+          });
           return {
             ...item,
             meta: {
               ...currentMeta,
-              columns,
-              rows: normalizedRows,
-              mergedCells,
-              columnWidths: nextWidths,
+              ...stored,
             },
           };
         }));
@@ -7765,61 +7758,6 @@ export default function Documents() {
             <colgroup>
               {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
             </colgroup>
-            <thead>
-              <tr>
-                {columns.map((column, columnIndex) => (
-                  <th
-                    key={`col-${columnIndex}`}
-                    data-document-table-cell="true"
-                    data-table-block-id={block.id}
-                    data-cell-type="header"
-                    data-row-index={-1}
-                    data-column-index={columnIndex}
-                    onMouseDown={event => beginTableCellSelection(event, 'header', -1, columnIndex)}
-                    style={{
-                      position: 'relative',
-                      border: '1px solid #e5e7eb',
-                      background: wholeTableSelected || isCellInSelectedRange(-1, columnIndex) ? '#fde2e2' : (selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? '#eef2ff' : '#f8fafc'),
-                      padding: 4,
-                      boxShadow: wholeTableSelected ? 'none' : (selectedCell?.type === 'header' && selectedColumnIndex === columnIndex ? 'inset 0 0 0 1px #6366f1' : (isCellInSelectedRange(-1, columnIndex) ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
-                    }}
-                  >
-                    <InlineRichTextEditor
-                      id={`doc-table-cell-input-${block.id}-header--1-${columnIndex}`}
-                      value={column}
-                      placeholder=""
-                      onFocus={() => selectTableHeader(columnIndex)}
-                      onChange={value => updateColumn(columnIndex, value)}
-                      onMouseUp={event => handleTableCellTextSelection(block, { type: 'header', rowIndex: -1, columnIndex }, event)}
-                      onKeyUp={event => handleTableCellTextSelection(block, { type: 'header', rowIndex: -1, columnIndex }, event)}
-                      onBlur={hideTableInlineToolbarOnBlur}
-                      style={{
-                        minHeight: 26,
-                        padding: 4,
-                        lineHeight: 1.45,
-                        fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
-                        fontWeight: 600,
-                        background: 'transparent',
-                        textAlign: horizontalCenter ? 'center' : 'left',
-                      }}
-                    />
-                    <span
-                      role="presentation"
-                      onMouseDown={event => beginColumnResize(event, columnIndex)}
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        right: -4,
-                        width: 8,
-                        height: '100%',
-                        cursor: 'col-resize',
-                        zIndex: 3,
-                      }}
-                    />
-                  </th>
-                ))}
-              </tr>
-            </thead>
             <tbody>
               {normalizedRows.map((row, rowIndex) => (
                 <tr key={`row-${rowIndex}`}>
@@ -7837,18 +7775,18 @@ export default function Documents() {
                       key={`cell-${rowIndex}-${columnIndex}`}
                       data-document-table-cell="true"
                       data-table-block-id={block.id}
-                      data-cell-type="body"
                       data-row-index={rowIndex}
                       data-column-index={columnIndex}
                       rowSpan={rowSpan}
                       colSpan={colSpan}
-                      onMouseDown={event => beginTableCellSelection(event, 'body', rowIndex, columnIndex)}
+                      onMouseDown={event => beginTableCellSelection(event, rowIndex, columnIndex)}
                       style={{
+                        position: 'relative',
                         border: '1px solid #e5e7eb',
                         padding: 4,
                         verticalAlign: verticalCenter ? 'middle' : 'top',
                         textAlign: horizontalCenter ? 'center' : 'left',
-                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : '#fff',
+                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : (activeCell ? '#eef2ff' : '#fff'),
                         boxShadow: wholeTableSelected ? 'none' : (activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
                       }}
                     >
@@ -7870,6 +7808,21 @@ export default function Documents() {
                           textAlign: horizontalCenter ? 'center' : 'left',
                         }}
                       />
+                      {rowIndex === 0 && (
+                        <span
+                          role="presentation"
+                          onMouseDown={event => beginColumnResize(event, columnIndex)}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            right: -4,
+                            width: 8,
+                            height: '100%',
+                            cursor: 'col-resize',
+                            zIndex: 3,
+                          }}
+                        />
+                      )}
                     </td>
                       );
                     })()
@@ -8266,17 +8219,6 @@ export default function Documents() {
             <colgroup>
               {columnWidths.map((width, index) => <col key={`presentation-col-${index}`} style={{ width }} />)}
             </colgroup>
-          )}
-          {columns.length > 0 && (
-            <thead>
-              <tr>
-                {columns.map((column, index) => (
-                  <th key={`${column}-${index}`} style={{ borderBottom: '2px solid #d1d5db', padding: '10px 12px', textAlign: 'left' }}>
-                    <InlineHtmlView value={column} />
-                  </th>
-                ))}
-              </tr>
-            </thead>
           )}
           <tbody>
             {rows.map((row, rowIndex) => (
