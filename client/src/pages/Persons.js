@@ -17,7 +17,9 @@ import InteractionList from '../components/InteractionList';
 import ReminderList from '../components/ReminderList';
 import PersonsMap from '../components/PersonsMap';
 import ResizableTable from '../components/ResizableTable';
+import AttachmentList from '../components/AttachmentList';
 import { RichTextEditor, RichTextView } from '../components/RichText';
+import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -601,6 +603,7 @@ export default function Persons() {
   const [filterVisibility, setFilterVisibility] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [fileList, setFileList] = useState([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [current, setCurrent] = useState(null);
   const [interactions, setInteractions] = useState([]);
@@ -700,6 +703,7 @@ export default function Persons() {
 
   const openEdit = (record) => {
     setEditing(record);
+    setFileList([]);
     form.setFieldsValue({
       ...record,
       relation_types: parseRelationTypes(record.relation_types),
@@ -718,6 +722,7 @@ export default function Persons() {
 
   const openAdd = () => {
     setEditing(null);
+    setFileList([]);
     form.resetFields();
     form.setFieldsValue({
       person_category: 'business',
@@ -754,6 +759,13 @@ export default function Persons() {
     };
     if (editing) {
       await personsApi.update(editing.id, payload);
+      if (fileList.length > 0) {
+        try {
+          await uploadAttachments('person', editing.id, fileList);
+        } catch {
+          message.warning('附件上传失败，但人脉信息已更新');
+        }
+      }
       message.success('更新成功');
       // 同步更新 current（详情 Drawer 的数据源）
       if (current && current.id === editing.id) {
@@ -769,10 +781,18 @@ export default function Persons() {
       } catch {
         message.warning('重名检查失败，将继续保存当前人脉');
       }
-      await personsApi.create(payload);
+      const created = await personsApi.create(payload);
+      if (fileList.length > 0) {
+        try {
+          await uploadAttachments('person', created.id, fileList);
+        } catch {
+          message.warning('附件上传失败，但人脉信息已保存');
+        }
+      }
       message.success('添加成功');
     }
     setModalOpen(false);
+    setFileList([]);
     load();
   };
 
@@ -1924,7 +1944,10 @@ export default function Persons() {
         title={editing ? '编辑人脉' : '添加人脉'}
         open={modalOpen}
         onOk={handleSave}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => {
+          setModalOpen(false);
+          setFileList([]);
+        }}
         width={isMobile ? '100%' : 760}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         okText="保存"
@@ -1960,6 +1983,27 @@ export default function Persons() {
           <Form.Item name="notes" valuePropName="value" trigger="onChange">
             <RichTextEditor placeholder="其他备注..." minHeight={160} enableTables />
           </Form.Item>
+
+          <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>资料附件</Divider>
+          <Form.Item label="新增附件">
+            <Upload
+              fileList={fileList}
+              onChange={({ fileList: newFileList }) => setFileList(newFileList)}
+              beforeUpload={validateAttachment}
+              maxCount={10}
+              multiple
+              accept={ATTACHMENT_ACCEPT}
+            >
+              <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
+            </Upload>
+          </Form.Item>
+          {editing && (
+            <>
+              <Divider style={{ margin: '8px 0 12px' }} />
+              <AttachmentList sourceType="person" sourceId={editing.id} title="已上传附件" showPreview />
+            </>
+          )}
+
           {canUsePrivatePersons && (
             <>
               <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>可见范围</Divider>
@@ -2188,6 +2232,9 @@ export default function Persons() {
                       </Descriptions.Item>
                     </Descriptions>
                   )}
+
+                  <Divider orientation="left" plain style={{ fontSize: 12, color: '#888' }}>资料附件</Divider>
+                  <AttachmentList sourceType="person" sourceId={current.id} title="人脉附件" showPreview />
                 </>
               )
             },

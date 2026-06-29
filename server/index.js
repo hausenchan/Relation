@@ -200,6 +200,13 @@ function uploadAttachments(req, res, next) {
   });
 }
 
+function cleanupUploadedFiles(files = []) {
+  files.forEach(file => {
+    if (!file?.filename) return;
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, file.filename)); } catch {}
+  });
+}
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
@@ -2975,6 +2982,27 @@ function canAccessPerson(user, row = {}) {
   `).get(row.id, ...visibleIds));
 }
 
+function canModifyPerson(user, row = {}) {
+  if (!canAccessPerson(user, row)) return false;
+  if (!user || ['readonly', 'guest'].includes(user.role)) return false;
+  if (user.role === 'member') {
+    return Number(row.created_by) === Number(user.id) || Number(row.assigned_to) === Number(user.id);
+  }
+  return true;
+}
+
+function canAccessAttachmentSource(user, sourceType, sourceId) {
+  if (sourceType !== 'person') return true;
+  const person = getPersonAccessRecord(sourceId);
+  return Boolean(person && canAccessPerson(user, person));
+}
+
+function canModifyAttachmentSource(user, sourceType, sourceId) {
+  if (sourceType !== 'person') return true;
+  const person = getPersonAccessRecord(sourceId);
+  return Boolean(person && canModifyPerson(user, person));
+}
+
 function getVisibilityFromPerson(row = {}) {
   if (isPrivatePerson(row)) {
     return {
@@ -5310,13 +5338,9 @@ app.put('/api/persons/batch', canWrite, (req, res) => {
         errors.push({ id, reason: '无权访问此数据' });
         return;
       }
-      if (req.user.role === 'member') {
-        const isOwner = Number(person.created_by) === Number(req.user.id);
-        const isAssigned = Number(person.assigned_to) === Number(req.user.id);
-        if (!isOwner && !isAssigned) {
-          errors.push({ id, reason: '无权修改此数据' });
-          return;
-        }
+      if (!canModifyPerson(req.user, person)) {
+        errors.push({ id, reason: '无权修改此数据' });
+        return;
       }
       if (hasSharedPatch && isPrivatePerson(person) && visibilityScopePatch !== COMPANY_PERSON_SCOPE) {
         errors.push({ id, reason: '个人私密人脉不能共享' });
@@ -5384,13 +5408,9 @@ app.put('/api/persons/batch', canWrite, (req, res) => {
 app.put('/api/persons/:id', canWrite, async (req, res) => {
   const existingPerson = db.prepare('SELECT created_by, assigned_to, visibility_scope, private_owner_id, city, address, lat, lng, geocode_address FROM persons WHERE id = ?').get(req.params.id);
   if (!existingPerson) return res.status(404).json({ error: '未找到' });
-  if (!canAccessPerson(req.user, { ...existingPerson, id: Number(req.params.id) })) return res.status(404).json({ error: '未找到' });
-  // member / readonly 只能改自己录入的 或 被指派给自己的
-  if (req.user.role === 'member' || req.user.role === 'readonly') {
-    const isOwner = existingPerson.created_by === req.user.id;
-    const isAssigned = existingPerson.assigned_to === req.user.id;
-    if (!isOwner && !isAssigned) return res.status(403).json({ error: '无权修改此数据' });
-  }
+  const editablePerson = { ...existingPerson, id: Number(req.params.id) };
+  if (!canAccessPerson(req.user, editablePerson)) return res.status(404).json({ error: '未找到' });
+  if (!canModifyPerson(req.user, editablePerson)) return res.status(403).json({ error: '无权修改此数据' });
   const {
     name, person_category, relation_types, city, company, position, industry,
     phone, email, wechat, birthday, address, tags, notes, resources, demands, success_traits,
@@ -5485,11 +5505,19 @@ app.delete('/api/persons/:id', canWrite, (req, res) => {
   if (req.user.role === 'member') {
     if (person.created_by && person.created_by !== req.user.id) return res.status(403).json({ error: '无权删除他人录入的数据' });
   }
-  db.prepare('DELETE FROM person_shared_users WHERE person_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM persons WHERE id = ?').run(req.params.id);
-  db.prepare('DELETE FROM interactions WHERE person_id = ?').run(req.params.id);
-  db.prepare('DELETE FROM reminders WHERE person_id = ?').run(req.params.id);
-  db.prepare('UPDATE company_personnel SET person_id = NULL WHERE person_id = ?').run(req.params.id);
+  const attachmentRows = db.prepare("SELECT filepath FROM attachments WHERE source_type = 'person' AND source_id = ?").all(req.params.id);
+  const deletePerson = db.transaction((personId) => {
+    db.prepare("DELETE FROM attachments WHERE source_type = 'person' AND source_id = ?").run(personId);
+    db.prepare('DELETE FROM person_shared_users WHERE person_id = ?').run(personId);
+    db.prepare('DELETE FROM persons WHERE id = ?').run(personId);
+    db.prepare('DELETE FROM interactions WHERE person_id = ?').run(personId);
+    db.prepare('DELETE FROM reminders WHERE person_id = ?').run(personId);
+    db.prepare('UPDATE company_personnel SET person_id = NULL WHERE person_id = ?').run(personId);
+  });
+  deletePerson(req.params.id);
+  attachmentRows.forEach(att => {
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.filepath)); } catch {}
+  });
   res.json({ success: true });
 });
 
@@ -11759,6 +11787,10 @@ app.post('/api/attachments/upload', auth, uploadAttachments, (req, res) => {
   const { source_type, source_id } = req.body;
   if (!source_type || !source_id) return res.status(400).json({ error: '缺少 source_type 或 source_id' });
   if (!req.files?.length) return res.status(400).json({ error: '未收到文件' });
+  if (!canModifyAttachmentSource(req.user, source_type, source_id)) {
+    cleanupUploadedFiles(req.files);
+    return res.status(403).json({ error: '无权上传此附件' });
+  }
 
   const insert = db.prepare(`
     INSERT INTO attachments (source_type, source_id, filename, filepath, mimetype, size, created_by)
@@ -11775,6 +11807,9 @@ app.post('/api/attachments/upload', auth, uploadAttachments, (req, res) => {
 app.get('/api/attachments', auth, (req, res) => {
   const { source_type, source_id } = req.query;
   if (!source_type || !source_id) return res.status(400).json({ error: '缺少参数' });
+  if (!canAccessAttachmentSource(req.user, source_type, source_id)) {
+    return res.status(404).json({ error: '附件不存在' });
+  }
   const rows = db.prepare(`
     SELECT a.*, u.display_name as creator_name
     FROM attachments a LEFT JOIN users u ON a.created_by = u.id
@@ -11787,6 +11822,9 @@ app.get('/api/attachments', auth, (req, res) => {
 app.get('/api/attachments/:id/download', auth, (req, res) => {
   const row = normalizeGenericAttachmentRow(db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id));
   if (!row) return res.status(404).json({ error: '附件不存在' });
+  if (!canAccessAttachmentSource(req.user, row.source_type, row.source_id)) {
+    return res.status(404).json({ error: '附件不存在' });
+  }
   const filePath = path.join(UPLOADS_DIR, row.filepath);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
 
@@ -11805,6 +11843,9 @@ app.get('/api/attachments/:id/download', auth, (req, res) => {
 app.delete('/api/attachments/:id', auth, (req, res) => {
   const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
   if (!row) return res.status(404).json({ error: '附件不存在' });
+  if (!canModifyAttachmentSource(req.user, row.source_type, row.source_id)) {
+    return res.status(403).json({ error: '无权删除此附件' });
+  }
   if (row.created_by !== req.user.id && !isAdmin(req.user.role)) {
     return res.status(403).json({ error: '只有创建人可以删除附件' });
   }
