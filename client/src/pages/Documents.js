@@ -558,7 +558,7 @@ function normalizeTransientBlockInput(block, nextValue) {
 function getDefaultBlockMeta(type) {
   const columnCount = getColumnCount(type);
   if (columnCount) return { cells: Array.from({ length: columnCount }, (_, index) => `分栏 ${index + 1}`) };
-  if (type === 'table-simple') return { columns: ['名称', '说明'], rows: [['', '']] };
+  if (type === 'table-simple') return { columns: ['名称', '说明'], rows: [['', '']], mergedCells: [] };
   if (type?.startsWith('database-')) return { columns: ['字段', '内容'], rows: [['', '']], view: type.replace('database-', '') };
   if (type === 'progress') return { value: 30 };
   if (type === 'button') return { url: '' };
@@ -585,6 +585,69 @@ function getDefaultBlockMeta(type) {
     };
   }
   return {};
+}
+
+function clampTableCellSpan(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return 1;
+  return Math.max(1, Math.round(next));
+}
+
+function buildTableMergeKey(rowIndex, columnIndex) {
+  return `${Number(rowIndex)}:${Number(columnIndex)}`;
+}
+
+function normalizeTableMergedCells(mergedCells, rowCount, columnCount) {
+  if (!Array.isArray(mergedCells) || rowCount <= 0 || columnCount <= 0) return [];
+  const normalized = [];
+  const occupied = new Set();
+  mergedCells.forEach(item => {
+    const rowIndex = Number(item?.rowIndex);
+    const columnIndex = Number(item?.columnIndex);
+    if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return;
+    if (rowIndex < 0 || rowIndex >= rowCount || columnIndex < 0 || columnIndex >= columnCount) return;
+    const rowSpan = Math.min(clampTableCellSpan(item?.rowSpan), rowCount - rowIndex);
+    const colSpan = Math.min(clampTableCellSpan(item?.colSpan), columnCount - columnIndex);
+    if (rowSpan <= 1 && colSpan <= 1) return;
+    let overlaps = false;
+    for (let r = rowIndex; r < rowIndex + rowSpan && !overlaps; r += 1) {
+      for (let c = columnIndex; c < columnIndex + colSpan; c += 1) {
+        const key = buildTableMergeKey(r, c);
+        if (occupied.has(key)) {
+          overlaps = true;
+          break;
+        }
+      }
+    }
+    if (overlaps) return;
+    for (let r = rowIndex; r < rowIndex + rowSpan; r += 1) {
+      for (let c = columnIndex; c < columnIndex + colSpan; c += 1) {
+        occupied.add(buildTableMergeKey(r, c));
+      }
+    }
+    normalized.push({ rowIndex, columnIndex, rowSpan, colSpan });
+  });
+  return normalized;
+}
+
+function buildTableMergedLookup(mergedCells, rowCount, columnCount) {
+  const normalized = normalizeTableMergedCells(mergedCells, rowCount, columnCount);
+  const anchorMap = new Map();
+  const coveredMap = new Map();
+  normalized.forEach(merge => {
+    const anchorKey = buildTableMergeKey(merge.rowIndex, merge.columnIndex);
+    anchorMap.set(anchorKey, merge);
+    for (let rowIndex = merge.rowIndex; rowIndex < merge.rowIndex + merge.rowSpan; rowIndex += 1) {
+      for (let columnIndex = merge.columnIndex; columnIndex < merge.columnIndex + merge.colSpan; columnIndex += 1) {
+        const key = buildTableMergeKey(rowIndex, columnIndex);
+        coveredMap.set(key, {
+          ...merge,
+          isAnchor: key === anchorKey,
+        });
+      }
+    }
+  });
+  return { normalized, anchorMap, coveredMap };
 }
 
 function isHierarchicalListBlock(block) {
@@ -1221,9 +1284,11 @@ function normalizeTableBlockData(block) {
   const meta = { ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) };
   const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
   const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
+  const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
   return {
     columns,
-    rows: rows.map(row => columns.map((_, index) => row?.[index] || '')),
+    rows: normalizedRows,
+    mergedCells: normalizeTableMergedCells(meta.mergedCells, normalizedRows.length, columns.length),
   };
 }
 
@@ -1384,6 +1449,7 @@ function parseClipboardHtmlTableBlocks(html) {
         ...getDefaultBlockMeta('table-simple'),
         columns,
         rows,
+        mergedCells: [],
       },
     };
   }).filter(Boolean);
@@ -7157,6 +7223,8 @@ export default function Documents() {
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [['', '']];
     const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
+    const mergedLookup = buildTableMergedLookup(meta.mergedCells, normalizedRows.length, columns.length);
+    const mergedCells = mergedLookup.normalized;
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
     const selectedTableCellIsBody = selectedCell?.type === 'body' && Number.isInteger(selectedCell?.rowIndex);
     const selectedColumnIndex = Number.isInteger(selectedCell?.columnIndex) ? selectedCell.columnIndex : -1;
@@ -7196,12 +7264,29 @@ export default function Documents() {
     const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
     const horizontalCenter = Boolean(meta.horizontalCenter);
     const verticalCenter = Boolean(meta.verticalCenter);
+    const getMergedAnchor = (rowIndex, columnIndex) => mergedLookup.anchorMap.get(buildTableMergeKey(rowIndex, columnIndex)) || null;
+    const getMergedCover = (rowIndex, columnIndex) => mergedLookup.coveredMap.get(buildTableMergeKey(rowIndex, columnIndex)) || null;
+    const getAnchorCellValue = (rowIndex, columnIndex) => String(normalizedRows[rowIndex]?.[columnIndex] || '');
+    const canMergeSelectedRange = Boolean(
+      hasSelectedRange
+      && selectedRangeBounds.startRowIndex >= 0
+      && selectedRangeBounds.endRowIndex >= 0
+      && selectedRangeBounds.startColumnIndex >= 0
+      && selectedRangeBounds.endColumnIndex >= 0
+      && mergedCells.every(merge => (
+        merge.rowIndex + merge.rowSpan - 1 < selectedRangeBounds.startRowIndex
+        || merge.rowIndex > selectedRangeBounds.endRowIndex
+        || merge.columnIndex + merge.colSpan - 1 < selectedRangeBounds.startColumnIndex
+        || merge.columnIndex > selectedRangeBounds.endColumnIndex
+      ))
+    );
     const persistTableMeta = (patch) => updateBlockMeta(block.id, {
       columns,
       rows: normalizedRows,
       columnWidths,
       horizontalCenter,
       verticalCenter,
+      mergedCells,
       ...patch,
     });
     const updateColumn = (index, value) => {
@@ -7209,9 +7294,12 @@ export default function Documents() {
       persistTableMeta({ columns: nextColumns });
     };
     const updateCell = (rowIndex, columnIndex, value) => {
+      const anchor = getMergedCover(rowIndex, columnIndex);
+      const targetRowIndex = anchor?.rowIndex ?? rowIndex;
+      const targetColumnIndex = anchor?.columnIndex ?? columnIndex;
       const nextRows = normalizedRows.map((row, currentRowIndex) => (
-        currentRowIndex === rowIndex
-          ? row.map((cell, currentColumnIndex) => (currentColumnIndex === columnIndex ? value : cell))
+        currentRowIndex === targetRowIndex
+          ? row.map((cell, currentColumnIndex) => (currentColumnIndex === targetColumnIndex ? value : cell))
           : row
       ));
       persistTableMeta({ rows: nextRows });
@@ -7221,7 +7309,16 @@ export default function Documents() {
       const insertIndex = position === 'before' ? safeIndex : safeIndex + 1;
       const nextRows = [...normalizedRows];
       nextRows.splice(insertIndex, 0, columns.map(() => ''));
-      persistTableMeta({ rows: nextRows });
+      const nextMergedCells = normalizeTableMergedCells(mergedCells.map(merge => {
+        if (merge.rowIndex >= insertIndex) {
+          return { ...merge, rowIndex: merge.rowIndex + 1 };
+        }
+        if (merge.rowIndex < insertIndex && merge.rowIndex + merge.rowSpan > insertIndex) {
+          return { ...merge, rowSpan: merge.rowSpan + 1 };
+        }
+        return merge;
+      }), nextRows.length, columns.length);
+      persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells });
       setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: insertIndex, columnIndex: Math.max(0, selectedColumnIndex) });
       setSelectedTableRange(null);
     };
@@ -7237,7 +7334,16 @@ export default function Documents() {
       });
       const nextWidths = [...columnWidths];
       nextWidths.splice(insertIndex, 0, columnWidths[safeIndex] || 160);
-      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
+      const nextMergedCells = normalizeTableMergedCells(mergedCells.map(merge => {
+        if (merge.columnIndex >= insertIndex) {
+          return { ...merge, columnIndex: merge.columnIndex + 1 };
+        }
+        if (merge.columnIndex < insertIndex && merge.columnIndex + merge.colSpan > insertIndex) {
+          return { ...merge, colSpan: merge.colSpan + 1 };
+        }
+        return merge;
+      }), nextRows.length, nextColumns.length);
+      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths, mergedCells: nextMergedCells });
       setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: Math.max(0, selectedRowIndex), columnIndex: insertIndex });
       setSelectedTableRange(null);
     };
@@ -7246,11 +7352,11 @@ export default function Documents() {
         const nextColumns = columns.map((column, columnIndex) => (
           isCellInSelectedRange(-1, columnIndex) ? '' : column
         ));
-        const nextRows = normalizedRows.map((row, rowIndex) => (
-          row.map((cell, columnIndex) => (
-            isCellInSelectedRange(rowIndex, columnIndex) ? '' : cell
-          ))
-        ));
+        const nextRows = normalizedRows.map((row, rowIndex) => row.map((cell, columnIndex) => {
+          const anchor = getMergedCover(rowIndex, columnIndex);
+          if (anchor && !anchor.isAnchor) return cell;
+          return isCellInSelectedRange(rowIndex, columnIndex) ? '' : cell;
+        }));
         persistTableMeta({ columns: nextColumns, rows: nextRows });
         return;
       }
@@ -7266,7 +7372,24 @@ export default function Documents() {
       const nextRows = normalizedRows.filter((_, index) => (
         index < startRowIndex || index > endRowIndex
       ));
-      persistTableMeta({ rows: nextRows });
+      const nextMergedCells = normalizeTableMergedCells(mergedCells.flatMap(merge => {
+        const mergeEnd = merge.rowIndex + merge.rowSpan - 1;
+        if (mergeEnd < startRowIndex) return [merge];
+        if (merge.rowIndex > endRowIndex) {
+          return [{ ...merge, rowIndex: merge.rowIndex - deleteCount }];
+        }
+        const overlapStart = Math.max(merge.rowIndex, startRowIndex);
+        const overlapEnd = Math.min(mergeEnd, endRowIndex);
+        const removedRows = overlapEnd - overlapStart + 1;
+        const nextRowSpan = merge.rowSpan - removedRows;
+        if (nextRowSpan <= 1 && merge.colSpan <= 1) return [];
+        if (nextRowSpan <= 0) return [];
+        const nextRowIndex = merge.rowIndex >= startRowIndex
+          ? startRowIndex
+          : merge.rowIndex;
+        return [{ ...merge, rowIndex: nextRowIndex, rowSpan: nextRowSpan }];
+      }), nextRows.length, columns.length);
+      persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells });
       setSelectedTableCell({
         blockId: block.id,
         type: 'body',
@@ -7290,13 +7413,63 @@ export default function Documents() {
       const nextWidths = columnWidths.filter((_, index) => (
         index < startColumnIndex || index > endColumnIndex
       ));
-      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths });
+      const nextMergedCells = normalizeTableMergedCells(mergedCells.flatMap(merge => {
+        const mergeEnd = merge.columnIndex + merge.colSpan - 1;
+        if (mergeEnd < startColumnIndex) return [merge];
+        if (merge.columnIndex > endColumnIndex) {
+          return [{ ...merge, columnIndex: merge.columnIndex - deleteCount }];
+        }
+        const overlapStart = Math.max(merge.columnIndex, startColumnIndex);
+        const overlapEnd = Math.min(mergeEnd, endColumnIndex);
+        const removedColumns = overlapEnd - overlapStart + 1;
+        const nextColSpan = merge.colSpan - removedColumns;
+        if (nextColSpan <= 1 && merge.rowSpan <= 1) return [];
+        if (nextColSpan <= 0) return [];
+        const nextColumnIndex = merge.columnIndex >= startColumnIndex
+          ? startColumnIndex
+          : merge.columnIndex;
+        return [{ ...merge, columnIndex: nextColumnIndex, colSpan: nextColSpan }];
+      }), nextRows.length, nextColumns.length);
+      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths, mergedCells: nextMergedCells });
       setSelectedTableCell({
         blockId: block.id,
         type: 'body',
         rowIndex: Math.max(0, selectedRowIndex),
         columnIndex: Math.max(0, Math.min(startColumnIndex, nextColumns.length - 1)),
       });
+      setSelectedTableRange(null);
+    };
+    const mergeSelectedCells = () => {
+      if (!canMergeSelectedRange) return;
+      const anchorRowIndex = selectedRangeBounds.startRowIndex;
+      const anchorColumnIndex = selectedRangeBounds.startColumnIndex;
+      const rangeRowSpan = selectedRangeBounds.endRowIndex - selectedRangeBounds.startRowIndex + 1;
+      const rangeColSpan = selectedRangeBounds.endColumnIndex - selectedRangeBounds.startColumnIndex + 1;
+      const mergedValueParts = [];
+      for (let rowIndex = selectedRangeBounds.startRowIndex; rowIndex <= selectedRangeBounds.endRowIndex; rowIndex += 1) {
+        for (let columnIndex = selectedRangeBounds.startColumnIndex; columnIndex <= selectedRangeBounds.endColumnIndex; columnIndex += 1) {
+          const content = String(normalizedRows[rowIndex]?.[columnIndex] || '').trim();
+          if (content) mergedValueParts.push(content);
+        }
+      }
+      const nextRows = normalizedRows.map((row, rowIndex) => row.map((cell, columnIndex) => {
+        if (!isCellInSelectedRange(rowIndex, columnIndex)) return cell;
+        if (rowIndex === anchorRowIndex && columnIndex === anchorColumnIndex) {
+          return mergedValueParts.join('<br/>');
+        }
+        return '';
+      }));
+      const nextMergedCells = normalizeTableMergedCells([
+        ...mergedCells,
+        {
+          rowIndex: anchorRowIndex,
+          columnIndex: anchorColumnIndex,
+          rowSpan: rangeRowSpan,
+          colSpan: rangeColSpan,
+        },
+      ], nextRows.length, columns.length);
+      persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells });
+      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: anchorRowIndex, columnIndex: anchorColumnIndex });
       setSelectedTableRange(null);
     };
     const distributeSelectedColumnWidths = () => {
@@ -7311,8 +7484,11 @@ export default function Documents() {
       setSelectedTableRange(null);
     };
     const selectTableCell = (rowIndex, columnIndex) => {
+      const anchor = getMergedCover(rowIndex, columnIndex);
+      const nextRowIndex = anchor?.rowIndex ?? rowIndex;
+      const nextColumnIndex = anchor?.columnIndex ?? columnIndex;
       setSelectedBlockId(block.id);
-      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex, columnIndex });
+      setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: nextRowIndex, columnIndex: nextColumnIndex });
       setSelectedTableRange(null);
     };
     const selectTableHeader = (columnIndex) => {
@@ -7335,6 +7511,14 @@ export default function Documents() {
       const columnIndex = Number(cell.dataset.columnIndex);
       if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return null;
       const type = cell.dataset.cellType === 'header' || rowIndex < 0 ? 'header' : 'body';
+      if (type === 'body') {
+        const anchor = getMergedCover(rowIndex, columnIndex);
+        return {
+          type,
+          rowIndex: anchor?.rowIndex ?? rowIndex,
+          columnIndex: anchor?.columnIndex ?? columnIndex,
+        };
+      }
       return { type, rowIndex, columnIndex };
     };
     const beginTableCellSelection = (event, type, rowIndex, columnIndex) => {
@@ -7408,7 +7592,16 @@ export default function Documents() {
               ? nextWidth
               : Math.max(80, Number(currentMeta.columnWidths?.[index]) || columnWidths[index] || 160)
           ));
-          return { ...item, meta: { ...currentMeta, columns, rows: normalizedRows, columnWidths: nextWidths } };
+          return {
+            ...item,
+            meta: {
+              ...currentMeta,
+              columns,
+              rows: normalizedRows,
+              mergedCells,
+              columnWidths: nextWidths,
+            },
+          };
         }));
       };
       const handleMouseUp = () => {
@@ -7519,7 +7712,7 @@ export default function Documents() {
           {renderTableMenuItem({ icon: '▭', label: '在下方插入一行', onClick: () => insertRow(menuRowIndex, 'after') })}
           {renderTableMenuItem({ icon: '▯', label: '在左边插入一列', onClick: () => insertColumn(menuColumnIndex, 'before') })}
           {renderTableMenuItem({ icon: '▯', label: '在右边插入一列', onClick: () => insertColumn(menuColumnIndex, 'after') })}
-          {renderTableMenuItem({ icon: '▣', label: '合并单元格', disabled: true })}
+          {renderTableMenuItem({ icon: '▣', label: '合并单元格', disabled: !canMergeSelectedRange, onClick: mergeSelectedCells })}
         </div>
         <Divider style={{ margin: 0 }} />
         <div style={{ padding: '8px 10px' }}>
@@ -7603,8 +7796,13 @@ export default function Documents() {
             <tbody>
               {normalizedRows.map((row, rowIndex) => (
                 <tr key={`row-${rowIndex}`}>
-                  {row.map((cell, columnIndex) => (
-                    (() => {
+                  {row.map((cell, columnIndex) => {
+                    const mergedCell = getMergedCover(rowIndex, columnIndex);
+                    if (mergedCell && !mergedCell.isAnchor) return null;
+                    const rowSpan = mergedCell?.rowSpan || 1;
+                    const colSpan = mergedCell?.colSpan || 1;
+                    return (
+                      (() => {
                       const selectedInRange = isCellInSelectedRange(rowIndex, columnIndex);
                       const activeCell = selectedTableCellIsBody && selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex;
                       return (
@@ -7615,6 +7813,8 @@ export default function Documents() {
                       data-cell-type="body"
                       data-row-index={rowIndex}
                       data-column-index={columnIndex}
+                      rowSpan={rowSpan}
+                      colSpan={colSpan}
                       onMouseDown={event => beginTableCellSelection(event, 'body', rowIndex, columnIndex)}
                       style={{
                         border: '1px solid #e5e7eb',
@@ -7627,7 +7827,7 @@ export default function Documents() {
                     >
                       <InlineRichTextEditor
                         id={`doc-table-cell-input-${block.id}-body-${rowIndex}-${columnIndex}`}
-                        value={cell}
+                        value={getAnchorCellValue(rowIndex, columnIndex)}
                         placeholder=""
                         onFocus={() => selectTableCell(rowIndex, columnIndex)}
                         onChange={value => updateCell(rowIndex, columnIndex, value)}
@@ -7635,7 +7835,7 @@ export default function Documents() {
                         onKeyUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
                         onBlur={hideTableInlineToolbarOnBlur}
                         style={{
-                          minHeight: 28,
+                          minHeight: Math.max(28, rowSpan * 42 - 12),
                           padding: 4,
                           lineHeight: 1.55,
                           fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
@@ -7646,7 +7846,8 @@ export default function Documents() {
                     </td>
                       );
                     })()
-                  ))}
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -8024,6 +8225,7 @@ export default function Documents() {
     const meta = getBlockMeta(block);
     const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : [];
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [];
+    const mergedLookup = buildTableMergedLookup(meta.mergedCells, rows.length, columns.length);
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
     const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
     if (!columns.length && !rows.length) {
@@ -8052,11 +8254,20 @@ export default function Documents() {
           <tbody>
             {rows.map((row, rowIndex) => (
               <tr key={`row-${rowIndex}`}>
-                {(row || []).map((cell, cellIndex) => (
-                  <td key={`cell-${rowIndex}-${cellIndex}`} style={{ borderBottom: '1px solid #e5e7eb', padding: '10px 12px', verticalAlign: 'top' }}>
-                    <InlineHtmlView value={cell} />
-                  </td>
-                ))}
+                {(row || []).map((cell, cellIndex) => {
+                  const mergedCell = mergedLookup.coveredMap.get(buildTableMergeKey(rowIndex, cellIndex));
+                  if (mergedCell && !mergedCell.isAnchor) return null;
+                  return (
+                    <td
+                      key={`cell-${rowIndex}-${cellIndex}`}
+                      rowSpan={mergedCell?.rowSpan || 1}
+                      colSpan={mergedCell?.colSpan || 1}
+                      style={{ borderBottom: '1px solid #e5e7eb', padding: '10px 12px', verticalAlign: 'top' }}
+                    >
+                      <InlineHtmlView value={cell} />
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
