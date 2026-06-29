@@ -53,6 +53,8 @@ import {
   MoreOutlined,
   PlusCircleOutlined,
   PlusOutlined,
+  PushpinFilled,
+  PushpinOutlined,
   ReloadOutlined,
   RightOutlined,
   RollbackOutlined,
@@ -1238,6 +1240,21 @@ function saveDocumentDraftBeforeUnload(docId, payload, baseUpdatedAt = '') {
     },
     body: JSON.stringify(requestPayload),
   }).catch(() => {});
+}
+
+async function requestDocumentPinState(docId, pinned) {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`/api/documents/${docId}/pin`, {
+    method: pinned ? 'POST' : 'DELETE',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error || '置顶操作失败');
+  }
+  return data;
 }
 
 function blockMetaToText(meta = {}) {
@@ -3870,6 +3887,20 @@ export default function Documents() {
     }
   };
 
+  const toggleDocumentPin = async (doc) => {
+    if (!doc?.id) return;
+    const nextPinned = !doc.pinned_at;
+    try {
+      await requestDocumentPinState(doc.id, nextPinned);
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      if (selectedDoc?.id === doc.id) await loadDetail(doc.id, { force: true });
+      message.success(nextPinned ? '已置顶' : '已取消置顶');
+    } catch (err) {
+      message.error(err.message || '置顶操作失败');
+    }
+  };
+
   const handleApplyTemplate = async () => {
     try {
       const values = await templateForm.validateFields();
@@ -5513,6 +5544,10 @@ export default function Documents() {
       handleCopyDocLink(doc);
       return;
     }
+    if (key === 'pin') {
+      toggleDocumentPin(doc);
+      return;
+    }
     if (key === 'move') {
       openMoveFolder(doc);
       return;
@@ -5707,6 +5742,7 @@ export default function Documents() {
         title={
           <Space size={6} wrap style={{ rowGap: 2, lineHeight: 1.25 }}>
             <Text strong ellipsis style={{ maxWidth: isMobile ? 'calc(100vw - 164px)' : 170, lineHeight: '20px' }}>{item.title}</Text>
+            {item.pinned_at && <Tag color="gold" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>置顶</Tag>}
             <Tag color="blue" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
           </Space>
         }
@@ -9537,6 +9573,14 @@ export default function Documents() {
                     onClick: handleDocContextAction,
                     items: [
                       { key: 'copy-link', icon: <LinkOutlined />, label: '复制页面链接' },
+                      {
+                        key: 'pin',
+                        icon: docContextMenu.doc?.pinned_at
+                          ? <PushpinFilled style={{ color: '#f59e0b' }} />
+                          : <PushpinOutlined />,
+                        label: docContextMenu.doc?.pinned_at ? '取消置顶' : '置顶',
+                        disabled: !canManageDoc(docContextMenu.doc),
+                      },
                       { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
                       {
                         key: 'edit-properties',

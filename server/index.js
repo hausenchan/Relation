@@ -1168,6 +1168,7 @@ db.exec(`
     custom_width INTEGER,
     small_font_enabled INTEGER DEFAULT 0,
     title_numbering_enabled INTEGER DEFAULT 0,
+    pinned_at DATETIME,
     created_by INTEGER,
     updated_by INTEGER,
     is_deleted INTEGER DEFAULT 0,
@@ -1182,6 +1183,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_documents_department ON documents(department_key);
   CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type);
   CREATE INDEX IF NOT EXISTS idx_documents_created_by ON documents(created_by);
+  CREATE INDEX IF NOT EXISTS idx_documents_pinned_at ON documents(pinned_at);
 
   CREATE TABLE IF NOT EXISTS document_folders (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1317,6 +1319,7 @@ addColumnIfMissing('document_edit_records', 'content_before', 'TEXT DEFAULT NULL
 addColumnIfMissing('document_edit_records', 'content_after', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_before', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_after', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'pinned_at', 'DATETIME DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'block_id', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'display_name', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'file_ext', 'TEXT DEFAULT NULL');
@@ -4290,7 +4293,7 @@ app.get('/api/documents', (req, res) => {
   let q = `
     SELECT d.id, d.document_no, d.global_seq, d.title, d.summary, d.domain, d.project_group_id,
       d.project_code, d.department_key, d.doc_type, d.current_version, d.folder_id,
-      d.tags, d.created_by, d.updated_by, d.created_at, d.updated_at,
+      d.tags, d.pinned_at, d.created_by, d.updated_by, d.created_at, d.updated_at,
       ${searchText ? 'd.content_text as search_content_text,' : ''}
       creator.display_name as created_by_name,
       updater.display_name as updated_by_name,
@@ -4321,7 +4324,7 @@ app.get('/api/documents', (req, res) => {
   if (doc_type) { q += ' AND d.doc_type = ?'; params.push(normalizeDocumentType(doc_type)); }
   if (sop_only === '1' || sop_only === 'true') { q += " AND d.doc_type = 'SOP'"; }
   if (favorite === '1' || favorite === 'true') { q += ' AND fav.user_id IS NOT NULL'; }
-  q += ' ORDER BY d.updated_at DESC, d.id DESC';
+  q += ' ORDER BY CASE WHEN d.pinned_at IS NULL THEN 1 ELSE 0 END, d.pinned_at DESC, d.updated_at DESC, d.id DESC';
   const requestedLimit = Number(limit);
   if (Number.isFinite(requestedLimit) && requestedLimit > 0) {
     q += ' LIMIT ?';
@@ -4621,6 +4624,22 @@ app.post('/api/documents/:id/favorite', (req, res) => {
 app.delete('/api/documents/:id/favorite', (req, res) => {
   db.prepare('DELETE FROM document_favorites WHERE user_id = ? AND document_id = ?').run(req.user.id, req.params.id);
   res.json({ success: true });
+});
+
+app.post('/api/documents/:id/pin', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以置顶文档' });
+  db.prepare('UPDATE documents SET pinned_at = ?, updated_by = ? WHERE id = ?').run(new Date().toISOString(), req.user.id, doc.id);
+  res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true, user: req.user }));
+});
+
+app.delete('/api/documents/:id/pin', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以取消置顶文档' });
+  db.prepare('UPDATE documents SET pinned_at = NULL, updated_by = ? WHERE id = ?').run(req.user.id, doc.id);
+  res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true, user: req.user }));
 });
 
 app.get('/api/documents/:id/change-logs', (req, res) => {
