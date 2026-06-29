@@ -56,6 +56,7 @@ import {
   ReloadOutlined,
   RightOutlined,
   RollbackOutlined,
+  SearchOutlined,
   StarFilled,
   StarOutlined,
   TeamOutlined,
@@ -1705,6 +1706,53 @@ function getFolderPathLabel(folder) {
   ].filter(Boolean).join(' / ');
 }
 
+function getDocumentPathLabel(doc) {
+  if (!doc) return '未归档';
+  const parts = [
+    domainLabel[doc.domain] || doc.domain,
+    doc.project_group_name || doc.project_code || '未关联项目组',
+    departmentLabel[doc.department_key] || doc.department_key,
+    doc.folder_name,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' / ') : '未归档';
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getDocumentSearchHighlightTerms(keyword, exact) {
+  const text = String(keyword || '').trim();
+  if (!text) return [];
+  const terms = exact ? [text] : text.split(/\s+/).map(item => item.trim()).filter(Boolean);
+  return [...new Set(terms)].sort((a, b) => b.length - a.length);
+}
+
+function renderHighlightedDocumentSearchText(value, keyword, exact) {
+  const text = String(value || '');
+  const terms = getDocumentSearchHighlightTerms(keyword, exact);
+  if (!text || terms.length === 0) return text;
+  const pattern = new RegExp(`(${terms.map(escapeRegExp).join('|')})`, 'gi');
+  const nodes = [];
+  let lastIndex = 0;
+  Array.from(text.matchAll(pattern)).forEach((match, index) => {
+    const start = match.index || 0;
+    const matchText = match[0];
+    if (start > lastIndex) nodes.push(text.slice(lastIndex, start));
+    nodes.push(
+      <mark
+        key={`${matchText}-${start}-${index}`}
+        style={{ background: 'transparent', color: '#dc2626', padding: 0, fontWeight: 700 }}
+      >
+        {matchText}
+      </mark>
+    );
+    lastIndex = start + matchText.length;
+  });
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes.length ? nodes : text;
+}
+
 function isDocumentAdminUser(user) {
   return documentAdminRoles.has(user?.role);
 }
@@ -1986,6 +2034,12 @@ export default function Documents() {
   const [mobileLibraryVisible, setMobileLibraryVisible] = useState(false);
   const [domainFilter, setDomainFilter] = useState('all');
   const [keyword, setKeyword] = useState('');
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [globalSearchKeyword, setGlobalSearchKeyword] = useState('');
+  const [globalSearchTitleOnly, setGlobalSearchTitleOnly] = useState(false);
+  const [globalSearchExact, setGlobalSearchExact] = useState(false);
+  const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
+  const [globalSearchResults, setGlobalSearchResults] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState(null);
   const [sopOnly, setSopOnly] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -2072,6 +2126,7 @@ export default function Documents() {
   const tableResizeRef = useRef(null);
   const tableCellSelectionRef = useRef(null);
   const composingBlockIdsRef = useRef(new Set());
+  const globalSearchInputRef = useRef(null);
   const replaceAttachmentInputRef = useRef(null);
   const replaceAttachmentTargetRef = useRef(null);
   const [createForm] = Form.useForm();
@@ -2580,6 +2635,20 @@ export default function Documents() {
     });
   };
 
+  const openGlobalDocumentSearch = () => {
+    setGlobalSearchOpen(true);
+    setGlobalSearchKeyword(prev => prev || keyword.trim());
+  };
+
+  const closeGlobalDocumentSearch = () => {
+    setGlobalSearchOpen(false);
+  };
+
+  const openGlobalSearchResult = (item) => {
+    closeGlobalDocumentSearch();
+    openDocumentTab(item);
+  };
+
   useEffect(() => {
     loadFolders().catch(err => message.error(err.response?.data?.error || err.message || '加载目录失败'));
     loadProjectGroups().catch(err => message.error(err.response?.data?.error || err.message || '加载项目组失败'));
@@ -2600,6 +2669,62 @@ export default function Documents() {
     }, 300);
     return () => clearTimeout(timer);
   }, [keyword]);
+
+  useEffect(() => {
+    const handleGlobalSearchKeyDown = (event) => {
+      const key = String(event.key || '').toLowerCase();
+      if (key !== 'p' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openGlobalDocumentSearch();
+    };
+    window.addEventListener('keydown', handleGlobalSearchKeyDown, true);
+    return () => window.removeEventListener('keydown', handleGlobalSearchKeyDown, true);
+  }, [keyword]);
+
+  useEffect(() => {
+    if (!globalSearchOpen) return undefined;
+    const timer = window.setTimeout(() => {
+      globalSearchInputRef.current?.focus?.({ cursor: 'end' });
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [globalSearchOpen]);
+
+  useEffect(() => {
+    if (!globalSearchOpen) return undefined;
+    const searchText = globalSearchKeyword.trim();
+    if (!searchText) {
+      setGlobalSearchResults([]);
+      setGlobalSearchLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setGlobalSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      documentsApi.list({
+        search: searchText,
+        title_only: globalSearchTitleOnly ? 1 : undefined,
+        exact: globalSearchExact ? 1 : undefined,
+        limit: 100,
+      })
+        .then(rows => {
+          if (cancelled) return;
+          setGlobalSearchResults(Array.isArray(rows) ? rows : []);
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setGlobalSearchResults([]);
+          message.error(err.response?.data?.error || err.message || '搜索文档失败');
+        })
+        .finally(() => {
+          if (!cancelled) setGlobalSearchLoading(false);
+        });
+    }, 260);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [globalSearchOpen, globalSearchKeyword, globalSearchTitleOnly, globalSearchExact]);
 
   useEffect(() => {
     const docId = getDocumentIdFromSearch(searchParams);
@@ -5368,6 +5493,160 @@ export default function Documents() {
       openDocumentTab(doc);
       openEditProperties(doc);
     }
+  };
+
+  const renderGlobalDocumentSearchModal = () => {
+    const searchText = globalSearchKeyword.trim();
+    const resultCount = globalSearchResults.length;
+    return (
+      <Modal
+        open={globalSearchOpen}
+        onCancel={closeGlobalDocumentSearch}
+        footer={null}
+        closable={false}
+        destroyOnClose={false}
+        width={isMobile ? '100%' : 920}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : { top: 36 }}
+        styles={{
+          body: {
+            padding: 0,
+            maxHeight: isMobile ? '100vh' : 'calc(100vh - 96px)',
+            overflow: 'hidden',
+          },
+          content: {
+            borderRadius: isMobile ? 0 : 8,
+            overflow: 'hidden',
+          },
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', maxHeight: isMobile ? '100vh' : 'calc(100vh - 96px)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: isMobile ? '12px 12px' : '14px 18px', borderBottom: '1px solid #f0f0f0' }}>
+            <Input
+              ref={globalSearchInputRef}
+              bordered={false}
+              prefix={<SearchOutlined style={{ color: '#8c8c8c', fontSize: 19 }} />}
+              allowClear
+              size="large"
+              placeholder="搜索标题、编号、正文"
+              value={globalSearchKeyword}
+              onChange={event => setGlobalSearchKeyword(event.target.value)}
+              onPressEnter={() => {
+                if (globalSearchResults[0]) openGlobalSearchResult(globalSearchResults[0]);
+              }}
+              style={{ flex: 1, minWidth: 0, paddingLeft: 0, fontSize: 20 }}
+            />
+            <Tooltip title="关闭">
+              <Button
+                type="text"
+                shape="circle"
+                icon={<CloseOutlined />}
+                aria-label="关闭搜索"
+                onClick={closeGlobalDocumentSearch}
+                style={{ flex: '0 0 auto', color: '#8c8c8c' }}
+              />
+            </Tooltip>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', padding: isMobile ? '10px 12px' : '12px 18px', borderBottom: '1px solid #f5f5f5' }}>
+            <Space size={16} wrap>
+              <Space size={6}>
+                <Text type="secondary">仅匹配标题</Text>
+                <Switch size="small" checked={globalSearchTitleOnly} onChange={setGlobalSearchTitleOnly} />
+              </Space>
+              <Space size={6}>
+                <Text type="secondary">精准匹配</Text>
+                <Switch size="small" checked={globalSearchExact} onChange={setGlobalSearchExact} />
+              </Space>
+            </Space>
+            <Text type="secondary">{searchText ? `共 ${resultCount} 条匹配结果` : '输入关键词后搜索'}</Text>
+          </div>
+
+          <Spin spinning={globalSearchLoading}>
+            <div style={{ maxHeight: isMobile ? 'calc(100vh - 140px)' : 'calc(100vh - 230px)', overflowY: 'auto' }}>
+              {searchText ? (
+                <List
+                  dataSource={globalSearchResults}
+                  locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配文档" /> }}
+                  renderItem={(item) => {
+                    const title = item.title || '未命名文档';
+                    const path = getDocumentPathLabel(item);
+                    const excerpt = item.match_excerpt || item.summary || item.document_no || '';
+                    return (
+                      <List.Item
+                        key={item.id}
+                        onClick={() => openGlobalSearchResult(item)}
+                        style={{
+                          cursor: 'pointer',
+                          padding: isMobile ? '12px' : '13px 18px',
+                          borderBottom: '1px solid #f3f4f6',
+                          background: Number(selectedDocId) === Number(item.id) ? '#f5f7ff' : '#fff',
+                        }}
+                      >
+                        <div style={{
+                          display: 'grid',
+                          gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1fr) minmax(220px, 36%)',
+                          gap: isMobile ? 6 : 18,
+                          alignItems: 'center',
+                          width: '100%',
+                          minWidth: 0,
+                        }}>
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                              <FileTextOutlined style={{ color: '#6b7280', flex: '0 0 auto' }} />
+                              <Text
+                                strong
+                                title={title}
+                                style={{ display: 'block', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 15 }}
+                              >
+                                {renderHighlightedDocumentSearchText(title, searchText, globalSearchExact)}
+                              </Text>
+                              {item.match_label && <Tag style={{ marginInlineEnd: 0 }}>{item.match_label}</Tag>}
+                            </div>
+                            {excerpt && (
+                              <div
+                                title={excerpt}
+                                style={{
+                                  marginTop: 5,
+                                  color: '#8c8c8c',
+                                  fontSize: 13,
+                                  lineHeight: 1.4,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {renderHighlightedDocumentSearchText(excerpt, searchText, globalSearchExact)}
+                              </div>
+                            )}
+                          </div>
+                          <Text
+                            type="secondary"
+                            title={path}
+                            style={{
+                              display: 'block',
+                              minWidth: 0,
+                              textAlign: isMobile ? 'left' : 'right',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              fontSize: 13,
+                            }}
+                          >
+                            {path}
+                          </Text>
+                        </div>
+                      </List.Item>
+                    );
+                  }}
+                />
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无搜索内容" style={{ padding: '52px 0' }} />
+              )}
+            </div>
+          </Spin>
+        </div>
+      </Modal>
+    );
   };
 
   const renderDocItem = (item) => (
@@ -9202,6 +9481,9 @@ export default function Documents() {
             </Space>
             {!isFolderSidebarCollapsed && (
               <Space size={6}>
+                <Tooltip title="搜索文档">
+                  <Button icon={<SearchOutlined />} aria-label="搜索文档" onClick={openGlobalDocumentSearch} />
+                </Tooltip>
                 <Tooltip title="刷新">
                   <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); loadFolderTreeDocuments(); }} />
                 </Tooltip>
@@ -9573,6 +9855,8 @@ export default function Documents() {
       >
         {renderShareSelector()}
       </Modal>
+
+      {renderGlobalDocumentSearchModal()}
 
       {renderChangeLogDrawer()}
 
