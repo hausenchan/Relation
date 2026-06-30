@@ -99,6 +99,14 @@ const companyListTagStyle = {
   verticalAlign: 'middle',
 };
 
+function buildStandardPagination(defaultPageSize = 20) {
+  return {
+    defaultPageSize,
+    showSizeChanger: true,
+    showTotal: total => `共 ${total} 条`,
+  };
+}
+
 function renderCompanyListText(value, options = {}) {
   const text = value === null || value === undefined ? '' : String(value).trim();
   if (!text) return '-';
@@ -2342,7 +2350,7 @@ function AllProductsView() {
           dataSource={filteredData}
           rowKey="id"
           loading={loading}
-          pagination={{ defaultPageSize: 15, showSizeChanger: false }}
+          pagination={buildStandardPagination(20)}
           locale={{ emptyText: '暂无产品数据' }}
           renderItem={renderProductCard}
         />
@@ -2355,7 +2363,7 @@ function AllProductsView() {
           loading={loading}
           size="small"
           scroll={{ x: 1380 }}
-          pagination={{ defaultPageSize: 15 }}
+          pagination={buildStandardPagination(20)}
           onRow={record => ({
             onDoubleClick: () => openProductDetail(record),
             style: { cursor: 'pointer' },
@@ -2773,7 +2781,7 @@ export default function Companies() {
                     dataSource={data}
                     rowKey="id"
                     loading={loading}
-                    pagination={{ defaultPageSize: 15, showSizeChanger: false }}
+                    pagination={buildStandardPagination(20)}
                     locale={{ emptyText: '暂无公司数据' }}
                     renderItem={renderCompanyCard}
                   />
@@ -2786,7 +2794,7 @@ export default function Companies() {
                     loading={loading}
                     size="small"
                     scroll={{ x: 1180 }}
-                    pagination={{ defaultPageSize: 15 }}
+                    pagination={buildStandardPagination(20)}
                     onRow={record => ({
                       onDoubleClick: () => openDetail(record),
                       style: { cursor: 'pointer' },
