@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions } from 'antd';
 import {
-  TeamOutlined, MessageOutlined, BellOutlined, CalendarOutlined,
+  TeamOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   CheckOutlined, PlayCircleOutlined, FlagOutlined, UserOutlined,
   ThunderboltOutlined, ScheduleOutlined, LikeFilled, CheckCircleFilled
@@ -1088,8 +1088,6 @@ export default function Dashboard() {
       gradient: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
       filterKey: TASK_STAT_FILTERS.todayDone,
     },
-    !hideRelationshipPanels && { title: '人脉总数', value: stats?.personCount || 0, icon: <TeamOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-    !hideRelationshipPanels && { title: '本月互动', value: stats?.monthlyInteractions || 0, icon: <MessageOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
   ].filter(Boolean);
 
   const renderSharedToNames = (value) => (
