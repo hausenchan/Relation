@@ -3953,6 +3953,18 @@ function getVisibleDocument(id, user) {
   `).get(user.id, id, ...visibility.params);
 }
 
+function getVisibleDocumentLiveMeta(id, user) {
+  const visibility = buildDocumentVisibilityFilter(user, 'd');
+  return db.prepare(`
+    SELECT d.id, d.updated_by, d.updated_at,
+      updater.display_name as updated_by_name
+    FROM documents d
+    LEFT JOIN users updater ON d.updated_by = updater.id
+    WHERE d.id = ? AND COALESCE(d.is_deleted, 0) = 0
+    ${visibility.sql}
+  `).get(id, ...visibility.params);
+}
+
 function normalizeDocumentShares(shares) {
   if (!Array.isArray(shares)) return [];
   const seen = new Set();
@@ -4386,9 +4398,36 @@ app.get('/api/documents/:id', (req, res) => {
 });
 
 app.get('/api/documents/:id/live', (req, res) => {
+  const clientSince = req.query?.since ? String(req.query.since) : '';
+  if (clientSince) {
+    const meta = getVisibleDocumentLiveMeta(req.params.id, req.user);
+    if (!meta) return res.status(404).json({ error: '文档不存在或无权限访问' });
+    const currentUpdatedAt = String(meta.updated_at || '');
+    if (currentUpdatedAt && clientSince === currentUpdatedAt) {
+      return res.json({
+        id: meta.id,
+        has_changes: false,
+        updated_at: meta.updated_at,
+        updated_by: meta.updated_by,
+        updated_by_name: meta.updated_by_name,
+      });
+    }
+  }
   const row = getVisibleDocument(req.params.id, req.user);
   if (!row) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  res.json(serializeDocument(row, { withAccessSummary: true, user: req.user }));
+  if (clientSince && String(row.updated_at || '') === clientSince) {
+    return res.json({
+      id: row.id,
+      has_changes: false,
+      updated_at: row.updated_at,
+      updated_by: row.updated_by,
+      updated_by_name: row.updated_by_name,
+    });
+  }
+  res.json({
+    ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
+    has_changes: true,
+  });
 });
 
 app.put('/api/documents/:id', canWrite, (req, res) => {

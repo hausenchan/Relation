@@ -292,7 +292,7 @@ export const goalsApi = {
 export const documentsApi = {
   list: (params) => api.get('/documents', { params }).then(r => r.data),
   get: (id) => api.get(`/documents/${id}`).then(r => r.data),
-  live: (id) => api.get(`/documents/${id}/live`).then(r => r.data),
+  live: (id, params) => api.get(`/documents/${id}/live`, { params }).then(r => r.data),
   create: (data) => api.post('/documents', data).then(r => r.data),
   update: (id, data) => api.put(`/documents/${id}`, data).then(r => r.data),
   updateContent: (id, data) => api.put(`/documents/${id}/content`, data).then(r => r.data),

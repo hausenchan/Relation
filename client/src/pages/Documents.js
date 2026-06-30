@@ -305,7 +305,7 @@ const clipboardImageExtByMime = {
 const documentLinkParamKeys = ['doc', 'document_id', 'documentId', 'docId'];
 const documentAutoSaveDelay = 3000;
 const documentAutoSaveInterval = 30000;
-const documentLiveSyncInterval = 2000;
+const documentLiveSyncInterval = 5000;
 const documentClipboardBlocksMime = 'application/x-relation-document-blocks';
 const documentFolderSidebarCollapsedStorageKey = 'documents.folderSidebarCollapsed';
 
@@ -2125,7 +2125,6 @@ export default function Documents() {
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
   const [shareLinkError, setShareLinkError] = useState(null);
   const [autoSaving, setAutoSaving] = useState(false);
-  const [liveSyncing, setLiveSyncing] = useState(false);
   const [remoteUpdateHint, setRemoteUpdateHint] = useState('');
   const [attachmentDragOver, setAttachmentDragOver] = useState(false);
   const [attachmentUploadingBlockIds, setAttachmentUploadingBlockIds] = useState([]);
@@ -2158,6 +2157,7 @@ export default function Documents() {
   const documentSyncTimerRef = useRef(null);
   const liveSyncPendingDocIdsRef = useRef(new Set());
   const dirtyDocumentIdsRef = useRef(new Set());
+  const documentVisibilityStateRef = useRef(typeof document === 'undefined' ? 'visible' : document.visibilityState);
   const autoSaveTimerRef = useRef(null);
   const autoSaveIntervalRef = useRef(null);
   const saveDirtyDocumentTabsRef = useRef(null);
@@ -3009,6 +3009,7 @@ export default function Documents() {
     if (documentSyncTimerRef.current) window.clearInterval(documentSyncTimerRef.current);
     if (!selectedDoc?.id || detailLoading || presentationOpen) return undefined;
     documentSyncTimerRef.current = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       const activeDocId = getDocTabId(selectedDocIdRef.current || selectedDoc?.id);
       if (!activeDocId) return;
       syncDocumentFromRemote(activeDocId).catch(() => {});
@@ -3019,6 +3020,20 @@ export default function Documents() {
         documentSyncTimerRef.current = null;
       }
     };
+  }, [selectedDoc?.id, detailLoading, presentationOpen]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const handleVisibilityChange = () => {
+      const previousState = documentVisibilityStateRef.current;
+      documentVisibilityStateRef.current = document.visibilityState;
+      if (document.visibilityState !== 'visible' || previousState === 'visible') return;
+      const activeDocId = getDocTabId(selectedDocIdRef.current || selectedDoc?.id);
+      if (!activeDocId || detailLoading || presentationOpen) return;
+      syncDocumentFromRemote(activeDocId).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [selectedDoc?.id, detailLoading, presentationOpen]);
 
   useEffect(() => {
@@ -3368,9 +3383,21 @@ export default function Documents() {
     if (!localDoc?.id) return;
 
     liveSyncPendingDocIdsRef.current.add(normalizedId);
-    if (isActiveDoc) setLiveSyncing(true);
     try {
-      const liveData = await documentsApi.live(normalizedId);
+      const latestKnownUpdatedAt = getRemoteDocumentSnapshot(normalizedId)?.updated_at || localDoc.updated_at || '';
+      const liveData = await documentsApi.live(normalizedId, latestKnownUpdatedAt ? { since: latestKnownUpdatedAt } : undefined);
+      if (!liveData?.has_changes) {
+        if (liveData?.updated_at && latestKnownUpdatedAt !== liveData.updated_at) {
+          setRemoteDocumentSnapshot(normalizedId, {
+            title: getRemoteDocumentSnapshot(normalizedId)?.title || localDoc.title || '',
+            blocks: getRemoteDocumentSnapshot(normalizedId)?.blocks || (Array.isArray(localState?.editorBlocks) ? localState.editorBlocks : contentToBlocks(localDoc.content)),
+            updated_at: liveData.updated_at,
+            updated_by: liveData.updated_by,
+            updated_by_name: liveData.updated_by_name,
+          });
+        }
+        return;
+      }
       const remoteSnapshot = buildDocumentSyncSnapshot(liveData.title || '', contentToBlocks(liveData.content), {
         updated_at: liveData.updated_at,
         updated_by: liveData.updated_by,
@@ -3458,9 +3485,6 @@ export default function Documents() {
       }
     } finally {
       liveSyncPendingDocIdsRef.current.delete(normalizedId);
-      if (isActiveDoc) {
-        setLiveSyncing(false);
-      }
     }
   };
 
@@ -9713,8 +9737,6 @@ export default function Documents() {
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {formatDocumentTimestamp(selectedDoc.updated_at)}
                     {autoSaving && ' · 自动保存中'}
-                    {liveSyncing && ' · 同步中'}
-                    {!liveSyncing && remoteUpdateHint ? ` · ${remoteUpdateHint}` : ''}
                   </Text>
                 </Space>
                 <Space wrap size={6}>
