@@ -1334,6 +1334,33 @@ addColumnIfMissing('document_attachments', 'preview_status', "TEXT DEFAULT 'unsu
 addColumnIfMissing('document_attachments', 'replaced_from_id', 'INTEGER DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'updated_at', 'DATETIME DEFAULT NULL');
 
+db.prepare(`
+  DELETE FROM document_folders
+  WHERE name = '03_模板表单'
+    AND COALESCE(parent_id, 0) = 0
+    AND NOT EXISTS (
+      SELECT 1 FROM documents
+      WHERE folder_id = document_folders.id
+        AND COALESCE(is_deleted, 0) = 0
+    )
+`).run();
+
+db.prepare(`
+  UPDATE document_folders
+  SET
+    name = '03_项目资料',
+    sort_order = 30
+  WHERE name = '04_项目资料'
+`).run();
+
+db.prepare(`
+  UPDATE document_folders
+  SET
+    name = '04_复盘案例',
+    sort_order = 40
+  WHERE name = '05_复盘案例'
+`).run();
+
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_document_attachments_block ON document_attachments(document_id, block_id);
 `);
@@ -3463,9 +3490,8 @@ const DOCUMENT_DEPARTMENTS = [
 const DOCUMENT_TEMPLATE_FOLDERS = [
   { name: '01_SOP流程规范', type: 'SOP', order: 10 },
   { name: '02_规则制度', type: 'RULE', order: 20 },
-  { name: '03_模板表单', type: 'TPL', order: 30 },
-  { name: '04_项目资料', type: 'SPEC', order: 40 },
-  { name: '05_复盘案例', type: 'REVIEW', order: 50 },
+  { name: '03_项目资料', type: 'SPEC', order: 30 },
+  { name: '04_复盘案例', type: 'REVIEW', order: 40 },
   { name: '临时文档', type: 'TMP', order: 90 },
 ];
 

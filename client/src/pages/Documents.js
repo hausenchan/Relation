@@ -10129,7 +10129,7 @@ export default function Documents() {
           <Form.Item name="departments" label="部门">
             <Select mode="multiple" options={departmentOptions.filter(item => ['PM', 'PD', 'BD', 'OPS', 'ADS'].includes(item.value))} />
           </Form.Item>
-          <Text type="secondary">会为所选部门创建 SOP、规则制度、模板表单、项目资料、复盘案例和临时文档目录。</Text>
+          <Text type="secondary">会为所选部门创建 SOP、规则制度、项目资料、复盘案例和临时文档目录。</Text>
         </Form>
       </Modal>
     </div>
