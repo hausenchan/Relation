@@ -5990,7 +5990,7 @@ export default function Documents() {
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
               <Space size={8} wrap>
                 <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
-                <Text type="secondary">新建文档默认仅创建人可访问；超级管理员可查看所有文档权限。下方用于追加共享范围。</Text>
+                <Text type="secondary">新建文档默认仅创建人可访问；超级管理员可查看所有文档权限。已被共享且可编辑该文档的成员，也可以继续追加共享范围。</Text>
               </Space>
               {accessUsers.length > 0 && (
                 <div>

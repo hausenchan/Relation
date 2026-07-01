@@ -4654,7 +4654,7 @@ app.get('/api/documents/:id/shares', (req, res) => {
 app.put('/api/documents/:id/shares', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以调整共享范围' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有可编辑该文档的用户才可以调整共享范围' });
   const shares = replaceDocumentShares(doc.id, req.body.shares || [], req.user.id);
   res.json({ success: true, shares, access_summary: getDocumentAccessSummary(doc) });
 });
