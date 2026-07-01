@@ -6078,7 +6078,7 @@ export default function Documents() {
             onChange={value => setShareDraft(prev => ({ ...prev, user_ids: value }))}
             options={users.map(item => ({
               value: item.id,
-              label: `${item.display_name || item.username}${item.department ? ` / ${orgDepartmentLabel[item.department] || item.department}` : ''}`,
+              label: item.display_name || item.username,
             }))}
             style={{ width: '100%', marginTop: 8 }}
           />
