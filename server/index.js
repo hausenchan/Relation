@@ -4618,7 +4618,7 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
 app.put('/api/documents/:id/page-options', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以编辑文档' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有可编辑该文档的用户才可以调整页面设置' });
   db.prepare(`
     UPDATE documents SET
       toc_enabled = ?, width_mode = ?, custom_width = ?, small_font_enabled = ?,
