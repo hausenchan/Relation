@@ -266,6 +266,11 @@ const blockActionSelectedBorder = '#f2c9d0';
 const listBlockSelectedBackground = '#f8e6e8';
 const inlineToolbarWidth = 420;
 
+function getListGuideLineOffset(blockType, markerWidth = listMarkerBoxWidth) {
+  if (blockType === 'numbered') return markerWidth - 6;
+  return markerWidth / 2;
+}
+
 const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, item.label]));
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
@@ -7408,6 +7413,7 @@ export default function Documents() {
     const blockListFontSize = block.type === 'fold-list' ? foldListFontSize : listFontSize;
     const markerLineHeight = blockListFontSize * listLineHeight;
     const listGuideCenterY = markerLineHeight / 2 + 1;
+    const listGuideLineOffset = getListGuideLineOffset(block.type, listMarkerBoxWidth);
     const markerContainerStyle = {
       width: listMarkerBoxWidth,
       minWidth: listMarkerBoxWidth,
@@ -7465,7 +7471,12 @@ export default function Documents() {
 
     return (
       <div style={{ position: 'relative', paddingLeft: indent * listIndentWidth }}>
-        {renderListGuides(block, { top: -8, bottom: -8, centerY: listGuideCenterY })}
+        {renderListGuides(block, {
+          top: -8,
+          bottom: -8,
+          centerY: listGuideCenterY,
+          lineOffset: listGuideLineOffset,
+        })}
         <div style={{ display: 'flex', gap: block.type === 'fold-list' ? 7 : listMarkerTextGap, alignItems: 'flex-start' }}>
           {markerNode}
           <InlineRichTextEditor
@@ -8689,6 +8700,7 @@ export default function Documents() {
       const presentationListFontSize = presentationFontSize;
       const presentationLineHeight = presentationListFontSize * listLineHeight;
       const presentationGuideCenterY = presentationLineHeight / 2 + 1;
+      const presentationGuideLineOffset = getListGuideLineOffset(block.type, presentationMarkerWidth);
       const marker = block.type === 'bullet'
         ? getBulletListMarker(indent)
         : block.type === 'numbered'
@@ -8723,7 +8735,7 @@ export default function Documents() {
             top: -8,
             bottom: -8,
             centerY: presentationGuideCenterY,
-            lineOffset: presentationMarkerWidth / 2,
+            lineOffset: presentationGuideLineOffset,
             indentWidth: presentationIndentWidth,
           })}
           {markerNode}
