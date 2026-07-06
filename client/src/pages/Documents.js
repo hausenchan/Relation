@@ -313,6 +313,12 @@ const documentAutoSaveInterval = 30000;
 const documentLiveSyncInterval = 5000;
 const documentClipboardBlocksMime = 'application/x-relation-document-blocks';
 const documentFolderSidebarCollapsedStorageKey = 'documents.folderSidebarCollapsed';
+const tableFillColorOptions = ['#ffffff', '#f8fafc', '#fee2e2', '#ffedd5', '#fef3c7', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
+const tableTextColorOptions = ['#111827', '#475569', '#b91c1c', '#c2410c', '#a16207', '#15803d', '#1d4ed8', '#4338ca', '#7e22ce'];
+const pasteHtmlBlockSelector = [
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'p', 'li', 'table', 'div',
+].join(',');
 
 function getDocumentIdFromSearch(searchParams) {
   for (const key of documentLinkParamKeys) {
@@ -638,6 +644,42 @@ function normalizeTableMergedCells(mergedCells, rowCount, columnCount) {
   return normalized;
 }
 
+function normalizeCssColor(value) {
+  const color = String(value || '').trim();
+  if (!color || color === 'transparent' || color === 'inherit' || color === 'initial') return '';
+  if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(color)) return color;
+  if (/^[a-z]+$/i.test(color)) return color;
+  return '';
+}
+
+function normalizeTableCellStyle(style = {}) {
+  const backgroundColor = normalizeCssColor(style.backgroundColor || style.background || style.fill);
+  const color = normalizeCssColor(style.color || style.textColor);
+  return {
+    ...(backgroundColor ? { backgroundColor } : {}),
+    ...(color ? { color } : {}),
+  };
+}
+
+function isEmptyTableCellStyle(style = {}) {
+  return !style.backgroundColor && !style.color;
+}
+
+function normalizeTableCellStyles(cellStyles, rowCount, columnCount) {
+  if (!cellStyles || typeof cellStyles !== 'object' || rowCount <= 0 || columnCount <= 0) return {};
+  return Object.entries(cellStyles).reduce((acc, [key, style]) => {
+    const [rowText, columnText] = String(key).split(':');
+    const rowIndex = Number(rowText);
+    const columnIndex = Number(columnText);
+    if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return acc;
+    if (rowIndex < 0 || rowIndex >= rowCount || columnIndex < 0 || columnIndex >= columnCount) return acc;
+    const normalized = normalizeTableCellStyle(style);
+    if (!isEmptyTableCellStyle(normalized)) acc[buildTableMergeKey(rowIndex, columnIndex)] = normalized;
+    return acc;
+  }, {});
+}
+
 function buildTableMergedLookup(mergedCells, rowCount, columnCount) {
   const normalized = normalizeTableMergedCells(mergedCells, rowCount, columnCount);
   const anchorMap = new Map();
@@ -899,6 +941,182 @@ function sanitizeInlineHtml(value) {
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'img', 'video', 'audio'],
     FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus', 'src', 'srcset'],
   });
+}
+
+function normalizePastedInlineHtml(value) {
+  const html = String(value || '')
+    .replace(/<\/(p|div|h[1-6])>\s*<(p|div|h[1-6])[^>]*>/gi, '<br>')
+    .replace(/<\/?(p|div|h[1-6])[^>]*>/gi, '')
+    .replace(/<\/li>\s*<li[^>]*>/gi, '<br>')
+    .replace(/<\/?li[^>]*>/gi, '');
+  return sanitizeInlineHtml(html);
+}
+
+function getElementStyleText(element) {
+  return String(element?.getAttribute?.('style') || '');
+}
+
+function getStyleDeclarationColor(element, propertyNames = []) {
+  if (!element) return '';
+  for (const propertyName of propertyNames) {
+    const directValue = element.style?.[propertyName];
+    const normalizedDirect = normalizeCssColor(directValue);
+    if (normalizedDirect) return normalizedDirect;
+  }
+  const styleText = getElementStyleText(element);
+  for (const propertyName of propertyNames) {
+    const cssName = propertyName.replace(/[A-Z]/g, match => `-${match.toLowerCase()}`);
+    const match = styleText.match(new RegExp(`${cssName}\\s*:\\s*([^;]+)`, 'i'));
+    const normalized = normalizeCssColor(match?.[1]);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function getPastedTableCellStyle(cell) {
+  const backgroundColor = normalizeCssColor(cell?.getAttribute?.('bgcolor'))
+    || getStyleDeclarationColor(cell, ['backgroundColor', 'background'])
+    || getStyleDeclarationColor(cell?.parentElement, ['backgroundColor', 'background']);
+  const color = getStyleDeclarationColor(cell, ['color'])
+    || getStyleDeclarationColor(cell?.parentElement, ['color']);
+  return normalizeTableCellStyle({ backgroundColor, color });
+}
+
+function removeNestedBlocksFromClone(element, selector) {
+  const clone = element.cloneNode(true);
+  clone.querySelectorAll(selector).forEach(node => node.remove());
+  return clone;
+}
+
+function getPastedBlockInlineHtml(element) {
+  const clone = removeNestedBlocksFromClone(element, 'table, ul, ol');
+  return normalizePastedInlineHtml(clone.innerHTML || clone.textContent || '');
+}
+
+function inferPastedBlockType(element) {
+  const tag = String(element?.tagName || '').toLowerCase();
+  if (/^h[1-6]$/.test(tag)) return `heading${Math.min(4, Math.max(1, Number(tag.slice(1))))}`;
+  if (tag === 'li') return element.closest('ol') ? 'numbered' : 'bullet';
+
+  const className = String(element?.getAttribute?.('class') || '');
+  const classHeadingMatch = className.match(/(?:heading|msoheading|标题)\s*([1-4])/i);
+  if (classHeadingMatch) return `heading${Number(classHeadingMatch[1])}`;
+
+  const styleText = getElementStyleText(element);
+  const outlineMatch = styleText.match(/mso-outline-level\s*:\s*([1-4])/i);
+  if (outlineMatch) return `heading${Number(outlineMatch[1])}`;
+
+  const fontSizeMatch = styleText.match(/font-size\s*:\s*([0-9.]+)\s*(pt|px)/i);
+  const fontSizeValue = Number(fontSizeMatch?.[1]);
+  const fontSizePx = fontSizeMatch?.[2]?.toLowerCase() === 'pt' ? fontSizeValue * 1.333 : fontSizeValue;
+  const boldish = /font-weight\s*:\s*(bold|[6-9]00)/i.test(styleText)
+    || /<(strong|b)\b/i.test(element?.innerHTML || '');
+  if (boldish && Number.isFinite(fontSizePx)) {
+    if (fontSizePx >= 26) return 'heading1';
+    if (fontSizePx >= 21) return 'heading2';
+    if (fontSizePx >= 17) return 'heading3';
+  }
+  return 'paragraph';
+}
+
+function parsePastedTableElement(table) {
+  if (!table) return null;
+  const rowNodes = Array.from(table.querySelectorAll('tr'));
+  const matrix = [];
+  const occupied = new Set();
+  const mergedCells = [];
+  const cellStyles = {};
+
+  rowNodes.forEach((rowNode, rowIndex) => {
+    matrix[rowIndex] = matrix[rowIndex] || [];
+    let columnIndex = 0;
+    Array.from(rowNode.querySelectorAll('th,td')).forEach(cell => {
+      while (occupied.has(buildTableMergeKey(rowIndex, columnIndex))) columnIndex += 1;
+      const rowSpan = Math.max(1, Number(cell.getAttribute('rowspan')) || 1);
+      const colSpan = Math.max(1, Number(cell.getAttribute('colspan')) || 1);
+      const rawContent = normalizePastedInlineHtml(cell.innerHTML || cell.textContent || '');
+      const cellContent = cell.tagName?.toLowerCase() === 'th' && rawContent && !/^<strong\b/i.test(rawContent)
+        ? `<strong>${rawContent}</strong>`
+        : rawContent;
+      matrix[rowIndex][columnIndex] = cellContent;
+
+      const style = getPastedTableCellStyle(cell);
+      if (!isEmptyTableCellStyle(style)) {
+        cellStyles[buildTableMergeKey(rowIndex, columnIndex)] = style;
+      }
+      if (rowSpan > 1 || colSpan > 1) {
+        mergedCells.push({ rowIndex, columnIndex, rowSpan, colSpan });
+      }
+      for (let r = rowIndex; r < rowIndex + rowSpan; r += 1) {
+        matrix[r] = matrix[r] || [];
+        for (let c = columnIndex; c < columnIndex + colSpan; c += 1) {
+          occupied.add(buildTableMergeKey(r, c));
+          if (r !== rowIndex || c !== columnIndex) matrix[r][c] = matrix[r][c] ?? '';
+        }
+      }
+      columnIndex += colSpan;
+    });
+  });
+
+  const visibleRows = matrix.filter(row => Array.isArray(row) && row.length);
+  if (!visibleRows.length) return null;
+  const columnCount = Math.max(...visibleRows.map(row => row.length), 1);
+  const rows = visibleRows.map(row => Array.from({ length: columnCount }, (_, index) => row[index] || ''));
+  const columns = Array.from({ length: columnCount }, (_, index) => `字段 ${index + 1}`);
+  return {
+    type: 'table-simple',
+    content: '',
+    meta: {
+      ...getDefaultBlockMeta('table-simple'),
+      columns,
+      rows,
+      mergedCells: normalizeTableMergedCells(mergedCells, rows.length, columnCount),
+      cellStyles: normalizeTableCellStyles(cellStyles, rows.length, columnCount),
+    },
+  };
+}
+
+function parseClipboardHtmlDocumentBlocks(html) {
+  if (!html || typeof document === 'undefined') return [];
+  const container = document.createElement('div');
+  container.innerHTML = DOMPurify.sanitize(String(html), {
+    ALLOWED_TAGS: [
+      'html', 'body', 'section', 'article', 'div', 'p',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      'ul', 'ol', 'li',
+      'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
+      ...inlineHtmlAllowedTags,
+    ],
+    ALLOWED_ATTR: ['style', 'href', 'target', 'rel', 'colspan', 'rowspan', 'bgcolor', 'class'],
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'img', 'video', 'audio'],
+    FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus', 'src', 'srcset'],
+  });
+
+  const blocks = [];
+  Array.from(container.querySelectorAll(pasteHtmlBlockSelector)).forEach(element => {
+    const tag = String(element.tagName || '').toLowerCase();
+    if (tag !== 'table' && element.closest('table')) return;
+    if (tag === 'div' && element.querySelector(pasteHtmlBlockSelector)) return;
+    if (tag === 'li' && element.parentElement?.closest('li')) return;
+
+    if (tag === 'table') {
+      const tableBlock = parsePastedTableElement(element);
+      if (tableBlock) blocks.push(tableBlock);
+      return;
+    }
+
+    const content = getPastedBlockInlineHtml(element);
+    if (!inlineHtmlToPlain(content).trim()) return;
+    blocks.push({
+      type: inferPastedBlockType(element),
+      content,
+      meta: getDefaultBlockMeta(inferPastedBlockType(element)),
+    });
+  });
+
+  if (blocks.length) return blocks;
+  const text = inlineHtmlToPlain(container.innerHTML || '');
+  return text.trim() ? plainTextToBlocks(text) : [];
 }
 
 function inlineHtmlToPlain(value) {
@@ -1313,8 +1531,8 @@ function serializeVisibleTableRows(visibleRows = [], fallbackColumns = []) {
   );
   const normalizedVisibleRows = sourceRows.map(row => Array.from({ length: columnCount }, (_, index) => row?.[index] || ''));
   return {
-    columns: normalizedVisibleRows[0] || Array.from({ length: columnCount }, () => ''),
-    rows: normalizedVisibleRows.slice(1),
+    columns: Array.from({ length: columnCount }, (_, index) => baseColumns[index] || `字段 ${index + 1}`),
+    rows: normalizedVisibleRows,
   };
 }
 
@@ -1328,13 +1546,14 @@ function normalizeTableBlockData(block) {
     1
   );
   const normalizedColumns = Array.from({ length: columnCount }, (_, index) => storedColumns[index] || '');
-  const normalizedRows = [normalizedColumns, ...storedRows].map(row => (
+  const normalizedRows = (storedRows.length ? storedRows : [normalizedColumns.map(() => '')]).map(row => (
     Array.from({ length: columnCount }, (_, index) => row?.[index] || '')
   ));
   return {
     columns: normalizedColumns,
     rows: normalizedRows,
     mergedCells: normalizeTableMergedCells(meta.mergedCells, normalizedRows.length, columnCount),
+    cellStyles: normalizeTableCellStyles(meta.cellStyles, normalizedRows.length, columnCount),
   };
 }
 
@@ -1422,13 +1641,23 @@ function buildTableClipboardPayload(block, range = null) {
 function blockToClipboardPayload(block) {
   if (!block) return { text: '', html: '' };
   if (isTableLikeBlock(block)) return buildTableClipboardPayload(block);
-  if (block.type === 'divider') return { text: '---', html: '<hr>' };
+  const blocks = [{
+    type: block.type || 'paragraph',
+    content: block.type === 'divider' ? '' : (block.content || ''),
+    checked: Boolean(block.checked),
+    highlight: block.highlight || '',
+    meta: cloneMeta(block.meta),
+  }];
+  if (block.type === 'divider') return { text: '---', html: '<hr>', blocks };
   const text = blocksToText([block]);
   const content = sanitizeInlineHtml(block.content || '');
   const label = blockTypeMap[block.type]?.label || '';
+  const headingLevel = String(block.type || '').match(/^heading([1-4])$/)?.[1];
+  const htmlTag = headingLevel ? `h${headingLevel}` : 'p';
   return {
     text,
-    html: content ? `<p>${content}</p>` : (text ? `<p>${escapeHtml(text)}</p>` : `<p>${escapeHtml(label)}</p>`),
+    html: content ? `<${htmlTag}>${content}</${htmlTag}>` : (text ? `<${htmlTag}>${escapeHtml(text)}</${htmlTag}>` : `<p>${escapeHtml(label)}</p>`),
+    blocks,
   };
 }
 
@@ -4214,7 +4443,11 @@ export default function Documents() {
     setHoveredBlockId(null);
     window.setTimeout(() => {
       document.getElementById(`doc-block-${nextBlocks[0].id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      if (nextBlocks.length === 1 && !isTableLikeBlock(nextBlocks[0])) focusBlock(nextBlocks[0].id);
+      if (nextBlocks.length === 1 && isTableLikeBlock(nextBlocks[0])) {
+        document.getElementById(`doc-table-shell-${nextBlocks[0].id}`)?.focus?.();
+      } else if (nextBlocks.length === 1) {
+        focusBlock(nextBlocks[0].id);
+      }
     }, 0);
     return true;
   };
@@ -4227,8 +4460,8 @@ export default function Documents() {
       || editorBlocks[editorBlocks.length - 1]?.id
       || null;
     const documentBlocks = parseClipboardDocumentBlocks(clipboardData);
-    const htmlTableBlocks = documentBlocks.length ? [] : parseClipboardHtmlTableBlocks(clipboardData?.getData?.('text/html'));
-    const pastedBlocks = documentBlocks.length ? documentBlocks : htmlTableBlocks;
+    const htmlBlocks = documentBlocks.length ? [] : parseClipboardHtmlDocumentBlocks(clipboardData?.getData?.('text/html'));
+    const pastedBlocks = documentBlocks.length ? documentBlocks : htmlBlocks;
     if (pastedBlocks.length) {
       event.preventDefault();
       event.stopPropagation();
@@ -4236,7 +4469,7 @@ export default function Documents() {
         message.warning('你没有编辑该文档的权限');
         return;
       }
-      if (insertBlocksFromClipboard(pastedBlocks, targetBlockId)) message.success(pastedBlocks.length > 1 ? `已粘贴 ${pastedBlocks.length} 个块` : '表格已粘贴');
+      if (insertBlocksFromClipboard(pastedBlocks, targetBlockId)) message.success(pastedBlocks.length > 1 ? `已粘贴 ${pastedBlocks.length} 个块` : '已粘贴');
       return;
     }
 
@@ -6734,6 +6967,7 @@ export default function Documents() {
       columnWidths: meta.columnWidths,
       horizontalCenter: meta.horizontalCenter,
       verticalCenter: meta.verticalCenter,
+      cellStyles: meta.cellStyles,
     }));
 
     setEditorBlocks(prev => prev.map(item => (
@@ -7595,16 +7829,19 @@ export default function Documents() {
 
   const renderTableBlock = (block) => {
     const meta = getBlockMeta(block);
-    const columns = Array.isArray(meta.columns) && meta.columns.length
-      ? meta.columns
-      : ((Array.isArray(meta.rows) && meta.rows[0]?.length)
-        ? meta.rows[0].map((_, index) => `字段 ${index + 1}`)
-        : ['名称', '说明']);
-    const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [columns.map(() => '')];
-    const normalizedRows = rows.map(row => columns.map((_, index) => row?.[index] || ''));
+    const storedColumns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
+    const storedRows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [storedColumns.map(() => '')];
+    const columnCount = Math.max(
+      storedColumns.length,
+      ...storedRows.map(row => (Array.isArray(row) ? row.length : 0)),
+      1
+    );
+    const columns = Array.from({ length: columnCount }, (_, index) => storedColumns[index] || `字段 ${index + 1}`);
+    const normalizedRows = storedRows.map(row => Array.from({ length: columnCount }, (_, index) => row?.[index] || ''));
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
     const mergedLookup = buildTableMergedLookup(meta.mergedCells, normalizedRows.length, columns.length);
     const mergedCells = mergedLookup.normalized;
+    const cellStyles = normalizeTableCellStyles(meta.cellStyles, normalizedRows.length, columns.length);
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
     const selectedTableCellIsBody = !selectedCell?.type || selectedCell.type === 'body';
     const selectedColumnIndex = Number.isInteger(selectedCell?.columnIndex) ? selectedCell.columnIndex : -1;
@@ -7634,6 +7871,14 @@ export default function Documents() {
         || selectedRangeBounds.startColumnIndex !== selectedRangeBounds.endColumnIndex
       )
     );
+    const activeStyleBounds = wholeTableSelected
+      ? {
+        startRowIndex: 0,
+        endRowIndex: Math.max(0, normalizedRows.length - 1),
+        startColumnIndex: 0,
+        endColumnIndex: Math.max(0, columns.length - 1),
+      }
+      : (hasSelectedRange ? selectedRangeBounds : null);
     const isCellInSelectedRange = (rowIndex, columnIndex) => (
       hasSelectedRange
       && rowIndex >= selectedRangeBounds.startRowIndex
@@ -7660,15 +7905,18 @@ export default function Documents() {
     );
     const persistTableMeta = (patch) => {
       const nextVisibleRows = Array.isArray(patch?.rows) ? patch.rows : normalizedRows;
+      const nextColumns = Array.isArray(patch?.columns) ? patch.columns : columns;
       const nextColumnWidths = patch?.columnWidths ?? columnWidths;
       const nextHorizontalCenter = patch?.horizontalCenter ?? horizontalCenter;
       const nextVerticalCenter = patch?.verticalCenter ?? verticalCenter;
       const nextMergedCells = patch?.mergedCells ?? mergedCells;
-      const stored = buildStoredTableMetaFromVisibleRows(nextVisibleRows, columns, {
+      const nextCellStyles = patch?.cellStyles ?? cellStyles;
+      const stored = buildStoredTableMetaFromVisibleRows(nextVisibleRows, nextColumns, {
         columnWidths: nextColumnWidths,
         horizontalCenter: nextHorizontalCenter,
         verticalCenter: nextVerticalCenter,
         mergedCells: nextMergedCells,
+        cellStyles: normalizeTableCellStyles(nextCellStyles, nextVisibleRows.length, nextColumns.length),
       });
       updateBlockMeta(block.id, stored);
     };
@@ -7687,6 +7935,50 @@ export default function Documents() {
       ));
       persistTableMeta({ rows: nextRows });
     };
+    const mapCellStyles = (mapper) => {
+      const nextStyles = {};
+      Object.entries(cellStyles).forEach(([key, style]) => {
+        const [rowText, columnText] = key.split(':');
+        const mapped = mapper(Number(rowText), Number(columnText), style);
+        if (!mapped) return;
+        const normalized = normalizeTableCellStyle(mapped.style || style);
+        if (isEmptyTableCellStyle(normalized)) return;
+        nextStyles[buildTableMergeKey(mapped.rowIndex, mapped.columnIndex)] = normalized;
+      });
+      return nextStyles;
+    };
+    const shiftCellStylesForInsertedRow = (insertIndex) => mapCellStyles((rowIndex, columnIndex, style) => ({
+      rowIndex: rowIndex >= insertIndex ? rowIndex + 1 : rowIndex,
+      columnIndex,
+      style,
+    }));
+    const shiftCellStylesForInsertedColumn = (insertIndex) => mapCellStyles((rowIndex, columnIndex, style) => ({
+      rowIndex,
+      columnIndex: columnIndex >= insertIndex ? columnIndex + 1 : columnIndex,
+      style,
+    }));
+    const shiftCellStylesForDeletedRows = (startRowIndex, endRowIndex) => {
+      const deleteCount = endRowIndex - startRowIndex + 1;
+      return mapCellStyles((rowIndex, columnIndex, style) => {
+        if (rowIndex >= startRowIndex && rowIndex <= endRowIndex) return null;
+        return {
+          rowIndex: rowIndex > endRowIndex ? rowIndex - deleteCount : rowIndex,
+          columnIndex,
+          style,
+        };
+      });
+    };
+    const shiftCellStylesForDeletedColumns = (startColumnIndex, endColumnIndex) => {
+      const deleteCount = endColumnIndex - startColumnIndex + 1;
+      return mapCellStyles((rowIndex, columnIndex, style) => {
+        if (columnIndex >= startColumnIndex && columnIndex <= endColumnIndex) return null;
+        return {
+          rowIndex,
+          columnIndex: columnIndex > endColumnIndex ? columnIndex - deleteCount : columnIndex,
+          style,
+        };
+      });
+    };
     const insertRow = (targetIndex = normalizedRows.length - 1, position = 'after') => {
       const safeIndex = Math.max(0, Math.min(normalizedRows.length - 1, Number(targetIndex) || 0));
       const insertIndex = position === 'before' ? safeIndex : safeIndex + 1;
@@ -7701,7 +7993,7 @@ export default function Documents() {
         }
         return merge;
       }), nextRows.length, columns.length);
-      persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells });
+      persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells, cellStyles: shiftCellStylesForInsertedRow(insertIndex) });
       setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: insertIndex, columnIndex: Math.max(0, selectedColumnIndex) });
       setSelectedTableRange(null);
     };
@@ -7726,7 +8018,13 @@ export default function Documents() {
         }
         return merge;
       }), nextRows.length, nextColumns.length);
-      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths, mergedCells: nextMergedCells });
+      persistTableMeta({
+        columns: nextColumns,
+        rows: nextRows,
+        columnWidths: nextWidths,
+        mergedCells: nextMergedCells,
+        cellStyles: shiftCellStylesForInsertedColumn(insertIndex),
+      });
       setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: Math.max(0, selectedRowIndex), columnIndex: insertIndex });
       setSelectedTableRange(null);
     };
@@ -7769,7 +8067,11 @@ export default function Documents() {
           : merge.rowIndex;
         return [{ ...merge, rowIndex: nextRowIndex, rowSpan: nextRowSpan }];
       }), nextRows.length, columns.length);
-      persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells });
+      persistTableMeta({
+        rows: nextRows,
+        mergedCells: nextMergedCells,
+        cellStyles: shiftCellStylesForDeletedRows(startRowIndex, endRowIndex),
+      });
       setSelectedTableCell({
         blockId: block.id,
         type: 'body',
@@ -7810,7 +8112,13 @@ export default function Documents() {
           : merge.columnIndex;
         return [{ ...merge, columnIndex: nextColumnIndex, colSpan: nextColSpan }];
       }), nextRows.length, nextColumns.length);
-      persistTableMeta({ columns: nextColumns, rows: nextRows, columnWidths: nextWidths, mergedCells: nextMergedCells });
+      persistTableMeta({
+        columns: nextColumns,
+        rows: nextRows,
+        columnWidths: nextWidths,
+        mergedCells: nextMergedCells,
+        cellStyles: shiftCellStylesForDeletedColumns(startColumnIndex, endColumnIndex),
+      });
       setSelectedTableCell({
         blockId: block.id,
         type: 'body',
@@ -7862,14 +8170,49 @@ export default function Documents() {
       setAreaBlockSelection([block.id]);
       setSelectedTableCell(null);
       setSelectedTableRange(null);
+      window.setTimeout(() => {
+        document.getElementById(`doc-table-shell-${block.id}`)?.focus?.();
+      }, 0);
     };
     const selectTableCell = (rowIndex, columnIndex) => {
       const anchor = getMergedCover(rowIndex, columnIndex);
       const nextRowIndex = anchor?.rowIndex ?? rowIndex;
       const nextColumnIndex = anchor?.columnIndex ?? columnIndex;
       setSelectedBlockId(block.id);
+      clearAreaBlockSelection();
       setSelectedTableCell({ blockId: block.id, rowIndex: nextRowIndex, columnIndex: nextColumnIndex });
       setSelectedTableRange(null);
+    };
+    const applyCellStyleToBounds = (patch) => {
+      if (!activeStyleBounds) return;
+      const nextStyles = { ...cellStyles };
+      for (let rowIndex = activeStyleBounds.startRowIndex; rowIndex <= activeStyleBounds.endRowIndex; rowIndex += 1) {
+        for (let columnIndex = activeStyleBounds.startColumnIndex; columnIndex <= activeStyleBounds.endColumnIndex; columnIndex += 1) {
+          const mergedCell = getMergedCover(rowIndex, columnIndex);
+          if (mergedCell && !mergedCell.isAnchor) continue;
+          const key = buildTableMergeKey(rowIndex, columnIndex);
+          const nextStyle = normalizeTableCellStyle({
+            ...(nextStyles[key] || {}),
+            ...patch,
+          });
+          if (isEmptyTableCellStyle(nextStyle)) {
+            delete nextStyles[key];
+          } else {
+            nextStyles[key] = nextStyle;
+          }
+        }
+      }
+      persistTableMeta({ cellStyles: nextStyles });
+    };
+    const clearCellStyleFromBounds = () => {
+      if (!activeStyleBounds) return;
+      const nextStyles = { ...cellStyles };
+      for (let rowIndex = activeStyleBounds.startRowIndex; rowIndex <= activeStyleBounds.endRowIndex; rowIndex += 1) {
+        for (let columnIndex = activeStyleBounds.startColumnIndex; columnIndex <= activeStyleBounds.endColumnIndex; columnIndex += 1) {
+          delete nextStyles[buildTableMergeKey(rowIndex, columnIndex)];
+        }
+      }
+      persistTableMeta({ cellStyles: nextStyles });
     };
     const hideTableInlineToolbarOnBlur = () => {
       inlineToolbarHideTimerRef.current = window.setTimeout(() => {
@@ -7894,6 +8237,7 @@ export default function Documents() {
     const beginTableCellSelection = (event, rowIndex, columnIndex) => {
       if (event.button !== 0) return;
       setSelectedBlockId(block.id);
+      clearAreaBlockSelection();
       setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
       setSelectedTableRange(null);
       const selectionState = {
@@ -8043,7 +8387,50 @@ export default function Documents() {
         <span style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', display: 'block' }} />
       </span>
     );
-    const tableMenu = hasSelectedRange ? (
+    const renderColorSwatch = (color, onClick, title) => (
+      <button
+        key={`${title}-${color}`}
+        type="button"
+        aria-label={title}
+        title={title}
+        onMouseDown={event => event.preventDefault()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClick(color);
+        }}
+        style={{
+          width: 22,
+          height: 22,
+          borderRadius: 4,
+          border: color === '#ffffff' ? '1px solid #d1d5db' : '1px solid rgba(15, 23, 42, 0.14)',
+          background: color,
+          cursor: 'pointer',
+        }}
+      />
+    );
+    const renderTableColorControls = () => (
+      <div style={{ padding: '8px 12px 10px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+          {renderTableMenuIcon('▣')}
+          <span style={{ fontSize: 15, color: '#242424' }}>填充颜色</span>
+        </div>
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', paddingLeft: 40 }}>
+          {tableFillColorOptions.map(color => renderColorSwatch(color, nextColor => applyCellStyleToBounds({ backgroundColor: nextColor }), `填充 ${color}`))}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0 8px' }}>
+          {renderTableMenuIcon('A')}
+          <span style={{ fontSize: 15, color: '#242424' }}>文字颜色</span>
+        </div>
+        <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', paddingLeft: 40 }}>
+          {tableTextColorOptions.map(color => renderColorSwatch(color, nextColor => applyCellStyleToBounds({ color: nextColor }), `文字 ${color}`))}
+        </div>
+        <Button size="small" type="text" onClick={clearCellStyleFromBounds} style={{ marginTop: 8, marginLeft: 36 }}>
+          清除颜色
+        </Button>
+      </div>
+    );
+    const tableMenuVisible = Boolean(activeStyleBounds);
+    const tableMenu = tableMenuVisible ? (
       <div
         data-document-table-menu="true"
         onMouseDown={event => event.preventDefault()}
@@ -8076,9 +8463,10 @@ export default function Documents() {
             trailing: renderTableSwitch(verticalCenter),
             onClick: () => persistTableMeta({ verticalCenter: !verticalCenter }),
           })}
-          {renderTableMenuItem({ icon: '🖌', label: '颜色', trailing: <span style={{ color: '#9ca3af', fontSize: 26 }}>›</span>, onClick: () => message.info('颜色设置即将支持') })}
           {renderTableMenuItem({ icon: '|||', label: '均分选中列宽', onClick: distributeSelectedColumnWidths })}
         </div>
+        <Divider style={{ margin: 0 }} />
+        {renderTableColorControls()}
         <Divider style={{ margin: 0 }} />
         <div style={{ padding: '8px 10px' }}>
           {renderTableMenuItem({ icon: '▭', label: '在上方插入一行', onClick: () => insertRow(menuRowIndex, 'before') })}
@@ -8095,9 +8483,42 @@ export default function Documents() {
         </div>
       </div>
     ) : null;
+    const insertParagraphAfterTable = () => {
+      setSelectedTableCell(null);
+      setSelectedTableRange(null);
+      clearAreaBlockSelection();
+      addBlockAfter(block.id, 'paragraph', { content: '' });
+    };
+    const handleTableShellKeyDown = (event) => {
+      if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.target?.closest?.('[contenteditable="true"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      insertParagraphAfterTable();
+    };
+    const handleTableCellKeyDown = (event, rowIndex, columnIndex) => {
+      if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const target = event.currentTarget;
+      try {
+        document.execCommand('insertLineBreak');
+      } catch {
+        document.execCommand('insertHTML', false, '<br>');
+      }
+      window.setTimeout(() => {
+        updateCell(rowIndex, columnIndex, sanitizeInlineHtml(target.innerHTML));
+      }, 0);
+    };
     return (
       <div style={{ width: '100%' }}>
-        <div data-document-table-shell="true" style={{ maxWidth: '100%', position: 'relative', paddingBottom: hasSelectedRange ? 8 : 0, overflow: 'visible' }}>
+        <div
+          id={`doc-table-shell-${block.id}`}
+          data-document-table-shell="true"
+          tabIndex={0}
+          onKeyDown={handleTableShellKeyDown}
+          style={{ maxWidth: '100%', position: 'relative', paddingBottom: tableMenuVisible ? 8 : 0, overflow: 'visible', outline: 'none' }}
+        >
           {tableMenu}
           <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
             <table
@@ -8123,6 +8544,8 @@ export default function Documents() {
                       (() => {
                       const selectedInRange = isCellInSelectedRange(rowIndex, columnIndex);
                       const activeCell = selectedTableCellIsBody && selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex;
+                      const cellStyle = cellStyles[buildTableMergeKey(rowIndex, columnIndex)] || {};
+                      const cellBackground = cellStyle.backgroundColor || '#fff';
                       return (
                     <td
                       key={`cell-${rowIndex}-${columnIndex}`}
@@ -8139,7 +8562,8 @@ export default function Documents() {
                         padding: 4,
                         verticalAlign: verticalCenter ? 'middle' : 'top',
                         textAlign: horizontalCenter ? 'center' : 'left',
-                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : (activeCell ? '#eef2ff' : '#fff'),
+                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : (activeCell ? '#eef2ff' : cellBackground),
+                        color: cellStyle.color || '#111827',
                         boxShadow: wholeTableSelected ? 'none' : (activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
                       }}
                     >
@@ -8151,6 +8575,7 @@ export default function Documents() {
                         onChange={value => updateCell(rowIndex, columnIndex, value)}
                         onMouseUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
                         onKeyUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
+                        onKeyDown={event => handleTableCellKeyDown(event, rowIndex, columnIndex)}
                         onBlur={hideTableInlineToolbarOnBlur}
                         style={{
                           minHeight: Math.max(28, rowSpan * 42 - 12),
@@ -8158,6 +8583,7 @@ export default function Documents() {
                           lineHeight: 1.55,
                           fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
                           background: 'transparent',
+                          color: cellStyle.color || '#111827',
                           textAlign: horizontalCenter ? 'center' : 'left',
                         }}
                       />
