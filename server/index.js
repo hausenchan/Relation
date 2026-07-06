@@ -10,12 +10,20 @@ const multer = require('multer');
 const { encryptRow, decryptRow, decryptRows } = require('./lib/cryptoDao');
 const { decrypt } = require('./lib/crypto');
 const NetworkCaptureManager = require('./lib/networkCapture');
+const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const {
   ensureAiSuggestionTables,
   getCurrentAiSuggestionFeed,
   syncBundledAiSuggestionSeeds,
   syncDistillationAiSuggestionFeed,
 } = require('./lib/aiSuggestionStore');
+const {
+  estimateTokenCount,
+  generateAiTrainingSkillResponse,
+  inferSectionTitles,
+  scoreAiTrainingEvalOutput,
+  selectRelevantSuggestions,
+} = require('./lib/aiTrainingRuntime');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -1945,7 +1953,16 @@ addColumnIfMissing('document_edit_records', 'content_after', 'TEXT DEFAULT NULL'
 addColumnIfMissing('document_edit_records', 'content_text_before', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_after', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'pinned_at', 'DATETIME DEFAULT NULL');
+addColumnIfMissing('documents', 'source_system', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'source_record_key', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'source_url', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'source_updated_at', 'DATETIME DEFAULT NULL');
+addColumnIfMissing('documents', 'source_payload_hash', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'import_batch_no', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'import_status', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'quality_status', 'TEXT DEFAULT NULL');
 createIndexIfColumnExists('documents', 'pinned_at', 'idx_documents_pinned_at', 'pinned_at');
+createIndexIfColumnExists('documents', 'source_record_key', 'idx_documents_source_record', 'source_system, source_record_key');
 addColumnIfMissing('document_attachments', 'block_id', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'display_name', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'file_ext', 'TEXT DEFAULT NULL');
@@ -4179,7 +4196,7 @@ function collectTextFromValue(value, parts = []) {
     return parts;
   }
   if (typeof value === 'object') {
-    ['text', 'title', 'content', 'children', 'blocks', 'items'].forEach(key => {
+    ['text', 'title', 'content', 'children', 'blocks', 'items', 'meta', 'url', 'filename', 'display_name', 'columns', 'rows', 'cells', 'body', 'value'].forEach(key => {
       if (Object.prototype.hasOwnProperty.call(value, key)) collectTextFromValue(value[key], parts);
     });
   }
@@ -5029,6 +5046,89 @@ app.post('/api/documents', canWrite, (req, res) => {
   const id = createDocumentRecord(req.body || {}, req.user);
   const row = getVisibleDocument(id, req.user);
   res.json(serializeDocument(row, { withAccessSummary: true, user: req.user }));
+});
+
+app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
+  const rawUrl = String(req.body?.url || '').trim();
+  if (!rawUrl) return res.status(400).json({ error: '请填写 Wolai URL' });
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return res.status(400).json({ error: 'Wolai URL 格式不正确' });
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    return res.status(400).json({ error: '仅支持 http/https URL' });
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== 'wolai.com' && !hostname.endsWith('.wolai.com')) {
+    return res.status(400).json({ error: '目前仅支持 wolai.com 的文档 URL' });
+  }
+
+  try {
+    const imported = await importWolaiUrlToBlocks(url.toString(), {
+      title: req.body?.title,
+      preferChrome: req.body?.prefer_chrome !== false,
+      cdp: req.body?.cdp || 'http://127.0.0.1:9222',
+      waitMs: Number(req.body?.wait_ms || 3000),
+    });
+    const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
+    const id = createDocumentRecord({
+      ...req.body,
+      title: imported.title || req.body?.title || 'Wolai 导入文档',
+      content: { blocks: imported.blocks },
+      content_text: imported.content_text,
+      tags: [...new Set(['wolai', ...tags])],
+      current_version: req.body?.current_version || 'V1.0',
+      width_mode: req.body?.width_mode || 'full',
+    }, req.user);
+    db.prepare(`
+      UPDATE documents SET
+        source_system = 'wolai',
+        source_record_key = ?,
+        source_url = ?,
+        source_payload_hash = ?,
+        import_batch_no = ?,
+        import_status = ?,
+        quality_status = ?,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      imported.source_record_key,
+      imported.source_url,
+      imported.source_payload_hash,
+      `wolai_url_${Date.now()}`,
+      'imported',
+      imported.content_text?.trim() ? (imported.warnings?.length ? 'warning' : 'pass') : 'warning',
+      req.user.id,
+      id
+    );
+    db.prepare(`
+      INSERT INTO document_change_logs (document_id, version, changed_by, summary, detail_text, remark)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      'V1.0',
+      req.user.id,
+      '从 Wolai URL 导入',
+      `来源：${imported.source_url}\n采集方式：${imported.capture_method}`,
+      imported.warnings?.length ? imported.warnings.join('；') : null
+    );
+    const row = getVisibleDocument(id, req.user);
+    res.json({
+      ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
+      import_meta: {
+        capture_method: imported.capture_method,
+        warnings: imported.warnings || [],
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      error: error.message || 'Wolai URL 导入失败',
+      hint: '如果页面需要登录，请先运行 npm run wolai:chrome，并在打开的专用 Chrome 中登录 Wolai。',
+    });
+  }
 });
 
 app.get('/api/documents/:id', (req, res) => {
@@ -8207,6 +8307,8 @@ function normalizeAiTrainingSessionRow(row) {
   const base = decryptRow('ai_training_sessions', row);
   return {
     ...base,
+    skill_id: base?.skill_id ? Number(base.skill_id) : null,
+    skill_version_id: base?.skill_version_id ? Number(base.skill_version_id) : null,
     quality_score: base?.quality_score === null || base?.quality_score === undefined ? null : Number(base.quality_score),
     last_score: base?.last_score === null || base?.last_score === undefined ? null : Number(base.last_score),
     context_snapshot_json: parseJsonSafe(base?.context_snapshot_json, null),
@@ -8222,6 +8324,12 @@ function normalizeAiTrainingMessageRow(row) {
     structured_json: parseJsonSafe(base?.structured_json, null),
     evidence_json: parseJsonSafe(base?.evidence_json, []),
     actions_json: parseJsonSafe(base?.actions_json, []),
+    skill_id: base?.skill_id ? Number(base.skill_id) : null,
+    skill_version_id: base?.skill_version_id ? Number(base.skill_version_id) : null,
+    token_in: Number(base?.token_in || 0),
+    token_out: Number(base?.token_out || 0),
+    latency_ms: Number(base?.latency_ms || 0),
+    cost_amount: base?.cost_amount === null || base?.cost_amount === undefined ? null : Number(base.cost_amount),
     avg_rating: base?.avg_rating === null || base?.avg_rating === undefined ? null : Number(base.avg_rating),
     helpful_count: Number(base?.helpful_count || 0),
     not_helpful_count: Number(base?.not_helpful_count || 0),

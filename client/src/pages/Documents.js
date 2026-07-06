@@ -2325,6 +2325,8 @@ export default function Documents() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [propertySaving, setPropertySaving] = useState(false);
+  const [wolaiImportOpen, setWolaiImportOpen] = useState(false);
+  const [wolaiImportSaving, setWolaiImportSaving] = useState(false);
   const [optionsSaving, setOptionsSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingPropertyDoc, setEditingPropertyDoc] = useState(null);
@@ -2409,6 +2411,7 @@ export default function Documents() {
   const replaceAttachmentInputRef = useRef(null);
   const replaceAttachmentTargetRef = useRef(null);
   const [createForm] = Form.useForm();
+  const [wolaiImportForm] = Form.useForm();
   const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
 
@@ -3381,6 +3384,50 @@ export default function Documents() {
       doc_type: selectedFolder?.default_doc_type || (sopOnly ? 'SOP' : 'TMP'),
     });
     setCreateOpen(true);
+  };
+
+  const openWolaiImport = () => {
+    wolaiImportForm.resetFields();
+    wolaiImportForm.setFieldsValue({
+      url: '',
+      title: '',
+      domain: selectedFolder?.domain || (domainFilter === 'all' ? 'general' : domainFilter),
+      project_group_id: selectedFolder?.project_group_id || undefined,
+      department_key: selectedFolder?.department_key || 'ALL',
+      folder_id: selectedFolderId || undefined,
+      doc_type: selectedFolder?.default_doc_type || 'SPEC',
+    });
+    setWolaiImportOpen(true);
+  };
+
+  const handleWolaiImport = async () => {
+    try {
+      const values = await wolaiImportForm.validateFields();
+      setWolaiImportSaving(true);
+      const doc = await documentsApi.importWolaiUrl({
+        ...values,
+        title: values.title || undefined,
+        project_group_id: values.project_group_id || null,
+        folder_id: values.folder_id || null,
+        prefer_chrome: true,
+      });
+      setWolaiImportOpen(false);
+      openDocumentTab(doc);
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      const warnings = doc.import_meta?.warnings || [];
+      if (warnings.length) {
+        message.warning('文档已导入，但采集过程有告警，可查看改动历史备注');
+      } else {
+        message.success('已从 Wolai URL 导入文档');
+      }
+    } catch (err) {
+      const hint = err.response?.data?.hint;
+      message.error(err.response?.data?.error || err.message || 'Wolai URL 导入失败');
+      if (hint) message.info(hint);
+    } finally {
+      setWolaiImportSaving(false);
+    }
   };
 
   const openEditProperties = async (docOrId) => {
@@ -9930,6 +9977,9 @@ export default function Documents() {
                 <Tooltip title="刷新">
                   <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); loadFolderTreeDocuments(); }} />
                 </Tooltip>
+                <Tooltip title="从 Wolai URL 导入">
+                  <Button icon={<LinkOutlined />} aria-label="从 Wolai URL 导入" onClick={openWolaiImport} />
+                </Tooltip>
                 <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建</Button>
               </Space>
             )}
@@ -10101,6 +10151,7 @@ export default function Documents() {
                 ) : (
                   <Space>
                     {isMobile && <Button icon={<LeftOutlined />} onClick={backToMobileLibrary}>文档列表</Button>}
+                    <Button icon={<LinkOutlined />} onClick={openWolaiImport}>从 Wolai 导入</Button>
                     <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建文档</Button>
                   </Space>
                 )}
@@ -10487,6 +10538,67 @@ export default function Documents() {
             notFoundContent="暂无可移动的文件夹"
           />
         </Space>
+      </Modal>
+
+      <Modal
+        title="从 Wolai URL 导入"
+        open={wolaiImportOpen}
+        onCancel={() => setWolaiImportOpen(false)}
+        onOk={handleWolaiImport}
+        okText="导入并新建"
+        cancelText="取消"
+        confirmLoading={wolaiImportSaving}
+        destroyOnClose
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
+      >
+        <Form form={wolaiImportForm} layout="vertical">
+          <Form.Item
+            name="url"
+            label="Wolai URL"
+            rules={[
+              { required: true, message: '请粘贴 Wolai 文档 URL' },
+              { type: 'url', message: '请输入完整 URL，例如 https://...' },
+            ]}
+          >
+            <Input placeholder="https://www.wolai.com/..." />
+          </Form.Item>
+          <Form.Item name="title" label="标题">
+            <Input placeholder="留空则自动读取 Wolai 页面标题" />
+          </Form.Item>
+          <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
+            <Select options={domainOptions.filter(item => item.value !== 'all')} />
+          </Form.Item>
+          <Form.Item name="project_group_id" label="项目组">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={projectGroups.map(group => ({ value: group.id, label: `${group.name}${group.code ? ` (${group.code})` : ''}` }))}
+            />
+          </Form.Item>
+          <Form.Item name="department_key" label="部门">
+            <Select options={departmentOptions} />
+          </Form.Item>
+          <Form.Item name="folder_id" label="文件夹">
+            <Select
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              options={folders.map(folder => ({
+                value: folder.id,
+                label: `${domainLabel[folder.domain] || folder.domain} / ${folder.project_group_name || '未关联项目组'} / ${departmentLabel[folder.department_key] || folder.department_key} / ${folder.name}`,
+              }))}
+            />
+          </Form.Item>
+          <Form.Item name="doc_type" label="文档类型">
+            <Select options={docTypeOptions} />
+          </Form.Item>
+          <Text type="secondary">
+            页面需要登录时，请先运行 npm run wolai:chrome，并在打开的专用 Chrome 中登录 Wolai。
+          </Text>
+        </Form>
       </Modal>
 
       <Modal
