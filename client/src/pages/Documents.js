@@ -3928,6 +3928,7 @@ export default function Documents() {
   const removeDocTab = (docId) => {
     const normalizedId = getDocTabId(docId);
     clearRemoteDocumentSnapshot(normalizedId);
+    dirtyDocumentIdsRef.current.delete(normalizedId);
     const closingIndex = openDocTabs.findIndex(tab => getDocTabId(tab.id) === normalizedId);
     const nextTabs = openDocTabs.filter(tab => getDocTabId(tab.id) !== normalizedId);
     setOpenDocTabs(nextTabs);
@@ -3948,23 +3949,106 @@ export default function Documents() {
     }
   };
 
-  const handleCloseDocTab = async (event, docId) => {
-    event.stopPropagation();
-    const normalizedId = getDocTabId(docId);
-    if (!normalizedId || closingTabIds.includes(normalizedId)) return;
+  const closeDocTabsByIds = async (docIds, options = {}) => {
+    const openTabsSnapshot = [...openDocTabs];
+    const closingSet = new Set(closingTabIds);
+    const targetIds = Array.from(new Set((Array.isArray(docIds) ? docIds : [docIds])
+      .map(getDocTabId)
+      .filter(docId => Number.isFinite(docId) && docId > 0)))
+      .filter(docId => !closingSet.has(docId) && openTabsSnapshot.some(tab => getDocTabId(tab.id) === docId));
+    if (!targetIds.length) return;
+
+    const targetSet = new Set(targetIds);
     persistActiveDocTabState();
-    setClosingTabIds(prev => [...prev, normalizedId]);
+    setClosingTabIds(prev => Array.from(new Set([...prev, ...targetIds])));
+
     try {
-      await saveDocTabSnapshot(normalizedId);
-      removeDocTab(normalizedId);
+      await Promise.all(targetIds.map(docId => saveDocTabSnapshot(docId)));
+
+      targetIds.forEach(docId => {
+        clearRemoteDocumentSnapshot(docId);
+        dirtyDocumentIdsRef.current.delete(docId);
+      });
+
+      const nextTabs = openTabsSnapshot.filter(tab => !targetSet.has(getDocTabId(tab.id)));
+      setOpenDocTabs(nextTabs);
+      setDocTabStates(prev => {
+        const next = { ...prev };
+        targetIds.forEach(docId => { delete next[docId]; });
+        return next;
+      });
+
+      const activeDocId = getDocTabId(selectedDocId);
+      if (targetSet.has(activeDocId)) {
+        const requestedNextActiveId = getDocTabId(options.nextActiveDocId);
+        let nextActiveTab = null;
+        if (Number.isFinite(requestedNextActiveId) && requestedNextActiveId > 0 && !targetSet.has(requestedNextActiveId)) {
+          nextActiveTab = nextTabs.find(tab => getDocTabId(tab.id) === requestedNextActiveId)
+            || getDocumentSummaryById(requestedNextActiveId);
+        } else if (options.fallbackToNeighbor !== false) {
+          const firstClosingIndex = openTabsSnapshot.findIndex(tab => targetSet.has(getDocTabId(tab.id)));
+          nextActiveTab = nextTabs[firstClosingIndex] || nextTabs[firstClosingIndex - 1] || null;
+        }
+
+        if (nextActiveTab?.id) {
+          const nextActiveDocId = getDocTabId(nextActiveTab.id);
+          replaceDocumentLinkParam(nextActiveDocId);
+          setSelectedDocId(nextActiveDocId);
+        } else {
+          clearActiveDocument();
+        }
+      } else if (!nextTabs.length) {
+        clearActiveDocument();
+      }
+
       await loadDocuments();
       await loadFolderTreeDocuments();
-      message.success('已保存并关闭文档');
+      message.success(options.successMessage || '已保存并关闭标签页');
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '关闭前自动保存失败');
     } finally {
-      setClosingTabIds(prev => prev.filter(id => id !== normalizedId));
+      setClosingTabIds(prev => prev.filter(id => !targetSet.has(id)));
     }
+  };
+
+  const handleCloseDocTab = async (event, docId) => {
+    event.stopPropagation();
+    const normalizedId = getDocTabId(docId);
+    if (!normalizedId) return;
+    await closeDocTabsByIds([normalizedId], { successMessage: '已保存并关闭当前标签页' });
+  };
+
+  const handleCloseAllDocTabs = async () => {
+    await closeDocTabsByIds(openDocTabs.map(tab => tab.id), {
+      fallbackToNeighbor: false,
+      successMessage: '已保存并关闭全部标签页',
+    });
+  };
+
+  const handleCloseOtherDocTabs = async (docId) => {
+    const normalizedId = getDocTabId(docId);
+    await closeDocTabsByIds(
+      openDocTabs.filter(tab => getDocTabId(tab.id) !== normalizedId).map(tab => tab.id),
+      {
+        nextActiveDocId: normalizedId,
+        fallbackToNeighbor: false,
+        successMessage: '已保存并关闭其他标签页',
+      }
+    );
+  };
+
+  const handleCloseRightDocTabs = async (docId) => {
+    const normalizedId = getDocTabId(docId);
+    const tabIndex = openDocTabs.findIndex(tab => getDocTabId(tab.id) === normalizedId);
+    if (tabIndex === -1) return;
+    await closeDocTabsByIds(
+      openDocTabs.slice(tabIndex + 1).map(tab => tab.id),
+      {
+        nextActiveDocId: normalizedId,
+        fallbackToNeighbor: false,
+        successMessage: '已保存并关闭右侧标签页',
+      }
+    );
   };
 
   const buildPageOptionsPayload = (patch = {}) => ({
@@ -6200,67 +6284,99 @@ export default function Documents() {
           borderBottom: '1px solid #edf0f5',
         }}
       >
-        {openDocTabs.map(tab => {
+        {openDocTabs.map((tab, index) => {
           const docId = getDocTabId(tab.id);
           const active = getDocTabId(selectedDocId) === docId;
           const closing = closingTabIds.includes(docId);
           const title = tab.title || '未命名文档';
+          const hasOtherDocTabs = openDocTabs.some(item => getDocTabId(item.id) !== docId);
+          const hasRightDocTabs = openDocTabs.slice(index + 1).length > 0;
+          const contextMenuItems = [
+            { key: 'close-current', label: '关闭当前标签页', disabled: closing },
+            { key: 'close-all', label: '关闭全部标签页', disabled: !openDocTabs.length },
+            { key: 'close-others', label: '关闭其他标签页', disabled: !hasOtherDocTabs },
+            { key: 'close-right', label: '关闭右侧标签页', disabled: !hasRightDocTabs },
+          ];
+          const handleDocTabContextMenuClick = ({ key, domEvent }) => {
+            domEvent?.stopPropagation?.();
+            if (key === 'close-current') {
+              closeDocTabsByIds([docId], { successMessage: '已保存并关闭当前标签页' });
+              return;
+            }
+            if (key === 'close-all') {
+              handleCloseAllDocTabs();
+              return;
+            }
+            if (key === 'close-others') {
+              handleCloseOtherDocTabs(docId);
+              return;
+            }
+            if (key === 'close-right') {
+              handleCloseRightDocTabs(docId);
+            }
+          };
+
           return (
-            <div
+            <Dropdown
               key={docId}
-              role="tab"
-              aria-selected={active}
-              onClick={() => openDocumentTab(tab)}
-              style={{
-                height: 34,
-                minWidth: 128,
-                maxWidth: isMobile ? 180 : 240,
-                flex: '0 0 auto',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                padding: '0 4px 0 10px',
-                borderRadius: 6,
-                border: active ? '1px solid #c7d2fe' : '1px solid #e5e7eb',
-                background: active ? '#eef2ff' : '#fff',
-                color: active ? '#3730a3' : '#374151',
-                cursor: 'pointer',
-                boxShadow: active ? '0 2px 8px rgba(79, 70, 229, 0.12)' : 'none',
-              }}
+              trigger={['contextMenu']}
+              menu={{ items: contextMenuItems, onClick: handleDocTabContextMenuClick }}
             >
-              <FileTextOutlined style={{ flex: '0 0 auto', fontSize: 13 }} />
-              <Tooltip title={title}>
-                <Text
-                  ellipsis
-                  style={{
-                    flex: 1,
-                    minWidth: 0,
-                    maxWidth: isMobile ? 110 : 168,
-                    fontSize: 13,
-                    color: 'inherit',
-                    lineHeight: '32px',
-                  }}
-                >
-                  {title}
-                </Text>
-              </Tooltip>
-              <Tooltip title="关闭">
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CloseOutlined />}
-                  loading={closing}
-                  aria-label={`关闭 ${title}`}
-                  onClick={(event) => handleCloseDocTab(event, docId)}
-                  style={{
-                    width: 24,
-                    height: 24,
-                    minWidth: 24,
-                    color: active ? '#4338ca' : '#6b7280',
-                  }}
-                />
-              </Tooltip>
-            </div>
+              <div
+                role="tab"
+                aria-selected={active}
+                onClick={() => openDocumentTab(tab)}
+                style={{
+                  height: 34,
+                  minWidth: 128,
+                  maxWidth: isMobile ? 180 : 240,
+                  flex: '0 0 auto',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '0 4px 0 10px',
+                  borderRadius: 6,
+                  border: active ? '1px solid #c7d2fe' : '1px solid #e5e7eb',
+                  background: active ? '#eef2ff' : '#fff',
+                  color: active ? '#3730a3' : '#374151',
+                  cursor: 'pointer',
+                  boxShadow: active ? '0 2px 8px rgba(79, 70, 229, 0.12)' : 'none',
+                }}
+              >
+                <FileTextOutlined style={{ flex: '0 0 auto', fontSize: 13 }} />
+                <Tooltip title={title}>
+                  <Text
+                    ellipsis
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      maxWidth: isMobile ? 110 : 168,
+                      fontSize: 13,
+                      color: 'inherit',
+                      lineHeight: '32px',
+                    }}
+                  >
+                    {title}
+                  </Text>
+                </Tooltip>
+                <Tooltip title="关闭">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CloseOutlined />}
+                    loading={closing}
+                    aria-label={`关闭 ${title}`}
+                    onClick={(event) => handleCloseDocTab(event, docId)}
+                    style={{
+                      width: 24,
+                      height: 24,
+                      minWidth: 24,
+                      color: active ? '#4338ca' : '#6b7280',
+                    }}
+                  />
+                </Tooltip>
+              </div>
+            </Dropdown>
           );
         })}
       </div>
