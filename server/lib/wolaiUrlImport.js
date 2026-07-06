@@ -87,7 +87,7 @@ function parseHtmlToBlocks(html, pageUrl, seed) {
   const clean = sanitizeHtml(html);
   const makeBlock = makeBlockFactory(seed || pageUrl || clean.slice(0, 80));
   const blocks = [];
-  const tokenPattern = /<(h[1-6]|p|li|blockquote|pre|table|img|a)\b[^>]*>[\s\S]*?(?:<\/\1>|$)|<img\b[^>]*\/?>/gi;
+  const tokenPattern = /<(h[1-6]|p|ul|ol|li|blockquote|pre|table|img|a)\b[^>]*>[\s\S]*?(?:<\/\1>|$)|<img\b[^>]*\/?>/gi;
   let match;
 
   while ((match = tokenPattern.exec(clean))) {
@@ -96,6 +96,15 @@ function parseHtmlToBlocks(html, pageUrl, seed) {
     if (tag === 'table') {
       const tableBlock = parseHtmlTable(fragment, makeBlock);
       if (tableBlock) blocks.push(tableBlock);
+      continue;
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      const listType = tag === 'ol' ? 'numbered' : 'bullet';
+      const itemMatches = fragment.match(/<li[^>]*>[\s\S]*?<\/li>/gi) || [];
+      itemMatches.forEach(itemHtml => {
+        const text = stripHtmlTags(itemHtml);
+        if (text) blocks.push(makeBlock(listType, text, { meta: { indent: 0 } }));
+      });
       continue;
     }
     if (tag === 'img') {
@@ -176,6 +185,26 @@ function cleanTitle(value, fallback = '未命名文档') {
   return title || fallback;
 }
 
+function getWolaiUrlKey(value) {
+  try {
+    const url = new URL(value);
+    if (!url.hostname.toLowerCase().includes('wolai')) return '';
+    return `${url.hostname.toLowerCase()}${url.pathname.replace(/\/$/, '')}`;
+  } catch {
+    return '';
+  }
+}
+
+function findMatchingWolaiTab(tabs, targetUrl) {
+  const targetKey = getWolaiUrlKey(targetUrl);
+  if (!targetKey) return null;
+  const pages = (Array.isArray(tabs) ? tabs : [])
+    .filter(tab => tab?.type === 'page' && tab.id && /^https?:/i.test(tab.url || ''));
+  return pages.find(tab => getWolaiUrlKey(tab.url) === targetKey)
+    || pages.find(tab => String(tab.url || '').includes(targetUrl))
+    || null;
+}
+
 function isLikelyAuthPage(title, text, url) {
   const haystack = `${title || ''}\n${text || ''}`.toLowerCase();
   let isWolaiHost = false;
@@ -187,6 +216,82 @@ function isLikelyAuthPage(title, text, url) {
   if (!isWolaiHost) return false;
   if ((text || '').length > 120 && !/登录|扫码|login|sign in/i.test(haystack)) return false;
   return /登录|扫码|login|sign in|验证码/.test(haystack) || (text || '').length < 40;
+}
+
+function isLikelyWolaiErrorPage(title, text, url) {
+  let isWolaiHost = false;
+  try {
+    isWolaiHost = new URL(url).hostname.toLowerCase().includes('wolai');
+  } catch {
+    isWolaiHost = false;
+  }
+  if (!isWolaiHost) return false;
+  const normalized = `${title || ''}\n${text || ''}`
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return true;
+  if (/网络可能有一点问题|请重新加载|加载失败|页面加载失败|重新加载/.test(normalized)
+    && /我来\s*wolai|不仅仅是未来的云端协作平台|重新加载|网络可能/.test(normalized)) {
+    return true;
+  }
+  if (/无权限|没有权限|访问受限|页面不存在|文档不存在|已被删除/.test(normalized)) return true;
+  return false;
+}
+
+function assertUsableWolaiCapture(title, text, url) {
+  if (isLikelyAuthPage(title, text, url)) {
+    throw new Error('Wolai 页面需要登录态，未读取到正文');
+  }
+  if (isLikelyWolaiErrorPage(title, text, url)) {
+    throw new Error('Wolai 页面加载失败，只读取到错误页，请在专用 Chrome 中打开该 URL 并确认正文已显示后再导入');
+  }
+}
+
+function sanitizeInlineHtml(value) {
+  const raw = String(value || '');
+  if (!raw) return '';
+  return raw
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/\s(?:on\w+|class|id|data-[\w-]+|spellcheck|contenteditable|placeholder)=("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\s(?:src|srcset)=("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\shref=(["'])\s*javascript:[\s\S]*?\1/gi, '')
+    .replace(/<\/?(?!strong\b|b\b|em\b|i\b|u\b|s\b|strike\b|del\b|code\b|span\b|mark\b|a\b|br\b)[a-z][^>]*>/gi, '')
+    .replace(/\sstyle=(["'])([\s\S]*?)\1/gi, (_match, quote, styleText) => {
+      const allowed = String(styleText || '')
+        .split(';')
+        .map(item => item.trim())
+        .filter(item => /^(font-weight|font-style|text-decoration|color|background-color)\s*:/i.test(item))
+        .join('; ');
+      return allowed ? ` style=${quote}${allowed}${quote}` : '';
+    })
+    .trim();
+}
+
+function normalizeBrowserBlocks(rawBlocks, pageUrl, seed) {
+  const makeBlock = makeBlockFactory(seed || pageUrl || JSON.stringify(rawBlocks || []).slice(0, 80));
+  const validTypes = new Set([
+    'paragraph', 'heading1', 'heading2', 'heading3', 'heading4',
+    'bullet', 'numbered', 'todo', 'quote', 'code',
+    'table-simple', 'image', 'external-link',
+  ]);
+  const blocks = [];
+  (Array.isArray(rawBlocks) ? rawBlocks : []).forEach(rawBlock => {
+    const type = validTypes.has(rawBlock?.type) ? rawBlock.type : 'paragraph';
+    const content = type === 'divider' ? '' : sanitizeInlineHtml(rawBlock?.content ?? rawBlock?.text ?? '');
+    const plain = stripHtmlTags(content);
+    if (!plain && !['image', 'external-link', 'table-simple'].includes(type)) return;
+    const meta = rawBlock?.meta && typeof rawBlock.meta === 'object' ? { ...rawBlock.meta } : {};
+    if (type === 'bullet' || type === 'numbered') {
+      const indent = Number(meta.indent);
+      meta.indent = Number.isFinite(indent) ? Math.max(0, Math.min(8, Math.round(indent))) : 0;
+    }
+    blocks.push(makeBlock(type, content, {
+      checked: Boolean(rawBlock?.checked),
+      meta,
+    }));
+  });
+  return blocks;
 }
 
 async function captureByFetch(url) {
@@ -203,9 +308,7 @@ async function captureByFetch(url) {
     || stripHtmlTags(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]));
   const blocks = parseHtmlToBlocks(html, url, url);
   const text = collectBlocksText(blocks);
-  if (isLikelyAuthPage(title, text, url)) {
-    throw new Error('Wolai 页面需要登录态，普通 fetch 无法读取正文');
-  }
+  assertUsableWolaiCapture(title, text, url);
   return { method: 'fetch', title, pageUrl: url, html, plainText: text, blocks };
 }
 
@@ -285,32 +388,29 @@ async function captureByChrome(url, options = {}) {
   const cdpBase = String(options.cdp || DEFAULT_CDP).replace(/\/$/, '');
   const version = await fetchJson(`${cdpBase}/json/version`);
   if (!version.webSocketDebuggerUrl) throw new Error('Chrome 调试端口未开启');
+  const openTabs = await fetchJson(`${cdpBase}/json/list`).catch(() => []);
+  const existingTab = options.useOpenTab !== false ? findMatchingWolaiTab(openTabs, url) : null;
   const client = new CdpClient(version.webSocketDebuggerUrl);
   await client.connect();
   let targetId;
   let sessionId;
+  let createdTarget = false;
   try {
-    const target = await client.send('Target.createTarget', { url: 'about:blank' });
-    targetId = target.targetId;
+    if (existingTab) {
+      targetId = existingTab.id;
+    } else {
+      const target = await client.send('Target.createTarget', { url: 'about:blank' });
+      targetId = target.targetId;
+      createdTarget = true;
+    }
     const attached = await client.send('Target.attachToTarget', { targetId, flatten: true });
     sessionId = attached.sessionId;
     await client.send('Page.enable', {}, sessionId);
     await client.send('Runtime.enable', {}, sessionId);
-    await client.send('Page.navigate', { url }, sessionId);
+    if (!existingTab) await client.send('Page.navigate', { url }, sessionId);
     await new Promise(resolve => setTimeout(resolve, Number(options.waitMs || 3000)));
-    await evaluate(client, sessionId, async function scrollPage() {
+    const snapshot = await evaluate(client, sessionId, async function extract(expectedUrl, waitMs) {
       const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-      const max = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
-      const step = Math.max(Math.floor(window.innerHeight * 0.85), 500);
-      for (let y = 0; y <= max; y += step) {
-        window.scrollTo(0, y);
-        await sleep(120);
-      }
-      window.scrollTo(0, 0);
-      await sleep(200);
-      return true;
-    });
-    const snapshot = await evaluate(client, sessionId, function extract() {
       const isVisible = element => {
         if (!element || !(element instanceof Element)) return false;
         const style = window.getComputedStyle(element);
@@ -322,6 +422,168 @@ async function captureByChrome(url, options = {}) {
         .replace(/[ \t]+\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+      const isWolaiErrorText = value => /网络可能有一点问题|请重新加载|加载失败|页面加载失败/.test(String(value || ''));
+      const clickReloadIfNeeded = async () => {
+        const bodyText = textOf(document.body);
+        if (!isWolaiErrorText(bodyText)) return false;
+        const reloadNode = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+          .filter(isVisible)
+          .find(element => textOf(element) === '重新加载');
+        if (!reloadNode) return false;
+        reloadNode.click();
+        await sleep(Math.max(Number(waitMs || 0), 3000));
+        return true;
+      };
+      await clickReloadIfNeeded();
+
+      function cleanInlineHtml(element) {
+        const clone = element.cloneNode(true);
+        clone.querySelectorAll('script, style, noscript, svg, button, input, textarea, select, [aria-hidden="true"]').forEach(node => node.remove());
+        clone.querySelectorAll('*').forEach(node => {
+          [...node.attributes].forEach(attr => {
+            if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
+            if (['class', 'id', 'contenteditable', 'spellcheck', 'placeholder'].includes(attr.name) || attr.name.startsWith('data-')) {
+              node.removeAttribute(attr.name);
+            }
+          });
+          const style = node.getAttribute('style') || '';
+          const allowedStyle = style.split(';')
+            .map(item => item.trim())
+            .filter(item => /^(font-weight|font-style|text-decoration|color|background-color)\s*:/i.test(item))
+            .join('; ');
+          if (allowedStyle) node.setAttribute('style', allowedStyle);
+          else node.removeAttribute('style');
+          if (node.getAttribute('href')) {
+            try { node.setAttribute('href', new URL(node.getAttribute('href'), location.href).toString()); } catch {}
+          }
+        });
+        return clone.innerHTML || textOf(element);
+      }
+
+      function getWolaiEditor() {
+        return document.querySelector('#wolai-main-editor-wrapper')
+          || document.querySelector('#wolai-main-editor')
+          || document.querySelector('.mac-editor')
+          || document.querySelector('[class*="editor"]');
+      }
+
+      function countWolaiIndent(element, editor) {
+        let indent = 0;
+        for (let node = element.parentElement; node && node !== editor; node = node.parentElement) {
+          if (node.getAttribute?.('data-type') === 'subnode') indent += 1;
+        }
+        return Math.max(0, Math.min(indent, 8));
+      }
+
+      function inferBlockType(element, wrapper) {
+        const blockType = String(wrapper?.getAttribute?.('data-block-type') || '').toLowerCase();
+        const placeholder = String(element.getAttribute('placeholder') || '').toLowerCase();
+        if (/enum|number|ordered|数字/.test(`${blockType} ${placeholder}`)) return 'numbered';
+        if (/bullet|unordered|list|无序|项目符号/.test(`${blockType} ${placeholder}`)) return 'bullet';
+        if (/todo|check|待办/.test(`${blockType} ${placeholder}`)) return 'todo';
+        if (/quote|引用/.test(`${blockType} ${placeholder}`)) return 'quote';
+        if (/code|代码/.test(`${blockType} ${placeholder}`)) return 'code';
+        if (/head|title|标题/.test(`${blockType} ${placeholder}`)) {
+          const levelMatch = `${blockType} ${placeholder}`.match(/[1-4]/);
+          return `heading${levelMatch ? Number(levelMatch[0]) : 2}`;
+        }
+        const style = window.getComputedStyle(element);
+        const fontSize = Number.parseFloat(style.fontSize || '0');
+        const fontWeight = Number.parseInt(style.fontWeight || '400', 10);
+        if (fontWeight >= 600 && fontSize >= 26) return 'heading1';
+        if (fontWeight >= 600 && fontSize >= 21) return 'heading2';
+        if (fontWeight >= 600 && fontSize >= 17) return 'heading3';
+        return 'paragraph';
+      }
+
+      function collectVisibleWolaiBlocks(seen) {
+        const editor = getWolaiEditor();
+        if (!editor) return [];
+        const editables = Array.from(editor.querySelectorAll('[contenteditable="true"]'))
+          .filter(element => !element.classList.contains('wolai-page-title'))
+          .filter(element => !element.closest('.wolai-page-title'))
+          .filter(isVisible);
+        const collected = [];
+        editables.forEach((element, index) => {
+          const text = textOf(element);
+          if (!text) return;
+          const wrapper = element.closest('[data-block-type]') || element.parentElement;
+          const blockId = wrapper?.getAttribute?.('data-block-id')
+            || wrapper?.getAttribute?.('data-id')
+            || wrapper?.id
+            || `${index}:${text}`;
+          if (seen.has(blockId)) return;
+          const type = inferBlockType(element, wrapper);
+          const meta = {};
+          if (type === 'numbered' || type === 'bullet') {
+            meta.indent = countWolaiIndent(element, editor);
+            const marker = wrapper?.getAttribute?.('data-enum');
+            if (marker) meta.sourceMarker = marker;
+          }
+          const block = {
+            id: blockId,
+            type,
+            content: cleanInlineHtml(element),
+            text,
+            meta,
+            source_block_type: wrapper?.getAttribute?.('data-block-type') || '',
+          };
+          seen.set(blockId, block);
+          collected.push(block);
+        });
+        return collected;
+      }
+
+      function getScrollElement() {
+        const editor = getWolaiEditor();
+        const candidates = [];
+        for (let node = editor; node; node = node.parentElement) candidates.push(node);
+        candidates.push(document.scrollingElement, document.documentElement, document.body);
+        return candidates
+          .filter(Boolean)
+          .filter(element => element.scrollHeight > element.clientHeight + 80)
+          .sort((a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight))[0]
+          || document.scrollingElement
+          || document.documentElement;
+      }
+
+      function scrollTopOf(element) {
+        if (element === document.body || element === document.documentElement || element === document.scrollingElement) {
+          return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+        }
+        return element.scrollTop || 0;
+      }
+
+      function scrollToTop(element, top) {
+        if (element === document.body || element === document.documentElement || element === document.scrollingElement) {
+          window.scrollTo(0, top);
+        } else {
+          element.scrollTop = top;
+        }
+      }
+
+      async function collectWolaiBlocksAcrossScroll() {
+        const editor = getWolaiEditor();
+        if (!editor) return [];
+        const seen = new Map();
+        const scrollElement = getScrollElement();
+        const originalTop = scrollTopOf(scrollElement);
+        const maxScroll = Math.max(0, (scrollElement.scrollHeight || document.documentElement.scrollHeight || 0)
+          - (scrollElement.clientHeight || window.innerHeight || 0));
+        const step = Math.max(Math.floor((scrollElement.clientHeight || window.innerHeight || 800) * 0.75), 420);
+        scrollToTop(scrollElement, 0);
+        await sleep(120);
+        collectVisibleWolaiBlocks(seen);
+        for (let y = step; y <= maxScroll + step; y += step) {
+          scrollToTop(scrollElement, Math.min(y, maxScroll));
+          await sleep(160);
+          collectVisibleWolaiBlocks(seen);
+        }
+        scrollToTop(scrollElement, originalTop || 0);
+        await sleep(80);
+        return Array.from(seen.values());
+      }
+
       const scoreRoot = element => {
         const text = textOf(element);
         if (!text) return 0;
@@ -350,21 +612,30 @@ async function captureByChrome(url, options = {}) {
         if (node.getAttribute('href')) node.setAttribute('href', new URL(node.getAttribute('href'), location.href).toString());
       });
       const h1 = Array.from(document.querySelectorAll('h1')).find(isVisible);
+      const wolaiTitle = document.querySelector('.wolai-page-title[contenteditable="true"], .wolai-page-title');
+      const wolaiBlocks = await collectWolaiBlocksAcrossScroll();
+      const wolaiPlainText = wolaiBlocks.map(block => block.text).filter(Boolean).join('\n');
       return {
-        title: textOf(h1) || document.title || '',
+        title: textOf(wolaiTitle) || textOf(h1) || document.title || '',
         pageUrl: location.href,
         html: clone.innerHTML,
-        plainText: textOf(root),
+        plainText: wolaiPlainText || textOf(root),
+        blocks: wolaiBlocks,
+        expectedUrl,
       };
-    });
+    }, url, Number(options.waitMs || 3000));
     const title = cleanTitle(snapshot.title);
-    const blocks = parseHtmlToBlocks(snapshot.html || snapshot.plainText, snapshot.pageUrl || url, url);
+    const browserBlocks = normalizeBrowserBlocks(snapshot.blocks, snapshot.pageUrl || url, url);
+    const blocks = browserBlocks.length
+      ? browserBlocks
+      : parseHtmlToBlocks(snapshot.html || snapshot.plainText, snapshot.pageUrl || url, url);
     const text = collectBlocksText(blocks) || snapshot.plainText || '';
-    if (isLikelyAuthPage(title, text, url)) {
-      throw new Error('Chrome 页面没有读取到 Wolai 正文，请确认专用 Chrome 已登录并能打开该 URL');
+    assertUsableWolaiCapture(title, text, snapshot.pageUrl || url);
+    if (getWolaiUrlKey(url) && text.trim().length < 20) {
+      throw new Error('Chrome 页面没有读取到足够的 Wolai 正文，请确认页面已加载完成后再导入');
     }
     return {
-      method: 'chrome',
+      method: existingTab ? 'chrome-open-tab' : 'chrome',
       title,
       pageUrl: snapshot.pageUrl || url,
       html: snapshot.html || '',
@@ -373,7 +644,7 @@ async function captureByChrome(url, options = {}) {
     };
   } finally {
     try { if (sessionId) await client.send('Target.detachFromTarget', { sessionId }); } catch {}
-    try { if (targetId) await client.send('Target.closeTarget', { targetId }); } catch {}
+    try { if (createdTarget && targetId) await client.send('Target.closeTarget', { targetId }); } catch {}
     client.close();
   }
 }

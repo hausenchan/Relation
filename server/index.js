@@ -5126,7 +5126,7 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
   } catch (error) {
     res.status(400).json({
       error: error.message || 'Wolai URL 导入失败',
-      hint: '如果页面需要登录，请先运行 npm run wolai:chrome，并在打开的专用 Chrome 中登录 Wolai。',
+      hint: '如果页面需要登录，请先运行 npm run wolai:chrome，在打开的专用 Chrome 中登录 Wolai，并打开该 URL 确认正文已显示后再导入。',
     });
   }
 });
