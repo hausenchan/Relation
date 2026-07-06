@@ -299,6 +299,19 @@ const attachmentAccept = [
   '.vsdx', '.drawio', '.xmind', '.mind', '.mm',
   '.eml', '.msg',
 ].join(',');
+const documentImportFileExts = [
+  'jpg', 'jpeg', 'png', 'gif', 'webp',
+  'pdf', 'ofd', 'caj', 'ceb',
+  'doc', 'docx', 'dot', 'dotx', 'rtf', 'wps', 'wpt', 'odt', 'pages',
+  'xls', 'xlsx', 'xlsm', 'xlsb', 'csv', 'tsv', 'et', 'ett', 'ods', 'numbers',
+  'ppt', 'pptx', 'pps', 'ppsx', 'dps', 'dpt', 'odp', 'key',
+  'txt', 'md', 'markdown', 'json', 'log', 'xml', 'yaml', 'yml',
+  'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2',
+  'vsdx', 'drawio', 'xmind', 'mind', 'mm',
+  'eml', 'msg',
+];
+const documentImportAccept = documentImportFileExts.map(ext => `.${ext}`).join(',');
+const documentImportMaxSize = 50 * 1024 * 1024;
 const clipboardImagePasteLimit = 10;
 const clipboardImageExtByMime = {
   'image/jpeg': 'jpg',
@@ -2328,6 +2341,7 @@ export default function Documents() {
   const [wolaiImportOpen, setWolaiImportOpen] = useState(false);
   const [wolaiImportSaving, setWolaiImportSaving] = useState(false);
   const [wolaiImportTargetDoc, setWolaiImportTargetDoc] = useState(null);
+  const [documentImportFileList, setDocumentImportFileList] = useState([]);
   const [optionsSaving, setOptionsSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingPropertyDoc, setEditingPropertyDoc] = useState(null);
@@ -3388,10 +3402,43 @@ export default function Documents() {
     setCreateOpen(true);
   };
 
+  const validateDocumentImportFile = (file) => {
+    const ext = getFileExt(file?.name);
+    if (!documentImportFileExts.includes(ext)) {
+      message.error('请上传 Word、PDF、PPT、Excel、XMind、TXT 等常见非视频文件');
+      return Upload.LIST_IGNORE;
+    }
+    if (String(file?.type || '').startsWith('video/') || String(file?.type || '').startsWith('audio/')) {
+      message.error('导入不支持视频或音频文件');
+      return Upload.LIST_IGNORE;
+    }
+    if (Number(file?.size || 0) > documentImportMaxSize) {
+      message.error('单个文件不能超过 50MB');
+      return Upload.LIST_IGNORE;
+    }
+    return false;
+  };
+
+  const appendDocumentImportFormValue = (formData, key, value) => {
+    if (value === undefined || value === null || value === '') return;
+    formData.append(key, value);
+  };
+
+  const buildDocumentImportFileFormData = (values, file) => {
+    const formData = new FormData();
+    formData.append('file', file.originFileObj || file);
+    ['title', 'domain', 'project_group_id', 'department_key', 'folder_id', 'doc_type'].forEach(key => {
+      appendDocumentImportFormValue(formData, key, values[key]);
+    });
+    return formData;
+  };
+
   const openWolaiImport = () => {
     setWolaiImportTargetDoc(null);
+    setDocumentImportFileList([]);
     wolaiImportForm.resetFields();
     wolaiImportForm.setFieldsValue({
+      import_mode: 'url',
       url: '',
       title: '',
       domain: selectedFolder?.domain || (domainFilter === 'all' ? 'general' : domainFilter),
@@ -3410,8 +3457,10 @@ export default function Documents() {
       return;
     }
     setWolaiImportTargetDoc(doc);
+    setDocumentImportFileList([]);
     wolaiImportForm.resetFields();
     wolaiImportForm.setFieldsValue({
+      import_mode: 'url',
       url: doc.source_url || '',
     });
     setWolaiImportOpen(true);
@@ -3421,58 +3470,74 @@ export default function Documents() {
     try {
       const targetDoc = wolaiImportTargetDoc;
       const updatingExistingDoc = Boolean(targetDoc?.id);
-      const values = updatingExistingDoc
-        ? await wolaiImportForm.validateFields(['url'])
-        : await wolaiImportForm.validateFields();
+      const values = await wolaiImportForm.validateFields();
+      const importMode = values.import_mode || 'url';
+      if (importMode === 'url' && !String(values.url || '').trim()) {
+        wolaiImportForm.setFields([{ name: 'url', errors: ['请填写 URL'] }]);
+        return;
+      }
+      if (importMode === 'file' && !documentImportFileList.length) {
+        message.warning('请选择要导入的本地文件');
+        return;
+      }
       setWolaiImportSaving(true);
       if (updatingExistingDoc) {
         if (!canEditDoc(targetDoc)) {
           message.warning('你没有更新该文档正文的权限');
           return;
         }
-        const doc = await documentsApi.importWolaiUrlToDocument(targetDoc.id, {
-          url: values.url,
-          prefer_chrome: true,
-        });
+        const doc = importMode === 'file'
+          ? await documentsApi.importFileToDocument(
+            targetDoc.id,
+            buildDocumentImportFileFormData(values, documentImportFileList[0])
+          )
+          : await documentsApi.importWolaiUrlToDocument(targetDoc.id, {
+            url: values.url,
+            prefer_chrome: true,
+          });
         const docId = getDocTabId(doc.id);
         const blocks = contentToBlocks(doc.content);
         lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(doc.title || '', blocks);
         dirtyDocumentIdsRef.current.delete(docId);
         setWolaiImportOpen(false);
         setWolaiImportTargetDoc(null);
+        setDocumentImportFileList([]);
         openDocumentTab(doc);
         await loadDetail(docId, { force: true });
         await loadDocuments();
         await loadFolderTreeDocuments();
         const warnings = doc.import_meta?.warnings || [];
         if (warnings.length) {
-          message.warning('文档已更新，但采集过程有告警，可查看改动历史备注');
+          message.warning('文档已更新，但导入过程有提示，可查看改动历史备注');
         } else {
-          message.success('已从 Wolai URL 更新文档内容');
+          message.success(importMode === 'file' ? '已从本地文件更新文档内容' : '已从 URL 更新文档内容');
         }
         return;
       }
-      const doc = await documentsApi.importWolaiUrl({
-        ...values,
-        title: values.title || undefined,
-        project_group_id: values.project_group_id || null,
-        folder_id: values.folder_id || null,
-        prefer_chrome: true,
-      });
+      const doc = importMode === 'file'
+        ? await documentsApi.importFile(buildDocumentImportFileFormData(values, documentImportFileList[0]))
+        : await documentsApi.importWolaiUrl({
+          ...values,
+          title: values.title || undefined,
+          project_group_id: values.project_group_id || null,
+          folder_id: values.folder_id || null,
+          prefer_chrome: true,
+        });
       setWolaiImportOpen(false);
       setWolaiImportTargetDoc(null);
+      setDocumentImportFileList([]);
       openDocumentTab(doc);
       await loadDocuments();
       await loadFolderTreeDocuments();
       const warnings = doc.import_meta?.warnings || [];
       if (warnings.length) {
-        message.warning('文档已导入，但采集过程有告警，可查看改动历史备注');
+        message.warning('文档已导入，但导入过程有提示，可查看改动历史备注');
       } else {
-        message.success('已从 Wolai URL 导入文档');
+        message.success(importMode === 'file' ? '已从本地文件导入文档' : '已从 URL 导入文档');
       }
     } catch (err) {
       const hint = err.response?.data?.hint;
-      message.error(err.response?.data?.error || err.message || 'Wolai URL 导入失败');
+      message.error(err.response?.data?.error || err.message || '导入失败');
       if (hint) message.info(hint);
     } finally {
       setWolaiImportSaving(false);
@@ -5904,7 +5969,7 @@ export default function Documents() {
       handleCopyDocLink(doc);
       return;
     }
-    if (key === 'import-wolai-url') {
+    if (key === 'import' || key === 'import-wolai-url') {
       openWolaiImportForDocument(doc);
       return;
     }
@@ -10029,8 +10094,8 @@ export default function Documents() {
                 <Tooltip title="刷新">
                   <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); loadFolderTreeDocuments(); }} />
                 </Tooltip>
-                <Tooltip title="从 Wolai URL 导入">
-                  <Button icon={<LinkOutlined />} aria-label="从 Wolai URL 导入" onClick={openWolaiImport} />
+                <Tooltip title="导入">
+                  <Button icon={<DownloadOutlined />} aria-label="导入" onClick={openWolaiImport} />
                 </Tooltip>
                 <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建</Button>
               </Space>
@@ -10141,9 +10206,9 @@ export default function Documents() {
                     items: [
                       { key: 'copy-link', icon: <LinkOutlined />, label: '复制页面链接' },
                       {
-                        key: 'import-wolai-url',
+                        key: 'import',
                         icon: <DownloadOutlined />,
-                        label: '从URL导入',
+                        label: '导入',
                         disabled: !canEditDoc(docContextMenu.doc),
                       },
                       {
@@ -10209,7 +10274,7 @@ export default function Documents() {
                 ) : (
                   <Space>
                     {isMobile && <Button icon={<LeftOutlined />} onClick={backToMobileLibrary}>文档列表</Button>}
-                    <Button icon={<LinkOutlined />} onClick={openWolaiImport}>从 Wolai 导入</Button>
+                    <Button icon={<DownloadOutlined />} onClick={openWolaiImport}>导入</Button>
                     <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建文档</Button>
                   </Space>
                 )}
@@ -10599,11 +10664,12 @@ export default function Documents() {
       </Modal>
 
       <Modal
-        title="从 Wolai URL 导入"
+        title="导入"
         open={wolaiImportOpen}
         onCancel={() => {
           setWolaiImportOpen(false);
           setWolaiImportTargetDoc(null);
+          setDocumentImportFileList([]);
         }}
         onOk={handleWolaiImport}
         okText={isWolaiImportUpdateMode ? '导入并更新' : '导入并新建'}
@@ -10616,19 +10682,69 @@ export default function Documents() {
       >
         <Form form={wolaiImportForm} layout="vertical">
           <Form.Item
-            name="url"
-            label="Wolai URL"
-            rules={[
-              { required: true, message: '请粘贴 Wolai 文档 URL' },
-              { type: 'url', message: '请输入完整 URL，例如 https://...' },
-            ]}
+            name="import_mode"
+            label="导入方式"
+            rules={[{ required: true, message: '请选择导入方式' }]}
           >
-            <Input placeholder="https://www.wolai.com/..." />
+            <Radio.Group
+              optionType="button"
+              buttonStyle="solid"
+              onChange={(event) => {
+                if (event.target.value === 'file') {
+                  wolaiImportForm.setFields([{ name: 'url', errors: [] }]);
+                }
+              }}
+            >
+              <Radio.Button value="url">URL</Radio.Button>
+              <Radio.Button value="file">本地文件</Radio.Button>
+            </Radio.Group>
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.import_mode !== next.import_mode}>
+            {({ getFieldValue }) => {
+              const importMode = getFieldValue('import_mode') || 'url';
+              if (importMode === 'file') {
+                return (
+                  <Form.Item label="本地文件" required>
+                    <Upload.Dragger
+                      accept={documentImportAccept}
+                      beforeUpload={validateDocumentImportFile}
+                      fileList={documentImportFileList}
+                      maxCount={1}
+                      onChange={({ fileList }) => setDocumentImportFileList(fileList.slice(-1))}
+                      onRemove={() => {
+                        setDocumentImportFileList([]);
+                        return true;
+                      }}
+                    >
+                      <Space direction="vertical" size={6}>
+                        <UploadOutlined style={{ color: '#64748b', fontSize: 20 }} />
+                        <Text>拖入或选择文件</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          支持 Word、PDF、PPT、Excel、XMind、TXT 等常见非视频文件，单个文件不超过 50MB
+                        </Text>
+                      </Space>
+                    </Upload.Dragger>
+                  </Form.Item>
+                );
+              }
+              return (
+                <Form.Item
+                  name="url"
+                  label="URL"
+                  rules={[
+                    { required: true, message: '请填写 URL' },
+                    { type: 'url', message: '请输入完整 URL，例如 https://...' },
+                  ]}
+                >
+                  <Input placeholder="https://..." />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
           {!isWolaiImportUpdateMode && (
             <>
               <Form.Item name="title" label="标题">
-                <Input placeholder="留空则自动读取 Wolai 页面标题" />
+                <Input placeholder="留空则自动读取页面标题或文件名" />
               </Form.Item>
               <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
                 <Select options={domainOptions.filter(item => item.value !== 'all')} />
@@ -10661,7 +10777,9 @@ export default function Documents() {
             </>
           )}
           <Text type="secondary">
-            系统会自动渲染并采集 Wolai 页面正文，导入成功后将覆盖当前文档内容。
+            {isWolaiImportUpdateMode
+              ? 'URL 导入会采集页面正文；本地文件会作为附件导入，文本类文件会抽取预览。导入成功后将覆盖当前文档内容。'
+              : 'URL 导入会采集页面正文；本地文件会作为附件导入，文本类文件会抽取预览。导入成功后将创建新文档。'}
           </Text>
         </Form>
       </Modal>

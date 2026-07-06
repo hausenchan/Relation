@@ -75,6 +75,17 @@ const allowedUploadExtensions = new Set([
   'eml', 'msg',
 ]);
 const documentTextPreviewExtensions = new Set(['txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'xml', 'yaml', 'yml']);
+const documentImportFileExtensions = new Set([
+  'jpg', 'jpeg', 'png', 'gif', 'webp',
+  'pdf', 'ofd', 'caj', 'ceb',
+  'doc', 'docx', 'dot', 'dotx', 'rtf', 'wps', 'wpt', 'odt', 'pages',
+  'xls', 'xlsx', 'xlsm', 'xlsb', 'csv', 'tsv', 'et', 'ett', 'ods', 'numbers',
+  'ppt', 'pptx', 'pps', 'ppsx', 'dps', 'dpt', 'odp', 'key',
+  'txt', 'md', 'markdown', 'json', 'log', 'xml', 'yaml', 'yml',
+  'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2',
+  'vsdx', 'drawio', 'xmind', 'mind', 'mm',
+  'eml', 'msg',
+]);
 const upload = multer({
   storage,
   limits: { fileSize: 50 * 1024 * 1024 },
@@ -4793,6 +4804,128 @@ function getDocumentAttachment(id) {
   `).get(id);
 }
 
+function makeDocumentBlockId(prefix = 'b_import') {
+  return `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+}
+
+function validateDocumentImportFile(file) {
+  if (!file) return { error: '未收到文件' };
+  const filename = normalizeUploadedFilename(file.originalname || file.filename || '');
+  const ext = getFileExtFromName(filename);
+  const mime = String(file.mimetype || '').toLowerCase();
+  if (!ext || !documentImportFileExtensions.has(ext)) {
+    return { error: '暂不支持该文件格式，请上传 Word、PDF、PPT、Excel、XMind、TXT 等常见非视频文件' };
+  }
+  if (mime.startsWith('video/') || mime.startsWith('audio/')) {
+    return { error: '导入不支持视频或音频文件，请使用文档类文件' };
+  }
+  return { filename, ext, mime };
+}
+
+function readDocumentImportTextPreview(file, ext) {
+  if (!file?.filename || !documentTextPreviewExtensions.has(ext)) return '';
+  const filePath = path.join(UPLOADS_DIR, file.filename);
+  if (!fs.existsSync(filePath)) return '';
+  const content = fs.readFileSync(filePath, 'utf8');
+  return content.replace(/\r\n/g, '\n').slice(0, 20000);
+}
+
+function getUploadedFileHash(file) {
+  try {
+    const filePath = path.join(UPLOADS_DIR, file.filename);
+    if (file?.filename && fs.existsSync(filePath)) {
+      return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+    }
+  } catch {}
+  return crypto
+    .createHash('sha256')
+    .update(`${file?.originalname || ''}:${file?.size || 0}:${file?.filename || ''}`)
+    .digest('hex');
+}
+
+function createDocumentAttachmentRecord(docId, file, userId, { blockId = null, displayName = '' } = {}) {
+  const filename = normalizeUploadedFilename(file.originalname);
+  const finalDisplayName = String(displayName || filename).trim() || filename;
+  const result = db.prepare(`
+    INSERT INTO document_attachments (
+      document_id, block_id, filename, display_name, filepath, mimetype, file_ext, size, preview_status, created_by, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(
+    docId,
+    blockId,
+    filename,
+    finalDisplayName,
+    file.filename,
+    file.mimetype,
+    getFileExtFromName(filename),
+    file.size,
+    getDocumentAttachmentPreviewStatus(file.mimetype, filename),
+    userId
+  );
+  return serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid));
+}
+
+function buildDocumentImportBlocks(attachment, textPreview = '') {
+  const blocks = [];
+  const displayName = attachment.display_name || attachment.filename || '导入文件';
+  blocks.push({
+    id: makeDocumentBlockId('b_import_note'),
+    type: 'paragraph',
+    content: `已导入本地文件：${displayName}`,
+    checked: false,
+    highlight: '',
+    meta: {},
+  });
+  blocks.push({
+    id: attachment.block_id || makeDocumentBlockId('b_import_file'),
+    type: 'attachment',
+    content: displayName,
+    checked: false,
+    highlight: '',
+    meta: {
+      attachment_id: attachment.id,
+      filename: attachment.filename || displayName,
+      display_name: displayName,
+      url: attachment.url || '',
+      filepath: attachment.filepath || '',
+      mimetype: attachment.mimetype || '',
+      file_ext: attachment.file_ext || getFileExtFromName(displayName),
+      size: Number(attachment.size || 0),
+      preview_status: attachment.preview_status || 'unsupported',
+      created_by_name: attachment.creator_name || '',
+      created_at: attachment.created_at || '',
+      updated_at: attachment.updated_at || '',
+    },
+  });
+  const previewText = String(textPreview || '').trim();
+  if (previewText) {
+    blocks.push({
+      id: makeDocumentBlockId('b_import_text_title'),
+      type: 'heading2',
+      content: '文本预览',
+      checked: false,
+      highlight: '',
+      meta: {},
+    });
+    previewText
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .slice(0, 120)
+      .forEach(line => {
+        blocks.push({
+          id: makeDocumentBlockId('b_import_text'),
+          type: 'paragraph',
+          content: line,
+          checked: false,
+          highlight: '',
+          meta: {},
+        });
+      });
+  }
+  return blocks;
+}
+
 function buildDocumentVisibilityFilter(user, alias = 'd') {
   if (user.role === 'admin') return { sql: '', params: [] };
 
@@ -5264,19 +5397,15 @@ app.post('/api/documents', canWrite, (req, res) => {
 
 app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
   const rawUrl = String(req.body?.url || '').trim();
-  if (!rawUrl) return res.status(400).json({ error: '请填写 Wolai URL' });
+  if (!rawUrl) return res.status(400).json({ error: '请填写 URL' });
   let url;
   try {
     url = new URL(rawUrl);
   } catch {
-    return res.status(400).json({ error: 'Wolai URL 格式不正确' });
+    return res.status(400).json({ error: 'URL 格式不正确' });
   }
   if (!['http:', 'https:'].includes(url.protocol)) {
     return res.status(400).json({ error: '仅支持 http/https URL' });
-  }
-  const hostname = url.hostname.toLowerCase();
-  if (hostname !== 'wolai.com' && !hostname.endsWith('.wolai.com')) {
-    return res.status(400).json({ error: '目前仅支持 wolai.com 的文档 URL' });
   }
 
   try {
@@ -5289,16 +5418,17 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
     const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
     const id = createDocumentRecord({
       ...req.body,
-      title: imported.title || req.body?.title || 'Wolai 导入文档',
+      title: imported.title || req.body?.title || 'URL 导入文档',
       content: { blocks: imported.blocks },
       content_text: imported.content_text,
-      tags: [...new Set(['wolai', ...tags])],
+      tags: [...new Set(['url-import', ...tags])],
       current_version: req.body?.current_version || 'V1.0',
       width_mode: req.body?.width_mode || 'full',
     }, req.user);
+    const isWolaiUrl = url.hostname.toLowerCase() === 'wolai.com' || url.hostname.toLowerCase().endsWith('.wolai.com');
     db.prepare(`
       UPDATE documents SET
-        source_system = 'wolai',
+        source_system = ?,
         source_record_key = ?,
         source_url = ?,
         source_payload_hash = ?,
@@ -5309,6 +5439,7 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(
+      isWolaiUrl ? 'wolai' : 'url',
       imported.source_record_key,
       imported.source_url,
       imported.source_payload_hash,
@@ -5325,7 +5456,7 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
       id,
       'V1.0',
       req.user.id,
-      '从 Wolai URL 导入',
+      '从 URL 导入',
       `来源：${imported.source_url}\n采集方式：${imported.capture_method}`,
       imported.warnings?.length ? imported.warnings.join('；') : null
     );
@@ -5339,9 +5470,95 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({
-      error: error.message || 'Wolai URL 导入失败',
-      hint: '系统会自动启动 Chrome 渲染 Wolai 页面并采集正文；如果仍失败，请确认服务器安装了 Chrome/Chromium，且该 Wolai URL 对当前登录态或公开访问可见。',
+      error: error.message || 'URL 导入失败',
+      hint: '系统会自动启动 Chrome 渲染页面并采集正文；如果仍失败，请确认服务器安装了 Chrome/Chromium，且该 URL 对当前登录态或公开访问可见。',
     });
+  }
+});
+
+app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+  const validation = validateDocumentImportFile(req.file);
+  if (validation.error) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(400).json({ error: validation.error });
+  }
+
+  let attachmentCreated = false;
+  try {
+    const filename = validation.filename;
+    const fileHash = getUploadedFileHash(req.file);
+    const defaultTitle = filename.replace(/\.[^.]+$/, '') || filename || '文件导入文档';
+    const id = createDocumentRecord({
+      ...req.body,
+      title: String(req.body?.title || '').trim() || defaultTitle,
+      content: { blocks: [] },
+      content_text: '',
+      tags: [...new Set(['file-import', ...String(req.body?.tags || '').split(',').map(item => item.trim()).filter(Boolean)])],
+      current_version: req.body?.current_version || 'V1.0',
+      width_mode: req.body?.width_mode || 'full',
+    }, req.user);
+    const attachmentBlockId = makeDocumentBlockId('b_import_file');
+    const attachment = createDocumentAttachmentRecord(id, req.file, req.user.id, {
+      blockId: attachmentBlockId,
+      displayName: filename,
+    });
+    attachmentCreated = true;
+    const textPreview = readDocumentImportTextPreview(req.file, validation.ext);
+    const content = { blocks: buildDocumentImportBlocks(attachment, textPreview) };
+    const contentText = extractDocumentText(content);
+    db.prepare(`
+      UPDATE documents SET
+        content = ?,
+        content_text = ?,
+        summary = ?,
+        source_system = 'file',
+        source_record_key = ?,
+        source_url = ?,
+        source_payload_hash = ?,
+        import_batch_no = ?,
+        import_status = ?,
+        quality_status = ?,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      JSON.stringify(content),
+      contentText,
+      buildDocumentSummary(contentText),
+      `file:${fileHash.slice(0, 24)}`,
+      attachment.url || '',
+      fileHash,
+      `file_import_${Date.now()}`,
+      'imported',
+      contentText.trim() ? 'pass' : 'warning',
+      req.user.id,
+      id
+    );
+    db.prepare(`
+      INSERT INTO document_change_logs (document_id, version, changed_by, summary, detail_text, remark)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      'V1.0',
+      req.user.id,
+      '导入本地文件',
+      `文件：${attachment.display_name}\n格式：${attachment.file_ext || validation.ext}\n大小：${attachment.size || 0} bytes`,
+      textPreview ? '已抽取文本预览' : '该文件已作为附件导入'
+    );
+    const row = getVisibleDocument(id, req.user);
+    res.json({
+      ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
+      import_meta: {
+        source_type: 'file',
+        file_ext: attachment.file_ext || validation.ext,
+        attachment_id: attachment.id,
+        text_preview: Boolean(textPreview),
+        warnings: textPreview ? [] : ['该文件格式不支持直接抽取正文，已作为附件导入'],
+      },
+    });
+  } catch (error) {
+    if (!attachmentCreated) cleanupUploadedFiles(req.file ? [req.file] : []);
+    res.status(400).json({ error: error.message || '文件导入失败' });
   }
 });
 
@@ -5351,19 +5568,15 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
   if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
 
   const rawUrl = String(req.body?.url || '').trim();
-  if (!rawUrl) return res.status(400).json({ error: '请填写 Wolai URL' });
+  if (!rawUrl) return res.status(400).json({ error: '请填写 URL' });
   let url;
   try {
     url = new URL(rawUrl);
   } catch {
-    return res.status(400).json({ error: 'Wolai URL 格式不正确' });
+    return res.status(400).json({ error: 'URL 格式不正确' });
   }
   if (!['http:', 'https:'].includes(url.protocol)) {
     return res.status(400).json({ error: '仅支持 http/https URL' });
-  }
-  const hostname = url.hostname.toLowerCase();
-  if (hostname !== 'wolai.com' && !hostname.endsWith('.wolai.com')) {
-    return res.status(400).json({ error: '目前仅支持 wolai.com 的文档 URL' });
   }
 
   try {
@@ -5388,13 +5601,14 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
     };
     const importBatchNo = `wolai_url_update_${Date.now()}`;
     const qualityStatus = contentText.trim() ? (imported.warnings?.length ? 'warning' : 'pass') : 'warning';
+    const isWolaiUrl = url.hostname.toLowerCase() === 'wolai.com' || url.hostname.toLowerCase().endsWith('.wolai.com');
     const updateFromWolai = db.transaction(() => {
       db.prepare(`
         UPDATE documents SET
           content = ?,
           content_text = ?,
           summary = ?,
-          source_system = 'wolai',
+          source_system = ?,
           source_record_key = ?,
           source_url = ?,
           source_payload_hash = ?,
@@ -5408,6 +5622,7 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
         storedContent,
         contentText,
         buildDocumentSummary(contentText),
+        isWolaiUrl ? 'wolai' : 'url',
         imported.source_record_key,
         imported.source_url,
         imported.source_payload_hash,
@@ -5425,7 +5640,7 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
         doc.id,
         doc.current_version || 'V1.0',
         req.user.id,
-        '从 Wolai URL 更新正文',
+        '从 URL 更新正文',
         `来源：${imported.source_url}\n采集方式：${imported.capture_method}`,
         imported.warnings?.length ? imported.warnings.join('；') : null
       );
@@ -5441,9 +5656,109 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
     });
   } catch (error) {
     res.status(400).json({
-      error: error.message || 'Wolai URL 导入失败',
-      hint: '系统会自动启动 Chrome 渲染 Wolai 页面并采集正文；如果仍失败，请确认服务器安装了 Chrome/Chromium，且该 Wolai URL 对当前登录态或公开访问可见。',
+      error: error.message || 'URL 导入失败',
+      hint: '系统会自动启动 Chrome 渲染页面并采集正文；如果仍失败，请确认服务器安装了 Chrome/Chromium，且该 URL 对当前登录态或公开访问可见。',
     });
+  }
+});
+
+app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(404).json({ error: '文档不存在或无权限访问' });
+  }
+  if (!canEditDocument(req.user, doc)) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  }
+  const validation = validateDocumentImportFile(req.file);
+  if (validation.error) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(400).json({ error: validation.error });
+  }
+
+  let attachmentCreated = false;
+  try {
+    const filename = validation.filename;
+    const fileHash = getUploadedFileHash(req.file);
+    const attachmentBlockId = makeDocumentBlockId('b_import_file');
+    const attachment = createDocumentAttachmentRecord(doc.id, req.file, req.user.id, {
+      blockId: attachmentBlockId,
+      displayName: filename,
+    });
+    attachmentCreated = true;
+    const textPreview = readDocumentImportTextPreview(req.file, validation.ext);
+    const content = { blocks: buildDocumentImportBlocks(attachment, textPreview) };
+    const storedContent = JSON.stringify(content);
+    const contentText = extractDocumentText(content);
+    const beforeSnapshot = {
+      title: doc.title,
+      content: doc.content,
+      content_text: doc.content_text,
+    };
+    const afterSnapshot = {
+      title: doc.title,
+      content: storedContent,
+      content_text: contentText,
+    };
+    const updateFromFile = db.transaction(() => {
+      db.prepare(`
+        UPDATE documents SET
+          content = ?,
+          content_text = ?,
+          summary = ?,
+          source_system = 'file',
+          source_record_key = ?,
+          source_url = ?,
+          source_payload_hash = ?,
+          import_batch_no = ?,
+          import_status = ?,
+          quality_status = ?,
+          updated_by = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        storedContent,
+        contentText,
+        buildDocumentSummary(contentText),
+        `file:${fileHash.slice(0, 24)}`,
+        attachment.url || '',
+        fileHash,
+        `file_import_update_${Date.now()}`,
+        'imported',
+        contentText.trim() ? 'pass' : 'warning',
+        req.user.id,
+        doc.id
+      );
+      insertDocumentEditRecord(doc.id, req.user.id, 'file_import', beforeSnapshot, afterSnapshot);
+      db.prepare(`
+        INSERT INTO document_change_logs (document_id, version, changed_by, summary, detail_text, remark)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        doc.id,
+        doc.current_version || 'V1.0',
+        req.user.id,
+        '导入本地文件更新正文',
+        `文件：${attachment.display_name}\n格式：${attachment.file_ext || validation.ext}\n大小：${attachment.size || 0} bytes`,
+        textPreview ? '已抽取文本预览' : '该文件已作为附件导入'
+      );
+    });
+    updateFromFile();
+    const row = getVisibleDocument(doc.id, req.user);
+    res.json({
+      ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
+      import_meta: {
+        source_type: 'file',
+        file_ext: attachment.file_ext || validation.ext,
+        attachment_id: attachment.id,
+        text_preview: Boolean(textPreview),
+        warnings: textPreview ? [] : ['该文件格式不支持直接抽取正文，已作为附件导入'],
+      },
+    });
+  } catch (error) {
+    if (!attachmentCreated) cleanupUploadedFiles(req.file ? [req.file] : []);
+    res.status(400).json({ error: error.message || '文件导入失败' });
   }
 });
 
