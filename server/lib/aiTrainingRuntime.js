@@ -675,6 +675,56 @@ function getLlmRuntimeStatus(overrides = null) {
   };
 }
 
+function getUrlOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return normalizeText(value || DEFAULT_LLM_BASE_URL);
+  }
+}
+
+function getUrlHostname(value) {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return normalizeText(value || DEFAULT_LLM_BASE_URL);
+  }
+}
+
+function normalizeLlmHttpErrorMessage(status, text) {
+  const raw = normalizeText(text);
+  if (!raw) return `模型接口返回 HTTP ${status}`;
+  try {
+    const parsed = JSON.parse(raw);
+    const message = normalizeText(parsed?.error?.message || parsed?.message || raw);
+    return `模型接口返回 HTTP ${status}：${message}`;
+  } catch {
+    return `模型接口返回 HTTP ${status}：${raw.slice(0, 300)}`;
+  }
+}
+
+function buildLlmFetchFailureMessage(error, config) {
+  const origin = getUrlOrigin(config?.baseUrl);
+  const hostname = getUrlHostname(config?.baseUrl);
+  const cause = error?.cause || {};
+  const code = cause.code || cause.name || error?.code || error?.name || '';
+  const detail = code ? `（${code}）` : '';
+
+  if (error?.name === 'TimeoutError' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT') {
+    return `模型接口连接超时${detail}：服务端在 ${Math.round(Number(config?.timeoutMs || 0) / 1000) || 15} 秒内无法访问 ${origin}。请确认服务器网络可达，或把 Base URL 改为公司可访问的 OpenAI 兼容网关地址。`;
+  }
+  if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) {
+    return `模型接口域名解析失败${detail}：服务端无法解析 ${hostname}。请检查 DNS、服务器网络，或把 Base URL 改为可访问的 OpenAI 兼容网关地址。`;
+  }
+  if (['ECONNREFUSED', 'ECONNRESET', 'UND_ERR_SOCKET'].includes(code)) {
+    return `模型接口连接失败${detail}：服务端访问 ${origin} 时连接被拒绝或中断。请确认该 Base URL 在服务器环境可访问。`;
+  }
+  if (String(error?.message || '').includes('fetch failed')) {
+    return `服务端访问模型接口失败：无法连接 ${origin}。如果线上服务器不能直连 OpenAI，请在 Base URL 填写公司可访问的 OpenAI 兼容网关地址，或为服务器配置网络代理。`;
+  }
+  return `服务端访问模型接口失败${detail}：${normalizeText(error?.message || '未知网络错误')}。请确认 Base URL 在服务器环境可访问。`;
+}
+
 async function postChatCompletion(config, payload, useJsonMode = true) {
   const body = {
     model: config.model,
@@ -684,18 +734,23 @@ async function postChatCompletion(config, payload, useJsonMode = true) {
   if (useJsonMode) {
     body.response_format = { type: 'json_object' };
   }
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(config.timeoutMs),
-  });
+  let response;
+  try {
+    response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(config.timeoutMs),
+    });
+  } catch (error) {
+    throw new Error(buildLlmFetchFailureMessage(error, config));
+  }
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`LLM HTTP ${response.status}: ${text}`);
+    throw new Error(normalizeLlmHttpErrorMessage(response.status, text));
   }
   return response.json();
 }

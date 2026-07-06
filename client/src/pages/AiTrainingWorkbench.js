@@ -1571,6 +1571,12 @@ export default function AiTrainingWorkbench() {
               message="个人模型 Key 仅当前账号使用"
               description="保存后，AI训练台会优先使用你的个人 Key；未配置或停用时，自动回退到系统模型或规则模式。"
             />
+            <Alert
+              type="warning"
+              showIcon
+              message="测试连接由服务端发起"
+              description="如果 Base URL 使用 api.openai.com 但服务器网络不能直连 OpenAI，会提示连接失败；这种情况请填写公司可访问的 OpenAI 兼容网关地址。"
+            />
             <Form
               form={modelSettingForm}
               layout="vertical"
@@ -1593,7 +1599,12 @@ export default function AiTrainingWorkbench() {
                   </Form.Item>
                 </Col>
               </Row>
-              <Form.Item label="Base URL" name="base_url" rules={[{ required: true, message: '请输入 Base URL' }]}>
+              <Form.Item
+                label="Base URL"
+                name="base_url"
+                extra="需要填写服务端可访问的 /v1 地址，例如官方地址或公司统一模型网关。"
+                rules={[{ required: true, message: '请输入 Base URL' }]}
+              >
                 <Input placeholder="https://api.openai.com/v1" />
               </Form.Item>
               <Form.Item
