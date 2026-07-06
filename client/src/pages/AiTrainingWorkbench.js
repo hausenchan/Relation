@@ -63,6 +63,17 @@ const VISIBILITY_OPTIONS = [
   { value: 'team', label: '团队可见' },
 ];
 
+const SESSION_CREATE_INITIAL_VALUES = {
+  title: undefined,
+  scene_code: 'revenue_diagnosis',
+  business_line: 'zhixiao',
+  business_side: '预算侧',
+  budget_side: 'C端',
+  role_scope: 'strategy',
+  visibility_scope: 'private',
+  skill_id: undefined,
+};
+
 function formatTime(value) {
   return value ? dayjs(value).format('MM-DD HH:mm') : '-';
 }
@@ -119,10 +130,21 @@ function formatScorePercent(value) {
   return `${Math.round(numeric * 100)}%`;
 }
 
+function runtimeModeTag(mode) {
+  const map = {
+    llm: { color: 'green', label: 'LLM' },
+    deterministic: { color: 'blue', label: 'Skill Runtime' },
+    deterministic_fallback: { color: 'gold', label: 'Skill 回退' },
+  };
+  const current = map[mode] || { color: 'default', label: mode || 'Runtime' };
+  return <Tag color={current.color}>{current.label}</Tag>;
+}
+
 function ChatBubble({ item, writable, onFeedback, onAction }) {
   const isUser = item.message_role === 'user';
   const isAssistant = item.message_role === 'assistant';
   const bubbleBg = isUser ? '#edf4ff' : '#ffffff';
+  const runtimeMeta = item.structured_json?.runtime_meta || null;
 
   return (
     <div
@@ -142,6 +164,9 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
             <Text type="secondary" style={{ fontSize: 12 }}>
               {formatTime(item.created_at)}
             </Text>
+            {isAssistant && runtimeMeta?.mode && runtimeModeTag(runtimeMeta.mode)}
+            {isAssistant && runtimeMeta?.skill_name ? <Tag color="geekblue">{runtimeMeta.skill_name}</Tag> : null}
+            {isAssistant && runtimeMeta?.skill_version_no ? <Tag>版本 {runtimeMeta.skill_version_no}</Tag> : null}
             {!isUser && qualityTag(item.avg_rating ? Math.round(item.avg_rating * 20) : null)}
           </Space>
 
@@ -452,10 +477,40 @@ export default function AiTrainingWorkbench() {
     () => skills.find((item) => item.id === selectedSkillId) || null,
     [selectedSkillId, skills],
   );
+  const publishedSkillOptions = useMemo(
+    () => (skills || [])
+      .filter((item) => item.status === 'published' && item.publish_version_id)
+      .map((item) => ({
+        value: item.id,
+        label: `${item.name} · ${item.business_line || '-'} / ${item.scene_code || '-'}`,
+      })),
+    [skills],
+  );
   const canManageCurrentSkill = Boolean(skillDetail?.skill?.can_manage || currentSkill?.can_manage);
 
   const topSessionQuality = currentSession?.quality_score || 0;
   const lastAssistantMessage = [...messages].reverse().find((item) => item.message_role === 'assistant');
+  const currentSessionSkillName = currentSession?.skill_name || currentSession?.context_snapshot_json?.skill_name || '';
+  const currentSessionSkillVersion = currentSession?.skill_version_no || currentSession?.context_snapshot_json?.skill_version_no || '';
+
+  const openCreateSessionModal = useCallback((preset = {}) => {
+    setCreateModalOpen(true);
+    createForm.setFieldsValue({ ...SESSION_CREATE_INITIAL_VALUES, ...preset });
+  }, [createForm]);
+
+  const handleCreateSkillChange = useCallback((value) => {
+    if (!value) return;
+    const targetSkill = skills.find((item) => item.id === value);
+    if (!targetSkill) return;
+    createForm.setFieldsValue({
+      scene_code: targetSkill.scene_code || SESSION_CREATE_INITIAL_VALUES.scene_code,
+      business_line: targetSkill.business_line || SESSION_CREATE_INITIAL_VALUES.business_line,
+      business_side: targetSkill.business_side || SESSION_CREATE_INITIAL_VALUES.business_side,
+      budget_side: targetSkill.budget_side || SESSION_CREATE_INITIAL_VALUES.budget_side,
+      role_scope: targetSkill.role_scope || SESSION_CREATE_INITIAL_VALUES.role_scope,
+      skill_id: targetSkill.id,
+    });
+  }, [createForm, skills]);
 
   const createSession = async () => {
     const values = await createForm.validateFields();
@@ -656,7 +711,7 @@ export default function AiTrainingWorkbench() {
             extra={
               <Space>
                 <Button icon={<ReloadOutlined />} onClick={loadSessions} />
-                {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>新建</Button>}
+                {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateSessionModal()}>新建</Button>}
               </Space>
             }
             bodyStyle={{ padding: 12 }}
@@ -688,6 +743,7 @@ export default function AiTrainingWorkbench() {
                           <Space size={[6, 6]} wrap>
                             <Tag>{item.business_line || '未分配业务线'}</Tag>
                             <Tag>{item.business_side || '未设视角'}</Tag>
+                            {item.skill_name ? <Tag color="geekblue">{item.skill_name}</Tag> : <Tag>未绑定 Skill</Tag>}
                             <Tag>{item.message_count || 0} 条消息</Tag>
                             {qualityTag(item.quality_score)}
                           </Space>
@@ -713,6 +769,8 @@ export default function AiTrainingWorkbench() {
                   <Tag color="blue">{currentSession.scene_label || '通用训练'}</Tag>
                   <Tag color="purple">{currentSession.business_line || '未设置业务线'}</Tag>
                   <Tag>{currentSession.role_scope || currentSession.business_side || '未设置角色'}</Tag>
+                  {currentSessionSkillName ? <Tag color="geekblue">{currentSessionSkillName}</Tag> : <Tag>未绑定 Skill</Tag>}
+                  {currentSessionSkillVersion ? <Tag>版本 {currentSessionSkillVersion}</Tag> : null}
                 </Space>
               ) : null
             }
@@ -743,6 +801,9 @@ export default function AiTrainingWorkbench() {
                     <Space size={[8, 8]} wrap>
                       <Tag color="blue">场景：{currentSession.scene_label || '通用训练'}</Tag>
                       <Tag>输出：结论 / 证据 / 动作</Tag>
+                      <Tag color={currentSessionSkillName ? 'geekblue' : 'default'}>
+                        {currentSessionSkillName ? `Skill：${currentSessionSkillName}` : 'Skill：系统自动匹配'}
+                      </Tag>
                       <Tag>{currentSession.visibility_scope === 'team' ? '团队可见' : '仅自己'}</Tag>
                     </Space>
                     <TextArea
@@ -781,6 +842,9 @@ export default function AiTrainingWorkbench() {
                   <Text type="secondary">当前上下文</Text>
                   <Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
                     {currentSession.business_line || '-'} · {currentSession.business_side || '-'} · {currentSession.scene_label || '-'}
+                    <br />
+                    Skill：{currentSessionSkillName || '暂未绑定，发送消息时系统会优先自动匹配'}
+                    {currentSessionSkillVersion ? `（${currentSessionSkillVersion}）` : ''}
                     <br />
                     权限：{currentSession.visibility_scope === 'team' ? '团队共享' : '仅自己'}
                     <br />
@@ -1035,27 +1099,47 @@ export default function AiTrainingWorkbench() {
       <Col xs={24} xl={14}>
         <Card
           title={currentSkill?.name || 'Skill 详情'}
-          extra={currentSkill && canManageCurrentSkill ? (
+          extra={currentSkill ? (
             <Space wrap>
-              <Button
-                loading={skillActionLoading === 'evaluate'}
-                onClick={evaluateCurrentSkill}
-              >
-                发起重评测
-              </Button>
-              <Button
-                type="primary"
-                loading={skillActionLoading === 'publish'}
-                onClick={publishCurrentSkill}
-              >
-                发布
-              </Button>
-              <Button
-                loading={skillActionLoading === 'rollback'}
-                onClick={rollbackCurrentSkill}
-              >
-                回滚
-              </Button>
+              {currentSkill.status === 'published' ? (
+                <Button
+                  type="default"
+                  onClick={() => openCreateSessionModal({
+                    title: `${currentSkill.name} 会话`,
+                    scene_code: currentSkill.scene_code || SESSION_CREATE_INITIAL_VALUES.scene_code,
+                    business_line: currentSkill.business_line || SESSION_CREATE_INITIAL_VALUES.business_line,
+                    business_side: currentSkill.business_side || SESSION_CREATE_INITIAL_VALUES.business_side,
+                    budget_side: currentSkill.budget_side || SESSION_CREATE_INITIAL_VALUES.budget_side,
+                    role_scope: currentSkill.role_scope || SESSION_CREATE_INITIAL_VALUES.role_scope,
+                    skill_id: currentSkill.id,
+                  })}
+                >
+                  用此 Skill 新建会话
+                </Button>
+              ) : null}
+              {canManageCurrentSkill ? (
+                <>
+                  <Button
+                    loading={skillActionLoading === 'evaluate'}
+                    onClick={evaluateCurrentSkill}
+                  >
+                    发起重评测
+                  </Button>
+                  <Button
+                    type="primary"
+                    loading={skillActionLoading === 'publish'}
+                    onClick={publishCurrentSkill}
+                  >
+                    发布
+                  </Button>
+                  <Button
+                    loading={skillActionLoading === 'rollback'}
+                    onClick={rollbackCurrentSkill}
+                  >
+                    回滚
+                  </Button>
+                </>
+              ) : null}
             </Space>
           ) : null}
           bodyStyle={{ padding: 16 }}
@@ -1408,13 +1492,7 @@ export default function AiTrainingWorkbench() {
         <Form
           form={createForm}
           layout="vertical"
-          initialValues={{
-            scene_code: 'revenue_diagnosis',
-            business_line: 'zhixiao',
-            business_side: '预算侧',
-            role_scope: 'strategy',
-            visibility_scope: 'private',
-          }}
+          initialValues={SESSION_CREATE_INITIAL_VALUES}
         >
           <Form.Item label="会话标题" name="title">
             <Input placeholder="例如：支小收入回撤排查模板" />
@@ -1428,8 +1506,19 @@ export default function AiTrainingWorkbench() {
           <Form.Item label="视角" name="business_side" rules={[{ required: true, message: '请选择视角' }]}>
             <Select options={BUSINESS_SIDE_OPTIONS} />
           </Form.Item>
+          <Form.Item label="预算侧" name="budget_side">
+            <Select options={[{ value: 'C端', label: 'C端' }, { value: 'B端', label: 'B端' }]} />
+          </Form.Item>
           <Form.Item label="角色" name="role_scope" rules={[{ required: true, message: '请选择角色' }]}>
             <Select options={ROLE_SCOPE_OPTIONS} />
+          </Form.Item>
+          <Form.Item label="绑定已发布 Skill" name="skill_id">
+            <Select
+              allowClear
+              placeholder="不指定则由系统自动匹配"
+              options={publishedSkillOptions}
+              onChange={handleCreateSkillChange}
+            />
           </Form.Item>
           <Form.Item label="可见范围" name="visibility_scope" rules={[{ required: true, message: '请选择可见范围' }]}>
             <Select options={VISIBILITY_OPTIONS} />
@@ -1451,7 +1540,7 @@ export default function AiTrainingWorkbench() {
         <Space wrap>
           <Button icon={<ReloadOutlined />} onClick={refreshCore}>刷新</Button>
           <Button icon={<TeamOutlined />} onClick={() => setTab('cases')}>查看案例库</Button>
-          {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>新建训练会话</Button>}
+          {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateSessionModal()}>新建训练会话</Button>}
         </Space>
       </Space>
 
