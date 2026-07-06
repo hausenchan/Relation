@@ -158,9 +158,10 @@ const getStoredStringArray = (storageKey, fallbackValue) => {
   return fallbackValue;
 };
 
-function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onReorder }) {
+function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onCloseAll, onCloseOthers, onReorder }) {
   const trackRef = React.useRef(null);
   const [draggingKey, setDraggingKey] = useState(null);
+  const hasClosableTabs = tabs.some(tab => tab.key !== '/');
 
   useEffect(() => {
     const track = trackRef.current;
@@ -213,40 +214,66 @@ function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onReorder
         {tabs.map(tab => {
           const active = tab.key === activeKey;
           const closable = tab.key !== '/';
+          const hasOtherClosableTabs = tabs.some(item => item.key !== tab.key && item.key !== '/');
+          const contextMenuItems = [
+            { key: 'close-current', label: '关闭当前窗口', disabled: !closable },
+            { key: 'close-all', label: '关闭全部', disabled: !hasClosableTabs },
+            { key: 'close-others', label: '关闭其它全部', disabled: !hasOtherClosableTabs },
+          ];
+          const handleContextMenuClick = ({ key, domEvent }) => {
+            domEvent?.stopPropagation?.();
+            if (key === 'close-current') {
+              onClose(tab.key);
+              return;
+            }
+            if (key === 'close-all') {
+              onCloseAll();
+              return;
+            }
+            if (key === 'close-others') {
+              onCloseOthers(tab.key);
+            }
+          };
+
           return (
-            <div
+            <Dropdown
               key={tab.key}
-              data-tab-key={tab.key}
-              role="tab"
-              aria-selected={active}
-              tabIndex={active ? 0 : -1}
-              title={tab.title}
-              draggable={tabs.length > 1}
-              className={`workspace-tab${active ? ' is-active' : ''}${draggingKey === tab.key ? ' is-dragging' : ''}`}
-              onClick={() => onSelect(tab)}
-              onKeyDown={(event) => activateWithKeyboard(event, tab)}
-              onDragStart={(event) => handleDragStart(event, tab.key)}
-              onDragEnd={() => setDraggingKey(null)}
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => handleDrop(event, tab.key)}
+              trigger={['contextMenu']}
+              menu={{ items: contextMenuItems, onClick: handleContextMenuClick }}
             >
-              <span className="workspace-tab-title">{tab.title}</span>
-              {closable && (
-                <button
-                  type="button"
-                  className="workspace-tab-close"
-                  aria-label={`关闭${tab.title}`}
-                  title={`关闭${tab.title}`}
-                  onMouseDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onClose(tab.key);
-                  }}
-                >
-                  <CloseOutlined />
-                </button>
-              )}
-            </div>
+              <div
+                data-tab-key={tab.key}
+                role="tab"
+                aria-selected={active}
+                tabIndex={active ? 0 : -1}
+                title={tab.title}
+                draggable={tabs.length > 1}
+                className={`workspace-tab${active ? ' is-active' : ''}${draggingKey === tab.key ? ' is-dragging' : ''}`}
+                onClick={() => onSelect(tab)}
+                onKeyDown={(event) => activateWithKeyboard(event, tab)}
+                onDragStart={(event) => handleDragStart(event, tab.key)}
+                onDragEnd={() => setDraggingKey(null)}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => handleDrop(event, tab.key)}
+              >
+                <span className="workspace-tab-title">{tab.title}</span>
+                {closable && (
+                  <button
+                    type="button"
+                    className="workspace-tab-close"
+                    aria-label={`关闭${tab.title}`}
+                    title={`关闭${tab.title}`}
+                    onMouseDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onClose(tab.key);
+                    }}
+                  >
+                    <CloseOutlined />
+                  </button>
+                )}
+              </div>
+            </Dropdown>
           );
         })}
         {isMobile && <span className="workspace-tabs-mobile-spacer" aria-hidden="true" />}
@@ -638,6 +665,26 @@ function AppLayout() {
 
     if (key === activeTabKey) {
       navigate('/');
+    }
+  };
+
+  const handleTabCloseAll = () => {
+    setWorkspaceTabs([HOME_TAB]);
+    if (activeTabKey !== '/') {
+      navigate('/');
+    }
+  };
+
+  const handleTabCloseOthers = (key) => {
+    const normalizedTabs = normalizeWorkspaceTabs(workspaceTabs);
+    const targetTab = normalizedTabs.find(tab => tab.key === key);
+    const nextTabs = targetTab && targetTab.key !== '/' ? [HOME_TAB, targetTab] : [HOME_TAB];
+
+    setWorkspaceTabs(nextTabs);
+
+    const nextActiveTab = targetTab && targetTab.key !== '/' ? targetTab : HOME_TAB;
+    if (activeTabKey !== nextActiveTab.key) {
+      navigate(nextActiveTab.path || nextActiveTab.key);
     }
   };
 
@@ -1072,6 +1119,8 @@ function AppLayout() {
             isMobile={isMobile}
             onSelect={handleTabSelect}
             onClose={handleTabClose}
+            onCloseAll={handleTabCloseAll}
+            onCloseOthers={handleTabCloseOthers}
             onReorder={handleTabReorder}
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16, flexShrink: 0 }}>
