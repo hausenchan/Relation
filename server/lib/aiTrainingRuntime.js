@@ -1,0 +1,641 @@
+const DEFAULT_SECTION_TITLES = ['结论摘要', '核心证据', '风险提醒', '下一步建议'];
+
+const SCENE_SUGGESTION_TYPE_MAP = {
+  revenue_diagnosis: ['revenue_diagnosis', 'collaboration', 'media_mix'],
+  budget_advice: ['budget_adjustment', 'revenue_diagnosis'],
+  daily_report: ['revenue_diagnosis', 'budget_adjustment', 'collaboration', 'media_mix'],
+  general_chat: ['revenue_diagnosis', 'budget_adjustment', 'collaboration', 'media_mix'],
+};
+
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function clipText(value, maxLength = 48) {
+  const chars = Array.from(normalizeText(value));
+  return chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}...` : chars.join('');
+}
+
+function compactWhitespace(value) {
+  return normalizeText(value).replace(/\s+/g, ' ');
+}
+
+function buildKeywordSet(value) {
+  const matches = compactWhitespace(value)
+    .toLowerCase()
+    .match(/[\u4e00-\u9fa5]{2,8}|[a-z0-9_.:%+-]{2,}/gi) || [];
+  return new Set(matches.map(item => item.trim()).filter(Boolean));
+}
+
+function hasDateLikeExpression(text) {
+  return /(\d{4}[./-]\d{1,2}[./-]\d{1,2})|(\d{1,2}[./-]\d{1,2})|(今天|昨日|昨天|本周|上周|本月|上月|本季度|上季度|最近\s*\d+\s*[天日周月]|近\s*\d+\s*[天日周月]|4-6月|4月到6月)/.test(text);
+}
+
+function hasCompareLikeExpression(text) {
+  return /(较前|环比|同比|对比|相比|上一|前一|回撤|增长|变化|波动|抬头|下降|提升)/.test(text);
+}
+
+function inferSectionTitles(outputSchema, outputTemplate) {
+  if (Array.isArray(outputSchema?.sections) && outputSchema.sections.length > 0) {
+    return outputSchema.sections.map(item => normalizeText(item)).filter(Boolean);
+  }
+  const headings = normalizeText(outputTemplate)
+    .split(/\n+/)
+    .map(item => normalizeText(item.replace(/[:：-]+$/g, '')))
+    .filter(item => item && item.length <= 12);
+  return headings.length >= 2 ? headings : DEFAULT_SECTION_TITLES;
+}
+
+function extractPromptSignals(promptText, session = {}) {
+  const text = compactWhitespace(promptText);
+  const lowerText = text.toLowerCase();
+  return {
+    text,
+    lower_text: lowerText,
+    keywords: buildKeywordSet(text),
+    has_time_range: hasDateLikeExpression(text),
+    has_compare_window: hasCompareLikeExpression(text),
+    has_role_scope: Boolean(text.includes('预算侧')
+      || text.includes('流量侧')
+      || text.includes('负责人')
+      || text.includes('运营')
+      || text.includes('策略')
+      || normalizeText(session.role_scope)
+      || normalizeText(session.business_side)),
+  };
+}
+
+function scoreSuggestionMatch(suggestion, session, signals, preferredTypes) {
+  const item = suggestion || {};
+  let score = 0;
+  const haystack = compactWhitespace([
+    item.title,
+    item.summary,
+    item.recommendation,
+    item.related_product_name,
+    item.related_subject_name,
+    ...(item.scope_tags || []),
+  ].join(' ')).toLowerCase();
+
+  if (preferredTypes.includes(item.type)) score += 40;
+  if (normalizeText(item.business_side) && normalizeText(item.business_side) === normalizeText(session.business_side)) score += 16;
+  if (normalizeText(item.budget_side) && normalizeText(item.budget_side) === normalizeText(session.budget_side)) score += 10;
+  if (normalizeText(item.owner_role) && normalizeText(item.owner_role).includes(normalizeText(session.role_scope))) score += 8;
+
+  let exactMatchCount = 0;
+  [
+    item.related_product_name,
+    item.related_subject_name,
+    item.title,
+  ].forEach(value => {
+    const token = compactWhitespace(value).toLowerCase();
+    if (token && signals.lower_text.includes(token)) {
+      exactMatchCount += 1;
+    }
+  });
+  score += exactMatchCount * 28;
+
+  let keywordOverlap = 0;
+  signals.keywords.forEach((keyword) => {
+    if (keyword && haystack.includes(keyword)) keywordOverlap += 1;
+  });
+  score += Math.min(keywordOverlap, 8) * 5;
+
+  score += Math.round(Number(item.confidence || 0) / 12);
+  return score;
+}
+
+function selectRelevantSuggestions(feed, session, promptText, options = {}) {
+  const limit = Math.max(1, Number(options.limit || 3));
+  const preferredTypes = SCENE_SUGGESTION_TYPE_MAP[session.scene_code] || SCENE_SUGGESTION_TYPE_MAP.general_chat;
+  const suggestions = Array.isArray(feed?.suggestions) ? feed.suggestions : [];
+  const signals = extractPromptSignals(promptText, session);
+  return suggestions
+    .map((item) => ({
+      ...item,
+      _match_score: scoreSuggestionMatch(item, session, signals, preferredTypes),
+    }))
+    .filter(item => item._match_score > 0)
+    .sort((a, b) => b._match_score - a._match_score)
+    .slice(0, limit);
+}
+
+function buildFollowUpQuestions(version, session, promptSignals, matchedSuggestions) {
+  const questions = [];
+  const requiredFields = Array.isArray(version?.input_schema_json?.required_fields)
+    ? version.input_schema_json.required_fields
+    : [];
+  const needBusinessObject = requiredFields.includes('业务对象');
+  const needTimeRange = requiredFields.includes('时间范围');
+  const needCompareWindow = requiredFields.includes('对照窗口') || session.scene_code !== 'general_chat';
+
+  if (needBusinessObject && matchedSuggestions.length === 0) {
+    questions.push('这次先聚焦哪个产品或主体？我可以按单产品口径继续下钻。');
+  }
+  if (needTimeRange && !promptSignals.has_time_range) {
+    questions.push('请补充时间范围，比如最近7天、本月，或 2026-04-01 到 2026-06-30。');
+  }
+  if (needCompareWindow && !promptSignals.has_compare_window) {
+    questions.push('这次希望对比哪个窗口？例如较前7天、上周、上月或同比窗口。');
+  }
+  if (!promptSignals.has_role_scope && !normalizeText(session.role_scope)) {
+    questions.push('这次要按运营、策略，还是负责人视角来判断？');
+  }
+  return questions.slice(0, 3);
+}
+
+function buildRiskReminders(session, matchedSuggestions, followUpQuestions) {
+  const risks = [];
+  if (followUpQuestions.length > 0) {
+    risks.push('当前关键口径还不完整，直接扩量或下结论容易把判断做偏。');
+  }
+  if (matchedSuggestions[0]?.type === 'media_mix') {
+    risks.push('媒体过度集中时，日波动会被放大，建议先做第二梯队测试。');
+  }
+  if (matchedSuggestions[0]?.type === 'collaboration') {
+    risks.push('预算侧和流量侧若不统一观察窗，复盘会反复对不上口径。');
+  }
+  if (matchedSuggestions[0]?.priority === 'high') {
+    risks.push('当前问题优先级较高，建议当日完成一次证据复核和动作确认。');
+  }
+  if (risks.length === 0) {
+    if (session.scene_code === 'budget_advice') {
+      risks.push('证据不足时不建议一次性放量，先保留止损阈值。');
+    } else if (session.scene_code === 'revenue_diagnosis') {
+      risks.push('只看收入不看订单与结构，容易把问题错判成单一量级回撤。');
+    } else {
+      risks.push('如果缺少对照窗和责任归属，后续动作很难落地。');
+    }
+  }
+  return risks.slice(0, 3);
+}
+
+function buildDeterministicSkillResponse({
+  session,
+  skill,
+  version,
+  promptText,
+  matchedSuggestions,
+  examples,
+  promptSignals,
+  followUpQuestions,
+}) {
+  const topSuggestion = matchedSuggestions[0] || null;
+  const sectionTitles = inferSectionTitles(version?.output_schema_json, version?.output_template_text);
+  const focusText = clipText(promptText, 26) || '当前问题';
+  const roleLabel = normalizeText(session.role_scope || session.business_side || skill?.role_scope || '当前角色');
+  const sceneLabel = normalizeText(session.scene_label || skill?.scene_code || '当前场景');
+  const businessLineLabel = normalizeText(session.business_line || skill?.business_line || '当前业务线');
+  const exampleTitles = (examples || [])
+    .map(item => normalizeText(item.source_case_title || item.note_text))
+    .filter(Boolean)
+    .slice(0, 2);
+
+  let summary = `我先按 ${roleLabel} 视角，用 ${skill?.name || '当前 Skill'} 对“${focusText}”输出一版结构化判断。`;
+  let evidence = [];
+  let actions = [];
+
+  if (topSuggestion) {
+    summary = normalizeText(topSuggestion.summary || topSuggestion.title || summary);
+    evidence = Array.isArray(topSuggestion.evidence_highlights) ? topSuggestion.evidence_highlights.slice(0, 3) : [];
+    actions = Array.isArray(topSuggestion.actions) ? topSuggestion.actions.slice(0, 3) : [];
+  }
+
+  if (evidence.length === 0) {
+    evidence = [
+      `当前会话口径：${businessLineLabel} / ${sceneLabel} / ${roleLabel}。`,
+      promptSignals.has_time_range ? '时间范围已明确，可以直接对比关键指标变化。' : '建议先补时间范围，再继续下钻判断。',
+      exampleTitles.length > 0 ? `可参考历史案例：${exampleTitles.join('、')}。` : '建议优先把结论、证据、动作拆开输出，方便后续沉淀为案例。',
+    ];
+  }
+
+  if (actions.length === 0) {
+    if (session.scene_code === 'budget_advice') {
+      actions = [
+        '先补 5% 到 10% 的测试量，观察 2 到 3 天是否继续同向增长。',
+        '把收入、订单和入口质量放到同一观察窗里跟踪。',
+        '提前写清楚回撤阈值和回收动作，避免误放量。',
+      ];
+    } else if (session.scene_code === 'revenue_diagnosis') {
+      actions = [
+        '先核查最近 3 天预算、入口、媒体结构是否有异常变更。',
+        '把收入、订单和结构拆开看，判断是量问题还是结构问题。',
+        '若牵涉跨侧问题，当日发起预算侧与流量侧联合复盘。',
+      ];
+    } else {
+      actions = [
+        '先统一问题口径，再补证据和动作拆解。',
+        '把建议压缩为 2 到 3 条可以直接执行的动作。',
+      ];
+    }
+  }
+
+  const risks = buildRiskReminders(session, matchedSuggestions, followUpQuestions);
+  const confidence = Math.max(
+    58,
+    Math.min(
+      93,
+      Number(topSuggestion?.confidence || 0)
+      || (68 + (matchedSuggestions.length * 5) + (examples.length * 3) - (followUpQuestions.length * 6))
+    ),
+  );
+
+  const structured = {
+    summary,
+    evidence,
+    risk_reminders: risks,
+    actions,
+    follow_up_questions: followUpQuestions,
+    confidence,
+    references: matchedSuggestions.map((item) => ({
+      id: item.id,
+      title: item.title,
+      related_product_name: item.related_product_name || null,
+      related_subject_name: item.related_subject_name || null,
+      type: item.type,
+    })),
+    runtime_meta: {
+      mode: 'deterministic',
+      skill_id: skill?.id || null,
+      skill_name: skill?.name || null,
+      skill_version_id: version?.id || null,
+      skill_version_no: version?.version_no || null,
+      matched_suggestion_ids: matchedSuggestions.map(item => item.id),
+      matched_suggestion_count: matchedSuggestions.length,
+    },
+  };
+
+  const contentText = [
+    `${sectionTitles[0] || '结论摘要'}`,
+    `- ${summary}`,
+    '',
+    `${sectionTitles[1] || '核心证据'}`,
+    ...evidence.map(item => `- ${item}`),
+    '',
+    `${sectionTitles[2] || '风险提醒'}`,
+    ...risks.map(item => `- ${item}`),
+    '',
+    `${sectionTitles[3] || '下一步建议'}`,
+    ...actions.map(item => `- ${item}`),
+    ...(followUpQuestions.length > 0
+      ? [
+        '',
+        '补充问题',
+        ...followUpQuestions.map(item => `- ${item}`),
+      ]
+      : []),
+  ].join('\n');
+
+  return {
+    contentText,
+    structured,
+    evidence,
+    actions,
+    section_titles: sectionTitles,
+    confidence,
+    runtime_mode: 'deterministic',
+  };
+}
+
+function tryParseJsonPayload(text) {
+  const raw = normalizeText(text);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {}
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {}
+  }
+  return null;
+}
+
+function buildModelSystemPrompt({ session, skill, version, sectionTitles }) {
+  return [
+    normalizeText(version?.system_prompt || skill?.description || '你是一个业务分析助手。'),
+    normalizeText(version?.guardrails_text || ''),
+    '请严格输出 JSON 对象，不要输出额外解释。',
+    `JSON 字段必须包含：summary, evidence, risk_reminders, actions, follow_up_questions, confidence。`,
+    `evidence, risk_reminders, actions, follow_up_questions 必须是字符串数组。`,
+    `最终展示会按以下章节落地：${sectionTitles.join(' / ')}。`,
+    `当前业务线：${normalizeText(session.business_line || skill?.business_line || '当前业务线')}。`,
+    `当前视角：${normalizeText(session.role_scope || session.business_side || skill?.role_scope || '当前角色')}。`,
+  ].filter(Boolean).join('\n');
+}
+
+function buildModelUserPrompt({
+  session,
+  skill,
+  version,
+  promptText,
+  matchedSuggestions,
+  examples,
+  followUpQuestions,
+  recentMessages,
+}) {
+  return JSON.stringify({
+    session: {
+      id: session.id,
+      scene_code: session.scene_code,
+      scene_label: session.scene_label,
+      business_line: session.business_line,
+      business_side: session.business_side,
+      budget_side: session.budget_side,
+      role_scope: session.role_scope,
+    },
+    skill: {
+      id: skill?.id || null,
+      name: skill?.name || null,
+      version_no: version?.version_no || null,
+      reasoning_steps_text: version?.reasoning_steps_text || null,
+      output_template_text: version?.output_template_text || null,
+    },
+    user_prompt: promptText,
+    required_follow_up_questions: followUpQuestions,
+    matched_suggestions: matchedSuggestions.map((item) => ({
+      title: item.title,
+      summary: item.summary,
+      recommendation: item.recommendation,
+      evidence_highlights: item.evidence_highlights || [],
+      actions: item.actions || [],
+      related_product_name: item.related_product_name || null,
+      related_subject_name: item.related_subject_name || null,
+      confidence: item.confidence || 0,
+      type: item.type || null,
+    })),
+    few_shot_examples: (examples || []).slice(0, 3).map(item => ({
+      title: item.source_case_title || item.note_text || '',
+      input_text: item.input_text || '',
+      expected_output_text: item.expected_output_text || '',
+    })),
+    recent_messages: (recentMessages || []).slice(-4),
+  }, null, 2);
+}
+
+function normalizeModelStructuredResponse(payload, baseResponse, skill, version, matchedSuggestions) {
+  const summary = normalizeText(payload?.summary || baseResponse.structured.summary || baseResponse.contentText);
+  const evidence = Array.isArray(payload?.evidence) && payload.evidence.length > 0
+    ? payload.evidence.map(item => normalizeText(item)).filter(Boolean)
+    : baseResponse.evidence;
+  const riskReminders = Array.isArray(payload?.risk_reminders) && payload.risk_reminders.length > 0
+    ? payload.risk_reminders.map(item => normalizeText(item)).filter(Boolean)
+    : baseResponse.structured.risk_reminders;
+  const actions = Array.isArray(payload?.actions) && payload.actions.length > 0
+    ? payload.actions.map(item => normalizeText(item)).filter(Boolean)
+    : baseResponse.actions;
+  const followUpQuestions = Array.isArray(payload?.follow_up_questions)
+    ? payload.follow_up_questions.map(item => normalizeText(item)).filter(Boolean)
+    : baseResponse.structured.follow_up_questions;
+  const confidence = Math.max(0, Math.min(100, Number(payload?.confidence || baseResponse.confidence || 0)));
+  const sectionTitles = baseResponse.section_titles;
+
+  const structured = {
+    summary,
+    evidence,
+    risk_reminders: riskReminders,
+    actions,
+    follow_up_questions: followUpQuestions,
+    confidence,
+    references: baseResponse.structured.references,
+    runtime_meta: {
+      mode: 'llm',
+      skill_id: skill?.id || null,
+      skill_name: skill?.name || null,
+      skill_version_id: version?.id || null,
+      skill_version_no: version?.version_no || null,
+      matched_suggestion_ids: matchedSuggestions.map(item => item.id),
+      matched_suggestion_count: matchedSuggestions.length,
+    },
+  };
+
+  const contentText = [
+    `${sectionTitles[0] || '结论摘要'}`,
+    `- ${summary}`,
+    '',
+    `${sectionTitles[1] || '核心证据'}`,
+    ...evidence.map(item => `- ${item}`),
+    '',
+    `${sectionTitles[2] || '风险提醒'}`,
+    ...riskReminders.map(item => `- ${item}`),
+    '',
+    `${sectionTitles[3] || '下一步建议'}`,
+    ...actions.map(item => `- ${item}`),
+    ...(followUpQuestions.length > 0
+      ? [
+        '',
+        '补充问题',
+        ...followUpQuestions.map(item => `- ${item}`),
+      ]
+      : []),
+  ].join('\n');
+
+  return {
+    contentText,
+    structured,
+    evidence,
+    actions,
+    confidence,
+    runtime_mode: 'llm',
+    section_titles: sectionTitles,
+  };
+}
+
+function getLlmConfig() {
+  const apiKey = process.env.AI_TRAINING_LLM_API_KEY || process.env.OPENAI_API_KEY || '';
+  const model = process.env.AI_TRAINING_LLM_MODEL || process.env.OPENAI_MODEL || '';
+  if (!apiKey || !model) return null;
+  const baseUrl = normalizeText(process.env.AI_TRAINING_LLM_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1');
+  const timeoutMs = Math.max(5000, Number(process.env.AI_TRAINING_LLM_TIMEOUT_MS || 25000));
+  return {
+    apiKey,
+    model,
+    baseUrl: baseUrl.replace(/\/+$/g, ''),
+    timeoutMs,
+    temperature: Number.isFinite(Number(process.env.AI_TRAINING_LLM_TEMPERATURE))
+      ? Number(process.env.AI_TRAINING_LLM_TEMPERATURE)
+      : 0.2,
+  };
+}
+
+async function postChatCompletion(config, payload, useJsonMode = true) {
+  const body = {
+    model: config.model,
+    temperature: config.temperature,
+    messages: payload.messages,
+  };
+  if (useJsonMode) {
+    body.response_format = { type: 'json_object' };
+  }
+  const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(config.timeoutMs),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`LLM HTTP ${response.status}: ${text}`);
+  }
+  return response.json();
+}
+
+async function generateAiTrainingSkillResponse({
+  session,
+  skill,
+  version,
+  promptText,
+  matchedSuggestions,
+  examples,
+  recentMessages,
+}) {
+  const promptSignals = extractPromptSignals(promptText, session);
+  const followUpQuestions = buildFollowUpQuestions(version, session, promptSignals, matchedSuggestions);
+  const baseResponse = buildDeterministicSkillResponse({
+    session,
+    skill,
+    version,
+    promptText,
+    matchedSuggestions,
+    examples,
+    promptSignals,
+    followUpQuestions,
+  });
+  const config = getLlmConfig();
+  if (!config) {
+    return {
+      ...baseResponse,
+      follow_up_questions: followUpQuestions,
+      prompt_signals: promptSignals,
+      llm_usage: null,
+    };
+  }
+
+  const messages = [
+    { role: 'system', content: buildModelSystemPrompt({ session, skill, version, sectionTitles: baseResponse.section_titles }) },
+    { role: 'user', content: buildModelUserPrompt({ session, skill, version, promptText, matchedSuggestions, examples, followUpQuestions, recentMessages }) },
+  ];
+
+  try {
+    let completion;
+    try {
+      completion = await postChatCompletion(config, { messages }, true);
+    } catch (error) {
+      completion = await postChatCompletion(config, { messages }, false);
+    }
+    const content = normalizeText(completion?.choices?.[0]?.message?.content || '');
+    const parsed = tryParseJsonPayload(content);
+    if (!parsed) {
+      return {
+        ...baseResponse,
+        follow_up_questions: followUpQuestions,
+        prompt_signals: promptSignals,
+        llm_usage: completion?.usage || null,
+        runtime_mode: 'deterministic_fallback',
+        model_error: 'llm_response_not_json',
+      };
+    }
+    const normalized = normalizeModelStructuredResponse(parsed, baseResponse, skill, version, matchedSuggestions);
+    return {
+      ...normalized,
+      follow_up_questions: followUpQuestions,
+      prompt_signals: promptSignals,
+      llm_usage: completion?.usage || null,
+    };
+  } catch (error) {
+    return {
+      ...baseResponse,
+      follow_up_questions: followUpQuestions,
+      prompt_signals: promptSignals,
+      llm_usage: null,
+      runtime_mode: 'deterministic_fallback',
+      model_error: error.message,
+    };
+  }
+}
+
+function computeKeywordOverlapScore(sourceText, targetText) {
+  const sourceKeywords = buildKeywordSet(sourceText);
+  const targetKeywords = buildKeywordSet(targetText);
+  if (sourceKeywords.size === 0 || targetKeywords.size === 0) return 0;
+  let overlap = 0;
+  sourceKeywords.forEach((item) => {
+    if (targetKeywords.has(item)) overlap += 1;
+  });
+  return overlap / Math.max(sourceKeywords.size, targetKeywords.size);
+}
+
+function scoreAiTrainingEvalOutput({
+  promptText,
+  expectedOutputText,
+  actualStructured,
+  actualText,
+  sectionTitles,
+  referenceSuggestions,
+}) {
+  const safeText = compactWhitespace(actualText);
+  const presentSections = (sectionTitles || DEFAULT_SECTION_TITLES).reduce((count, section) => (
+    count + (safeText.includes(section) ? 1 : 0)
+  ), 0);
+  const structureScore = Math.min(0.99, Math.max(0.58, (presentSections / Math.max((sectionTitles || DEFAULT_SECTION_TITLES).length, 1)) * 0.85 + 0.12));
+  const evidenceScore = Math.min(
+    0.99,
+    Math.max(
+      0.55,
+      ((actualStructured?.evidence || []).length >= 2 ? 0.68 : 0.52)
+      + (((actualStructured?.evidence || []).join(' ').match(/\d+(\.\d+)?%?/g) || []).length >= 1 ? 0.14 : 0)
+      + (referenceSuggestions.length > 0 ? 0.08 : 0),
+    ),
+  );
+  const actionabilityScore = Math.min(
+    0.99,
+    Math.max(
+      0.56,
+      ((actualStructured?.actions || []).length >= 2 ? 0.7 : 0.54)
+      + ((actualStructured?.actions || []).some(item => /(复核|观察|创建|统一|补|拉齐|核查|收量|回撤)/.test(item)) ? 0.12 : 0),
+    ),
+  );
+  const overlapWithExpected = computeKeywordOverlapScore(expectedOutputText, safeText);
+  const overlapWithPrompt = computeKeywordOverlapScore(promptText, safeText);
+  const accuracyScore = Math.min(
+    0.99,
+    Math.max(
+      0.54,
+      0.48 + (overlapWithExpected * 0.32) + (overlapWithPrompt * 0.14) + (referenceSuggestions.length > 0 ? 0.06 : 0),
+    ),
+  );
+  const passed = accuracyScore >= 0.72
+    && structureScore >= 0.78
+    && evidenceScore >= 0.72
+    && actionabilityScore >= 0.72
+    ? 1
+    : 0;
+
+  return {
+    accuracy: Number(accuracyScore.toFixed(4)),
+    structure: Number(structureScore.toFixed(4)),
+    evidence: Number(evidenceScore.toFixed(4)),
+    actionability: Number(actionabilityScore.toFixed(4)),
+    passed,
+  };
+}
+
+function estimateTokenCount(value) {
+  const text = normalizeText(value);
+  if (!text) return 0;
+  return Math.max(1, Math.round(text.length / 2.2));
+}
+
+module.exports = {
+  extractPromptSignals,
+  generateAiTrainingSkillResponse,
+  inferSectionTitles,
+  selectRelevantSuggestions,
+  scoreAiTrainingEvalOutput,
+  estimateTokenCount,
+};
