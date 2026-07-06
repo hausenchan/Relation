@@ -439,14 +439,6 @@ export default function Dashboard() {
   }, [taskColumnWidths]);
 
   useEffect(() => {
-    if (activeTaskTab !== TASK_TAB_KEYS.ai) return undefined;
-    const timer = setInterval(() => {
-      loadAiSuggestions({ silent: true });
-    }, 300000);
-    return () => clearInterval(timer);
-  }, [activeTaskTab, loadAiSuggestions]);
-
-  useEffect(() => {
     if (activeTaskTab === TASK_TAB_KEYS.team && !canViewTeamTasks) {
       setActiveTaskTab(TASK_TAB_KEYS.execution);
     }
@@ -497,6 +489,14 @@ export default function Dashboard() {
       if (!silent) setAiSuggestionsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (activeTaskTab !== TASK_TAB_KEYS.ai) return undefined;
+    const timer = setInterval(() => {
+      loadAiSuggestions({ silent: true });
+    }, 300000);
+    return () => clearInterval(timer);
+  }, [activeTaskTab, loadAiSuggestions]);
 
   const buildAssignedTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
