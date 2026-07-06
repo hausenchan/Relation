@@ -158,7 +158,7 @@ const getStoredStringArray = (storageKey, fallbackValue) => {
   return fallbackValue;
 };
 
-function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onCloseAll, onCloseOthers, onReorder }) {
+function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onCloseAll, onCloseOthers, onCloseRight, onReorder }) {
   const trackRef = React.useRef(null);
   const [draggingKey, setDraggingKey] = useState(null);
   const hasClosableTabs = tabs.some(tab => tab.key !== '/');
@@ -211,14 +211,16 @@ function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onCloseAl
         aria-orientation="horizontal"
         onWheel={handleWheel}
       >
-        {tabs.map(tab => {
+        {tabs.map((tab, index) => {
           const active = tab.key === activeKey;
           const closable = tab.key !== '/';
           const hasOtherClosableTabs = tabs.some(item => item.key !== tab.key && item.key !== '/');
+          const hasRightClosableTabs = tabs.slice(index + 1).some(item => item.key !== '/');
           const contextMenuItems = [
-            { key: 'close-current', label: '关闭当前窗口', disabled: !closable },
-            { key: 'close-all', label: '关闭全部', disabled: !hasClosableTabs },
-            { key: 'close-others', label: '关闭其它全部', disabled: !hasOtherClosableTabs },
+            { key: 'close-current', label: '关闭当前标签页', disabled: !closable },
+            { key: 'close-all', label: '关闭全部标签页', disabled: !hasClosableTabs },
+            { key: 'close-others', label: '关闭其他标签页', disabled: !hasOtherClosableTabs },
+            { key: 'close-right', label: '关闭右侧标签页', disabled: !hasRightClosableTabs },
           ];
           const handleContextMenuClick = ({ key, domEvent }) => {
             domEvent?.stopPropagation?.();
@@ -232,6 +234,10 @@ function WorkspaceTabs({ tabs, activeKey, isMobile, onSelect, onClose, onCloseAl
             }
             if (key === 'close-others') {
               onCloseOthers(tab.key);
+              return;
+            }
+            if (key === 'close-right') {
+              onCloseRight(tab.key);
             }
           };
 
@@ -688,6 +694,24 @@ function AppLayout() {
     }
   };
 
+  const handleTabCloseRight = (key) => {
+    const normalizedTabs = normalizeWorkspaceTabs(workspaceTabs);
+    const targetIndex = normalizedTabs.findIndex(tab => tab.key === key);
+    if (targetIndex === -1) return;
+
+    const targetTab = normalizedTabs[targetIndex];
+    const closingKeys = new Set(normalizedTabs.slice(targetIndex + 1).filter(tab => tab.key !== '/').map(tab => tab.key));
+    if (!closingKeys.size) return;
+
+    const nextTabs = normalizedTabs.filter(tab => !closingKeys.has(tab.key));
+    setWorkspaceTabs(nextTabs.length > 0 ? nextTabs : [HOME_TAB]);
+
+    if (closingKeys.has(activeTabKey)) {
+      const nextActiveTab = targetTab.key === '/' ? HOME_TAB : targetTab;
+      navigate(nextActiveTab.path || nextActiveTab.key);
+    }
+  };
+
   const handleTabReorder = (sourceKey, targetKey) => {
     setWorkspaceTabs(prevTabs => {
       const nextTabs = normalizeWorkspaceTabs(prevTabs);
@@ -1121,6 +1145,7 @@ function AppLayout() {
             onClose={handleTabClose}
             onCloseAll={handleTabCloseAll}
             onCloseOthers={handleTabCloseOthers}
+            onCloseRight={handleTabCloseRight}
             onReorder={handleTabReorder}
           />
           <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 16, flexShrink: 0 }}>
