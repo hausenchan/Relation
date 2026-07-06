@@ -10661,7 +10661,7 @@ export default function Documents() {
             </>
           )}
           <Text type="secondary">
-            页面需要登录时，请先运行 npm run wolai:chrome，并在打开的专用 Chrome 中登录 Wolai。
+            系统会自动渲染并采集 Wolai 页面正文，导入成功后将覆盖当前文档内容。
           </Text>
         </Form>
       </Modal>

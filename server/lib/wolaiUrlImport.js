@@ -1,6 +1,11 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
 
 const DEFAULT_CDP = 'http://127.0.0.1:9222';
+const repoRoot = path.resolve(__dirname, '..', '..');
+const defaultChromeProfileDir = path.join(repoRoot, 'tmp', 'chrome-wolai-profile');
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value || '')).digest('hex');
@@ -195,6 +200,121 @@ function getWolaiUrlKey(value) {
   }
 }
 
+function resolveChromeExecutable() {
+  const candidates = [
+    process.env.CHROME_PATH,
+    process.env.GOOGLE_CHROME_BIN,
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    process.platform === 'win32' ? 'chrome.exe' : null,
+    process.platform === 'linux' ? 'google-chrome' : null,
+  ].filter(Boolean);
+  const found = candidates.find(candidate => candidate.includes(path.sep) && fs.existsSync(candidate));
+  return found || candidates[candidates.length - 1] || '';
+}
+
+function getRandomDebugPort() {
+  return 9300 + Math.floor(Math.random() * 600);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function waitForChromeCdp(cdpBase, timeoutMs = 10000) {
+  const startedAt = Date.now();
+  let lastError;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const version = await fetchJson(`${cdpBase}/json/version`);
+      if (version?.webSocketDebuggerUrl) return version;
+    } catch (error) {
+      lastError = error;
+    }
+    await sleep(250);
+  }
+  throw new Error(lastError?.message || '自动 Chrome 调试端口启动超时');
+}
+
+function buildManagedChromeArgs({ port, profileDir, headless }) {
+  const args = [
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${profileDir}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-background-networking',
+    '--disable-dev-shm-usage',
+    '--disable-extensions',
+    '--disable-features=Translate,BackForwardCache',
+    '--disable-blink-features=AutomationControlled',
+    '--remote-allow-origins=*',
+    '--window-size=1440,1200',
+    'about:blank',
+  ];
+  if (headless) {
+    args.unshift('--headless=new');
+    args.unshift('--disable-gpu');
+    if (process.platform === 'linux') args.unshift('--no-sandbox');
+  }
+  return args;
+}
+
+async function captureByManagedChrome(url, options = {}) {
+  const chrome = resolveChromeExecutable();
+  if (!chrome) throw new Error('未找到可用的 Chrome/Chromium');
+  const profileDir = path.resolve(
+    options.autoChromeProfileDir
+      || process.env.WOLAI_CHROME_PROFILE_DIR
+      || defaultChromeProfileDir
+  );
+  fs.mkdirSync(profileDir, { recursive: true });
+  const port = Number(options.autoChromePort) || getRandomDebugPort();
+  const cdp = `http://127.0.0.1:${port}`;
+  const headless = options.autoChromeHeadless !== undefined
+    ? Boolean(options.autoChromeHeadless)
+    : process.env.WOLAI_AUTO_CHROME_HEADLESS === '1';
+  const chromeArgs = buildManagedChromeArgs({ port, profileDir, headless });
+  const child = spawn(chrome, chromeArgs, {
+    detached: false,
+    stdio: 'ignore',
+  });
+  let closed = false;
+  let launchError = null;
+  child.once('error', error => {
+    launchError = error;
+    closed = true;
+  });
+  child.once('exit', () => { closed = true; });
+  try {
+    await sleep(200);
+    if (launchError) throw launchError;
+    await waitForChromeCdp(cdp, Number(options.autoChromeStartupMs || 12000));
+    const captured = await captureByChrome(url, {
+      ...options,
+      cdp,
+      useOpenTab: false,
+      waitMs: Math.max(Number(options.waitMs || 3000), 5000),
+    });
+    return {
+      ...captured,
+      method: headless ? 'chrome-auto-headless' : 'chrome-auto',
+    };
+  } catch (error) {
+    if (closed) {
+      throw new Error(`自动 Chrome 启动失败，请确认服务器可运行 Chrome/Chromium。${error.message}`);
+    }
+    throw error;
+  } finally {
+    try {
+      if (!closed) child.kill();
+    } catch {}
+  }
+}
+
 function findMatchingWolaiTab(tabs, targetUrl) {
   const targetKey = getWolaiUrlKey(targetUrl);
   if (!targetKey) return null;
@@ -243,7 +363,7 @@ function assertUsableWolaiCapture(title, text, url) {
     throw new Error('Wolai 页面需要登录态，未读取到正文');
   }
   if (isLikelyWolaiErrorPage(title, text, url)) {
-    throw new Error('Wolai 页面加载失败，只读取到错误页，请在专用 Chrome 中打开该 URL 并确认正文已显示后再导入');
+    throw new Error('Wolai 页面加载失败，只读取到错误页。通常是该 URL 需要登录态、访问权限，或 Wolai 未向当前 Chrome profile 返回正文');
   }
 }
 
@@ -632,7 +752,7 @@ async function captureByChrome(url, options = {}) {
     const text = collectBlocksText(blocks) || snapshot.plainText || '';
     assertUsableWolaiCapture(title, text, snapshot.pageUrl || url);
     if (getWolaiUrlKey(url) && text.trim().length < 20) {
-      throw new Error('Chrome 页面没有读取到足够的 Wolai 正文，请确认页面已加载完成后再导入');
+      throw new Error('Chrome 页面没有读取到足够的 Wolai 正文，可能是页面尚未加载完成或当前 Chrome profile 无访问权限');
     }
     return {
       method: existingTab ? 'chrome-open-tab' : 'chrome',
@@ -657,6 +777,13 @@ async function importWolaiUrlToBlocks(url, options = {}) {
       captured = await captureByChrome(url, options);
     } catch (error) {
       warnings.push(`chrome:${error.message}`);
+    }
+  }
+  if (!captured && options.autoLaunchChrome !== false) {
+    try {
+      captured = await captureByManagedChrome(url, options);
+    } catch (error) {
+      warnings.push(`auto-chrome:${error.message}`);
     }
   }
   if (!captured) {
