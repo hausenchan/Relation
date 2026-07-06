@@ -31,6 +31,17 @@ FROM registry-vpc.cn-shenzhen.aliyuncs.com/md-devops/node:20-slim
 
 WORKDIR /app
 ENV NODE_ENV=production
+ENV CHROME_PATH=/usr/bin/chromium
+ENV WOLAI_AUTO_CHROME_HEADLESS=1
+
+# Wolai URL 导入需要真实浏览器渲染前端页面。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      chromium \
+      ca-certificates \
+      fonts-liberation \
+      fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
 
 # ------------------------
 # 4.拷贝生产所需文件

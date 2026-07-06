@@ -200,6 +200,19 @@ function getWolaiUrlKey(value) {
   }
 }
 
+function resolveExecutableOnPath(command) {
+  if (!command || command.includes(path.sep)) return '';
+  const searchPaths = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const dir of searchPaths) {
+    const candidate = path.join(dir, command);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {}
+  }
+  return '';
+}
+
 function resolveChromeExecutable() {
   const candidates = [
     process.env.CHROME_PATH,
@@ -211,10 +224,21 @@ function resolveChromeExecutable() {
     '/usr/bin/chromium',
     '/usr/bin/chromium-browser',
     process.platform === 'win32' ? 'chrome.exe' : null,
+    process.platform === 'linux' ? 'chromium' : null,
+    process.platform === 'linux' ? 'chromium-browser' : null,
     process.platform === 'linux' ? 'google-chrome' : null,
   ].filter(Boolean);
-  const found = candidates.find(candidate => candidate.includes(path.sep) && fs.existsSync(candidate));
-  return found || candidates[candidates.length - 1] || '';
+  for (const candidate of candidates) {
+    try {
+      if (candidate.includes(path.sep)) {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      }
+      const resolved = resolveExecutableOnPath(candidate);
+      if (resolved) return resolved;
+    } catch {}
+  }
+  return '';
 }
 
 function getRandomDebugPort() {
@@ -791,14 +815,14 @@ async function importWolaiUrlToBlocks(url, options = {}) {
       captured = await captureByFetch(url);
     } catch (error) {
       warnings.push(`fetch:${error.message}`);
-      throw new Error(`无法导入 Wolai URL。${warnings.join('；')}`);
+      throw new Error(`无法导入 URL。${warnings.join('；')}`);
     }
   }
   const contentText = collectBlocksText(captured.blocks);
   return {
     title: cleanTitle(options.title || captured.title),
     source_url: captured.pageUrl || url,
-    source_record_key: `wolai:url:${sha256(url).slice(0, 24)}`,
+    source_record_key: `url:${sha256(url).slice(0, 24)}`,
     source_payload_hash: sha256(JSON.stringify({
       url,
       title: captured.title,
