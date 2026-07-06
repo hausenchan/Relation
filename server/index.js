@@ -5131,6 +5131,108 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
   }
 });
 
+app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+
+  const rawUrl = String(req.body?.url || '').trim();
+  if (!rawUrl) return res.status(400).json({ error: '请填写 Wolai URL' });
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return res.status(400).json({ error: 'Wolai URL 格式不正确' });
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    return res.status(400).json({ error: '仅支持 http/https URL' });
+  }
+  const hostname = url.hostname.toLowerCase();
+  if (hostname !== 'wolai.com' && !hostname.endsWith('.wolai.com')) {
+    return res.status(400).json({ error: '目前仅支持 wolai.com 的文档 URL' });
+  }
+
+  try {
+    const imported = await importWolaiUrlToBlocks(url.toString(), {
+      title: doc.title,
+      preferChrome: req.body?.prefer_chrome !== false,
+      cdp: req.body?.cdp || 'http://127.0.0.1:9222',
+      waitMs: Number(req.body?.wait_ms || 3000),
+    });
+    const content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    const storedContent = JSON.stringify(content);
+    const contentText = imported.content_text || extractDocumentText(content);
+    const beforeSnapshot = {
+      title: doc.title,
+      content: doc.content,
+      content_text: doc.content_text,
+    };
+    const afterSnapshot = {
+      title: doc.title,
+      content: storedContent,
+      content_text: contentText,
+    };
+    const importBatchNo = `wolai_url_update_${Date.now()}`;
+    const qualityStatus = contentText.trim() ? (imported.warnings?.length ? 'warning' : 'pass') : 'warning';
+    const updateFromWolai = db.transaction(() => {
+      db.prepare(`
+        UPDATE documents SET
+          content = ?,
+          content_text = ?,
+          summary = ?,
+          source_system = 'wolai',
+          source_record_key = ?,
+          source_url = ?,
+          source_payload_hash = ?,
+          import_batch_no = ?,
+          import_status = ?,
+          quality_status = ?,
+          updated_by = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        storedContent,
+        contentText,
+        buildDocumentSummary(contentText),
+        imported.source_record_key,
+        imported.source_url,
+        imported.source_payload_hash,
+        importBatchNo,
+        'imported',
+        qualityStatus,
+        req.user.id,
+        doc.id
+      );
+      insertDocumentEditRecord(doc.id, req.user.id, 'wolai_url_import', beforeSnapshot, afterSnapshot);
+      db.prepare(`
+        INSERT INTO document_change_logs (document_id, version, changed_by, summary, detail_text, remark)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        doc.id,
+        doc.current_version || 'V1.0',
+        req.user.id,
+        '从 Wolai URL 更新正文',
+        `来源：${imported.source_url}\n采集方式：${imported.capture_method}`,
+        imported.warnings?.length ? imported.warnings.join('；') : null
+      );
+    });
+    updateFromWolai();
+    const row = getVisibleDocument(doc.id, req.user);
+    res.json({
+      ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
+      import_meta: {
+        capture_method: imported.capture_method,
+        warnings: imported.warnings || [],
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      error: error.message || 'Wolai URL 导入失败',
+      hint: '如果页面需要登录，请先运行 npm run wolai:chrome，在打开的专用 Chrome 中登录 Wolai，并打开该 URL 确认正文已显示后再导入。',
+    });
+  }
+});
+
 app.get('/api/documents/:id', (req, res) => {
   const row = getVisibleDocument(req.params.id, req.user);
   if (!row) return res.status(404).json({ error: '文档不存在或无权限访问' });

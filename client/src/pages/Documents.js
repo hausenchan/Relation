@@ -2327,6 +2327,7 @@ export default function Documents() {
   const [propertySaving, setPropertySaving] = useState(false);
   const [wolaiImportOpen, setWolaiImportOpen] = useState(false);
   const [wolaiImportSaving, setWolaiImportSaving] = useState(false);
+  const [wolaiImportTargetDoc, setWolaiImportTargetDoc] = useState(null);
   const [optionsSaving, setOptionsSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingPropertyDoc, setEditingPropertyDoc] = useState(null);
@@ -2535,6 +2536,7 @@ export default function Documents() {
   );
 
   const canManageSelectedDoc = canManageDoc(selectedDoc);
+  const isWolaiImportUpdateMode = Boolean(wolaiImportTargetDoc?.id);
 
   const resetEditorUndoStack = () => {
     editorUndoStackRef.current = [];
@@ -3387,6 +3389,7 @@ export default function Documents() {
   };
 
   const openWolaiImport = () => {
+    setWolaiImportTargetDoc(null);
     wolaiImportForm.resetFields();
     wolaiImportForm.setFieldsValue({
       url: '',
@@ -3400,10 +3403,55 @@ export default function Documents() {
     setWolaiImportOpen(true);
   };
 
+  const openWolaiImportForDocument = (doc) => {
+    if (!doc?.id) return;
+    if (!canEditDoc(doc)) {
+      message.warning('你没有更新该文档正文的权限');
+      return;
+    }
+    setWolaiImportTargetDoc(doc);
+    wolaiImportForm.resetFields();
+    wolaiImportForm.setFieldsValue({
+      url: doc.source_url || '',
+    });
+    setWolaiImportOpen(true);
+  };
+
   const handleWolaiImport = async () => {
     try {
-      const values = await wolaiImportForm.validateFields();
+      const targetDoc = wolaiImportTargetDoc;
+      const updatingExistingDoc = Boolean(targetDoc?.id);
+      const values = updatingExistingDoc
+        ? await wolaiImportForm.validateFields(['url'])
+        : await wolaiImportForm.validateFields();
       setWolaiImportSaving(true);
+      if (updatingExistingDoc) {
+        if (!canEditDoc(targetDoc)) {
+          message.warning('你没有更新该文档正文的权限');
+          return;
+        }
+        const doc = await documentsApi.importWolaiUrlToDocument(targetDoc.id, {
+          url: values.url,
+          prefer_chrome: true,
+        });
+        const docId = getDocTabId(doc.id);
+        const blocks = contentToBlocks(doc.content);
+        lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(doc.title || '', blocks);
+        dirtyDocumentIdsRef.current.delete(docId);
+        setWolaiImportOpen(false);
+        setWolaiImportTargetDoc(null);
+        openDocumentTab(doc);
+        await loadDetail(docId, { force: true });
+        await loadDocuments();
+        await loadFolderTreeDocuments();
+        const warnings = doc.import_meta?.warnings || [];
+        if (warnings.length) {
+          message.warning('文档已更新，但采集过程有告警，可查看改动历史备注');
+        } else {
+          message.success('已从 Wolai URL 更新文档内容');
+        }
+        return;
+      }
       const doc = await documentsApi.importWolaiUrl({
         ...values,
         title: values.title || undefined,
@@ -3412,6 +3460,7 @@ export default function Documents() {
         prefer_chrome: true,
       });
       setWolaiImportOpen(false);
+      setWolaiImportTargetDoc(null);
       openDocumentTab(doc);
       await loadDocuments();
       await loadFolderTreeDocuments();
@@ -5853,6 +5902,10 @@ export default function Documents() {
     closeDocContextMenu();
     if (key === 'copy-link') {
       handleCopyDocLink(doc);
+      return;
+    }
+    if (key === 'import-wolai-url') {
+      openWolaiImportForDocument(doc);
       return;
     }
     if (key === 'pin') {
@@ -10088,6 +10141,12 @@ export default function Documents() {
                     items: [
                       { key: 'copy-link', icon: <LinkOutlined />, label: '复制页面链接' },
                       {
+                        key: 'import-wolai-url',
+                        icon: <DownloadOutlined />,
+                        label: '从URL导入',
+                        disabled: !canEditDoc(docContextMenu.doc),
+                      },
+                      {
                         key: 'pin',
                         icon: docContextMenu.doc?.pinned_at
                           ? <PushpinFilled style={{ color: '#f59e0b' }} />
@@ -10542,9 +10601,12 @@ export default function Documents() {
       <Modal
         title="从 Wolai URL 导入"
         open={wolaiImportOpen}
-        onCancel={() => setWolaiImportOpen(false)}
+        onCancel={() => {
+          setWolaiImportOpen(false);
+          setWolaiImportTargetDoc(null);
+        }}
         onOk={handleWolaiImport}
-        okText="导入并新建"
+        okText={isWolaiImportUpdateMode ? '导入并更新' : '导入并新建'}
         cancelText="取消"
         confirmLoading={wolaiImportSaving}
         destroyOnClose
@@ -10563,37 +10625,41 @@ export default function Documents() {
           >
             <Input placeholder="https://www.wolai.com/..." />
           </Form.Item>
-          <Form.Item name="title" label="标题">
-            <Input placeholder="留空则自动读取 Wolai 页面标题" />
-          </Form.Item>
-          <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
-            <Select options={domainOptions.filter(item => item.value !== 'all')} />
-          </Form.Item>
-          <Form.Item name="project_group_id" label="项目组">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              options={projectGroups.map(group => ({ value: group.id, label: `${group.name}${group.code ? ` (${group.code})` : ''}` }))}
-            />
-          </Form.Item>
-          <Form.Item name="department_key" label="部门">
-            <Select options={departmentOptions} />
-          </Form.Item>
-          <Form.Item name="folder_id" label="文件夹">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              options={folders.map(folder => ({
-                value: folder.id,
-                label: `${domainLabel[folder.domain] || folder.domain} / ${folder.project_group_name || '未关联项目组'} / ${departmentLabel[folder.department_key] || folder.department_key} / ${folder.name}`,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="doc_type" label="文档类型">
-            <Select options={docTypeOptions} />
-          </Form.Item>
+          {!isWolaiImportUpdateMode && (
+            <>
+              <Form.Item name="title" label="标题">
+                <Input placeholder="留空则自动读取 Wolai 页面标题" />
+              </Form.Item>
+              <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
+                <Select options={domainOptions.filter(item => item.value !== 'all')} />
+              </Form.Item>
+              <Form.Item name="project_group_id" label="项目组">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  options={projectGroups.map(group => ({ value: group.id, label: `${group.name}${group.code ? ` (${group.code})` : ''}` }))}
+                />
+              </Form.Item>
+              <Form.Item name="department_key" label="部门">
+                <Select options={departmentOptions} />
+              </Form.Item>
+              <Form.Item name="folder_id" label="文件夹">
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  options={folders.map(folder => ({
+                    value: folder.id,
+                    label: `${domainLabel[folder.domain] || folder.domain} / ${folder.project_group_name || '未关联项目组'} / ${departmentLabel[folder.department_key] || folder.department_key} / ${folder.name}`,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item name="doc_type" label="文档类型">
+                <Select options={docTypeOptions} />
+              </Form.Item>
+            </>
+          )}
           <Text type="secondary">
             页面需要登录时，请先运行 npm run wolai:chrome，并在打开的专用 Chrome 中登录 Wolai。
           </Text>

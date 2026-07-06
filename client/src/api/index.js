@@ -349,6 +349,7 @@ export const documentsApi = {
   live: (id, params) => api.get(`/documents/${id}/live`, { params }).then(r => r.data),
   create: (data) => api.post('/documents', data).then(r => r.data),
   importWolaiUrl: (data) => api.post('/documents/import/wolai-url', data).then(r => r.data),
+  importWolaiUrlToDocument: (id, data) => api.post(`/documents/${id}/import/wolai-url`, data).then(r => r.data),
   update: (id, data) => api.put(`/documents/${id}`, data).then(r => r.data),
   updateContent: (id, data) => api.put(`/documents/${id}/content`, data).then(r => r.data),
   updatePageOptions: (id, data) => api.put(`/documents/${id}/page-options`, data).then(r => r.data),
