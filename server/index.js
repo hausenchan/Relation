@@ -9038,7 +9038,7 @@ function listAiTrainingPublishedSkillCandidatesForUser(user, filters = {}) {
       params.push(scene_code, 'general_chat');
     }
     if (business_line) {
-      sql += ' AND (COALESCE(sk.business_line, "") = COALESCE(?, "") OR sk.business_line IS NULL OR sk.business_line = "")';
+      sql += " AND (COALESCE(sk.business_line, '') = COALESCE(?, '') OR sk.business_line IS NULL OR sk.business_line = '')";
       params.push(business_line);
     }
   }
