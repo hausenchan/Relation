@@ -95,6 +95,31 @@ module.exports = {
     indexed: [],
   },
 
+  ai_training_sessions: {
+    fields: ['title', 'summary'],
+    indexed: [],
+  },
+
+  ai_training_messages: {
+    fields: ['content_text', 'content_markdown', 'structured_json', 'evidence_json', 'actions_json'],
+    indexed: [],
+  },
+
+  ai_training_message_feedback: {
+    fields: ['note_text'],
+    indexed: [],
+  },
+
+  ai_training_case_candidates: {
+    fields: ['title', 'prompt_excerpt', 'response_excerpt', 'method_summary', 'result_summary', 'review_note'],
+    indexed: [],
+  },
+
+  ai_training_cases: {
+    fields: ['title', 'summary', 'prompt_text', 'followup_text', 'response_text', 'reusable_method_text', 'business_result_text'],
+    indexed: [],
+  },
+
   // 周报、经营周报：高敏，重点保护
   weekly_reports: {
     fields: ['completed', 'next_week_plan', 'risks'],

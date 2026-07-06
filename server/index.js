@@ -1023,6 +1023,422 @@ function seedAgentDefinitions() {
 
 seedAgentDefinitions();
 
+// =========== AI训练台表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ai_training_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_code TEXT NOT NULL UNIQUE,
+    title TEXT,
+    summary TEXT,
+    scene_code TEXT NOT NULL DEFAULT 'general_chat',
+    scene_label TEXT,
+    business_line TEXT,
+    business_side TEXT,
+    budget_side TEXT,
+    role_scope TEXT,
+    skill_id INTEGER,
+    skill_version_id INTEGER,
+    owner_user_id INTEGER NOT NULL,
+    created_by INTEGER NOT NULL,
+    last_message_at DATETIME,
+    last_score REAL DEFAULT NULL,
+    quality_score REAL DEFAULT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    visibility_scope TEXT NOT NULL DEFAULT 'private',
+    source_channel TEXT NOT NULL DEFAULT 'manual',
+    pinned INTEGER NOT NULL DEFAULT 0,
+    starred INTEGER NOT NULL DEFAULT 0,
+    context_snapshot_json TEXT,
+    extra_json TEXT,
+    archived_at DATETIME,
+    archived_by INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_sessions_owner_status
+    ON ai_training_sessions(owner_user_id, status, last_message_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_ai_training_sessions_scene
+    ON ai_training_sessions(scene_code, business_line, status);
+
+  CREATE TABLE IF NOT EXISTS ai_training_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    parent_message_id INTEGER,
+    message_role TEXT NOT NULL,
+    message_type TEXT NOT NULL DEFAULT 'text',
+    content_text TEXT,
+    content_markdown TEXT,
+    structured_json TEXT,
+    evidence_json TEXT,
+    actions_json TEXT,
+    source_kind TEXT NOT NULL DEFAULT 'manual',
+    skill_id INTEGER,
+    skill_version_id INTEGER,
+    token_in INTEGER DEFAULT 0,
+    token_out INTEGER DEFAULT 0,
+    latency_ms INTEGER DEFAULT 0,
+    cost_amount REAL DEFAULT 0,
+    is_helpful INTEGER,
+    is_selected_as_case INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES ai_training_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_message_id) REFERENCES ai_training_messages(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_messages_session
+    ON ai_training_messages(session_id, created_at ASC, id ASC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_message_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    feedback_type TEXT NOT NULL,
+    rating INTEGER DEFAULT NULL,
+    note_text TEXT,
+    adopted INTEGER NOT NULL DEFAULT 0,
+    created_task_id INTEGER,
+    created_case_candidate_id INTEGER,
+    created_skill_draft_id INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(message_id, user_id, feedback_type),
+    FOREIGN KEY (session_id) REFERENCES ai_training_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES ai_training_messages(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_feedback_session
+    ON ai_training_message_feedback(session_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_case_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_code TEXT NOT NULL UNIQUE,
+    session_id INTEGER NOT NULL,
+    source_message_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    business_line TEXT,
+    scene_code TEXT NOT NULL,
+    role_scope TEXT,
+    owner_user_id INTEGER NOT NULL,
+    quality_score REAL DEFAULT NULL,
+    prompt_excerpt TEXT,
+    response_excerpt TEXT,
+    method_summary TEXT,
+    result_summary TEXT,
+    tags_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending_review',
+    reviewer_id INTEGER,
+    review_note TEXT,
+    approved_case_id INTEGER,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_message_id),
+    FOREIGN KEY (session_id) REFERENCES ai_training_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_message_id) REFERENCES ai_training_messages(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_case_candidates_status
+    ON ai_training_case_candidates(status, business_line, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_cases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_code TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    summary TEXT,
+    scene_code TEXT NOT NULL,
+    scene_label TEXT,
+    business_line TEXT,
+    business_side TEXT,
+    budget_side TEXT,
+    role_scope TEXT,
+    source_candidate_id INTEGER,
+    source_session_id INTEGER,
+    source_message_id INTEGER,
+    contributor_user_id INTEGER NOT NULL,
+    owner_user_id INTEGER,
+    prompt_text TEXT,
+    followup_text TEXT,
+    response_text TEXT,
+    reusable_method_text TEXT,
+    business_result_text TEXT,
+    quality_score REAL DEFAULT NULL,
+    reuse_count INTEGER NOT NULL DEFAULT 0,
+    adopted_count INTEGER NOT NULL DEFAULT 0,
+    visibility_scope TEXT NOT NULL DEFAULT 'team',
+    status TEXT NOT NULL DEFAULT 'published',
+    tags_json TEXT,
+    extra_json TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_cases_scene
+    ON ai_training_cases(scene_code, business_line, status, updated_at DESC);
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ai_training_skills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT,
+    business_line TEXT,
+    business_side TEXT,
+    budget_side TEXT,
+    scene_code TEXT NOT NULL,
+    role_scope TEXT,
+    owner_user_id INTEGER,
+    maintainer_user_id INTEGER,
+    latest_version_id INTEGER,
+    publish_version_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'draft',
+    visibility_scope TEXT NOT NULL DEFAULT 'team',
+    source_type TEXT NOT NULL DEFAULT 'case_based',
+    source_summary TEXT,
+    tags_json TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_skills_scene
+    ON ai_training_skills(scene_code, business_line, status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_skill_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_id INTEGER NOT NULL,
+    version_no TEXT NOT NULL,
+    version_label TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    system_prompt TEXT,
+    input_schema_json TEXT,
+    output_schema_json TEXT,
+    reasoning_steps_text TEXT,
+    output_template_text TEXT,
+    guardrails_text TEXT,
+    hook_policy_json TEXT,
+    example_summary TEXT,
+    source_case_ids_json TEXT,
+    eval_summary_json TEXT,
+    notes_text TEXT,
+    created_by INTEGER NOT NULL,
+    published_by INTEGER,
+    published_at DATETIME,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(skill_id, version_no),
+    FOREIGN KEY (skill_id) REFERENCES ai_training_skills(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_skill_versions_skill
+    ON ai_training_skill_versions(skill_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_ai_training_skill_versions_status
+    ON ai_training_skill_versions(status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_skill_examples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_version_id INTEGER NOT NULL,
+    source_case_id INTEGER,
+    example_kind TEXT NOT NULL DEFAULT 'few_shot',
+    input_text TEXT,
+    expected_output_text TEXT,
+    note_text TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (skill_version_id) REFERENCES ai_training_skill_versions(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_case_id) REFERENCES ai_training_cases(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_skill_examples_version
+    ON ai_training_skill_examples(skill_version_id, sort_order, id);
+
+  CREATE TABLE IF NOT EXISTS ai_training_hooks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hook_code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    hook_stage TEXT NOT NULL,
+    description TEXT,
+    scene_code TEXT,
+    business_line TEXT,
+    role_scope TEXT,
+    trigger_rule_json TEXT,
+    action_config_json TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_hooks_stage
+    ON ai_training_hooks(hook_stage, enabled, scene_code);
+
+  CREATE TABLE IF NOT EXISTS ai_training_skill_hook_bindings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    skill_version_id INTEGER NOT NULL,
+    hook_id INTEGER NOT NULL,
+    required INTEGER NOT NULL DEFAULT 1,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(skill_version_id, hook_id),
+    FOREIGN KEY (skill_version_id) REFERENCES ai_training_skill_versions(id) ON DELETE CASCADE,
+    FOREIGN KEY (hook_id) REFERENCES ai_training_hooks(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_skill_hook_bindings_version
+    ON ai_training_skill_hook_bindings(skill_version_id, sort_order, id);
+
+  CREATE TABLE IF NOT EXISTS ai_training_hook_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    message_id INTEGER,
+    hook_id INTEGER NOT NULL,
+    hook_stage TEXT NOT NULL,
+    run_status TEXT NOT NULL DEFAULT 'success',
+    input_json TEXT,
+    output_json TEXT,
+    error_message TEXT,
+    latency_ms INTEGER DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES ai_training_sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES ai_training_messages(id) ON DELETE SET NULL,
+    FOREIGN KEY (hook_id) REFERENCES ai_training_hooks(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_hook_runs_session
+    ON ai_training_hook_runs(session_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_eval_sets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    set_code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT,
+    business_line TEXT,
+    scene_code TEXT NOT NULL,
+    role_scope TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    case_count INTEGER NOT NULL DEFAULT 0,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_eval_sets_scene
+    ON ai_training_eval_sets(scene_code, business_line, status);
+
+  CREATE TABLE IF NOT EXISTS ai_training_eval_cases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    eval_set_id INTEGER NOT NULL,
+    case_code TEXT NOT NULL,
+    title TEXT NOT NULL,
+    scene_code TEXT NOT NULL,
+    input_text TEXT NOT NULL,
+    expected_output_text TEXT,
+    scoring_rubric_json TEXT,
+    source_case_id INTEGER,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(eval_set_id, case_code),
+    FOREIGN KEY (eval_set_id) REFERENCES ai_training_eval_sets(id) ON DELETE CASCADE,
+    FOREIGN KEY (source_case_id) REFERENCES ai_training_cases(id) ON DELETE SET NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_eval_cases_set
+    ON ai_training_eval_cases(eval_set_id, enabled, sort_order, id);
+
+  CREATE TABLE IF NOT EXISTS ai_training_eval_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_code TEXT NOT NULL UNIQUE,
+    skill_id INTEGER NOT NULL,
+    skill_version_id INTEGER NOT NULL,
+    eval_set_id INTEGER NOT NULL,
+    run_status TEXT NOT NULL DEFAULT 'running',
+    total_cases INTEGER NOT NULL DEFAULT 0,
+    pass_cases INTEGER NOT NULL DEFAULT 0,
+    avg_accuracy REAL DEFAULT NULL,
+    avg_structure_score REAL DEFAULT NULL,
+    avg_evidence_score REAL DEFAULT NULL,
+    avg_actionability_score REAL DEFAULT NULL,
+    summary_json TEXT,
+    started_by INTEGER NOT NULL,
+    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    finished_at DATETIME,
+    FOREIGN KEY (skill_id) REFERENCES ai_training_skills(id) ON DELETE CASCADE,
+    FOREIGN KEY (skill_version_id) REFERENCES ai_training_skill_versions(id) ON DELETE CASCADE,
+    FOREIGN KEY (eval_set_id) REFERENCES ai_training_eval_sets(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_eval_runs_skill
+    ON ai_training_eval_runs(skill_version_id, started_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_eval_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    eval_run_id INTEGER NOT NULL,
+    eval_case_id INTEGER NOT NULL,
+    actual_output_text TEXT,
+    actual_output_json TEXT,
+    accuracy_score REAL DEFAULT NULL,
+    structure_score REAL DEFAULT NULL,
+    evidence_score REAL DEFAULT NULL,
+    actionability_score REAL DEFAULT NULL,
+    passed INTEGER NOT NULL DEFAULT 0,
+    reviewer_note TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(eval_run_id, eval_case_id),
+    FOREIGN KEY (eval_run_id) REFERENCES ai_training_eval_runs(id) ON DELETE CASCADE,
+    FOREIGN KEY (eval_case_id) REFERENCES ai_training_eval_cases(id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_eval_results_run
+    ON ai_training_eval_results(eval_run_id, passed, id);
+
+  CREATE TABLE IF NOT EXISTS ai_training_user_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stat_date TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    business_line TEXT,
+    session_count INTEGER NOT NULL DEFAULT 0,
+    high_quality_session_count INTEGER NOT NULL DEFAULT 0,
+    avg_rating REAL DEFAULT NULL,
+    case_candidate_count INTEGER NOT NULL DEFAULT 0,
+    published_case_count INTEGER NOT NULL DEFAULT 0,
+    skill_contribution_count INTEGER NOT NULL DEFAULT 0,
+    reuse_count INTEGER NOT NULL DEFAULT 0,
+    adopted_count INTEGER NOT NULL DEFAULT 0,
+    score_json TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(stat_date, user_id, business_line)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_user_scores_user
+    ON ai_training_user_scores(user_id, stat_date DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_training_skill_usage_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stat_date TEXT NOT NULL,
+    skill_id INTEGER NOT NULL,
+    skill_version_id INTEGER,
+    business_line TEXT,
+    call_count INTEGER NOT NULL DEFAULT 0,
+    unique_user_count INTEGER NOT NULL DEFAULT 0,
+    adopted_count INTEGER NOT NULL DEFAULT 0,
+    generated_case_count INTEGER NOT NULL DEFAULT 0,
+    generated_task_count INTEGER NOT NULL DEFAULT 0,
+    avg_rating REAL DEFAULT NULL,
+    score_json TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(stat_date, skill_id, skill_version_id, business_line)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_training_skill_usage_stats_skill
+    ON ai_training_skill_usage_stats(skill_id, stat_date DESC);
+`);
+
 // =========== 手机端任务中心采集表 ===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS mobile_task_apps (
@@ -7741,6 +8157,2482 @@ app.put('/api/agents/notification-rules/:id', canWrite, (req, res) => {
 app.delete('/api/agents/notification-rules/:id', canWrite, (req, res) => {
   db.prepare('DELETE FROM agent_notification_rules WHERE id = ?').run(req.params.id);
   res.json({ success: true });
+});
+
+const AI_TRAINING_SCENE_LABELS = {
+  general_chat: '通用训练',
+  revenue_diagnosis: '收入异常诊断',
+  budget_advice: '预算建议',
+  daily_report: '日报生成',
+  collaboration_review: '协同复盘',
+};
+
+const AI_TRAINING_FEEDBACK_TYPES = new Set(['helpful', 'not_helpful', 'inaccurate', 'incomplete', 'reusable']);
+
+function clipAiTrainingText(value, maxLength = 32) {
+  const chars = Array.from(String(value || '').trim());
+  return chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}...` : chars.join('');
+}
+
+function getAiTrainingSceneLabel(sceneCode) {
+  return AI_TRAINING_SCENE_LABELS[sceneCode] || '通用训练';
+}
+
+function generateAiTrainingCode(prefix = 'aits') {
+  return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
+}
+
+function canReviewAiTrainingAsset(user) {
+  return isAdmin(user.role) || isAdmin(user.executive_role) || ['leader', 'sales_director'].includes(user.role);
+}
+
+function getAiTrainingVisibleUserIds(user) {
+  const ids = getVisibleUserIds(user.id, user.role);
+  if (ids === null) return null;
+  return [...new Set((ids || []).map(id => Number(id)).filter(Boolean))];
+}
+
+function buildAiTrainingVisibilityFilter(user, alias = 'ats') {
+  const ids = getAiTrainingVisibleUserIds(user);
+  if (ids === null) return { sql: '', params: [] };
+  const prefix = alias ? `${alias}.` : '';
+  const placeholders = ids.map(() => '?').join(',');
+  return {
+    sql: ` AND ${prefix}owner_user_id IN (${placeholders})`,
+    params: ids,
+  };
+}
+
+function normalizeAiTrainingSessionRow(row) {
+  const base = decryptRow('ai_training_sessions', row);
+  return {
+    ...base,
+    quality_score: base?.quality_score === null || base?.quality_score === undefined ? null : Number(base.quality_score),
+    last_score: base?.last_score === null || base?.last_score === undefined ? null : Number(base.last_score),
+    context_snapshot_json: parseJsonSafe(base?.context_snapshot_json, null),
+    extra_json: parseJsonSafe(base?.extra_json, null),
+    message_count: Number(base?.message_count || 0),
+  };
+}
+
+function normalizeAiTrainingMessageRow(row) {
+  const base = decryptRow('ai_training_messages', row);
+  return {
+    ...base,
+    structured_json: parseJsonSafe(base?.structured_json, null),
+    evidence_json: parseJsonSafe(base?.evidence_json, []),
+    actions_json: parseJsonSafe(base?.actions_json, []),
+    avg_rating: base?.avg_rating === null || base?.avg_rating === undefined ? null : Number(base.avg_rating),
+    helpful_count: Number(base?.helpful_count || 0),
+    not_helpful_count: Number(base?.not_helpful_count || 0),
+    my_rating: base?.my_rating === null || base?.my_rating === undefined ? null : Number(base.my_rating),
+  };
+}
+
+function normalizeAiTrainingCandidateRow(row) {
+  const base = decryptRow('ai_training_case_candidates', row);
+  return {
+    ...base,
+    tags_json: parseJsonSafe(base?.tags_json, []),
+    quality_score: base?.quality_score === null || base?.quality_score === undefined ? null : Number(base.quality_score),
+  };
+}
+
+function normalizeAiTrainingCaseRow(row) {
+  const base = decryptRow('ai_training_cases', row);
+  return {
+    ...base,
+    tags_json: parseJsonSafe(base?.tags_json, []),
+    extra_json: parseJsonSafe(base?.extra_json, null),
+    quality_score: base?.quality_score === null || base?.quality_score === undefined ? null : Number(base.quality_score),
+  };
+}
+
+function normalizeAiTrainingSkillRow(row) {
+  const base = decryptRow('ai_training_skills', row);
+  return {
+    ...base,
+    tags_json: parseJsonSafe(base?.tags_json, []),
+    latest_version_eval_summary_json: parseJsonSafe(base?.latest_version_eval_summary_json, null),
+    version_count: Number(base?.version_count || 0),
+    example_count: Number(base?.example_count || 0),
+    hook_count: Number(base?.hook_count || 0),
+    call_count: Number(base?.call_count || 0),
+    unique_user_count: Number(base?.unique_user_count || 0),
+    adopted_count: Number(base?.adopted_count || 0),
+    latest_version_id: base?.latest_version_id ? Number(base.latest_version_id) : null,
+    publish_version_id: base?.publish_version_id ? Number(base.publish_version_id) : null,
+  };
+}
+
+function normalizeAiTrainingSkillVersionRow(row) {
+  const base = decryptRow('ai_training_skill_versions', row);
+  return {
+    ...base,
+    input_schema_json: parseJsonSafe(base?.input_schema_json, null),
+    output_schema_json: parseJsonSafe(base?.output_schema_json, null),
+    hook_policy_json: parseJsonSafe(base?.hook_policy_json, null),
+    source_case_ids_json: parseJsonSafe(base?.source_case_ids_json, []),
+    eval_summary_json: parseJsonSafe(base?.eval_summary_json, null),
+  };
+}
+
+function normalizeAiTrainingHookRow(row) {
+  const base = decryptRow('ai_training_hooks', row);
+  return {
+    ...base,
+    trigger_rule_json: parseJsonSafe(base?.trigger_rule_json, null),
+    action_config_json: parseJsonSafe(base?.action_config_json, null),
+    enabled: Number(base?.enabled || 0),
+    required: base?.required === undefined ? undefined : Number(base.required || 0),
+    sort_order: base?.sort_order === undefined ? undefined : Number(base.sort_order || 0),
+  };
+}
+
+function normalizeAiTrainingEvalRunRow(row) {
+  const base = decryptRow('ai_training_eval_runs', row);
+  const totalCases = Number(base?.total_cases || 0);
+  const passCases = Number(base?.pass_cases || 0);
+  return {
+    ...base,
+    total_cases: totalCases,
+    pass_cases: passCases,
+    avg_accuracy: base?.avg_accuracy === null || base?.avg_accuracy === undefined ? null : Number(base.avg_accuracy),
+    avg_structure_score: base?.avg_structure_score === null || base?.avg_structure_score === undefined ? null : Number(base.avg_structure_score),
+    avg_evidence_score: base?.avg_evidence_score === null || base?.avg_evidence_score === undefined ? null : Number(base.avg_evidence_score),
+    avg_actionability_score: base?.avg_actionability_score === null || base?.avg_actionability_score === undefined ? null : Number(base.avg_actionability_score),
+    summary_json: parseJsonSafe(base?.summary_json, null),
+    pass_rate: totalCases > 0 ? Number((passCases / totalCases).toFixed(4)) : 0,
+  };
+}
+
+function normalizeAiTrainingEvalCaseRow(row) {
+  const base = decryptRow('ai_training_eval_cases', row);
+  return {
+    ...base,
+    scoring_rubric_json: parseJsonSafe(base?.scoring_rubric_json, null),
+    enabled: Number(base?.enabled || 0),
+    sort_order: Number(base?.sort_order || 0),
+  };
+}
+
+function toAiTrainingSlug(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'general';
+}
+
+const AI_TRAINING_DEFAULT_HOOK_TEMPLATES = [
+  {
+    stage: 'pre',
+    suffix: 'pre_context',
+    name: '前置上下文补齐',
+    description: '自动挂载相关报表、历史案例和文档，减少人工反复补上下文。',
+    trigger_rule_json: { when: ['session_start', 'message_before_reply'] },
+    action_config_json: { attach_refs: ['report', 'case', 'document'] },
+  },
+  {
+    stage: 'mid',
+    suffix: 'mid_followup',
+    name: '中间追问补齐',
+    description: '当缺少时间范围、对照窗口或角色视角时，自动补追问口径。',
+    trigger_rule_json: { when: ['missing_time_range', 'missing_compare_window', 'missing_role_scope'] },
+    action_config_json: { ask_for: ['时间范围', '对照窗口', '角色视角'] },
+  },
+  {
+    stage: 'post',
+    suffix: 'post_settlement',
+    name: '后置沉淀动作',
+    description: '在输出质量较高时自动触发案例沉淀或任务草稿生成建议。',
+    trigger_rule_json: { when: ['high_quality_reply', 'user_adopted'] },
+    action_config_json: { suggest_actions: ['case_candidate', 'task_draft'] },
+  },
+];
+
+function ensureAiTrainingDefaultHooks(sceneCode, businessLine, roleScope, actorUserId) {
+  const insertHook = db.prepare(`
+    INSERT INTO ai_training_hooks (
+      hook_code, name, hook_stage, description, scene_code, business_line, role_scope,
+      trigger_rule_json, action_config_json, enabled, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+  `);
+
+  return AI_TRAINING_DEFAULT_HOOK_TEMPLATES.map((template) => {
+    const hookCode = `${toAiTrainingSlug(sceneCode)}_${template.suffix}`;
+    let hookRow = db.prepare('SELECT * FROM ai_training_hooks WHERE hook_code = ?').get(hookCode);
+    if (!hookRow) {
+      const result = insertHook.run(
+        hookCode,
+        template.name,
+        template.stage,
+        template.description,
+        sceneCode || null,
+        businessLine || null,
+        roleScope || null,
+        JSON.stringify(template.trigger_rule_json),
+        JSON.stringify(template.action_config_json),
+        actorUserId,
+      );
+      hookRow = db.prepare('SELECT * FROM ai_training_hooks WHERE id = ?').get(result.lastInsertRowid);
+    }
+    return normalizeAiTrainingHookRow(hookRow);
+  });
+}
+
+function ensureAiTrainingEvalSet(caseItem, actorUserId) {
+  const setCode = `eval_${toAiTrainingSlug(caseItem.scene_code)}_${toAiTrainingSlug(caseItem.business_line)}`;
+  let evalSet = db.prepare('SELECT * FROM ai_training_eval_sets WHERE set_code = ?').get(setCode);
+  if (!evalSet) {
+    const result = db.prepare(`
+      INSERT INTO ai_training_eval_sets (
+        set_code, name, description, business_line, scene_code, role_scope, status, case_count, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, 'active', 0, ?)
+    `).run(
+      setCode,
+      `${caseItem.scene_label || getAiTrainingSceneLabel(caseItem.scene_code)}基础评测集`,
+      `围绕 ${caseItem.business_line || '当前业务线'} / ${caseItem.scene_label || getAiTrainingSceneLabel(caseItem.scene_code)} 自动沉淀的基础评测集。`,
+      caseItem.business_line || null,
+      caseItem.scene_code,
+      caseItem.role_scope || null,
+      actorUserId,
+    );
+    evalSet = db.prepare('SELECT * FROM ai_training_eval_sets WHERE id = ?').get(result.lastInsertRowid);
+  }
+  return evalSet;
+}
+
+function buildAiTrainingEvalScoresFromCase(caseItem) {
+  const quality = Number(caseItem.quality_score || 80);
+  const accuracy = Math.min(0.98, Math.max(0.6, quality / 100));
+  const structure = Math.min(0.99, Math.max(0.65, accuracy + 0.04));
+  const evidence = Math.min(0.96, Math.max(0.6, accuracy - 0.02));
+  const actionability = Math.min(0.97, Math.max(0.62, accuracy + 0.01));
+  const passed = accuracy >= 0.8 && structure >= 0.8 ? 1 : 0;
+  return {
+    accuracy,
+    structure,
+    evidence,
+    actionability,
+    passed,
+  };
+}
+
+function buildAiTrainingSkillDraftFromCase(caseItem) {
+  const sceneLabel = caseItem.scene_label || getAiTrainingSceneLabel(caseItem.scene_code);
+  const reusableMethod = caseItem.reusable_method_text || caseItem.summary || '结合关键指标、证据和下一步动作，输出结构化建议。';
+  const responseText = caseItem.response_text || caseItem.business_result_text || caseItem.summary || '';
+  return {
+    name: `${clipAiTrainingText(caseItem.title || sceneLabel, 18)} Skill`,
+    description: caseItem.summary || caseItem.business_result_text || `基于案例《${caseItem.title}》生成的 ${sceneLabel} Skill 草稿。`,
+    systemPrompt: [
+      `你是一个聚焦 ${sceneLabel} 的业务分析助手。`,
+      `适用业务线：${caseItem.business_line || '当前业务线'}。`,
+      `优先遵循以下复用方法：${reusableMethod}`,
+      '输出必须结构化，至少包含：结论摘要、核心证据、风险提醒、下一步建议。',
+    ].join('\n'),
+    inputSchema: {
+      required_fields: ['业务对象', '时间范围', '角色视角'],
+      optional_fields: ['对照窗口', '目标指标', '是否需要生成任务草稿'],
+    },
+    outputSchema: {
+      sections: ['结论摘要', '核心证据', '风险提醒', '下一步建议'],
+      style: 'bullet_list',
+    },
+    reasoningSteps: reusableMethod,
+    outputTemplate: responseText,
+    guardrails: '禁止只给结论不写证据；当时间范围缺失时必须先补口径；避免给出不可执行的泛化建议。',
+    exampleSummary: clipAiTrainingText(caseItem.summary || reusableMethod, 120),
+    notesText: `由案例《${caseItem.title}》自动生成初始 Skill 草稿，可继续补充更多案例与评测样本。`,
+  };
+}
+
+function getAiTrainingSkillDetailForUser(skillId, user) {
+  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  const skillRow = db.prepare(`
+    SELECT
+      sk.*,
+      owner_u.display_name as owner_user_name,
+      maintainer_u.display_name as maintainer_user_name,
+      lv.version_no as latest_version_no,
+      lv.version_label as latest_version_label,
+      lv.status as latest_version_status,
+      lv.eval_summary_json as latest_version_eval_summary_json,
+      (SELECT COUNT(*) FROM ai_training_skill_versions sv WHERE sv.skill_id = sk.id) as version_count,
+      (SELECT COUNT(*) FROM ai_training_skill_examples ex
+        JOIN ai_training_skill_versions sv ON sv.id = ex.skill_version_id
+        WHERE sv.skill_id = sk.id) as example_count,
+      (SELECT COUNT(*) FROM ai_training_skill_hook_bindings hb
+        WHERE hb.skill_version_id = COALESCE(sk.latest_version_id, sk.publish_version_id)) as hook_count,
+      COALESCE((SELECT SUM(sus.call_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT COUNT(*) FROM ai_training_sessions ats WHERE ats.skill_id = sk.id), 0) as call_count,
+      COALESCE((SELECT MAX(sus.unique_user_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT COUNT(DISTINCT ats.owner_user_id) FROM ai_training_sessions ats WHERE ats.skill_id = sk.id), 0) as unique_user_count,
+      COALESCE((SELECT SUM(sus.adopted_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT SUM(CASE WHEN atmf.adopted = 1 THEN 1 ELSE 0 END)
+          FROM ai_training_message_feedback atmf
+          JOIN ai_training_messages atm ON atm.id = atmf.message_id
+          WHERE atm.skill_id = sk.id), 0) as adopted_count
+    FROM ai_training_skills sk
+    LEFT JOIN users owner_u ON owner_u.id = sk.owner_user_id
+    LEFT JOIN users maintainer_u ON maintainer_u.id = sk.maintainer_user_id
+    LEFT JOIN ai_training_skill_versions lv ON lv.id = sk.latest_version_id
+    WHERE sk.id = ?
+      ${visibility.sql}
+  `).get(skillId, ...visibility.params);
+  if (!skillRow) return null;
+
+  const skill = normalizeAiTrainingSkillRow(skillRow);
+  const versions = db.prepare(`
+    SELECT
+      sv.*,
+      cu.display_name as created_by_name,
+      pu.display_name as published_by_name
+    FROM ai_training_skill_versions sv
+    LEFT JOIN users cu ON cu.id = sv.created_by
+    LEFT JOIN users pu ON pu.id = sv.published_by
+    WHERE sv.skill_id = ?
+    ORDER BY sv.created_at DESC, sv.id DESC
+  `).all(skill.id).map(normalizeAiTrainingSkillVersionRow);
+
+  const latestVersionId = skill.latest_version_id || versions[0]?.id || null;
+  const latestVersion = versions.find((item) => Number(item.id) === Number(latestVersionId)) || versions[0] || null;
+  const hooks = latestVersionId ? db.prepare(`
+    SELECT h.*, b.required, b.sort_order
+    FROM ai_training_skill_hook_bindings b
+    JOIN ai_training_hooks h ON h.id = b.hook_id
+    WHERE b.skill_version_id = ?
+    ORDER BY b.sort_order ASC, b.id ASC
+  `).all(latestVersionId).map(normalizeAiTrainingHookRow) : [];
+
+  const examples = latestVersionId ? db.prepare(`
+    SELECT ex.*, c.title as source_case_title
+    FROM ai_training_skill_examples ex
+    LEFT JOIN ai_training_cases c ON c.id = ex.source_case_id
+    WHERE ex.skill_version_id = ?
+    ORDER BY ex.sort_order ASC, ex.id ASC
+  `).all(latestVersionId).map((row) => ({
+    ...row,
+    sort_order: Number(row.sort_order || 0),
+  })) : [];
+
+  const recentEvalRuns = db.prepare(`
+    SELECT er.*, es.name as eval_set_name, sv.version_no as skill_version_no
+    FROM ai_training_eval_runs er
+    LEFT JOIN ai_training_eval_sets es ON es.id = er.eval_set_id
+    LEFT JOIN ai_training_skill_versions sv ON sv.id = er.skill_version_id
+    WHERE er.skill_id = ?
+    ORDER BY er.started_at DESC, er.id DESC
+    LIMIT 10
+  `).all(skill.id).map(normalizeAiTrainingEvalRunRow);
+
+  return {
+    skill: { ...skill, can_manage: canManageAiTrainingSkill(user, skillRow) },
+    versions,
+    latest_version: latestVersion,
+    hooks,
+    examples,
+    recent_eval_runs: recentEvalRuns,
+  };
+}
+
+function createAiTrainingSkillDraftFromCaseRow(caseRow, actorUserId) {
+  const caseItem = normalizeAiTrainingCaseRow(caseRow);
+  const existingSkill = db.prepare(`
+    SELECT sk.id
+    FROM ai_training_skill_examples ex
+    JOIN ai_training_skill_versions sv ON sv.id = ex.skill_version_id
+    JOIN ai_training_skills sk ON sk.id = sv.skill_id
+    WHERE ex.source_case_id = ?
+      AND sk.status != 'archived'
+    ORDER BY sk.updated_at DESC, sk.id DESC
+    LIMIT 1
+  `).get(caseItem.id);
+  if (existingSkill?.id) {
+    return { skill_id: Number(existingSkill.id), reused: true };
+  }
+
+  const draft = buildAiTrainingSkillDraftFromCase(caseItem);
+  const hooks = ensureAiTrainingDefaultHooks(caseItem.scene_code, caseItem.business_line, caseItem.role_scope, actorUserId);
+  const evalScores = buildAiTrainingEvalScoresFromCase(caseItem);
+
+  return db.transaction(() => {
+    const skillInsert = db.prepare(`
+      INSERT INTO ai_training_skills (
+        skill_code, name, description, business_line, business_side, budget_side, scene_code,
+        role_scope, owner_user_id, maintainer_user_id, latest_version_id, publish_version_id,
+        status, visibility_scope, source_type, source_summary, tags_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'testing', 'team', 'case_based', ?, ?)
+    `).run(
+      generateAiTrainingCode('aisk'),
+      draft.name,
+      draft.description,
+      caseItem.business_line || null,
+      caseItem.business_side || null,
+      caseItem.budget_side || null,
+      caseItem.scene_code,
+      caseItem.role_scope || null,
+      actorUserId,
+      actorUserId,
+      caseItem.summary || null,
+      JSON.stringify([...(caseItem.tags_json || []), caseItem.scene_label || getAiTrainingSceneLabel(caseItem.scene_code)].filter(Boolean)),
+    );
+    const skillId = Number(skillInsert.lastInsertRowid);
+
+    const hookPolicyJson = {
+      hooks: hooks.map((hook) => ({
+        hook_id: hook.id,
+        hook_code: hook.hook_code,
+        hook_stage: hook.hook_stage,
+      })),
+    };
+
+    const versionInsert = db.prepare(`
+      INSERT INTO ai_training_skill_versions (
+        skill_id, version_no, version_label, status, system_prompt, input_schema_json, output_schema_json,
+        reasoning_steps_text, output_template_text, guardrails_text, hook_policy_json, example_summary,
+        source_case_ids_json, eval_summary_json, notes_text, created_by
+      ) VALUES (?, 'v0.1', '案例初始化', 'evaluating', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    `).run(
+      skillId,
+      draft.systemPrompt,
+      JSON.stringify(draft.inputSchema),
+      JSON.stringify(draft.outputSchema),
+      draft.reasoningSteps,
+      draft.outputTemplate,
+      draft.guardrails,
+      JSON.stringify(hookPolicyJson),
+      draft.exampleSummary,
+      JSON.stringify([caseItem.id]),
+      draft.notesText,
+      actorUserId,
+    );
+    const versionId = Number(versionInsert.lastInsertRowid);
+
+    db.prepare(`
+      UPDATE ai_training_skills
+      SET latest_version_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(versionId, skillId);
+
+    db.prepare(`
+      INSERT INTO ai_training_skill_examples (
+        skill_version_id, source_case_id, example_kind, input_text, expected_output_text, note_text, sort_order
+      ) VALUES (?, ?, 'few_shot', ?, ?, ?, 0)
+    `).run(
+      versionId,
+      caseItem.id,
+      caseItem.prompt_text || caseItem.title || '',
+      caseItem.response_text || caseItem.business_result_text || caseItem.summary || '',
+      `来自案例《${caseItem.title}》的首个 few-shot 示例。`,
+    );
+
+    const bindHook = db.prepare(`
+      INSERT OR IGNORE INTO ai_training_skill_hook_bindings (
+        skill_version_id, hook_id, required, sort_order
+      ) VALUES (?, ?, ?, ?)
+    `);
+    hooks.forEach((hook, index) => {
+      bindHook.run(versionId, hook.id, 1, index);
+    });
+
+    const evalSet = ensureAiTrainingEvalSet(caseItem, actorUserId);
+    let evalCase = db.prepare(`
+      SELECT *
+      FROM ai_training_eval_cases
+      WHERE eval_set_id = ? AND source_case_id = ?
+    `).get(evalSet.id, caseItem.id);
+    if (!evalCase) {
+      const evalCaseInsert = db.prepare(`
+        INSERT INTO ai_training_eval_cases (
+          eval_set_id, case_code, title, scene_code, input_text, expected_output_text,
+          scoring_rubric_json, source_case_id, sort_order, enabled
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
+      `).run(
+        evalSet.id,
+        generateAiTrainingCode('aieval_case'),
+        caseItem.title || `${caseItem.scene_label || getAiTrainingSceneLabel(caseItem.scene_code)}样本`,
+        caseItem.scene_code,
+        caseItem.prompt_text || caseItem.title || '',
+        caseItem.response_text || caseItem.business_result_text || caseItem.summary || '',
+        JSON.stringify({
+          weights: {
+            accuracy: 0.35,
+            structure: 0.25,
+            evidence: 0.2,
+            actionability: 0.2,
+          },
+        }),
+        caseItem.id,
+      );
+      evalCase = db.prepare('SELECT * FROM ai_training_eval_cases WHERE id = ?').get(evalCaseInsert.lastInsertRowid);
+      db.prepare(`
+        UPDATE ai_training_eval_sets
+        SET case_count = (
+          SELECT COUNT(*) FROM ai_training_eval_cases WHERE eval_set_id = ? AND enabled = 1
+        ), updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(evalSet.id, evalSet.id);
+    }
+
+    const evalSummary = {
+      total_cases: 1,
+      pass_cases: evalScores.passed,
+      avg_accuracy: Number(evalScores.accuracy.toFixed(4)),
+      avg_structure_score: Number(evalScores.structure.toFixed(4)),
+      avg_evidence_score: Number(evalScores.evidence.toFixed(4)),
+      avg_actionability_score: Number(evalScores.actionability.toFixed(4)),
+      source: 'case_bootstrap',
+    };
+    const evalRunInsert = db.prepare(`
+      INSERT INTO ai_training_eval_runs (
+        run_code, skill_id, skill_version_id, eval_set_id, run_status,
+        total_cases, pass_cases, avg_accuracy, avg_structure_score, avg_evidence_score,
+        avg_actionability_score, summary_json, started_by, started_at, finished_at
+      ) VALUES (?, ?, ?, ?, 'completed', 1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(
+      generateAiTrainingCode('aieval'),
+      skillId,
+      versionId,
+      evalSet.id,
+      evalScores.passed,
+      evalSummary.avg_accuracy,
+      evalSummary.avg_structure_score,
+      evalSummary.avg_evidence_score,
+      evalSummary.avg_actionability_score,
+      JSON.stringify(evalSummary),
+      actorUserId,
+    );
+
+    db.prepare(`
+      INSERT INTO ai_training_eval_results (
+        eval_run_id, eval_case_id, actual_output_text, actual_output_json, accuracy_score,
+        structure_score, evidence_score, actionability_score, passed, reviewer_note
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      evalRunInsert.lastInsertRowid,
+      evalCase.id,
+      caseItem.response_text || caseItem.business_result_text || caseItem.summary || '',
+      JSON.stringify({
+        generated_from_case_id: caseItem.id,
+        mode: 'bootstrap',
+      }),
+      evalSummary.avg_accuracy,
+      evalSummary.avg_structure_score,
+      evalSummary.avg_evidence_score,
+      evalSummary.avg_actionability_score,
+      evalScores.passed,
+      '基于案例质量分自动生成的初始评测结果。',
+    );
+
+    db.prepare(`
+      UPDATE ai_training_skill_versions
+      SET status = 'draft', eval_summary_json = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(JSON.stringify(evalSummary), versionId);
+
+    return { skill_id: skillId, reused: false };
+  })();
+}
+
+function listAiTrainingSkillsForUser(user, query = {}) {
+  const { status, scene_code, business_line, keyword, limit = 100 } = query;
+  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  let sql = `
+    SELECT
+      sk.*,
+      owner_u.display_name as owner_user_name,
+      maintainer_u.display_name as maintainer_user_name,
+      lv.version_no as latest_version_no,
+      lv.version_label as latest_version_label,
+      lv.status as latest_version_status,
+      lv.eval_summary_json as latest_version_eval_summary_json,
+      (SELECT COUNT(*) FROM ai_training_skill_versions sv WHERE sv.skill_id = sk.id) as version_count,
+      (SELECT COUNT(*) FROM ai_training_skill_examples ex
+        JOIN ai_training_skill_versions sv ON sv.id = ex.skill_version_id
+        WHERE sv.skill_id = sk.id) as example_count,
+      (SELECT COUNT(*) FROM ai_training_skill_hook_bindings hb
+        WHERE hb.skill_version_id = COALESCE(sk.latest_version_id, sk.publish_version_id)) as hook_count,
+      COALESCE((SELECT SUM(sus.call_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT COUNT(*) FROM ai_training_sessions ats WHERE ats.skill_id = sk.id), 0) as call_count,
+      COALESCE((SELECT MAX(sus.unique_user_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT COUNT(DISTINCT ats.owner_user_id) FROM ai_training_sessions ats WHERE ats.skill_id = sk.id), 0) as unique_user_count,
+      COALESCE((SELECT SUM(sus.adopted_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT SUM(CASE WHEN atmf.adopted = 1 THEN 1 ELSE 0 END)
+          FROM ai_training_message_feedback atmf
+          JOIN ai_training_messages atm ON atm.id = atmf.message_id
+          WHERE atm.skill_id = sk.id), 0) as adopted_count
+    FROM ai_training_skills sk
+    LEFT JOIN users owner_u ON owner_u.id = sk.owner_user_id
+    LEFT JOIN users maintainer_u ON maintainer_u.id = sk.maintainer_user_id
+    LEFT JOIN ai_training_skill_versions lv ON lv.id = sk.latest_version_id
+    WHERE 1=1
+      ${visibility.sql}
+  `;
+  const params = [...visibility.params];
+  if (status) {
+    sql += ' AND sk.status = ?';
+    params.push(status);
+  }
+  if (scene_code) {
+    sql += ' AND sk.scene_code = ?';
+    params.push(scene_code);
+  }
+  if (business_line) {
+    sql += ' AND sk.business_line = ?';
+    params.push(business_line);
+  }
+  if (keyword) {
+    sql += ' AND (sk.name LIKE ? OR sk.description LIKE ? OR sk.source_summary LIKE ?)';
+    const kw = `%${String(keyword).trim()}%`;
+    params.push(kw, kw, kw);
+  }
+  sql += `
+    ORDER BY
+      CASE sk.status
+        WHEN 'published' THEN 1
+        WHEN 'pending_review' THEN 2
+        WHEN 'testing' THEN 3
+        ELSE 4
+      END,
+      sk.updated_at DESC,
+      sk.id DESC
+    LIMIT ?
+  `;
+  params.push(Math.min(Number(limit) || 100, 200));
+  return db.prepare(sql).all(...params).map((row) => ({
+    ...normalizeAiTrainingSkillRow(row),
+    can_manage: canManageAiTrainingSkill(user, row),
+  }));
+}
+
+function listAiTrainingEvalRunsForUser(user, query = {}) {
+  const { status, limit = 50 } = query;
+  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  let sql = `
+    SELECT
+      er.*,
+      sk.name as skill_name,
+      sv.version_no as skill_version_no,
+      es.name as eval_set_name
+    FROM ai_training_eval_runs er
+    JOIN ai_training_skills sk ON sk.id = er.skill_id
+    LEFT JOIN ai_training_skill_versions sv ON sv.id = er.skill_version_id
+    LEFT JOIN ai_training_eval_sets es ON es.id = er.eval_set_id
+    WHERE 1=1
+      ${visibility.sql}
+  `;
+  const params = [...visibility.params];
+  if (status) {
+    sql += ' AND er.run_status = ?';
+    params.push(status);
+  }
+  sql += ' ORDER BY er.started_at DESC, er.id DESC LIMIT ?';
+  params.push(Math.min(Number(limit) || 50, 200));
+  return db.prepare(sql).all(...params).map(normalizeAiTrainingEvalRunRow);
+}
+
+function canManageAiTrainingSkill(user, skillRow) {
+  if (!user || !skillRow) return false;
+  if (isAdmin(user.role) || isAdmin(user.executive_role) || ['leader', 'sales_director'].includes(user.role)) {
+    return true;
+  }
+  return Number(skillRow.owner_user_id) === Number(user.id) || Number(skillRow.maintainer_user_id) === Number(user.id);
+}
+
+function createAiTrainingManualSkillDraft(payload, actorUserId) {
+  const {
+    name,
+    description = '',
+    business_line = 'zhixiao',
+    business_side = '预算侧',
+    budget_side = 'C端',
+    scene_code = 'general_chat',
+    role_scope = 'strategy',
+    system_prompt = '',
+    reasoning_steps_text = '',
+    output_template_text = '',
+    guardrails_text = '',
+    visibility_scope = 'team',
+  } = payload || {};
+
+  const normalizedName = String(name || '').trim();
+  if (!normalizedName) {
+    throw new Error('Skill 名称不能为空');
+  }
+
+  const sceneLabel = getAiTrainingSceneLabel(scene_code);
+  const defaultPrompt = [
+    `你是一个聚焦 ${sceneLabel} 的业务分析助手。`,
+    `业务线：${business_line || '当前业务线'}。`,
+    '输出必须结构化，至少包含：结论摘要、核心证据、风险提醒、下一步建议。',
+  ].join('\n');
+  const defaultReasoning = '1. 确认问题口径；2. 对比关键指标；3. 补证据；4. 输出结论与动作。';
+  const defaultTemplate = '结论摘要\n- \n\n核心证据\n- \n\n风险提醒\n- \n\n下一步建议\n- ';
+  const defaultGuardrails = '禁止只给结论不写证据；时间范围缺失时需要先补口径；避免不可执行的空泛建议。';
+  const hooks = ensureAiTrainingDefaultHooks(scene_code, business_line, role_scope, actorUserId);
+
+  return db.transaction(() => {
+    const skillInsert = db.prepare(`
+      INSERT INTO ai_training_skills (
+        skill_code, name, description, business_line, business_side, budget_side, scene_code,
+        role_scope, owner_user_id, maintainer_user_id, latest_version_id, publish_version_id,
+        status, visibility_scope, source_type, source_summary, tags_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'draft', ?, 'manual', ?, ?)
+    `).run(
+      generateAiTrainingCode('aisk'),
+      normalizedName,
+      String(description || '').trim() || null,
+      business_line || null,
+      business_side || null,
+      budget_side || null,
+      scene_code,
+      role_scope || null,
+      actorUserId,
+      actorUserId,
+      visibility_scope || 'team',
+      `手动创建的 ${sceneLabel} Skill 草稿`,
+      JSON.stringify([business_line, sceneLabel, role_scope].filter(Boolean)),
+    );
+    const skillId = Number(skillInsert.lastInsertRowid);
+
+    const versionInsert = db.prepare(`
+      INSERT INTO ai_training_skill_versions (
+        skill_id, version_no, version_label, status, system_prompt, input_schema_json, output_schema_json,
+        reasoning_steps_text, output_template_text, guardrails_text, hook_policy_json, example_summary,
+        source_case_ids_json, eval_summary_json, notes_text, created_by
+      ) VALUES (?, 'v0.1', '手动创建', 'draft', ?, ?, ?, ?, ?, ?, ?, ?, '[]', NULL, ?, ?)
+    `).run(
+      skillId,
+      String(system_prompt || '').trim() || defaultPrompt,
+      JSON.stringify({
+        required_fields: ['业务对象', '时间范围', '角色视角'],
+        optional_fields: ['对照窗口', '目标指标', '补充背景'],
+      }),
+      JSON.stringify({
+        sections: ['结论摘要', '核心证据', '风险提醒', '下一步建议'],
+        style: 'bullet_list',
+      }),
+      String(reasoning_steps_text || '').trim() || defaultReasoning,
+      String(output_template_text || '').trim() || defaultTemplate,
+      String(guardrails_text || '').trim() || defaultGuardrails,
+      JSON.stringify({
+        hooks: hooks.map((hook) => ({
+          hook_id: hook.id,
+          hook_code: hook.hook_code,
+          hook_stage: hook.hook_stage,
+        })),
+      }),
+      clipAiTrainingText(String(description || '').trim() || normalizedName, 120),
+      '手动创建的初始版本，可补案例、重评测、再发布。',
+      actorUserId,
+    );
+    const versionId = Number(versionInsert.lastInsertRowid);
+
+    db.prepare(`
+      UPDATE ai_training_skills
+      SET latest_version_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(versionId, skillId);
+
+    const bindHook = db.prepare(`
+      INSERT OR IGNORE INTO ai_training_skill_hook_bindings (
+        skill_version_id, hook_id, required, sort_order
+      ) VALUES (?, ?, ?, ?)
+    `);
+    hooks.forEach((hook, index) => {
+      bindHook.run(versionId, hook.id, 1, index);
+    });
+
+    return skillId;
+  })();
+}
+
+function ensureAiTrainingEvalCasesForSkill(skillRow, versionRow, actorUserId) {
+  const skill = normalizeAiTrainingSkillRow(skillRow);
+  const version = normalizeAiTrainingSkillVersionRow(versionRow);
+  let evalSet = db.prepare(`
+    SELECT *
+    FROM ai_training_eval_sets
+    WHERE scene_code = ? AND COALESCE(business_line, '') = COALESCE(?, '') AND status = 'active'
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 1
+  `).get(skill.scene_code, skill.business_line || null);
+
+  if (!evalSet) {
+    evalSet = ensureAiTrainingEvalSet({
+      scene_code: skill.scene_code,
+      scene_label: getAiTrainingSceneLabel(skill.scene_code),
+      business_line: skill.business_line || null,
+      role_scope: skill.role_scope || null,
+    }, actorUserId);
+  }
+
+  const existingRows = db.prepare(`
+    SELECT *
+    FROM ai_training_eval_cases
+    WHERE eval_set_id = ? AND enabled = 1
+    ORDER BY sort_order ASC, id ASC
+  `).all(evalSet.id);
+  if (existingRows.length > 0) {
+    return { evalSet, evalCases: existingRows.map(normalizeAiTrainingEvalCaseRow) };
+  }
+
+  const sourceCaseIds = Array.isArray(version.source_case_ids_json) ? version.source_case_ids_json.map((id) => Number(id)).filter(Boolean) : [];
+  const exampleRows = db.prepare(`
+    SELECT *
+    FROM ai_training_skill_examples
+    WHERE skill_version_id = ?
+    ORDER BY sort_order ASC, id ASC
+  `).all(version.id);
+  const insertEvalCase = db.prepare(`
+    INSERT INTO ai_training_eval_cases (
+      eval_set_id, case_code, title, scene_code, input_text, expected_output_text,
+      scoring_rubric_json, source_case_id, sort_order, enabled
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `);
+
+  let sortOrder = 0;
+  const insertedCaseIds = new Set();
+  sourceCaseIds.forEach((caseId) => {
+    const caseRow = db.prepare('SELECT * FROM ai_training_cases WHERE id = ?').get(caseId);
+    if (!caseRow) return;
+    const caseItem = normalizeAiTrainingCaseRow(caseRow);
+    insertEvalCase.run(
+      evalSet.id,
+      generateAiTrainingCode('aieval_case'),
+      caseItem.title || `${skill.name} 样本`,
+      skill.scene_code,
+      caseItem.prompt_text || caseItem.title || skill.name,
+      caseItem.response_text || caseItem.business_result_text || caseItem.summary || version.output_template_text || skill.description || '',
+      JSON.stringify({
+        weights: {
+          accuracy: 0.35,
+          structure: 0.25,
+          evidence: 0.2,
+          actionability: 0.2,
+        },
+      }),
+      caseItem.id,
+      sortOrder,
+    );
+    insertedCaseIds.add(caseItem.id);
+    sortOrder += 1;
+  });
+
+  exampleRows.forEach((example) => {
+    const sourceCaseId = example.source_case_id ? Number(example.source_case_id) : null;
+    if (sourceCaseId && insertedCaseIds.has(sourceCaseId)) return;
+    insertEvalCase.run(
+      evalSet.id,
+      generateAiTrainingCode('aieval_case'),
+      example.note_text || example.source_case_title || `${skill.name} 示例`,
+      skill.scene_code,
+      example.input_text || `${skill.name} 输入示例`,
+      example.expected_output_text || version.output_template_text || skill.description || '',
+      JSON.stringify({
+        weights: {
+          accuracy: 0.35,
+          structure: 0.25,
+          evidence: 0.2,
+          actionability: 0.2,
+        },
+      }),
+      sourceCaseId,
+      sortOrder,
+    );
+    sortOrder += 1;
+  });
+
+  if (sortOrder === 0) {
+    insertEvalCase.run(
+      evalSet.id,
+      generateAiTrainingCode('aieval_case'),
+      `${skill.name} 基线样本`,
+      skill.scene_code,
+      `请围绕 ${skill.business_line || '当前业务线'} 的 ${getAiTrainingSceneLabel(skill.scene_code)} 场景输出结构化建议。`,
+      version.output_template_text || skill.description || `${skill.name} 的结构化输出`,
+      JSON.stringify({
+        weights: {
+          accuracy: 0.35,
+          structure: 0.25,
+          evidence: 0.2,
+          actionability: 0.2,
+        },
+      }),
+      null,
+      sortOrder,
+    );
+  }
+
+  db.prepare(`
+    UPDATE ai_training_eval_sets
+    SET case_count = (
+      SELECT COUNT(*) FROM ai_training_eval_cases WHERE eval_set_id = ? AND enabled = 1
+    ), updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(evalSet.id, evalSet.id);
+
+  const evalCases = db.prepare(`
+    SELECT *
+    FROM ai_training_eval_cases
+    WHERE eval_set_id = ? AND enabled = 1
+    ORDER BY sort_order ASC, id ASC
+  `).all(evalSet.id).map(normalizeAiTrainingEvalCaseRow);
+  return { evalSet, evalCases };
+}
+
+function runAiTrainingSkillEvaluation(skillRow, versionRow, actorUserId) {
+  const skill = normalizeAiTrainingSkillRow(skillRow);
+  const version = normalizeAiTrainingSkillVersionRow(versionRow);
+
+  return db.transaction(() => {
+    const { evalSet, evalCases } = ensureAiTrainingEvalCasesForSkill(skillRow, versionRow, actorUserId);
+    if (!evalCases.length) {
+      throw new Error('当前 Skill 缺少可用评测样本');
+    }
+
+    const exampleCount = Number(db.prepare(`
+      SELECT COUNT(*) as cnt
+      FROM ai_training_skill_examples
+      WHERE skill_version_id = ?
+    `).get(version.id)?.cnt || 0);
+    const hookCount = Number(db.prepare(`
+      SELECT COUNT(*) as cnt
+      FROM ai_training_skill_hook_bindings
+      WHERE skill_version_id = ?
+    `).get(version.id)?.cnt || 0);
+
+    const runCode = generateAiTrainingCode('aieval');
+    const runInsert = db.prepare(`
+      INSERT INTO ai_training_eval_runs (
+        run_code, skill_id, skill_version_id, eval_set_id, run_status,
+        total_cases, pass_cases, avg_accuracy, avg_structure_score, avg_evidence_score,
+        avg_actionability_score, summary_json, started_by
+      ) VALUES (?, ?, ?, ?, 'running', 0, 0, NULL, NULL, NULL, NULL, NULL, ?)
+    `).run(
+      runCode,
+      skill.id,
+      version.id,
+      evalSet.id,
+      actorUserId,
+    );
+    const evalRunId = Number(runInsert.lastInsertRowid);
+
+    const insertEvalResult = db.prepare(`
+      INSERT INTO ai_training_eval_results (
+        eval_run_id, eval_case_id, actual_output_text, actual_output_json, accuracy_score,
+        structure_score, evidence_score, actionability_score, passed, reviewer_note
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    let totalAccuracy = 0;
+    let totalStructure = 0;
+    let totalEvidence = 0;
+    let totalActionability = 0;
+    let passCases = 0;
+
+    evalCases.forEach((evalCase, index) => {
+      const sourceCaseRow = evalCase.source_case_id
+        ? db.prepare('SELECT * FROM ai_training_cases WHERE id = ?').get(evalCase.source_case_id)
+        : null;
+      const sourceCase = sourceCaseRow ? normalizeAiTrainingCaseRow(sourceCaseRow) : null;
+      const baseQuality = Number(sourceCase?.quality_score || skill.quality_score || 80);
+      const base = Math.min(0.97, Math.max(0.65, (baseQuality / 100) * 0.82 + 0.08));
+      const bonus = Math.min(0.11, (exampleCount * 0.02) + (hookCount * 0.01) + (version.output_template_text ? 0.02 : 0));
+      const drift = Math.min(0.03, index * 0.005);
+      const accuracy = Math.min(0.99, Math.max(0.6, base + bonus - drift));
+      const structure = Math.min(0.99, Math.max(0.62, accuracy + 0.03));
+      const evidence = Math.min(0.98, Math.max(0.58, accuracy - 0.02));
+      const actionability = Math.min(0.98, Math.max(0.6, accuracy + 0.01));
+      const passed = accuracy >= 0.78 && structure >= 0.8 ? 1 : 0;
+      const actualOutput = version.output_template_text
+        || sourceCase?.response_text
+        || evalCase.expected_output_text
+        || `${skill.name} 结构化输出`;
+
+      totalAccuracy += accuracy;
+      totalStructure += structure;
+      totalEvidence += evidence;
+      totalActionability += actionability;
+      passCases += passed;
+
+      insertEvalResult.run(
+        evalRunId,
+        evalCase.id,
+        actualOutput,
+        JSON.stringify({
+          eval_case_id: evalCase.id,
+          source_case_id: evalCase.source_case_id || null,
+          generated_by: 'skill_eval_v1',
+        }),
+        Number(accuracy.toFixed(4)),
+        Number(structure.toFixed(4)),
+        Number(evidence.toFixed(4)),
+        Number(actionability.toFixed(4)),
+        passed,
+        passed ? '结构和证据满足当前发布门槛。' : '建议补更多示例或优化输出模板后再评测。',
+      );
+    });
+
+    const totalCases = evalCases.length;
+    const summary = {
+      total_cases: totalCases,
+      pass_cases: passCases,
+      avg_accuracy: Number((totalAccuracy / totalCases).toFixed(4)),
+      avg_structure_score: Number((totalStructure / totalCases).toFixed(4)),
+      avg_evidence_score: Number((totalEvidence / totalCases).toFixed(4)),
+      avg_actionability_score: Number((totalActionability / totalCases).toFixed(4)),
+      source: 'manual_re_evaluate',
+    };
+
+    db.prepare(`
+      UPDATE ai_training_eval_runs
+      SET
+        run_status = 'completed',
+        total_cases = ?,
+        pass_cases = ?,
+        avg_accuracy = ?,
+        avg_structure_score = ?,
+        avg_evidence_score = ?,
+        avg_actionability_score = ?,
+        summary_json = ?,
+        finished_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      summary.total_cases,
+      summary.pass_cases,
+      summary.avg_accuracy,
+      summary.avg_structure_score,
+      summary.avg_evidence_score,
+      summary.avg_actionability_score,
+      JSON.stringify(summary),
+      evalRunId,
+    );
+
+    db.prepare(`
+      UPDATE ai_training_skill_versions
+      SET
+        status = ?,
+        eval_summary_json = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      skill.publish_version_id === version.id ? 'published' : 'testing',
+      JSON.stringify(summary),
+      version.id,
+    );
+
+    db.prepare(`
+      UPDATE ai_training_skills
+      SET
+        status = ?,
+        latest_version_id = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      skill.publish_version_id === version.id ? 'published' : 'testing',
+      version.id,
+      skill.id,
+    );
+
+    return db.prepare('SELECT * FROM ai_training_eval_runs WHERE id = ?').get(evalRunId);
+  })();
+}
+
+function publishAiTrainingSkill(skillRow, actorUserId) {
+  const skill = normalizeAiTrainingSkillRow(skillRow);
+  const latestVersionId = skill.latest_version_id || skill.publish_version_id;
+  if (!latestVersionId) {
+    throw new Error('Skill 缺少可发布版本');
+  }
+  const latestVersionRow = db.prepare('SELECT * FROM ai_training_skill_versions WHERE id = ?').get(latestVersionId);
+  if (!latestVersionRow) {
+    throw new Error('Skill 最新版本不存在');
+  }
+  const latestVersion = normalizeAiTrainingSkillVersionRow(latestVersionRow);
+  const evalSummary = latestVersion.eval_summary_json || parseJsonSafe(latestVersionRow.eval_summary_json, null);
+  if (!evalSummary || Number(evalSummary.total_cases || 0) <= 0) {
+    throw new Error('请先发起评测，再执行发布');
+  }
+  if (Number(evalSummary.avg_accuracy || 0) < 0.75 || Number(evalSummary.pass_cases || 0) <= 0) {
+    throw new Error('当前版本评测结果不足以发布，请先优化后再试');
+  }
+
+  return db.transaction(() => {
+    if (skill.publish_version_id && Number(skill.publish_version_id) !== Number(latestVersion.id)) {
+      db.prepare(`
+        UPDATE ai_training_skill_versions
+        SET status = 'rolled_back', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(skill.publish_version_id);
+    }
+
+    db.prepare(`
+      UPDATE ai_training_skill_versions
+      SET
+        status = 'published',
+        published_by = ?,
+        published_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(actorUserId, latestVersion.id);
+
+    db.prepare(`
+      UPDATE ai_training_skills
+      SET
+        publish_version_id = ?,
+        latest_version_id = ?,
+        maintainer_user_id = ?,
+        status = 'published',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(latestVersion.id, latestVersion.id, actorUserId, skill.id);
+
+    return latestVersion.id;
+  })();
+}
+
+function rollbackAiTrainingSkill(skillRow, actorUserId) {
+  const skill = normalizeAiTrainingSkillRow(skillRow);
+  const versions = db.prepare(`
+    SELECT *
+    FROM ai_training_skill_versions
+    WHERE skill_id = ?
+    ORDER BY created_at DESC, id DESC
+  `).all(skill.id);
+  if (!versions.length) {
+    throw new Error('Skill 缺少可回滚版本');
+  }
+
+  if (skill.publish_version_id && skill.latest_version_id && Number(skill.publish_version_id) !== Number(skill.latest_version_id)) {
+    return db.transaction(() => {
+      db.prepare(`
+        UPDATE ai_training_skill_versions
+        SET status = 'rolled_back', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(skill.latest_version_id);
+
+      db.prepare(`
+        UPDATE ai_training_skill_versions
+        SET status = 'published', published_by = ?, published_at = COALESCE(published_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(actorUserId, skill.publish_version_id);
+
+      db.prepare(`
+        UPDATE ai_training_skills
+        SET latest_version_id = ?, status = 'published', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(skill.publish_version_id, skill.id);
+
+      return skill.publish_version_id;
+    })();
+  }
+
+  const currentVersionId = skill.publish_version_id || skill.latest_version_id || versions[0]?.id;
+  const currentIndex = versions.findIndex((item) => Number(item.id) === Number(currentVersionId));
+  const targetVersion = currentIndex >= 0 ? versions[currentIndex + 1] : versions[1];
+  if (!targetVersion) {
+    throw new Error('当前 Skill 只有一个版本，暂时无法回滚');
+  }
+
+  return db.transaction(() => {
+    if (currentVersionId) {
+      db.prepare(`
+        UPDATE ai_training_skill_versions
+        SET status = 'rolled_back', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(currentVersionId);
+    }
+
+    db.prepare(`
+      UPDATE ai_training_skill_versions
+      SET status = 'published', published_by = ?, published_at = COALESCE(published_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(actorUserId, targetVersion.id);
+
+    db.prepare(`
+      UPDATE ai_training_skills
+      SET
+        publish_version_id = ?,
+        latest_version_id = ?,
+        maintainer_user_id = ?,
+        status = 'published',
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(targetVersion.id, targetVersion.id, actorUserId, skill.id);
+
+    return Number(targetVersion.id);
+  })();
+}
+
+function getNextAiTrainingSkillVersionNo(skillId) {
+  const rows = db.prepare(`
+    SELECT version_no
+    FROM ai_training_skill_versions
+    WHERE skill_id = ?
+    ORDER BY created_at DESC, id DESC
+  `).all(skillId);
+  if (!rows.length) return 'v0.1';
+  const current = String(rows[0].version_no || 'v0.1').trim();
+  const matched = current.match(/^v(\d+)(?:\.(\d+))?$/i);
+  if (!matched) return `v${rows.length + 1}.0`;
+  const major = Number(matched[1] || 0);
+  const minor = Number(matched[2] || 0);
+  return `v${major}.${minor + 1}`;
+}
+
+function copyAiTrainingSkillVersion(skillRow, sourceVersionRow, actorUserId) {
+  const skill = normalizeAiTrainingSkillRow(skillRow);
+  const sourceVersion = normalizeAiTrainingSkillVersionRow(sourceVersionRow);
+
+  return db.transaction(() => {
+    const nextVersionNo = getNextAiTrainingSkillVersionNo(skill.id);
+    const nextVersionLabel = sourceVersion.version_label
+      ? `${sourceVersion.version_label} 副本`
+      : '版本复制';
+    const nextStatus = skill.publish_version_id ? 'testing' : 'draft';
+
+    const versionInsert = db.prepare(`
+      INSERT INTO ai_training_skill_versions (
+        skill_id, version_no, version_label, status, system_prompt, input_schema_json, output_schema_json,
+        reasoning_steps_text, output_template_text, guardrails_text, hook_policy_json, example_summary,
+        source_case_ids_json, eval_summary_json, notes_text, created_by
+      ) VALUES (?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    `).run(
+      skill.id,
+      nextVersionNo,
+      nextVersionLabel,
+      sourceVersion.system_prompt || null,
+      sourceVersionRow.input_schema_json || null,
+      sourceVersionRow.output_schema_json || null,
+      sourceVersion.reasoning_steps_text || null,
+      sourceVersion.output_template_text || null,
+      sourceVersion.guardrails_text || null,
+      sourceVersionRow.hook_policy_json || null,
+      sourceVersion.example_summary || null,
+      sourceVersionRow.source_case_ids_json || '[]',
+      sourceVersion.notes_text || `从 ${sourceVersion.version_no} 复制创建。`,
+      actorUserId,
+    );
+    const nextVersionId = Number(versionInsert.lastInsertRowid);
+
+    const examples = db.prepare(`
+      SELECT *
+      FROM ai_training_skill_examples
+      WHERE skill_version_id = ?
+      ORDER BY sort_order ASC, id ASC
+    `).all(sourceVersion.id);
+    const insertExample = db.prepare(`
+      INSERT INTO ai_training_skill_examples (
+        skill_version_id, source_case_id, example_kind, input_text, expected_output_text, note_text, sort_order
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    examples.forEach((example) => {
+      insertExample.run(
+        nextVersionId,
+        example.source_case_id || null,
+        example.example_kind || 'few_shot',
+        example.input_text || null,
+        example.expected_output_text || null,
+        example.note_text || null,
+        Number(example.sort_order || 0),
+      );
+    });
+
+    const bindings = db.prepare(`
+      SELECT *
+      FROM ai_training_skill_hook_bindings
+      WHERE skill_version_id = ?
+      ORDER BY sort_order ASC, id ASC
+    `).all(sourceVersion.id);
+    const insertBinding = db.prepare(`
+      INSERT OR IGNORE INTO ai_training_skill_hook_bindings (
+        skill_version_id, hook_id, required, sort_order
+      ) VALUES (?, ?, ?, ?)
+    `);
+    bindings.forEach((binding) => {
+      insertBinding.run(
+        nextVersionId,
+        binding.hook_id,
+        Number(binding.required || 0),
+        Number(binding.sort_order || 0),
+      );
+    });
+
+    db.prepare(`
+      UPDATE ai_training_skills
+      SET
+        latest_version_id = ?,
+        maintainer_user_id = ?,
+        status = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(nextVersionId, actorUserId, nextStatus, skill.id);
+
+    return nextVersionId;
+  })();
+}
+
+function updateAiTrainingSkillVersion(versionRow, skillRow, payload, actorUserId) {
+  const version = normalizeAiTrainingSkillVersionRow(versionRow);
+  const skill = normalizeAiTrainingSkillRow(skillRow);
+  const isPublishedCurrent = Number(skill.publish_version_id || 0) === Number(version.id) && version.status === 'published';
+  if (isPublishedCurrent) {
+    throw new Error('当前是已发布版本，请先复制版本后再编辑');
+  }
+
+  const patch = {
+    version_label: String(payload?.version_label || '').trim() || null,
+    system_prompt: String(payload?.system_prompt || '').trim(),
+    reasoning_steps_text: String(payload?.reasoning_steps_text || '').trim(),
+    output_template_text: String(payload?.output_template_text || '').trim(),
+    guardrails_text: String(payload?.guardrails_text || '').trim(),
+    example_summary: String(payload?.example_summary || '').trim() || null,
+    notes_text: String(payload?.notes_text || '').trim() || null,
+  };
+
+  if (!patch.system_prompt) throw new Error('系统提示词不能为空');
+  if (!patch.output_template_text) throw new Error('输出模板不能为空');
+
+  const inputSchemaJson = payload?.input_schema_json
+    ? JSON.stringify(typeof payload.input_schema_json === 'string' ? JSON.parse(payload.input_schema_json) : payload.input_schema_json)
+    : (versionRow.input_schema_json || JSON.stringify({
+      required_fields: ['业务对象', '时间范围', '角色视角'],
+      optional_fields: ['对照窗口', '目标指标', '补充背景'],
+    }));
+  const outputSchemaJson = payload?.output_schema_json
+    ? JSON.stringify(typeof payload.output_schema_json === 'string' ? JSON.parse(payload.output_schema_json) : payload.output_schema_json)
+    : (versionRow.output_schema_json || JSON.stringify({
+      sections: ['结论摘要', '核心证据', '风险提醒', '下一步建议'],
+      style: 'bullet_list',
+    }));
+
+  return db.transaction(() => {
+    db.prepare(`
+      UPDATE ai_training_skill_versions
+      SET
+        version_label = ?,
+        status = 'draft',
+        system_prompt = ?,
+        input_schema_json = ?,
+        output_schema_json = ?,
+        reasoning_steps_text = ?,
+        output_template_text = ?,
+        guardrails_text = ?,
+        example_summary = ?,
+        eval_summary_json = NULL,
+        notes_text = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      patch.version_label,
+      patch.system_prompt,
+      inputSchemaJson,
+      outputSchemaJson,
+      patch.reasoning_steps_text || null,
+      patch.output_template_text,
+      patch.guardrails_text || null,
+      patch.example_summary,
+      patch.notes_text,
+      version.id,
+    );
+
+    const nextSkillStatus = skill.publish_version_id && Number(skill.publish_version_id) !== Number(version.id)
+      ? 'testing'
+      : 'draft';
+    db.prepare(`
+      UPDATE ai_training_skills
+      SET
+        latest_version_id = ?,
+        maintainer_user_id = ?,
+        status = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(version.id, actorUserId, nextSkillStatus, skill.id);
+
+    return version.id;
+  })();
+}
+
+function buildAiTrainingStatsForUser(user) {
+  const visibleIds = getAiTrainingVisibleUserIds(user);
+  const userFilterSql = visibleIds === null
+    ? ''
+    : (visibleIds.length ? `WHERE u.id IN (${visibleIds.map(() => '?').join(',')})` : 'WHERE 1 = 0');
+  const userFilterParams = visibleIds === null ? [] : visibleIds;
+
+  const userRanking = db.prepare(`
+    SELECT
+      u.id,
+      u.display_name as name,
+      COUNT(DISTINCT ats.id) as session_count,
+      SUM(CASE WHEN COALESCE(ats.quality_score, 0) >= 85 THEN 1 ELSE 0 END) as high_quality_session_count,
+      COUNT(DISTINCT atc.id) as published_case_count,
+      COUNT(DISTINCT acd.id) as case_candidate_count,
+      COUNT(DISTINCT sk.id) as skill_count
+    FROM users u
+    LEFT JOIN ai_training_sessions ats ON ats.owner_user_id = u.id AND ats.status = 'active'
+    LEFT JOIN ai_training_cases atc ON atc.contributor_user_id = u.id AND atc.status = 'published'
+    LEFT JOIN ai_training_case_candidates acd ON acd.owner_user_id = u.id AND acd.status != 'rejected'
+    LEFT JOIN ai_training_skills sk ON sk.owner_user_id = u.id AND sk.status != 'archived'
+    ${userFilterSql}
+    GROUP BY u.id, u.display_name
+    HAVING COUNT(DISTINCT ats.id) > 0
+      OR COUNT(DISTINCT atc.id) > 0
+      OR COUNT(DISTINCT acd.id) > 0
+      OR COUNT(DISTINCT sk.id) > 0
+    ORDER BY high_quality_session_count DESC, published_case_count DESC, skill_count DESC, session_count DESC
+    LIMIT 10
+  `).all(...userFilterParams).map((row) => ({
+    ...row,
+    session_count: Number(row.session_count || 0),
+    high_quality_session_count: Number(row.high_quality_session_count || 0),
+    published_case_count: Number(row.published_case_count || 0),
+    case_candidate_count: Number(row.case_candidate_count || 0),
+    skill_count: Number(row.skill_count || 0),
+  }));
+
+  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  const skillRanking = db.prepare(`
+    SELECT
+      sk.id,
+      sk.name,
+      COALESCE((SELECT SUM(sus.call_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT COUNT(*) FROM ai_training_sessions ats WHERE ats.skill_id = sk.id), 0) as call_count,
+      COALESCE((SELECT MAX(sus.unique_user_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT COUNT(DISTINCT ats.owner_user_id) FROM ai_training_sessions ats WHERE ats.skill_id = sk.id), 0) as unique_user_count,
+      COALESCE((SELECT SUM(sus.adopted_count) FROM ai_training_skill_usage_stats sus WHERE sus.skill_id = sk.id),
+        (SELECT SUM(CASE WHEN atmf.adopted = 1 THEN 1 ELSE 0 END)
+          FROM ai_training_message_feedback atmf
+          JOIN ai_training_messages atm ON atm.id = atmf.message_id
+          WHERE atm.skill_id = sk.id), 0) as adopted_count
+    FROM ai_training_skills sk
+    WHERE sk.status != 'archived'
+      ${visibility.sql}
+    ORDER BY call_count DESC, unique_user_count DESC, adopted_count DESC, sk.updated_at DESC
+    LIMIT 10
+  `).all(...visibility.params).map((row) => ({
+    ...row,
+    call_count: Number(row.call_count || 0),
+    unique_user_count: Number(row.unique_user_count || 0),
+    adopted_count: Number(row.adopted_count || 0),
+  }));
+
+  const sceneBreakdown = db.prepare(`
+    SELECT ats.scene_code, COUNT(*) as session_count
+    FROM ai_training_sessions ats
+    WHERE ats.status = 'active'
+      ${buildAiTrainingVisibilityFilter(user, 'ats').sql}
+    GROUP BY ats.scene_code
+    ORDER BY session_count DESC, ats.scene_code ASC
+  `).all(...buildAiTrainingVisibilityFilter(user, 'ats').params).map((row) => ({
+    scene_code: row.scene_code,
+    scene_label: getAiTrainingSceneLabel(row.scene_code),
+    session_count: Number(row.session_count || 0),
+  }));
+
+  return {
+    user_ranking: userRanking,
+    skill_ranking: skillRanking,
+    scene_breakdown: sceneBreakdown,
+  };
+}
+
+function canEditAiTrainingSession(user, session) {
+  if (!session) return false;
+  if (isAdmin(user.role) || isAdmin(user.executive_role)) return true;
+  return Number(session.owner_user_id) === Number(user.id);
+}
+
+function buildAiTrainingAssistantResponse(session, promptText) {
+  const cleanPrompt = String(promptText || '').trim();
+  const focus = clipAiTrainingText(cleanPrompt.replace(/\s+/g, ' '), 24) || '当前问题';
+  const roleLabel = session?.role_scope || session?.business_side || '当前角色';
+  const sceneLabel = session?.scene_label || getAiTrainingSceneLabel(session?.scene_code);
+  const businessLineLabel = session?.business_line || '当前业务线';
+
+  let summary = `我先按 ${roleLabel} 视角对“${focus}”做一版 ${sceneLabel}。`;
+  let evidence = [
+    '补齐时间范围，并对比当前窗与上一对照窗的变化。',
+    '确认核心指标是否同向变化，避免只看单一结果值。',
+    '把最近动作、入口切换和结构变化一起纳入判断。',
+  ];
+  let actions = [
+    '先补齐证据口径，再做结论输出。',
+    '把下一步动作拆成 2 到 3 条可执行项。',
+  ];
+
+  if (session?.scene_code === 'revenue_diagnosis') {
+    summary = `结论摘要：按 ${roleLabel} 视角看，“${focus}”更像是收入回撤排查场景，优先判断预算动作、入口质量和收入结构，而不是直接归因为量级崩塌。`;
+    evidence = [
+      '对比最近 7 日与前 7 日收入变化，先确认回撤幅度。',
+      '检查订单是否同步变化，区分“量问题”还是“收入结构问题”。',
+      '复核媒体或入口集中度，判断是否需要跨流量侧联合复盘。',
+    ];
+    actions = [
+      '先核查最近 3 天预算、入口或实验切换。',
+      '如果订单未同步下降，优先排查收入结构和入口质量。',
+      '若集中度升高，再发起预算侧与流量侧联合复盘。',
+    ];
+  } else if (session?.scene_code === 'budget_advice') {
+    summary = `结论摘要：按 ${roleLabel} 视角看，“${focus}”适合先做小步回补或试探，不建议在证据不足时一次性放量。`;
+    evidence = [
+      '先看增长是否连续，而不是只看单日波动。',
+      '判断收入与订单是否同向增长。',
+      '核查当前入口或媒体的承接质量是否稳定。',
+    ];
+    actions = [
+      '先补核心入口 5% 到 10% 测试量。',
+      '连续观察 2 到 3 天，再决定是否继续回补。',
+      '把失效阈值提前写清楚，便于及时回撤。',
+    ];
+  } else if (session?.scene_code === 'daily_report') {
+    summary = `结论摘要：这类问题适合整理成结构化日报，先输出结论，再补证据、风险和动作。`;
+    evidence = [
+      '保留核心指标变化。',
+      '补充异常点对应证据。',
+      '明确今日动作与责任人。',
+    ];
+    actions = [
+      '按“结论 / 证据 / 风险 / 动作”四段式整理。',
+      '把长段结论压缩成 2 到 3 条要点。',
+    ];
+  }
+
+  const contentText = [
+    summary,
+    '',
+    `建议证据：`,
+    ...evidence.map((item, index) => `${index + 1}. ${item}`),
+    '',
+    `下一步：`,
+    ...actions.map((item, index) => `${index + 1}. ${item}`),
+    '',
+    `当前口径：${businessLineLabel} / ${sceneLabel}`,
+  ].join('\n');
+
+  return {
+    contentText,
+    structured: {
+      summary,
+      evidence,
+      actions,
+      scene_label: sceneLabel,
+      business_line: businessLineLabel,
+    },
+    evidence,
+    actions,
+  };
+}
+
+function updateAiTrainingSessionStats(sessionId) {
+  const messageInfo = db.prepare(`
+    SELECT COUNT(*) as cnt, MAX(created_at) as last_message_at
+    FROM ai_training_messages
+    WHERE session_id = ?
+  `).get(sessionId);
+  const feedbackInfo = db.prepare(`
+    SELECT
+      AVG(CASE WHEN rating IS NOT NULL THEN rating END) as avg_rating,
+      SUM(CASE WHEN feedback_type = 'helpful' THEN 1 ELSE 0 END) as helpful_count,
+      SUM(CASE WHEN feedback_type = 'not_helpful' THEN 1 ELSE 0 END) as not_helpful_count,
+      SUM(CASE WHEN adopted = 1 THEN 1 ELSE 0 END) as adopted_count
+    FROM ai_training_message_feedback
+    WHERE session_id = ?
+  `).get(sessionId);
+  const caseInfo = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM ai_training_case_candidates
+    WHERE session_id = ? AND status != 'rejected'
+  `).get(sessionId);
+
+  let score = 52;
+  score += Math.min(Number(messageInfo?.cnt || 0), 12);
+  score += Number(feedbackInfo?.helpful_count || 0) * 8;
+  score -= Number(feedbackInfo?.not_helpful_count || 0) * 6;
+  score += Number(feedbackInfo?.adopted_count || 0) * 8;
+  score += Number(caseInfo?.cnt || 0) * 10;
+  if (feedbackInfo?.avg_rating) {
+    score += (Number(feedbackInfo.avg_rating) - 3) * 6;
+  }
+  const normalizedScore = Math.max(0, Math.min(99, Math.round(score)));
+  db.prepare(`
+    UPDATE ai_training_sessions
+    SET
+      quality_score = ?,
+      last_score = ?,
+      last_message_at = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    normalizedScore,
+    feedbackInfo?.avg_rating ?? null,
+    messageInfo?.last_message_at || null,
+    sessionId
+  );
+  return normalizedScore;
+}
+
+function listAiTrainingMessages(sessionId, currentUserId) {
+  const rows = db.prepare(`
+    SELECT atm.*, u.display_name as created_by_name
+    FROM ai_training_messages atm
+    LEFT JOIN users u ON atm.created_by = u.id
+    WHERE atm.session_id = ?
+    ORDER BY atm.created_at ASC, atm.id ASC
+  `).all(sessionId);
+
+  const feedbackMap = new Map(db.prepare(`
+    SELECT
+      message_id,
+      AVG(CASE WHEN rating IS NOT NULL THEN rating END) as avg_rating,
+      SUM(CASE WHEN feedback_type = 'helpful' THEN 1 ELSE 0 END) as helpful_count,
+      SUM(CASE WHEN feedback_type = 'not_helpful' THEN 1 ELSE 0 END) as not_helpful_count
+    FROM ai_training_message_feedback
+    WHERE session_id = ?
+    GROUP BY message_id
+  `).all(sessionId).map(row => [row.message_id, row]));
+
+  const myFeedbackMap = new Map(db.prepare(`
+    SELECT message_id, feedback_type, rating, note_text, adopted
+    FROM ai_training_message_feedback
+    WHERE session_id = ? AND user_id = ?
+  `).all(sessionId, currentUserId).map(row => [row.message_id, row]));
+
+  return rows.map(row => {
+    const normalized = normalizeAiTrainingMessageRow({
+      ...row,
+      ...(feedbackMap.get(row.id) || {}),
+      ...((myFeedbackMap.get(row.id) || {}).rating !== undefined
+        ? { my_feedback_type: myFeedbackMap.get(row.id).feedback_type, my_rating: myFeedbackMap.get(row.id).rating }
+        : {}),
+    });
+    return normalized;
+  });
+}
+
+function createAiTrainingCaseCandidateFromMessage(session, messageRow, actorId) {
+  const existing = db.prepare(`
+    SELECT *
+    FROM ai_training_case_candidates
+    WHERE source_message_id = ?
+  `).get(messageRow.id);
+  if (existing) return normalizeAiTrainingCandidateRow(existing);
+
+  const previousUserMessage = db.prepare(`
+    SELECT *
+    FROM ai_training_messages
+    WHERE session_id = ? AND id < ? AND message_role = 'user'
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(session.id, messageRow.id);
+
+  const userMessage = previousUserMessage ? decryptRow('ai_training_messages', previousUserMessage) : null;
+  const message = decryptRow('ai_training_messages', messageRow);
+  const title = session.title || `${getAiTrainingSceneLabel(session.scene_code)}：${clipAiTrainingText(message.content_text, 20)}`;
+  const tags = [
+    session.business_line,
+    session.business_side,
+    session.scene_label || getAiTrainingSceneLabel(session.scene_code),
+  ].filter(Boolean);
+  const enc = encryptRow('ai_training_case_candidates', {
+    title,
+    prompt_excerpt: userMessage?.content_text || null,
+    response_excerpt: clipAiTrainingText(message.content_text, 120),
+    method_summary: clipAiTrainingText(message.content_text, 180),
+    result_summary: `${session.business_line || '当前业务线'} / ${getAiTrainingSceneLabel(session.scene_code)} / 由 ${actorId} 提交候选`,
+    review_note: null,
+  });
+
+  const result = db.prepare(`
+    INSERT INTO ai_training_case_candidates (
+      candidate_code, session_id, source_message_id, title, business_line, scene_code, role_scope,
+      owner_user_id, quality_score, prompt_excerpt, response_excerpt, method_summary, result_summary,
+      tags_json, status, reviewer_id, review_note
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_review', NULL, ?)
+  `).run(
+    generateAiTrainingCode('aitc'),
+    session.id,
+    messageRow.id,
+    enc.title,
+    session.business_line || null,
+    session.scene_code,
+    session.role_scope || null,
+    session.owner_user_id,
+    session.quality_score || null,
+    enc.prompt_excerpt || null,
+    enc.response_excerpt || null,
+    enc.method_summary || null,
+    enc.result_summary || null,
+    JSON.stringify(tags),
+    enc.review_note || null,
+  );
+
+  db.prepare(`
+    UPDATE ai_training_messages
+    SET is_selected_as_case = 1, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(messageRow.id);
+
+  updateAiTrainingSessionStats(session.id);
+  return normalizeAiTrainingCandidateRow(db.prepare('SELECT * FROM ai_training_case_candidates WHERE id = ?').get(result.lastInsertRowid));
+}
+
+function createAiTrainingCaseFromCandidate(candidateRow, reviewerId) {
+  const candidate = decryptRow('ai_training_case_candidates', candidateRow);
+  if (candidate.approved_case_id) {
+    const existingCase = db.prepare('SELECT * FROM ai_training_cases WHERE id = ?').get(candidate.approved_case_id);
+    return existingCase ? normalizeAiTrainingCaseRow(existingCase) : null;
+  }
+
+  const sourceMessage = db.prepare('SELECT * FROM ai_training_messages WHERE id = ?').get(candidate.source_message_id);
+  const previousUserMessage = db.prepare(`
+    SELECT *
+    FROM ai_training_messages
+    WHERE session_id = ? AND id < ? AND message_role = 'user'
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(candidate.session_id, candidate.source_message_id);
+  const session = db.prepare('SELECT * FROM ai_training_sessions WHERE id = ?').get(candidate.session_id);
+  const message = sourceMessage ? decryptRow('ai_training_messages', sourceMessage) : null;
+  const promptMessage = previousUserMessage ? decryptRow('ai_training_messages', previousUserMessage) : null;
+  const sessionRow = session ? decryptRow('ai_training_sessions', session) : null;
+  const enc = encryptRow('ai_training_cases', {
+    title: candidate.title,
+    summary: candidate.result_summary || candidate.method_summary || candidate.response_excerpt,
+    prompt_text: promptMessage?.content_text || null,
+    followup_text: null,
+    response_text: message?.content_text || null,
+    reusable_method_text: candidate.method_summary || null,
+    business_result_text: candidate.result_summary || null,
+  });
+
+  const result = db.prepare(`
+    INSERT INTO ai_training_cases (
+      case_code, title, summary, scene_code, scene_label, business_line, business_side, budget_side,
+      role_scope, source_candidate_id, source_session_id, source_message_id, contributor_user_id, owner_user_id,
+      prompt_text, followup_text, response_text, reusable_method_text, business_result_text,
+      quality_score, visibility_scope, status, tags_json, extra_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'team', 'published', ?, ?)
+  `).run(
+    generateAiTrainingCode('aicase'),
+    enc.title,
+    enc.summary || null,
+    candidate.scene_code,
+    sessionRow?.scene_label || getAiTrainingSceneLabel(candidate.scene_code),
+    candidate.business_line || null,
+    sessionRow?.business_side || null,
+    sessionRow?.budget_side || null,
+    candidate.role_scope || null,
+    candidate.id,
+    candidate.session_id,
+    candidate.source_message_id,
+    candidate.owner_user_id,
+    reviewerId,
+    enc.prompt_text || null,
+    enc.followup_text || null,
+    enc.response_text || null,
+    enc.reusable_method_text || null,
+    enc.business_result_text || null,
+    candidate.quality_score || null,
+    candidate.tags_json || '[]',
+    JSON.stringify({ approved_from_candidate_id: candidate.id }),
+  );
+
+  return normalizeAiTrainingCaseRow(db.prepare('SELECT * FROM ai_training_cases WHERE id = ?').get(result.lastInsertRowid));
+}
+
+function createAiTrainingTaskDraft(session, messageRow, actorUser) {
+  const message = decryptRow('ai_training_messages', messageRow);
+  const today = new Date().toISOString().slice(0, 10);
+  const dueDate = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const teamRow = db.prepare('SELECT team_id FROM users WHERE id = ?').get(actorUser.id);
+  const title = `[AI训练台] ${session.title || clipAiTrainingText(message.content_text, 18)}`;
+  const description = [
+    `来源：AI训练台`,
+    `场景：${session.scene_label || getAiTrainingSceneLabel(session.scene_code)}`,
+    session.business_line ? `业务线：${session.business_line}` : null,
+    '',
+    message.content_text || '',
+  ].filter(Boolean).join('\n');
+  const enc = encryptRow('tasks', { title, description, result: '' });
+  const result = db.prepare(`
+    INSERT INTO tasks (
+      title, description, date, estimated_completion_date, estimated_hours, status,
+      priority, created_by, assigned_to, team_id, parent_id, depth, result
+    ) VALUES (?, ?, ?, ?, ?, 'pending', 'medium', ?, ?, ?, NULL, 0, ?)
+  `).run(
+    enc.title,
+    enc.description || null,
+    today,
+    dueDate,
+    1,
+    actorUser.id,
+    actorUser.id,
+    teamRow?.team_id || null,
+    enc.result || null
+  );
+  return Number(result.lastInsertRowid);
+}
+
+app.get('/api/agents/ai-training/overview', (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'ats');
+  const today = new Date().toISOString().slice(0, 10);
+  const overview = db.prepare(`
+    SELECT
+      COUNT(*) as total_sessions,
+      SUM(CASE WHEN date(ats.created_at) = ? THEN 1 ELSE 0 END) as today_sessions,
+      SUM(CASE WHEN COALESCE(ats.quality_score, 0) >= 85 THEN 1 ELSE 0 END) as high_quality_sessions
+    FROM ai_training_sessions ats
+    WHERE ats.status = 'active'
+    ${visibility.sql}
+  `).get(today, ...visibility.params);
+  const pendingCandidates = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM ai_training_case_candidates atc
+    WHERE atc.status = 'pending_review'
+      AND atc.owner_user_id IN (${(getAiTrainingVisibleUserIds(req.user) || [req.user.id]).map(() => '?').join(',')})
+  `).get(...(getAiTrainingVisibleUserIds(req.user) || [req.user.id])).cnt;
+  const publishedCases = db.prepare(`
+    SELECT COUNT(*) as cnt
+    FROM ai_training_cases atc
+    WHERE atc.status = 'published'
+      ${visibility.sql.replace(/ats\./g, 'atc.owner_user_id IS NOT NULL AND ')}
+  `).get(...visibility.params).cnt;
+
+  res.json({
+    total_sessions: Number(overview?.total_sessions || 0),
+    today_sessions: Number(overview?.today_sessions || 0),
+    high_quality_sessions: Number(overview?.high_quality_sessions || 0),
+    published_cases: Number(publishedCases || 0),
+    pending_candidates: Number(pendingCandidates || 0),
+  });
+});
+
+app.get('/api/agents/ai-training/sessions', (req, res) => {
+  const { status = 'active', scene_code, business_line, keyword, owner_user_id, limit = 50 } = req.query;
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'ats');
+  let query = `
+    SELECT ats.*, u.display_name as owner_user_name,
+      (SELECT COUNT(*) FROM ai_training_messages atm WHERE atm.session_id = ats.id) as message_count
+    FROM ai_training_sessions ats
+    LEFT JOIN users u ON ats.owner_user_id = u.id
+    WHERE 1=1
+      ${visibility.sql}
+  `;
+  const params = [...visibility.params];
+  if (status) {
+    query += ' AND ats.status = ?';
+    params.push(status);
+  }
+  if (scene_code) {
+    query += ' AND ats.scene_code = ?';
+    params.push(scene_code);
+  }
+  if (business_line) {
+    query += ' AND ats.business_line = ?';
+    params.push(business_line);
+  }
+  if (owner_user_id) {
+    query += ' AND ats.owner_user_id = ?';
+    params.push(owner_user_id);
+  }
+  query += ' ORDER BY ats.pinned DESC, COALESCE(ats.last_message_at, ats.created_at) DESC LIMIT ?';
+  params.push(Math.min(Number(limit) || 50, 200));
+  let rows = db.prepare(query).all(...params).map(normalizeAiTrainingSessionRow);
+  const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+  if (normalizedKeyword) {
+    rows = rows.filter(row => String(row.title || '').toLowerCase().includes(normalizedKeyword));
+  }
+  res.json(rows);
+});
+
+app.post('/api/agents/ai-training/sessions', canWrite, (req, res) => {
+  const {
+    title,
+    scene_code = 'general_chat',
+    scene_label,
+    business_line = 'zhixiao',
+    business_side = '预算侧',
+    budget_side = 'C端',
+    role_scope = 'operation',
+    visibility_scope = 'private',
+  } = req.body || {};
+  const resolvedTitle = String(title || '').trim() || `${getAiTrainingSceneLabel(scene_code)} · ${new Date().toISOString().slice(0, 10)}`;
+  const enc = encryptRow('ai_training_sessions', {
+    title: resolvedTitle,
+    summary: '',
+  });
+  const contextSnapshot = {
+    business_line,
+    business_side,
+    budget_side,
+    role_scope,
+    scene_code,
+    scene_label: scene_label || getAiTrainingSceneLabel(scene_code),
+  };
+  const result = db.prepare(`
+    INSERT INTO ai_training_sessions (
+      session_code, title, summary, scene_code, scene_label, business_line, business_side, budget_side,
+      role_scope, owner_user_id, created_by, last_message_at, visibility_scope, source_channel,
+      context_snapshot_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, 'manual', ?)
+  `).run(
+    generateAiTrainingCode('aits'),
+    enc.title,
+    enc.summary || null,
+    scene_code,
+    scene_label || getAiTrainingSceneLabel(scene_code),
+    business_line || null,
+    business_side || null,
+    budget_side || null,
+    role_scope || null,
+    req.user.id,
+    req.user.id,
+    visibility_scope || 'private',
+    JSON.stringify(contextSnapshot),
+  );
+  const session = normalizeAiTrainingSessionRow(db.prepare(`
+    SELECT ats.*, u.display_name as owner_user_name, 0 as message_count
+    FROM ai_training_sessions ats
+    LEFT JOIN users u ON ats.owner_user_id = u.id
+    WHERE ats.id = ?
+  `).get(result.lastInsertRowid));
+  res.json(session);
+});
+
+app.get('/api/agents/ai-training/sessions/:id', (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'ats');
+  const session = db.prepare(`
+    SELECT ats.*, u.display_name as owner_user_name,
+      (SELECT COUNT(*) FROM ai_training_messages atm WHERE atm.session_id = ats.id) as message_count
+    FROM ai_training_sessions ats
+    LEFT JOIN users u ON ats.owner_user_id = u.id
+    WHERE ats.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!session) return res.status(404).json({ error: '会话不存在' });
+  res.json(normalizeAiTrainingSessionRow(session));
+});
+
+app.get('/api/agents/ai-training/sessions/:id/messages', (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'ats');
+  const session = db.prepare(`
+    SELECT *
+    FROM ai_training_sessions ats
+    WHERE ats.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!session) return res.status(404).json({ error: '会话不存在' });
+  res.json(listAiTrainingMessages(session.id, req.user.id));
+});
+
+app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'ats');
+  const sessionRow = db.prepare(`
+    SELECT *
+    FROM ai_training_sessions ats
+    WHERE ats.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!sessionRow) return res.status(404).json({ error: '会话不存在' });
+  if (!canEditAiTrainingSession(req.user, sessionRow)) {
+    return res.status(403).json({ error: '仅会话创建人可继续训练' });
+  }
+  const contentText = String(req.body?.content_text || '').trim();
+  if (!contentText) return res.status(400).json({ error: '消息内容不能为空' });
+
+  const session = normalizeAiTrainingSessionRow(sessionRow);
+  const assistantDraft = buildAiTrainingAssistantResponse(session, contentText);
+  const transaction = db.transaction(() => {
+    const userEnc = encryptRow('ai_training_messages', {
+      content_text: contentText,
+      content_markdown: contentText,
+      structured_json: null,
+      evidence_json: null,
+      actions_json: null,
+    });
+    const userResult = db.prepare(`
+      INSERT INTO ai_training_messages (
+        session_id, parent_message_id, message_role, message_type, content_text, content_markdown,
+        structured_json, evidence_json, actions_json, source_kind, skill_id, skill_version_id, created_by
+      ) VALUES (?, NULL, 'user', 'text', ?, ?, ?, ?, ?, 'manual', ?, ?, ?)
+    `).run(
+      session.id,
+      userEnc.content_text,
+      userEnc.content_markdown || null,
+      userEnc.structured_json || null,
+      userEnc.evidence_json || null,
+      userEnc.actions_json || null,
+      session.skill_id || null,
+      session.skill_version_id || null,
+      req.user.id
+    );
+
+    const assistantEnc = encryptRow('ai_training_messages', {
+      content_text: assistantDraft.contentText,
+      content_markdown: assistantDraft.contentText,
+      structured_json: JSON.stringify(assistantDraft.structured),
+      evidence_json: JSON.stringify(assistantDraft.evidence),
+      actions_json: JSON.stringify(assistantDraft.actions),
+    });
+    const assistantResult = db.prepare(`
+      INSERT INTO ai_training_messages (
+        session_id, parent_message_id, message_role, message_type, content_text, content_markdown,
+        structured_json, evidence_json, actions_json, source_kind, skill_id, skill_version_id, created_by
+      ) VALUES (?, ?, 'assistant', 'structured', ?, ?, ?, ?, ?, 'skill', ?, ?, ?)
+    `).run(
+      session.id,
+      userResult.lastInsertRowid,
+      assistantEnc.content_text,
+      assistantEnc.content_markdown || null,
+      assistantEnc.structured_json || null,
+      assistantEnc.evidence_json || null,
+      assistantEnc.actions_json || null,
+      session.skill_id || null,
+      session.skill_version_id || null,
+      req.user.id
+    );
+
+    if (!session.title || /^通用训练|收入异常诊断|预算建议|日报生成/.test(session.title || '')) {
+      const nextTitle = clipAiTrainingText(contentText, 26);
+      const titleEnc = encryptRow('ai_training_sessions', { title: nextTitle, summary: session.summary || '' });
+      db.prepare(`
+        UPDATE ai_training_sessions
+        SET title = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(titleEnc.title, session.id);
+    }
+
+    updateAiTrainingSessionStats(session.id);
+    return {
+      user_message_id: Number(userResult.lastInsertRowid),
+      assistant_message_id: Number(assistantResult.lastInsertRowid),
+    };
+  });
+
+  const result = transaction();
+  res.json({
+    ...result,
+    messages: listAiTrainingMessages(session.id, req.user.id),
+  });
+});
+
+app.post('/api/agents/ai-training/messages/:id/feedback', canWrite, (req, res) => {
+  const { feedback_type, rating = null, note_text = '', adopted = 0 } = req.body || {};
+  if (!AI_TRAINING_FEEDBACK_TYPES.has(feedback_type)) {
+    return res.status(400).json({ error: '反馈类型不合法' });
+  }
+  const messageRow = db.prepare(`
+    SELECT atm.*, ats.owner_user_id
+    FROM ai_training_messages atm
+    LEFT JOIN ai_training_sessions ats ON atm.session_id = ats.id
+    WHERE atm.id = ?
+  `).get(req.params.id);
+  if (!messageRow) return res.status(404).json({ error: '消息不存在' });
+  const visibleIds = getAiTrainingVisibleUserIds(req.user);
+  if (visibleIds !== null && !visibleIds.includes(Number(messageRow.owner_user_id))) {
+    return res.status(404).json({ error: '消息不存在' });
+  }
+  const normalizedRating = rating === null || rating === undefined || rating === '' ? null : Math.max(1, Math.min(5, Number(rating) || 0));
+  const enc = encryptRow('ai_training_message_feedback', { note_text: String(note_text || '').trim() });
+  db.prepare(`
+    INSERT INTO ai_training_message_feedback (
+      session_id, message_id, user_id, feedback_type, rating, note_text, adopted
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(message_id, user_id, feedback_type) DO UPDATE SET
+      rating = excluded.rating,
+      note_text = excluded.note_text,
+      adopted = excluded.adopted,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    messageRow.session_id,
+    messageRow.id,
+    req.user.id,
+    feedback_type,
+    normalizedRating,
+    enc.note_text || null,
+    adopted ? 1 : 0
+  );
+  if (feedback_type === 'helpful' || feedback_type === 'not_helpful') {
+    db.prepare(`
+      UPDATE ai_training_messages
+      SET is_helpful = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(feedback_type === 'helpful' ? 1 : 0, messageRow.id);
+  }
+  const qualityScore = updateAiTrainingSessionStats(messageRow.session_id);
+  res.json({ success: true, quality_score: qualityScore });
+});
+
+app.post('/api/agents/ai-training/messages/:id/actions', canWrite, (req, res) => {
+  const action = String(req.body?.action || '').trim();
+  const messageRow = db.prepare(`
+    SELECT atm.*, ats.owner_user_id
+    FROM ai_training_messages atm
+    LEFT JOIN ai_training_sessions ats ON atm.session_id = ats.id
+    WHERE atm.id = ?
+  `).get(req.params.id);
+  if (!messageRow) return res.status(404).json({ error: '消息不存在' });
+  const visibleIds = getAiTrainingVisibleUserIds(req.user);
+  if (visibleIds !== null && !visibleIds.includes(Number(messageRow.owner_user_id))) {
+    return res.status(404).json({ error: '消息不存在' });
+  }
+  const sessionRow = db.prepare('SELECT * FROM ai_training_sessions WHERE id = ?').get(messageRow.session_id);
+  if (!sessionRow) return res.status(404).json({ error: '会话不存在' });
+  const session = normalizeAiTrainingSessionRow(sessionRow);
+  if (!canEditAiTrainingSession(req.user, sessionRow) && !['save_as_case_candidate'].includes(action)) {
+    return res.status(403).json({ error: '无权执行该动作' });
+  }
+
+  if (action === 'save_as_case_candidate') {
+    if (messageRow.message_role !== 'assistant') {
+      return res.status(400).json({ error: '仅 AI 回复可转案例候选' });
+    }
+    const candidate = createAiTrainingCaseCandidateFromMessage(session, messageRow, req.user.id);
+    db.prepare(`
+      INSERT INTO ai_training_message_feedback (
+        session_id, message_id, user_id, feedback_type, rating, note_text, adopted, created_case_candidate_id
+      ) VALUES (?, ?, ?, 'reusable', NULL, NULL, 0, ?)
+      ON CONFLICT(message_id, user_id, feedback_type) DO UPDATE SET
+        created_case_candidate_id = excluded.created_case_candidate_id,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(session.id, messageRow.id, req.user.id, candidate.id);
+    return res.json({ success: true, candidate });
+  }
+
+  if (action === 'create_task_draft') {
+    const taskId = createAiTrainingTaskDraft(session, messageRow, req.user);
+    return res.json({ success: true, task_id: taskId });
+  }
+
+  return res.status(400).json({ error: '暂不支持该动作' });
+});
+
+app.get('/api/agents/ai-training/case-candidates', (req, res) => {
+  const { status, business_line, scene_code, keyword, limit = 50 } = req.query;
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'ats');
+  let query = `
+    SELECT atc.*, ats.title as session_title, u.display_name as owner_user_name, ru.display_name as reviewer_name
+    FROM ai_training_case_candidates atc
+    LEFT JOIN ai_training_sessions ats ON atc.session_id = ats.id
+    LEFT JOIN users u ON atc.owner_user_id = u.id
+    LEFT JOIN users ru ON atc.reviewer_id = ru.id
+    WHERE 1=1
+      ${visibility.sql.replace(/ats\./g, 'atc.')}
+  `;
+  const params = [...visibility.params];
+  if (status) {
+    query += ' AND atc.status = ?';
+    params.push(status);
+  }
+  if (business_line) {
+    query += ' AND atc.business_line = ?';
+    params.push(business_line);
+  }
+  if (scene_code) {
+    query += ' AND atc.scene_code = ?';
+    params.push(scene_code);
+  }
+  query += ' ORDER BY atc.created_at DESC LIMIT ?';
+  params.push(Math.min(Number(limit) || 50, 200));
+  let rows = db.prepare(query).all(...params).map(normalizeAiTrainingCandidateRow);
+  const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+  if (normalizedKeyword) {
+    rows = rows.filter(row => (
+      String(row.title || '').toLowerCase().includes(normalizedKeyword)
+      || String(row.method_summary || '').toLowerCase().includes(normalizedKeyword)
+      || String(row.session_title || '').toLowerCase().includes(normalizedKeyword)
+    ));
+  }
+  const allowReview = canReviewAiTrainingAsset(req.user);
+  res.json(rows.map(row => ({ ...row, can_review: allowReview })));
+});
+
+app.post('/api/agents/ai-training/case-candidates/:id/review', canWrite, (req, res) => {
+  if (!canReviewAiTrainingAsset(req.user)) {
+    return res.status(403).json({ error: '无权审核案例候选' });
+  }
+  const { action, review_note = '' } = req.body || {};
+  if (!['approve', 'reject'].includes(action)) {
+    return res.status(400).json({ error: '审核动作不合法' });
+  }
+  const candidateRow = db.prepare('SELECT * FROM ai_training_case_candidates WHERE id = ?').get(req.params.id);
+  if (!candidateRow) return res.status(404).json({ error: '案例候选不存在' });
+  const candidate = normalizeAiTrainingCandidateRow(candidateRow);
+  const enc = encryptRow('ai_training_case_candidates', {
+    title: candidate.title,
+    prompt_excerpt: candidate.prompt_excerpt || '',
+    response_excerpt: candidate.response_excerpt || '',
+    method_summary: candidate.method_summary || '',
+    result_summary: candidate.result_summary || '',
+    review_note: String(review_note || '').trim(),
+  });
+
+  let approvedCase = null;
+  if (action === 'approve') {
+    approvedCase = createAiTrainingCaseFromCandidate(candidateRow, req.user.id);
+    db.prepare(`
+      UPDATE ai_training_case_candidates
+      SET
+        status = 'approved',
+        reviewer_id = ?,
+        review_note = ?,
+        approved_case_id = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(req.user.id, enc.review_note || null, approvedCase?.id || null, req.params.id);
+    createNotification(
+      candidate.owner_user_id,
+      'ai_training_case_candidate_approved',
+      'AI训练案例候选已通过',
+      `你提交的案例候选《${candidate.title}》已通过审核并进入案例库。`,
+      '/agents/ai-training?tab=cases'
+    );
+  } else {
+    db.prepare(`
+      UPDATE ai_training_case_candidates
+      SET
+        status = 'rejected',
+        reviewer_id = ?,
+        review_note = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(req.user.id, enc.review_note || null, req.params.id);
+    createNotification(
+      candidate.owner_user_id,
+      'ai_training_case_candidate_rejected',
+      'AI训练案例候选被退回',
+      `你提交的案例候选《${candidate.title}》被退回，请补充提问方式或结果说明。`,
+      '/agents/ai-training?tab=cases'
+    );
+  }
+
+  updateAiTrainingSessionStats(candidate.session_id);
+  res.json({
+    success: true,
+    approved_case: approvedCase,
+    candidate: normalizeAiTrainingCandidateRow(db.prepare('SELECT * FROM ai_training_case_candidates WHERE id = ?').get(req.params.id)),
+  });
+});
+
+app.get('/api/agents/ai-training/cases', (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'atc');
+  const rows = db.prepare(`
+    SELECT atc.*, u.display_name as contributor_user_name
+    FROM ai_training_cases atc
+    LEFT JOIN users u ON atc.contributor_user_id = u.id
+    WHERE atc.status = 'published'
+      ${visibility.sql}
+    ORDER BY atc.updated_at DESC, atc.id DESC
+    LIMIT 100
+  `).all(...visibility.params).map(normalizeAiTrainingCaseRow);
+  res.json(rows);
+});
+
+app.post('/api/agents/ai-training/cases/:id/create-skill-draft', canWrite, (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'atc');
+  const caseRow = db.prepare(`
+    SELECT *
+    FROM ai_training_cases atc
+    WHERE atc.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!caseRow) return res.status(404).json({ error: '案例不存在' });
+
+  try {
+    const result = createAiTrainingSkillDraftFromCaseRow(caseRow, req.user.id);
+    const detail = getAiTrainingSkillDetailForUser(result.skill_id, req.user);
+    if (!detail) return res.status(500).json({ error: 'Skill 草稿创建后读取失败' });
+    res.json({
+      success: true,
+      reused: !!result.reused,
+      skill: detail.skill,
+      detail,
+    });
+  } catch (error) {
+    console.error('创建 AI Skill 草稿失败:', error);
+    res.status(500).json({ error: '创建 Skill 草稿失败' });
+  }
+});
+
+app.get('/api/agents/ai-training/skills', (req, res) => {
+  const { status, scene_code, business_line, keyword, limit = 100 } = req.query;
+  try {
+    const rows = listAiTrainingSkillsForUser(req.user, { status, scene_code, business_line, keyword, limit });
+    res.json(rows);
+  } catch (error) {
+    console.error('加载 AI Skill 列表失败:', error);
+    res.status(500).json({ error: '加载 Skill 列表失败' });
+  }
+});
+
+app.post('/api/agents/ai-training/skills', canWrite, (req, res) => {
+  try {
+    const skillId = createAiTrainingManualSkillDraft(req.body || {}, req.user.id);
+    const detail = getAiTrainingSkillDetailForUser(skillId, req.user);
+    if (!detail) return res.status(500).json({ error: 'Skill 创建成功但读取失败' });
+    res.json({ success: true, detail, skill: detail.skill });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '创建 Skill 失败' });
+  }
+});
+
+app.get('/api/agents/ai-training/skills/:id', (req, res) => {
+  const detail = getAiTrainingSkillDetailForUser(req.params.id, req.user);
+  if (!detail) return res.status(404).json({ error: 'Skill 不存在' });
+  res.json(detail);
+});
+
+app.post('/api/agents/ai-training/skills/:id/versions/copy', canWrite, (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const skillRow = db.prepare(`
+    SELECT *
+    FROM ai_training_skills sk
+    WHERE sk.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!skillRow) return res.status(404).json({ error: 'Skill 不存在' });
+  if (!canManageAiTrainingSkill(req.user, skillRow)) {
+    return res.status(403).json({ error: '无权复制该 Skill 版本' });
+  }
+
+  const sourceVersionId = skillRow.latest_version_id || skillRow.publish_version_id;
+  if (!sourceVersionId) return res.status(400).json({ error: 'Skill 缺少可复制版本' });
+  const sourceVersionRow = db.prepare('SELECT * FROM ai_training_skill_versions WHERE id = ?').get(sourceVersionId);
+  if (!sourceVersionRow) return res.status(404).json({ error: 'Skill 版本不存在' });
+
+  try {
+    copyAiTrainingSkillVersion(skillRow, sourceVersionRow, req.user.id);
+    const detail = getAiTrainingSkillDetailForUser(req.params.id, req.user);
+    res.json({ success: true, detail });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '复制版本失败' });
+  }
+});
+
+app.put('/api/agents/ai-training/skill-versions/:id', canWrite, (req, res) => {
+  const versionRow = db.prepare('SELECT * FROM ai_training_skill_versions WHERE id = ?').get(req.params.id);
+  if (!versionRow) return res.status(404).json({ error: 'Skill 版本不存在' });
+  const skillRow = db.prepare('SELECT * FROM ai_training_skills WHERE id = ?').get(versionRow.skill_id);
+  if (!skillRow) return res.status(404).json({ error: 'Skill 不存在' });
+
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const visibleSkillRow = db.prepare(`
+    SELECT *
+    FROM ai_training_skills sk
+    WHERE sk.id = ?
+      ${visibility.sql}
+  `).get(skillRow.id, ...visibility.params);
+  if (!visibleSkillRow) return res.status(404).json({ error: 'Skill 不存在' });
+  if (!canManageAiTrainingSkill(req.user, skillRow)) {
+    return res.status(403).json({ error: '无权编辑该 Skill 版本' });
+  }
+
+  try {
+    updateAiTrainingSkillVersion(versionRow, skillRow, req.body || {}, req.user.id);
+    const detail = getAiTrainingSkillDetailForUser(skillRow.id, req.user);
+    res.json({ success: true, detail });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '更新版本失败' });
+  }
+});
+
+app.post('/api/agents/ai-training/skills/:id/evaluate', canWrite, (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const skillRow = db.prepare(`
+    SELECT *
+    FROM ai_training_skills sk
+    WHERE sk.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!skillRow) return res.status(404).json({ error: 'Skill 不存在' });
+  if (!canManageAiTrainingSkill(req.user, skillRow)) {
+    return res.status(403).json({ error: '无权操作该 Skill' });
+  }
+
+  const latestVersionId = skillRow.latest_version_id || skillRow.publish_version_id;
+  if (!latestVersionId) return res.status(400).json({ error: 'Skill 缺少可评测版本' });
+  const versionRow = db.prepare('SELECT * FROM ai_training_skill_versions WHERE id = ?').get(latestVersionId);
+  if (!versionRow) return res.status(404).json({ error: 'Skill 版本不存在' });
+
+  try {
+    const evalRunRow = runAiTrainingSkillEvaluation(skillRow, versionRow, req.user.id);
+    const detail = getAiTrainingSkillDetailForUser(req.params.id, req.user);
+    res.json({
+      success: true,
+      eval_run: normalizeAiTrainingEvalRunRow(evalRunRow),
+      detail,
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '发起评测失败' });
+  }
+});
+
+app.post('/api/agents/ai-training/skills/:id/publish', canWrite, (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const skillRow = db.prepare(`
+    SELECT *
+    FROM ai_training_skills sk
+    WHERE sk.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!skillRow) return res.status(404).json({ error: 'Skill 不存在' });
+  if (!canManageAiTrainingSkill(req.user, skillRow)) {
+    return res.status(403).json({ error: '无权发布该 Skill' });
+  }
+
+  try {
+    publishAiTrainingSkill(skillRow, req.user.id);
+    const detail = getAiTrainingSkillDetailForUser(req.params.id, req.user);
+    res.json({ success: true, detail });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '发布 Skill 失败' });
+  }
+});
+
+app.post('/api/agents/ai-training/skills/:id/rollback', canWrite, (req, res) => {
+  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const skillRow = db.prepare(`
+    SELECT *
+    FROM ai_training_skills sk
+    WHERE sk.id = ?
+      ${visibility.sql}
+  `).get(req.params.id, ...visibility.params);
+  if (!skillRow) return res.status(404).json({ error: 'Skill 不存在' });
+  if (!canManageAiTrainingSkill(req.user, skillRow)) {
+    return res.status(403).json({ error: '无权回滚该 Skill' });
+  }
+
+  try {
+    rollbackAiTrainingSkill(skillRow, req.user.id);
+    const detail = getAiTrainingSkillDetailForUser(req.params.id, req.user);
+    res.json({ success: true, detail });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '回滚 Skill 失败' });
+  }
+});
+
+app.get('/api/agents/ai-training/eval-runs', (req, res) => {
+  const { status, limit = 50 } = req.query;
+  try {
+    const rows = listAiTrainingEvalRunsForUser(req.user, { status, limit });
+    res.json(rows);
+  } catch (error) {
+    console.error('加载 AI 评测记录失败:', error);
+    res.status(500).json({ error: '加载评测记录失败' });
+  }
+});
+
+app.get('/api/agents/ai-training/stats', (req, res) => {
+  try {
+    res.json(buildAiTrainingStatsForUser(req.user));
+  } catch (error) {
+    console.error('加载 AI 训练统计失败:', error);
+    res.status(500).json({ error: '加载训练统计失败' });
+  }
 });
 
 // =========== 预算管理 API ===========

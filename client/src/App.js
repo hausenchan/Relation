@@ -34,6 +34,7 @@ const PAGE_TITLE_MAP = {
   '/weekly-reports': '周报管理',
   '/leads': '商机',
   '/agents': 'Agent 中台',
+  '/agents/ai-training': 'AI训练台',
   '/strategies': '策略',
   '/dev-tasks': '需求',
   '/company-subjects': '主体管理',
@@ -327,6 +328,7 @@ import Goals from './pages/Goals';
 import WeeklyReports from './pages/WeeklyReports';
 import Leads from './pages/Leads';
 import AgentOperations from './pages/AgentOperations';
+import AiTrainingWorkbench from './pages/AiTrainingWorkbench';
 import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
 import ProductAssets from './pages/ProductAssets';
@@ -658,9 +660,18 @@ function AppLayout() {
   ].filter(Boolean);
 
   // ── 业务流转 ────────────────────────────────────────────────
+  const canAccessAgentHub = canAccessMenu('/agents') || canAccessMenu('/agents/ai-training');
   const bizFlowChildren = [
     canAccessMenu('/leads') && { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">商机</Link> },
-    canAccessMenu('/agents') && { key: '/agents', icon: <RobotOutlined />, label: <Link to="/agents">Agent 中台</Link> },
+    canAccessAgentHub && {
+      key: 'agent-center',
+      icon: <RobotOutlined />,
+      label: 'Agent 中台',
+      children: [
+        canAccessMenu('/agents') && { key: '/agents', icon: <AppstoreOutlined />, label: <Link to="/agents">经营台</Link> },
+        canAccessAgentHub && { key: '/agents/ai-training', icon: <MessageOutlined />, label: <Link to="/agents/ai-training">AI训练台</Link> },
+      ].filter(Boolean),
+    },
     canAccessMenu('/strategies') && { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
     canAccessMenu('/dev-tasks') && { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
   ].filter(Boolean);
@@ -1116,6 +1127,7 @@ function AppLayout() {
             <Route path="/goals" element={<PrivateRoute><Goals /></PrivateRoute>} />
             <Route path="/weekly-reports" element={<PrivateRoute><WeeklyReports /></PrivateRoute>} />
             <Route path="/leads" element={<PrivateRoute><Leads /></PrivateRoute>} />
+            <Route path="/agents/ai-training" element={<PrivateRoute><AiTrainingWorkbench /></PrivateRoute>} />
             <Route path="/agents" element={<PrivateRoute><AgentOperations /></PrivateRoute>} />
             <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />

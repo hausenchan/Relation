@@ -287,6 +287,29 @@ export const agentsApi = {
   deleteNotificationRule: (id) => api.delete(`/agents/notification-rules/${id}`).then(r => r.data),
 };
 
+export const aiTrainingApi = {
+  overview: () => api.get('/agents/ai-training/overview').then(r => r.data),
+  listSessions: (params) => api.get('/agents/ai-training/sessions', { params }).then(r => r.data),
+  createSession: (data) => api.post('/agents/ai-training/sessions', data).then(r => r.data),
+  getSession: (id) => api.get(`/agents/ai-training/sessions/${id}`).then(r => r.data),
+  listMessages: (id) => api.get(`/agents/ai-training/sessions/${id}/messages`).then(r => r.data),
+  createMessage: (id, data) => api.post(`/agents/ai-training/sessions/${id}/messages`, data).then(r => r.data),
+  feedbackMessage: (id, data) => api.post(`/agents/ai-training/messages/${id}/feedback`, data).then(r => r.data),
+  runMessageAction: (id, data) => api.post(`/agents/ai-training/messages/${id}/actions`, data).then(r => r.data),
+  listCaseCandidates: (params) => api.get('/agents/ai-training/case-candidates', { params }).then(r => r.data),
+  reviewCaseCandidate: (id, data) => api.post(`/agents/ai-training/case-candidates/${id}/review`, data).then(r => r.data),
+  listCases: (params) => api.get('/agents/ai-training/cases', { params }).then(r => r.data),
+  createSkillDraftFromCase: (id) => api.post(`/agents/ai-training/cases/${id}/create-skill-draft`).then(r => r.data),
+  listSkills: (params) => api.get('/agents/ai-training/skills', { params }).then(r => r.data),
+  createSkill: (data) => api.post('/agents/ai-training/skills', data).then(r => r.data),
+  getSkill: (id) => api.get(`/agents/ai-training/skills/${id}`).then(r => r.data),
+  evaluateSkill: (id) => api.post(`/agents/ai-training/skills/${id}/evaluate`).then(r => r.data),
+  publishSkill: (id) => api.post(`/agents/ai-training/skills/${id}/publish`).then(r => r.data),
+  rollbackSkill: (id) => api.post(`/agents/ai-training/skills/${id}/rollback`).then(r => r.data),
+  listEvalRuns: (params) => api.get('/agents/ai-training/eval-runs', { params }).then(r => r.data),
+  getStats: () => api.get('/agents/ai-training/stats').then(r => r.data),
+};
+
 export const productAssetsApi = {
   list: (params) => api.get('/product-assets', { params }).then(r => r.data),
   get: (id) => api.get(`/product-assets/${id}`).then(r => r.data),

@@ -1,0 +1,2696 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI经营中台原型设计稿</title>
+  <style>
+    :root {
+      --bg: #edf1f5;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --line: #d9e1ea;
+      --line-dark: #c7d2de;
+      --text: #17212b;
+      --muted: #5f6b7a;
+      --subtle: #8a95a3;
+      --nav: #10243d;
+      --nav-soft: #173152;
+      --nav-line: rgba(255, 255, 255, 0.08);
+      --blue: #2563eb;
+      --blue-soft: #e8f1ff;
+      --teal: #0f766e;
+      --teal-soft: #e7f8f5;
+      --green: #15803d;
+      --green-soft: #edf9f0;
+      --amber: #b45309;
+      --amber-soft: #fff4e5;
+      --red: #c2410c;
+      --red-soft: #fff0eb;
+      --shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
+      --radius: 8px;
+      --browser-radius: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+
+    .page {
+      min-height: 100vh;
+      padding: 28px;
+    }
+
+    .hero {
+      max-width: 1600px;
+      margin: 0 auto 22px;
+      display: grid;
+      grid-template-columns: minmax(320px, 1.3fr) minmax(320px, 0.9fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .hero-main,
+    .hero-side {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+    }
+
+    .title {
+      margin: 0 0 10px;
+      font-size: 30px;
+      line-height: 1.2;
+      font-weight: 760;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .meta-grid {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .meta-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 12px;
+      min-height: 92px;
+    }
+
+    .meta-label {
+      display: block;
+      color: var(--subtle);
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+
+    .meta-value {
+      font-size: 14px;
+      line-height: 1.7;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .side-title {
+      margin: 0 0 12px;
+      font-size: 15px;
+      font-weight: 720;
+    }
+
+    .bullet-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+
+    .boards {
+      max-width: 1600px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(600px, 1fr));
+      gap: 20px;
+      align-items: start;
+    }
+
+    .artboard-wrap {
+      min-width: 0;
+    }
+
+    .artboard-title {
+      margin: 0 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+    }
+
+    .artboard-tag {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--subtle);
+    }
+
+    .browser {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      min-height: 640px;
+      background: #dbe3ec;
+      border-radius: var(--browser-radius);
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .browser-shell {
+      height: 100%;
+      background: var(--panel);
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+    }
+
+    .browser-top {
+      height: 46px;
+      background: #f3f6f9;
+      border-bottom: 1px solid var(--line);
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .traffic {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #d0d7df;
+    }
+
+    .dot.red { background: #ef4444; }
+    .dot.amber { background: #f59e0b; }
+    .dot.green { background: #22c55e; }
+
+    .url-bar {
+      flex: 1;
+      height: 30px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      font-size: 12px;
+      color: var(--subtle);
+    }
+
+    .app {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 204px 1fr;
+      background: var(--panel);
+    }
+
+    .nav {
+      background: var(--nav);
+      color: rgba(255, 255, 255, 0.86);
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid rgba(255, 255, 255, 0.02);
+    }
+
+    .brand {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid var(--nav-line);
+    }
+
+    .brand-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 760;
+      color: #ffffff;
+    }
+
+    .brand-sub {
+      margin-top: 6px;
+      color: rgba(255, 255, 255, 0.56);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .nav-group {
+      padding: 14px 10px 0;
+    }
+
+    .nav-caption {
+      padding: 0 8px 8px;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.42);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .nav-item {
+      height: 36px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px;
+      color: rgba(255, 255, 255, 0.82);
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      background: transparent;
+    }
+
+    .nav-item.active {
+      background: var(--nav-soft);
+      color: #ffffff;
+    }
+
+    .nav-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.16);
+      flex-shrink: 0;
+    }
+
+    .nav-foot {
+      margin-top: auto;
+      padding: 14px 12px 16px;
+      border-top: 1px solid var(--nav-line);
+    }
+
+    .user-box {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #60a5fa, #14b8a6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .user-meta {
+      min-width: 0;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .user-name {
+      color: #ffffff;
+      font-weight: 650;
+    }
+
+    .user-role {
+      color: rgba(255, 255, 255, 0.56);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      background: #f5f8fb;
+    }
+
+    .toolbar {
+      height: 62px;
+      border-bottom: 1px solid var(--line);
+      padding: 0 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      background: rgba(255, 255, 255, 0.88);
+      backdrop-filter: blur(6px);
+      flex-shrink: 0;
+    }
+
+    .toolbar-title {
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .toolbar-sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .search {
+      width: 220px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 0 10px;
+      color: var(--subtle);
+      display: flex;
+      align-items: center;
+      font-size: 12px;
+    }
+
+    .btn {
+      height: 34px;
+      border-radius: 8px;
+      border: 1px solid var(--line-dark);
+      background: #ffffff;
+      color: var(--text);
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .btn.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #ffffff;
+    }
+
+    .btn.ghost {
+      background: #f8fbff;
+      color: var(--blue);
+      border-color: #cfe0ff;
+    }
+
+    .content {
+      flex: 1;
+      min-height: 0;
+      padding: 16px 18px 18px;
+      overflow: hidden;
+    }
+
+    .stack {
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .section-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    .section-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .section-title {
+      font-size: 13px;
+      font-weight: 720;
+    }
+
+    .section-link {
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .section-body {
+      padding: 14px;
+      min-width: 0;
+    }
+
+    .stat-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-height: 94px;
+    }
+
+    .stat-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+
+    .stat-value {
+      font-size: 26px;
+      line-height: 1;
+      font-weight: 760;
+    }
+
+    .stat-note {
+      margin-top: 10px;
+      color: var(--subtle);
+      font-size: 12px;
+    }
+
+    .pill {
+      height: 24px;
+      border-radius: 999px;
+      padding: 0 10px;
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.blue { color: var(--blue); background: var(--blue-soft); }
+    .pill.teal { color: var(--teal); background: var(--teal-soft); }
+    .pill.green { color: var(--green); background: var(--green-soft); }
+    .pill.amber { color: var(--amber); background: var(--amber-soft); }
+    .pill.red { color: var(--red); background: var(--red-soft); }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #ffffff;
+      display: grid;
+      gap: 8px;
+    }
+
+    .row-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .row-title {
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .row-sub {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .mini-table th,
+    .mini-table td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .mini-table th {
+      color: var(--subtle);
+      font-weight: 650;
+      background: #fbfcfe;
+    }
+
+    .mini-table tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .trend-box {
+      display: grid;
+      gap: 8px;
+    }
+
+    .trend-line {
+      display: grid;
+      grid-template-columns: 64px minmax(0, 1fr) 46px;
+      gap: 10px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .bar {
+      height: 8px;
+      border-radius: 999px;
+      background: #e7edf5;
+      overflow: hidden;
+    }
+
+    .bar > span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+    }
+
+    .bar.blue > span { background: var(--blue); }
+    .bar.teal > span { background: var(--teal); }
+    .bar.amber > span { background: #d97706; }
+    .bar.red > span { background: #dc2626; }
+
+    .scenario-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 14px;
+      min-height: 168px;
+      display: grid;
+      grid-template-rows: auto auto auto 1fr auto;
+      gap: 10px;
+    }
+
+    .scenario-title {
+      font-size: 15px;
+      font-weight: 760;
+    }
+
+    .scenario-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .tag-line {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .tiny-tag {
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 650;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .page-tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      height: 30px;
+      border-radius: 8px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--muted);
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      font-weight: 650;
+    }
+
+    .tab.active {
+      background: #edf4ff;
+      color: var(--blue);
+      border-color: #cfe0ff;
+    }
+
+    .three-col {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 0.95fr 1.15fr 0.9fr;
+      gap: 12px;
+    }
+
+    .form-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .label {
+      color: var(--subtle);
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .input,
+    .textarea,
+    .select-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--text);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .input,
+    .select-box {
+      height: 34px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+    }
+
+    .textarea {
+      min-height: 80px;
+      padding: 10px;
+    }
+
+    .split-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .result-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+      overflow: hidden;
+    }
+
+    .result-banner {
+      padding: 14px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #fbfdff 0%, #f4f8ff 100%);
+    }
+
+    .result-score {
+      font-size: 28px;
+      font-weight: 780;
+      margin-top: 10px;
+    }
+
+    .insight-list {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .insight {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .insight strong {
+      font-size: 13px;
+    }
+
+    .insight p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .evidence-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+    }
+
+    .evidence-list {
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      align-content: start;
+    }
+
+    .evidence-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fbfcfe;
+      display: grid;
+      gap: 6px;
+    }
+
+    .evidence-item .hint {
+      color: var(--subtle);
+      font-size: 11px;
+    }
+
+    .action-stack {
+      padding: 12px 14px 14px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .knowledge-layout,
+    .skill-layout,
+    .approval-layout {
+      height: 100%;
+      display: grid;
+      gap: 12px;
+    }
+
+    .knowledge-layout {
+      grid-template-columns: 0.88fr 1.12fr 0.9fr;
+    }
+
+    .skill-layout {
+      grid-template-columns: 1.1fr 0.9fr;
+    }
+
+    .approval-layout {
+      grid-template-columns: 0.95fr 1.05fr;
+    }
+
+    .source-list,
+    .detail-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .source-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .source-item.active {
+      border-color: #b8d2ff;
+      background: #f5f9ff;
+    }
+
+    .source-title {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .source-meta {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .rule-block {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #ffffff;
+      display: grid;
+      gap: 8px;
+    }
+
+    .rule-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .rule-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .footer-note {
+      font-size: 11px;
+      color: var(--subtle);
+    }
+
+    .meta-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .micro-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px 12px;
+      min-height: 76px;
+    }
+
+    .micro-label {
+      color: var(--subtle);
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+
+    .micro-value {
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .micro-note {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .split-note {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .quad-layout {
+      height: 100%;
+      display: grid;
+      grid-template-columns: 0.78fr 0.9fr 1.05fr 0.92fr;
+      gap: 12px;
+    }
+
+    .section-stack {
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .source-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .source-tab {
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .source-tab.active {
+      color: var(--blue);
+      background: #edf4ff;
+      border-color: #cfe0ff;
+    }
+
+    .split-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .metric-mini {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .metric-mini strong {
+      color: var(--text);
+      font-size: 14px;
+    }
+
+    .fusion-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .fusion-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .source-chip {
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: #f4f7fb;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 650;
+    }
+
+    .compare-strip {
+      display: grid;
+      gap: 8px;
+    }
+
+    .compare-row {
+      border: 1px dashed var(--line-dark);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfe;
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .risk-box {
+      border: 1px solid #f1d0bf;
+      background: #fff8f4;
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: #9a3412;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .two-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .thin-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+
+    .thin-table th,
+    .thin-table td {
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .thin-table th {
+      color: var(--subtle);
+      font-weight: 650;
+      background: #fbfcfe;
+    }
+
+    @media (max-width: 1360px) {
+      .boards {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .meta-grid,
+      .grid-4,
+      .grid-3,
+      .grid-2,
+      .three-col,
+      .knowledge-layout,
+      .skill-layout,
+      .approval-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .browser {
+        min-height: auto;
+        aspect-ratio: auto;
+      }
+
+      .app {
+        grid-template-columns: 1fr;
+      }
+
+      .nav {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <section class="hero-main">
+        <h1 class="title">AI经营中台原型设计稿</h1>
+        <p class="subtitle">
+          面向 IAA 广告业务的一期原型，重点展示 AI 工作台、场景中心、收入异常诊断、知识蒸馏、
+          外部数据接入、Skill 中心、审批与日志七个关键页面。整体风格按组织中台场景处理，强调高密度信息、结构化输入、
+          证据并排展示与高风险动作可控。
+        </p>
+        <div class="meta-grid">
+          <div class="meta-box">
+            <span class="meta-label">产品定位</span>
+            <div class="meta-value">业务分析与策略辅助平台，不是通用聊天页</div>
+          </div>
+          <div class="meta-box">
+            <span class="meta-label">组织结构</span>
+            <div class="meta-value">预算侧 / 流量侧双主线，角色与业务线双重分发</div>
+          </div>
+          <div class="meta-box">
+            <span class="meta-label">交互原则</span>
+            <div class="meta-value">表单化发起、卡片化结果、证据可追溯、审批可控</div>
+          </div>
+        </div>
+      </section>
+      <aside class="hero-side">
+        <h2 class="side-title">本稿说明</h2>
+        <ul class="bullet-list">
+          <li>原型按桌面端信息工作台设计，适合中后台评审和拆任务。</li>
+          <li>每个画板都是高保真静态稿，重点确认信息架构和关键交互。</li>
+          <li>左侧统一保留组织中台式导航，右侧围绕具体场景展开。</li>
+          <li>异常诊断页采用三栏布局：输入、结论、证据，避免只给一段 AI 文本。</li>
+          <li>首页和场景入口按“业务侧 × 角色 × 业务线”推荐，不再是所有人共用一个首页。</li>
+          <li>知识蒸馏和 Skill 中心拆开，方便业务专家和系统管理员分别使用。</li>
+          <li>新增外部数据接入中心，承接“历史数据只在第三方后台 Web 中”的真实场景。</li>
+        </ul>
+      </aside>
+    </header>
+
+    <main class="boards">
+      <section class="artboard-wrap">
+        <div class="artboard-title">
+          <span>01. AI工作台</span>
+          <span class="artboard-tag">角色首页 / 今日入口</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营中台</h3>
+                  <div class="brand-sub">业务增长辅助 · Skill 驱动 · 可追溯治理</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Workspace</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>AI工作台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>场景中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>Skill中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>外部数据接入</div>
+                  <div class="nav-item"><span class="nav-icon"></span>知识蒸馏</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>审批与日志</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Linked Modules</div>
+                  <div class="nav-item"><span class="nav-icon"></span>工作台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>文档中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>策略管理</div>
+                  <div class="nav-item"><span class="nav-icon"></span>预算管理</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">CZ</div>
+                    <div class="user-meta">
+                      <div class="user-name">陈浩赞</div>
+                      <div class="user-role">C端预算策略负责人 · 负责 支小 / 微小 / 抖小 / 百度JS / 百度搜索</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">AI工作台</div>
+                    <div class="toolbar-sub">当前身份：预算侧 / C端预算策略负责人。默认先看 C端预算整体，再看各业务线差异、策略建议和运营协作状态。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="search">搜索场景、Skill、历史结果</div>
+                    <div class="btn ghost">查看帮助</div>
+                    <div class="btn primary">发起分析</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="stack">
+                    <div class="grid-4">
+                      <div class="stat-card">
+                        <div class="stat-top"><span>C端预算业务线</span><span class="pill blue">预算侧</span></div>
+                        <div class="stat-value">5</div>
+                        <div class="stat-note">支小、微小、抖小、百度JS、百度搜索</div>
+                      </div>
+                      <div class="stat-card">
+                        <div class="stat-top"><span>待策略判断</span><span class="pill amber">优先</span></div>
+                        <div class="stat-value">4</div>
+                        <div class="stat-note">2 条预算建议，2 条业务线异常待定级</div>
+                      </div>
+                      <div class="stat-card">
+                        <div class="stat-top"><span>策略采纳率</span><span class="pill green">稳定</span></div>
+                        <div class="stat-value">53%</div>
+                        <div class="stat-note">C端预算策略较上周提升 6 个百分点</div>
+                      </div>
+                      <div class="stat-card">
+                        <div class="stat-top"><span>待运营协同</span><span class="pill teal">策略→运营</span></div>
+                        <div class="stat-value">3</div>
+                        <div class="stat-note">3 条建议待分发给 C端预算运营负责人执行</div>
+                      </div>
+                    </div>
+
+                    <div class="section-card">
+                      <div class="section-head">
+                        <div class="section-title">当前视角</div>
+                        <div class="section-link">切换身份</div>
+                      </div>
+                      <div class="section-body">
+                        <div class="page-tabs">
+                          <div class="tab active">预算侧</div>
+                          <div class="tab">流量侧</div>
+                          <div class="tab active">C端预算策略负责人</div>
+                          <div class="tab">C端预算运营负责人</div>
+                          <div class="tab">B端预算策略负责人</div>
+                          <div class="tab">部门负责人</div>
+                        </div>
+                        <div class="page-tabs" style="margin-top: 10px;">
+                          <div class="tab active">全部业务线</div>
+                          <div class="tab">支小</div>
+                          <div class="tab">微小</div>
+                          <div class="tab">抖小</div>
+                          <div class="tab">百度JS</div>
+                          <div class="tab">百度搜索</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="grid-3">
+                      <div class="section-card">
+                        <div class="section-head">
+                          <div class="section-title">当前角色推荐场景</div>
+                          <div class="section-link">全部场景</div>
+                        </div>
+                        <div class="section-body list">
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">C端预算业务线对比</div>
+                              <div class="pill red">3 条高优</div>
+                            </div>
+                            <div class="row-sub">适合比较支小、微小、抖小、百度JS、百度搜索的预算效率与风险差异。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">预算分配建议</div>
+                              <div class="pill blue">2 条待确认</div>
+                            </div>
+                            <div class="row-sub">适合做 C端预算整体与业务线之间的拆分建议。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">策略执行跟踪</div>
+                              <div class="pill teal">常用</div>
+                            </div>
+                            <div class="row-sub">适合把策略建议分发给 C端预算运营负责人并跟踪执行闭环。</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="section-card">
+                        <div class="section-head">
+                          <div class="section-title">业务线异常排行</div>
+                          <div class="section-link">查看全部</div>
+                        </div>
+                        <div class="section-body list">
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">抖小</div>
+                              <div class="pill red">异常</div>
+                            </div>
+                            <div class="row-sub">收入下滑 14%，建议优先做预算回收和媒体质量排查。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">百度搜索</div>
+                              <div class="pill amber">待判断</div>
+                            </div>
+                            <div class="row-sub">预算效率波动较大，需要判断是策略问题还是执行问题。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">支小</div>
+                              <div class="pill green">稳定</div>
+                            </div>
+                            <div class="row-sub">当前可作为预算回补候选业务线。</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="section-card">
+                        <div class="section-head">
+                          <div class="section-title">策略与运营协作</div>
+                          <div class="section-link">反馈面板</div>
+                        </div>
+                        <div class="section-body list">
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">待运营执行</div>
+                              <div class="pill blue">3 条</div>
+                            </div>
+                            <div class="row-sub">3 条预算策略建议待分发给 C端预算运营负责人落地执行。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">已执行待复盘</div>
+                              <div class="pill amber">2 条</div>
+                            </div>
+                            <div class="row-sub">运营已执行两条业务线策略，需要 AI 自动汇总结果给策略负责人。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">闭环完成</div>
+                              <div class="pill green">已闭环</div>
+                            </div>
+                            <div class="row-sub">微小业务线一条策略采纳成功，已形成案例并同步至知识蒸馏待审核队列。</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="grid-2">
+                      <div class="section-card">
+                        <div class="section-head">
+                          <div class="section-title">最近运行记录</div>
+                          <div class="section-link">运行日志</div>
+                        </div>
+                        <div class="section-body">
+                          <table class="mini-table">
+                            <thead>
+                              <tr>
+                                <th>时间</th>
+                                <th>场景</th>
+                                <th>对象</th>
+                                <th>结论</th>
+                                <th>状态</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td>10:28</td>
+                                <td>业务线对比</td>
+                                <td>抖小 vs 支小</td>
+                                <td>建议回收抖小预算</td>
+                                <td><span class="pill green">已完成</span></td>
+                              </tr>
+                              <tr>
+                                <td>10:11</td>
+                                <td>预算分配建议</td>
+                                <td>C端预算 / 第1周</td>
+                                <td>待分发给运营</td>
+                                <td><span class="pill amber">待审批</span></td>
+                              </tr>
+                              <tr>
+                                <td>09:56</td>
+                                <td>策略执行跟踪</td>
+                                <td>百度搜索</td>
+                                <td>待补执行结果</td>
+                                <td><span class="pill blue">已返回</span></td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                      <div class="section-card">
+                        <div class="section-head">
+                          <div class="section-title">本周效果概览</div>
+                          <div class="section-link">评测中心</div>
+                        </div>
+                        <div class="section-body trend-box">
+                          <div class="trend-line">
+                            <span>采纳率</span>
+                            <div class="bar blue"><span style="width: 47%"></span></div>
+                            <strong>47%</strong>
+                          </div>
+                          <div class="trend-line">
+                            <span>证据覆盖</span>
+                            <div class="bar teal"><span style="width: 69%"></span></div>
+                            <strong>69%</strong>
+                          </div>
+                          <div class="trend-line">
+                            <span>正确率</span>
+                            <div class="bar amber"><span style="width: 74%"></span></div>
+                            <strong>74%</strong>
+                          </div>
+                          <div class="trend-line">
+                            <span>成本控制</span>
+                            <div class="bar red"><span style="width: 36%"></span></div>
+                            <strong>良好</strong>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard-wrap">
+        <div class="artboard-title">
+          <span>02. 场景中心</span>
+          <span class="artboard-tag">按业务任务选能力</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/scenarios</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营中台</h3>
+                  <div class="brand-sub">场景化入口，替代“提示词 + 技能下拉”方式</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Workspace</div>
+                  <div class="nav-item"><span class="nav-icon"></span>AI工作台</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>场景中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>Skill中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>外部数据接入</div>
+                  <div class="nav-item"><span class="nav-icon"></span>知识蒸馏</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>审批与日志</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">OP</div>
+                    <div class="user-meta">
+                      <div class="user-name">角色 / 业务线筛选视图</div>
+                      <div class="user-role">按预算侧 / 流量侧 / 业务线推荐可用场景</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">场景中心</div>
+                    <div class="toolbar-sub">按业务侧、角色、业务线选择场景，系统自动切换默认口径和参数模板。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="search">搜索业务问题，如“收入下滑”</div>
+                    <div class="btn">仅看已开通</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="stack">
+                    <div class="page-tabs">
+                      <div class="tab active">预算侧</div>
+                      <div class="tab">流量侧</div>
+                      <div class="tab active">C端预算策略负责人</div>
+                      <div class="tab">C端预算运营负责人</div>
+                      <div class="tab">流量运营</div>
+                      <div class="tab">流量BD</div>
+                      <div class="tab">部门负责人</div>
+                    </div>
+                    <div class="page-tabs">
+                      <div class="tab active">全部业务线</div>
+                      <div class="tab">支小</div>
+                      <div class="tab">微小</div>
+                      <div class="tab">抖小</div>
+                      <div class="tab">百度JS</div>
+                      <div class="tab">百度搜索</div>
+                    </div>
+
+                    <div class="grid-3">
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill red">P0</span>
+                          <span class="tiny-tag">预算侧</span>
+                          <span class="tiny-tag">策略负责人</span>
+                        </div>
+                        <div class="scenario-title">C端预算业务线对比</div>
+                        <div class="scenario-copy">比较支小、微小、抖小、百度JS、百度搜索等业务线的预算效率与风险，帮助策略负责人快速做取舍。</div>
+                        <div class="tag-line">
+                          <span class="tiny-tag">输入 4-6 项</span>
+                          <span class="tiny-tag">平均 9 秒</span>
+                          <span class="tiny-tag">业务线对比</span>
+                        </div>
+                        <div class="row-sub">默认服务于 C端预算策略负责人。</div>
+                      </div>
+
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill blue">P0</span>
+                          <span class="tiny-tag">预算侧</span>
+                          <span class="tiny-tag">策略负责人</span>
+                        </div>
+                        <div class="scenario-title">预算分配建议</div>
+                        <div class="scenario-copy">根据 C端预算整体目标与各业务线表现，辅助给出预算拆分、回收、加码建议。</div>
+                        <div class="tag-line">
+                          <span class="tiny-tag">输入 5-8 项</span>
+                          <span class="tiny-tag">平均 12 秒</span>
+                          <span class="tiny-tag">需分发执行</span>
+                        </div>
+                        <div class="row-sub">适合先由策略负责人判断，再分发给运营执行。</div>
+                      </div>
+
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill amber">P0</span>
+                          <span class="tiny-tag">预算侧</span>
+                          <span class="tiny-tag">运营负责人</span>
+                        </div>
+                        <div class="scenario-title">策略执行跟踪</div>
+                        <div class="scenario-copy">围绕已下发的预算或策略建议，自动跟踪执行进度、结果偏差和待复盘项。</div>
+                        <div class="tag-line">
+                          <span class="tiny-tag">输入 6-10 项</span>
+                          <span class="tiny-tag">执行闭环</span>
+                          <span class="tiny-tag">支持自动反馈</span>
+                        </div>
+                        <div class="row-sub">默认服务于 C端预算运营负责人。</div>
+                      </div>
+                    </div>
+
+                    <div class="grid-3">
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill teal">P1</span>
+                          <span class="tiny-tag">流量侧</span>
+                          <span class="tiny-tag">流量运营</span>
+                        </div>
+                        <div class="scenario-title">收入异常诊断</div>
+                        <div class="scenario-copy">定位收入、填充、请求、展示、eCPM 波动的主要原因，并输出证据与处理建议。</div>
+                        <div class="row-sub">默认服务于流量运营。</div>
+                      </div>
+
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill green">P1</span>
+                          <span class="tiny-tag">流量侧</span>
+                          <span class="tiny-tag">流量BD</span>
+                        </div>
+                        <div class="scenario-title">媒体机会评估</div>
+                        <div class="scenario-copy">评估新媒体合作机会、接入优先级和历史质量风险，帮助流量BD做推进决策。</div>
+                        <div class="row-sub">默认服务于流量BD。</div>
+                      </div>
+
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill blue">P1</span>
+                          <span class="tiny-tag">跨侧</span>
+                          <span class="tiny-tag">部门负责人</span>
+                        </div>
+                        <div class="scenario-title">团队经营看板</div>
+                        <div class="scenario-copy">按预算侧 / 流量侧、角色和业务线汇总异常、任务、采纳率和协作状态，供部门负责人做管理判断。</div>
+                        <div class="row-sub">默认服务于部门负责人。</div>
+                      </div>
+                    </div>
+
+                    <div class="section-card">
+                      <div class="section-head">
+                        <div class="section-title">推荐使用方式</div>
+                        <div class="section-link">为何不做聊天框</div>
+                      </div>
+                      <div class="section-body">
+                        <table class="mini-table">
+                          <thead>
+                            <tr>
+                              <th>方式</th>
+                              <th>适用</th>
+                              <th>优点</th>
+                              <th>限制</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td>场景表单</td>
+                              <td>高频标准分析</td>
+                              <td>稳定、好评测、好复用</td>
+                              <td>自由度较低</td>
+                            </tr>
+                            <tr>
+                              <td>卡片式结果</td>
+                              <td>经营判断</td>
+                              <td>便于审批与追责</td>
+                              <td>需要统一输出结构</td>
+                            </tr>
+                            <tr>
+                              <td>自由追问</td>
+                              <td>二次探索</td>
+                              <td>灵活</td>
+                              <td>不适合作为主入口</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard-wrap">
+        <div class="artboard-title">
+          <span>03. 收入异常诊断</span>
+          <span class="artboard-tag">三栏主分析页</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/scenarios/revenue-anomaly</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营中台</h3>
+                  <div class="brand-sub">输入尽量结构化，输出必须带证据</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Scenario</div>
+                  <div class="nav-item"><span class="nav-icon"></span>AI工作台</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>收入异常诊断</div>
+                  <div class="nav-item"><span class="nav-icon"></span>广告策略建议</div>
+                  <div class="nav-item"><span class="nav-icon"></span>预算分配建议</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">AI</div>
+                    <div class="user-meta">
+                      <div class="user-name">Skill v0.3</div>
+                      <div class="user-role">evidence_rules: strict</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">收入异常诊断</div>
+                    <div class="toolbar-sub">当前视角：流量侧 / 流量运营。定位“抖小业务线 Android”近三日收入下滑的主要原因。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="btn">加载模板</div>
+                    <div class="btn ghost">查看历史</div>
+                    <div class="btn primary">重新分析</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="three-col">
+                    <div class="form-card">
+                      <div class="field">
+                        <div class="label">时间范围</div>
+                        <div class="input">2026-06-30 至 2026-07-02</div>
+                      </div>
+                      <div class="split-row">
+                        <div class="field">
+                          <div class="label">业务线</div>
+                          <div class="select-box">抖小</div>
+                        </div>
+                        <div class="field">
+                          <div class="label">产品</div>
+                          <div class="select-box">抖小 Android</div>
+                        </div>
+                      </div>
+                      <div class="split-row">
+                        <div class="field">
+                          <div class="label">平台</div>
+                          <div class="select-box">Android</div>
+                        </div>
+                        <div class="field">
+                          <div class="label">关注指标</div>
+                          <div class="select-box">收入 / 填充 / eCPM</div>
+                        </div>
+                      </div>
+                      <div class="field">
+                        <div class="label">补充说明</div>
+                        <div class="textarea">昨天开始收入明显下滑，希望确认是媒体变化、填充波动、版本问题，还是该业务线预算与流量协同异常。</div>
+                      </div>
+                      <div class="section-card">
+                        <div class="section-head">
+                          <div class="section-title">系统自动补齐上下文</div>
+                        </div>
+                        <div class="section-body list">
+                          <div class="row">
+                            <div class="row-sub">已带入最近 7 天媒体分布、版本分布、地区分布与策略变更记录。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-sub">本次推理默认优先使用：内部历史数据模式、已验证复盘案例、正式知识包；行业资料仅作为解释补充，不直接参与强结论。</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="result-card">
+                      <div class="result-banner">
+                        <div class="tag-line">
+                          <span class="pill red">高优异常</span>
+                          <span class="tiny-tag">置信度 0.78</span>
+                          <span class="tiny-tag">证据 6 条</span>
+                        </div>
+                        <div class="result-score">收入较基线下滑 18.6%</div>
+                        <div class="row-sub">核心判断：主要由高占比媒体填充下降叠加 Android 新版本展示损耗导致。</div>
+                      </div>
+                      <div class="insight-list">
+                        <div class="insight">
+                          <strong>结论 1：媒体 M3 填充率下降是首因</strong>
+                          <p>M3 占整体请求 39%，但填充率从 72% 降到 58%，对收入影响最大。</p>
+                          <div class="tag-line">
+                            <span class="pill amber">影响高</span>
+                            <span class="tiny-tag">证据已关联</span>
+                          </div>
+                        </div>
+                        <div class="insight">
+                          <strong>结论 2：Android 2.9.1 版本展示损耗上升</strong>
+                          <p>请求到展示转化率较旧版下降 7 个点，集中出现在昨天下午发布后。</p>
+                          <div class="tag-line">
+                            <span class="pill red">需研发确认</span>
+                            <span class="tiny-tag">版本维度异常</span>
+                          </div>
+                        </div>
+                        <div class="insight">
+                          <strong>建议动作</strong>
+                          <p>先对 M3 做临时回撤；并创建研发排查任务，确认 Android 2.9.1 的广告展示链路。</p>
+                          <div class="tag-line">
+                            <span class="pill blue">可创建任务</span>
+                            <span class="tiny-tag">需负责人确认</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="evidence-card">
+                      <div class="section-head">
+                        <div class="section-title">证据与引用</div>
+                        <div class="section-link">查看全部来源</div>
+                      </div>
+                      <div class="evidence-list">
+                        <div class="evidence-item">
+                          <strong>媒体拆分趋势</strong>
+                          <div class="hint">数据源：广告收益日报 / media_dim</div>
+                          <div class="trend-line">
+                            <span>M3 填充</span>
+                            <div class="bar red"><span style="width: 58%"></span></div>
+                            <strong>58%</strong>
+                          </div>
+                          <div class="trend-line">
+                            <span>M1 填充</span>
+                            <div class="bar blue"><span style="width: 74%"></span></div>
+                            <strong>74%</strong>
+                          </div>
+                        </div>
+                        <div class="evidence-item">
+                          <strong>版本维度异常</strong>
+                          <div class="hint">数据源：版本监控 / app_version_dim</div>
+                          <div class="row-sub">2.9.1 在 15:00 后展示转化显著低于 2.9.0。</div>
+                        </div>
+                        <div class="evidence-item">
+                          <strong>历史相似案例</strong>
+                          <div class="hint">知识源：文档中心 / 2026-05-18 复盘</div>
+                          <div class="row-sub">相似案例中也是“高占比媒体填充下滑 + 版本兼容问题”组合导致。</div>
+                        </div>
+                        <div class="evidence-item">
+                          <strong>行业通识补充</strong>
+                          <div class="hint">知识源：广告平台白皮书 / 行业书籍摘要</div>
+                          <div class="row-sub">行业资料提示“版本切换期应重点观察展示损耗”，该信息仅用于补充解释，不作为最终主证据。</div>
+                        </div>
+                      </div>
+                      <div class="action-stack">
+                        <div class="btn">导出结论</div>
+                        <div class="btn ghost">创建研发任务</div>
+                        <div class="btn ghost">通知媒体负责人</div>
+                        <div class="btn primary">提交动作建议</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard-wrap">
+        <div class="artboard-title">
+          <span>04. 知识蒸馏</span>
+          <span class="artboard-tag">文档 + 历史数据 + 行业资料融合</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/knowledge</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营中台</h3>
+                  <div class="brand-sub">让业务专家审核 AI 抽取结果，而不是直接把文档丢给模型</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Knowledge</div>
+                  <div class="nav-item"><span class="nav-icon"></span>AI工作台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>Skill中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>外部数据接入</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>知识蒸馏</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测中心</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">KM</div>
+                    <div class="user-meta">
+                      <div class="user-name">知识管理员</div>
+                      <div class="user-role">今日待审核 12 条</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">知识蒸馏</div>
+                    <div class="toolbar-sub">把文档中心、历史数据、策略结果、行业白皮书和广告书籍中的认知，融合成可用于 Skill 的正式知识资产。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="btn">从文档中心导入</div>
+                    <div class="btn">接入历史数据</div>
+                    <div class="btn">导入行业资料</div>
+                    <div class="btn ghost">批量抽取</div>
+                    <div class="btn primary">发布知识</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="stack">
+                    <div class="meta-strip">
+                      <div class="micro-card">
+                        <div class="micro-label">待融合来源</div>
+                        <div class="micro-value">28</div>
+                        <div class="micro-note">文档 12，历史数据 9，行业资料 7</div>
+                      </div>
+                      <div class="micro-card">
+                        <div class="micro-label">候选规则</div>
+                        <div class="micro-value">46</div>
+                        <div class="micro-note">其中 11 条存在冲突，需人工处理</div>
+                      </div>
+                      <div class="micro-card">
+                        <div class="micro-label">数据模式卡片</div>
+                        <div class="micro-value">18</div>
+                        <div class="micro-note">来自近 180 天收入和策略历史</div>
+                      </div>
+                      <div class="micro-card">
+                        <div class="micro-label">外部行业资料</div>
+                        <div class="micro-value">9</div>
+                        <div class="micro-note">全部标记为“待本地验证”</div>
+                      </div>
+                    </div>
+
+                    <div class="section-card">
+                      <div class="section-head">
+                        <div class="section-title">来源类型与融合原则</div>
+                        <div class="section-link">查看口径</div>
+                      </div>
+                      <div class="section-body">
+                        <div class="source-tabs">
+                          <div class="source-tab active">内部文档知识</div>
+                          <div class="source-tab">历史结构化数据</div>
+                          <div class="source-tab">策略与实验结果</div>
+                          <div class="source-tab">行业白皮书/书籍</div>
+                          <div class="source-tab">人工补录经验</div>
+                        </div>
+                        <div class="split-note" style="margin-top: 12px;">
+                          <div>融合优先级：公司已验证案例 &gt; 近期历史数据模式 &gt; 已审核内部文档结论 &gt; 专家经验补录 &gt; 外部行业通识。</div>
+                          <div>外部行业书籍和白皮书只作为通识启发来源，默认不能直接成为生产强规则，必须经过本公司历史数据或试验验证。</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="quad-layout">
+                      <div class="form-card">
+                        <div class="field">
+                          <div class="label">来源池</div>
+                        </div>
+                        <div class="source-list">
+                          <div class="source-item active">
+                            <div class="source-title">2026Q2 收入波动复盘纪要</div>
+                            <div class="source-meta">来源：文档中心 · 类型：复盘文档 · 提交人：流量运营组</div>
+                            <div class="tag-line">
+                              <span class="pill amber">待融合</span>
+                              <span class="tiny-tag">规则 4</span>
+                              <span class="tiny-tag">案例 2</span>
+                            </div>
+                          </div>
+                          <div class="source-item">
+                            <div class="source-title">近180天媒体填充历史模式</div>
+                            <div class="source-meta">来源：历史数据集 · 类型：结构化时序数据</div>
+                            <div class="tag-line">
+                              <span class="pill blue">已抽模式</span>
+                              <span class="tiny-tag">模式 6</span>
+                            </div>
+                          </div>
+                          <div class="source-item">
+                            <div class="source-title">《程序化广告实战》频控章节</div>
+                            <div class="source-meta">来源：行业书籍 · 类型：外部资料</div>
+                            <div class="tag-line">
+                              <span class="pill teal">待验证</span>
+                              <span class="tiny-tag">通识 3</span>
+                            </div>
+                          </div>
+                          <div class="source-item">
+                            <div class="source-title">短剧产品频控策略总结</div>
+                            <div class="source-meta">来源：策略管理 · 类型：内部策略复盘</div>
+                            <div class="tag-line">
+                              <span class="pill green">可合并</span>
+                              <span class="tiny-tag">Playbook 1</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="form-card">
+                        <div class="section-head" style="padding: 0 0 12px; border-bottom: 1px solid var(--line);">
+                          <div class="section-title">来源详情</div>
+                          <div class="section-link">原文 / 原始数据</div>
+                        </div>
+                        <div class="section-stack">
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">来源可信度</div>
+                              <div class="pill green">0.84</div>
+                            </div>
+                            <div class="split-badges">
+                              <span class="source-chip">内部文档</span>
+                              <span class="source-chip">近 90 天</span>
+                              <span class="source-chip">已闭环结果</span>
+                            </div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">抽取摘要</div>
+                              <div class="pill blue">AI抽取</div>
+                            </div>
+                            <div class="row-sub">文档明确指出：高占比媒体填充异常与 Android 新版本展示损耗是本次收入下滑的组合首因。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">关联对象</div>
+                              <div class="pill teal">已识别</div>
+                            </div>
+                            <div class="row-sub">主体A、小游戏A、媒体M3、Android 2.9.1、2026-05-18 版本发布。</div>
+                          </div>
+                          <div class="section-card">
+                            <div class="section-head">
+                              <div class="section-title">历史数据匹配度</div>
+                            </div>
+                            <div class="section-body trend-box">
+                              <div class="metric-mini"><span>时间重合度</span><strong>0.79</strong></div>
+                              <div class="metric-mini"><span>对象重合度</span><strong>0.92</strong></div>
+                              <div class="metric-mini"><span>结果验证度</span><strong>0.71</strong></div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="form-card">
+                        <div class="section-head" style="padding: 0 0 12px; border-bottom: 1px solid var(--line);">
+                          <div class="section-title">候选资产与融合建议</div>
+                          <div class="section-link">查看冲突</div>
+                        </div>
+                        <div class="fusion-grid">
+                          <div class="fusion-card">
+                            <div class="rule-head">
+                              <strong>规则卡片：高占比媒体填充异常优先检查</strong>
+                              <span class="pill blue">候选强规则</span>
+                            </div>
+                            <div class="rule-copy">当单一媒体请求占比超过 30%，且填充率在 24 小时内下降超过 10 个点时，应优先判定为收入异常首因候选。</div>
+                            <div class="split-badges">
+                              <span class="source-chip">复盘纪要</span>
+                              <span class="source-chip">历史数据验证</span>
+                              <span class="source-chip">案例命中 4 次</span>
+                            </div>
+                          </div>
+                          <div class="fusion-card">
+                            <div class="rule-head">
+                              <strong>数据模式卡片：版本发布后展示损耗抬升</strong>
+                              <span class="pill teal">数据模式</span>
+                            </div>
+                            <div class="rule-copy">近 180 天内，共识别出 3 次“版本升级后展示转化下降 5% 以上”的异常模式，可作为收入异常诊断二级证据。</div>
+                            <div class="split-badges">
+                              <span class="source-chip">结构化历史</span>
+                              <span class="source-chip">样本 3 次</span>
+                            </div>
+                          </div>
+                          <div class="fusion-card">
+                            <div class="rule-head">
+                              <strong>行业通识：频控策略不宜一次性大幅收紧</strong>
+                              <span class="pill amber">待本地验证</span>
+                            </div>
+                            <div class="rule-copy">来自广告行业书籍与平台白皮书的通用方法，适合作为启发，但不能直接进入生产强规则。</div>
+                            <div class="split-badges">
+                              <span class="source-chip">行业书籍</span>
+                              <span class="source-chip">白皮书</span>
+                              <span class="source-chip">未本地验证</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="form-card">
+                        <div class="field">
+                          <div class="label">融合审核与发布</div>
+                        </div>
+                        <div class="list">
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">冲突处理</div>
+                              <div class="pill red">1 条冲突</div>
+                            </div>
+                            <div class="row-sub">行业书籍建议“先看频控”，但公司历史更常见的是“先看高占比媒体填充”。建议保留书籍结论为通识提示，不升级为强规则。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">适用场景</div>
+                              <div class="pill green">已匹配</div>
+                            </div>
+                            <div class="row-sub">收入异常诊断、历史案例检索、经营周报总结</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">发布策略</div>
+                              <div class="pill blue">知识包 v0.4</div>
+                            </div>
+                            <div class="row-sub">规则卡片进入正式知识库，行业通识卡片进入候选知识库，等待后续试验验证。</div>
+                          </div>
+                          <div class="risk-box">
+                            风险提醒：来自外部行业资料的知识，不允许直接作为生产强规则；若要升级，必须补充本公司历史数据或实验结果验证。
+                          </div>
+                        </div>
+                        <div class="action-stack" style="padding: 0; border-top: 0;">
+                          <div class="btn">退回修改</div>
+                          <div class="btn">拆分冲突项</div>
+                          <div class="btn ghost">保存为候选知识</div>
+                          <div class="btn primary">审核发布</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard-wrap">
+        <div class="artboard-title">
+          <span>05. 外部数据接入</span>
+          <span class="artboard-tag">接口接入优先 / 网页接入兜底</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/external-sources</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营中台</h3>
+                  <div class="brand-sub">先把第三方后台数据变成内部标准化数据源，再做蒸馏</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Builder</div>
+                  <div class="nav-item"><span class="nav-icon"></span>AI工作台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>Skill中心</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>外部数据接入</div>
+                  <div class="nav-item"><span class="nav-icon"></span>知识蒸馏</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测中心</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">DS</div>
+                    <div class="user-meta">
+                      <div class="user-name">数据接入管理员</div>
+                      <div class="user-role">已接入 3 个来源，1 个待修复</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">外部数据接入中心</div>
+                    <div class="toolbar-sub">支持接口接入、网页接入、文件导入。默认优先识别后台页面背后的真实接口，只有接口不可稳定复用时再走网页接入。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="btn">新建来源</div>
+                    <div class="btn">执行同步</div>
+                    <div class="btn ghost">查看同步日志</div>
+                    <div class="btn primary">发布为内部数据源</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="stack">
+                    <div class="meta-strip">
+                      <div class="micro-card">
+                        <div class="micro-label">接入来源数</div>
+                        <div class="micro-value">4</div>
+                        <div class="micro-note">接口 2，网页 1，文件 1</div>
+                      </div>
+                      <div class="micro-card">
+                        <div class="micro-label">昨日同步成功率</div>
+                        <div class="micro-value">96%</div>
+                        <div class="micro-note">网页接入来源失败 1 次</div>
+                      </div>
+                      <div class="micro-card">
+                        <div class="micro-label">待修复来源</div>
+                        <div class="micro-value">1</div>
+                        <div class="micro-note">登录态失效，建议切换接口方案</div>
+                      </div>
+                      <div class="micro-card">
+                        <div class="micro-label">标准化数据表</div>
+                        <div class="micro-value">7</div>
+                        <div class="micro-note">已供蒸馏模块和 Skill 使用</div>
+                      </div>
+                    </div>
+
+                    <div class="grid-3">
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill green">推荐</span>
+                          <span class="tiny-tag">稳定</span>
+                        </div>
+                        <div class="scenario-title">接口接入</div>
+                        <div class="scenario-copy">识别外部后台页面背后的真实 JSON 接口，复用人工登录态做受控同步，字段稳定、速度快、适合作为主链路。</div>
+                        <div class="tag-line">
+                          <span class="tiny-tag">优先级 1</span>
+                          <span class="tiny-tag">适合长期运行</span>
+                        </div>
+                        <div class="row-sub">建议用于历史报表、列表页、统计页。</div>
+                      </div>
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill amber">兜底</span>
+                          <span class="tiny-tag">半自动</span>
+                        </div>
+                        <div class="scenario-title">网页接入</div>
+                        <div class="scenario-copy">当接口签名复杂或数据只在页面渲染后可见时，使用人工登录 + 会话复用 + 页面级采集。适合 MVP，但不建议做主链路。</div>
+                        <div class="tag-line">
+                          <span class="tiny-tag">优先级 2</span>
+                          <span class="tiny-tag">易受页面改动影响</span>
+                        </div>
+                        <div class="row-sub">适合详情页、特殊交互页、仅前端渲染表格。</div>
+                      </div>
+                      <div class="scenario-card">
+                        <div class="tag-line">
+                          <span class="pill blue">补充</span>
+                          <span class="tiny-tag">离线</span>
+                        </div>
+                        <div class="scenario-title">文件导入</div>
+                        <div class="scenario-copy">支持 CSV、Excel、导出报表和截图 OCR 结果导入，适合作为补录、兜底或历史补数方式。</div>
+                        <div class="tag-line">
+                          <span class="tiny-tag">优先级 3</span>
+                          <span class="tiny-tag">适合补历史</span>
+                        </div>
+                        <div class="row-sub">适合后台可下载但不方便接口复用的场景。</div>
+                      </div>
+                    </div>
+
+                    <div class="quad-layout">
+                      <div class="form-card">
+                        <div class="field">
+                          <div class="label">来源列表</div>
+                        </div>
+                        <div class="source-list">
+                          <div class="source-item active">
+                            <div class="source-title">第三方广告经营后台</div>
+                            <div class="source-meta">域名：ads.partner-demo.com · 负责人：商业化数据组</div>
+                            <div class="tag-line">
+                              <span class="pill green">接口接入</span>
+                              <span class="tiny-tag">已验证</span>
+                              <span class="tiny-tag">每日 02:00</span>
+                            </div>
+                          </div>
+                          <div class="source-item">
+                            <div class="source-title">合作方媒体结算后台</div>
+                            <div class="source-meta">域名：settle.partner-demo.com · 当前只能网页接入</div>
+                            <div class="tag-line">
+                              <span class="pill amber">网页接入</span>
+                              <span class="tiny-tag">待优化</span>
+                            </div>
+                          </div>
+                          <div class="source-item">
+                            <div class="source-title">月度历史报表归档</div>
+                            <div class="source-meta">来源：人工导出 Excel</div>
+                            <div class="tag-line">
+                              <span class="pill blue">文件导入</span>
+                              <span class="tiny-tag">补历史</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="form-card">
+                        <div class="section-head" style="padding: 0 0 12px; border-bottom: 1px solid var(--line);">
+                          <div class="section-title">接入配置</div>
+                          <div class="section-link">编辑</div>
+                        </div>
+                        <div class="list">
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">登录方式</div>
+                              <div class="pill blue">人工登录态复用</div>
+                            </div>
+                            <div class="row-sub">不保存账号密码，使用人工登录后受控保存的会话状态。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">接入方式</div>
+                              <div class="pill green">接口接入优先</div>
+                            </div>
+                            <div class="row-sub">已识别 3 个核心报表接口，网页接入仅保留为兜底。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">同步范围</div>
+                              <div class="pill teal">增量同步</div>
+                            </div>
+                            <div class="row-sub">同步近 180 天收入、请求、填充、预算和媒体分布数据。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">风险等级</div>
+                              <div class="pill amber">中</div>
+                            </div>
+                            <div class="row-sub">涉及第三方后台访问，需要记录授权范围、频率限制和责任人。</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="form-card">
+                        <div class="section-head" style="padding: 0 0 12px; border-bottom: 1px solid var(--line);">
+                          <div class="section-title">字段映射与标准化</div>
+                          <div class="section-link">映射规则</div>
+                        </div>
+                        <table class="thin-table">
+                          <thead>
+                            <tr>
+                              <th>外部字段</th>
+                              <th>内部字段</th>
+                              <th>状态</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td>stat_date</td>
+                              <td>biz_date</td>
+                              <td><span class="pill green">已映射</span></td>
+                            </tr>
+                            <tr>
+                              <td>app_name</td>
+                              <td>product_name</td>
+                              <td><span class="pill green">已映射</span></td>
+                            </tr>
+                            <tr>
+                              <td>media_source</td>
+                              <td>media_name</td>
+                              <td><span class="pill green">已映射</span></td>
+                            </tr>
+                            <tr>
+                              <td>req_cnt</td>
+                              <td>request_count</td>
+                              <td><span class="pill green">已映射</span></td>
+                            </tr>
+                            <tr>
+                              <td>fill_rate</td>
+                              <td>fill_rate</td>
+                              <td><span class="pill blue">保留</span></td>
+                            </tr>
+                            <tr>
+                              <td>income_amt</td>
+                              <td>revenue_amount</td>
+                              <td><span class="pill green">已映射</span></td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        <div class="risk-box" style="margin-top: 10px;">
+                          标准化后的数据先进入内部历史数据层，再供知识蒸馏和 Skill 使用，不让 Skill 运行时直接依赖外部后台页面。
+                        </div>
+                      </div>
+
+                      <div class="form-card">
+                        <div class="field">
+                          <div class="label">同步日志与发布</div>
+                        </div>
+                        <div class="list">
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">最近同步</div>
+                              <div class="pill green">成功</div>
+                            </div>
+                            <div class="row-sub">2026-07-03 02:03，同步 18,420 行，质量校验通过率 99.2%。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">质量问题</div>
+                              <div class="pill amber">2 条</div>
+                            </div>
+                            <div class="row-sub">2 个媒体名称未匹配到主数据，已进入人工确认队列。</div>
+                          </div>
+                          <div class="row">
+                            <div class="row-top">
+                              <div class="row-title">发布状态</div>
+                              <div class="pill blue">已供蒸馏使用</div>
+                            </div>
+                            <div class="row-sub">当前已被“收入异常诊断”“预算分配建议”两个 Skill 使用。</div>
+                          </div>
+                        </div>
+                        <div class="action-stack" style="padding: 0; border-top: 0;">
+                          <div class="btn">查看原始快照</div>
+                          <div class="btn">手动重跑</div>
+                          <div class="btn ghost">停用来源</div>
+                          <div class="btn primary">发布到蒸馏层</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard-wrap">
+        <div class="artboard-title">
+          <span>06. Skill中心</span>
+          <span class="artboard-tag">版本、工具、Hook、评测</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/skills</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营中台</h3>
+                  <div class="brand-sub">Skill 是业务能力单元，不是随意堆 Prompt</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Builder</div>
+                  <div class="nav-item"><span class="nav-icon"></span>AI工作台</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>Skill中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>外部数据接入</div>
+                  <div class="nav-item"><span class="nav-icon"></span>知识蒸馏</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>审批与日志</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">AD</div>
+                    <div class="user-meta">
+                      <div class="user-name">管理员</div>
+                      <div class="user-role">生产中 6 个 Skill</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">Skill中心</div>
+                    <div class="toolbar-sub">统一管理输入结构、工具白名单、Hook 策略、知识包绑定、审批规则和版本评测。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="search">搜索 Skill code 或场景</div>
+                    <div class="btn">克隆版本</div>
+                    <div class="btn primary">新建Skill</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="skill-layout">
+                    <div class="section-card">
+                      <div class="section-head">
+                        <div class="section-title">Skill列表</div>
+                        <div class="section-link">批量操作</div>
+                      </div>
+                      <div class="section-body">
+                        <table class="mini-table">
+                          <thead>
+                            <tr>
+                              <th>Skill</th>
+                              <th>场景</th>
+                              <th>版本</th>
+                              <th>运行状态</th>
+                              <th>采纳率</th>
+                              <th>责任人</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td>revenue_anomaly_diagnosis</td>
+                              <td>收入异常诊断</td>
+                              <td>v0.3</td>
+                              <td><span class="pill green">已上线</span></td>
+                              <td>52%</td>
+                              <td>流量运营组</td>
+                            </tr>
+                            <tr>
+                              <td>ad_strategy_recommendation</td>
+                              <td>广告策略建议</td>
+                              <td>v0.2</td>
+                              <td><span class="pill blue">试点中</span></td>
+                              <td>41%</td>
+                              <td>策略组</td>
+                            </tr>
+                            <tr>
+                              <td>budget_allocation_recommendation</td>
+                              <td>预算分配建议</td>
+                              <td>v0.1</td>
+                              <td><span class="pill amber">需审批</span></td>
+                              <td>--</td>
+                              <td>商业化负责人</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div class="form-card">
+                      <div class="section-head" style="padding: 0 0 12px; border-bottom: 1px solid var(--line);">
+                        <div class="section-title">revenue_anomaly_diagnosis · v0.3</div>
+                        <div class="pill green">生产中</div>
+                      </div>
+                      <div class="list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">输入结构</div>
+                            <div class="pill blue">schema</div>
+                          </div>
+                          <div class="row-sub">时间范围、主体、产品、平台、关注指标、补充说明</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">工具白名单</div>
+                            <div class="pill teal">5 个</div>
+                          </div>
+                          <div class="row-sub">指标查询、案例检索、SQL 模板、任务创建、消息通知</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">绑定知识包</div>
+                            <div class="pill blue">v0.4</div>
+                          </div>
+                          <div class="row-sub">内部规则 12 条，数据模式 6 条，行业通识 4 条，其中行业通识仅作为提示层引用。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">Hook 策略</div>
+                            <div class="pill amber">strict</div>
+                          </div>
+                          <div class="row-sub">before_tool_call 做 SQL 白名单，before_response 做证据检查。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">评测结果</div>
+                            <div class="pill green">通过</div>
+                          </div>
+                          <div class="row-sub">正确率 74%，证据覆盖率 69%，平均响应 9.8 秒。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">发布建议</div>
+                            <div class="pill blue">可继续扩大试点</div>
+                          </div>
+                          <div class="row-sub">还需补充地域维度异常样本，避免过早下结论。</div>
+                        </div>
+                      </div>
+                      <div class="action-stack" style="padding: 0; border-top: 0;">
+                        <div class="btn">查看版本差异</div>
+                        <div class="btn">查看知识来源</div>
+                        <div class="btn ghost">运行回归</div>
+                        <div class="btn primary">发布新版本</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="artboard-wrap">
+        <div class="artboard-title">
+          <span>07. 审批与日志</span>
+          <span class="artboard-tag">高风险动作可控</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/approvals</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营中台</h3>
+                  <div class="brand-sub">所有高风险动作，都要能看证据、看影响、看责任人</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">Governance</div>
+                  <div class="nav-item"><span class="nav-icon"></span>AI工作台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测中心</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>审批与日志</div>
+                  <div class="nav-item"><span class="nav-icon"></span>系统配置</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">MG</div>
+                    <div class="user-meta">
+                      <div class="user-name">管理层审批视图</div>
+                      <div class="user-role">待处理 2 条 · 本周已审 9 条</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">审批与日志</div>
+                    <div class="toolbar-sub">默认按风险等级排序，优先处理影响收入或大范围配置变更的动作。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="btn">仅看待审批</div>
+                    <div class="btn ghost">下载日志</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="approval-layout">
+                    <div class="form-card">
+                      <div class="source-list">
+                        <div class="source-item active">
+                          <div class="source-title">预算分配建议审批</div>
+                          <div class="source-meta">发起人：商业化负责人 · 场景：预算分配建议 · 发起时间：10:11</div>
+                          <div class="tag-line">
+                            <span class="pill amber">高风险</span>
+                            <span class="tiny-tag">涉及 3 个主体</span>
+                            <span class="tiny-tag">建议变更 18%</span>
+                          </div>
+                        </div>
+                        <div class="source-item">
+                          <div class="source-title">批量创建优化任务</div>
+                          <div class="source-meta">发起人：流量运营组 · 场景：广告策略建议</div>
+                          <div class="tag-line">
+                            <span class="pill blue">待审批</span>
+                            <span class="tiny-tag">4 项动作</span>
+                          </div>
+                        </div>
+                        <div class="source-item">
+                          <div class="source-title">历史日志检索</div>
+                          <div class="source-meta">可按 Skill、用户、时间、状态筛选</div>
+                          <div class="tag-line">
+                            <span class="pill teal">审计</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="form-card">
+                      <div class="section-head" style="padding: 0 0 12px; border-bottom: 1px solid var(--line);">
+                        <div class="section-title">审批详情</div>
+                        <div class="pill amber">需管理层确认</div>
+                      </div>
+                      <div class="list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">AI建议摘要</div>
+                            <div class="pill blue">方案 A</div>
+                          </div>
+                          <div class="row-sub">建议将预算从低效媒体组回收 18%，转移到近 7 日 ROI 更优的小游戏和短剧流量池。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">主要证据</div>
+                            <div class="pill green">3 条</div>
+                          </div>
+                          <div class="row-sub">历史 ROI、近 7 日趋势、保底约束校验均已满足。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">知识来源结构</div>
+                            <div class="pill teal">可审计</div>
+                          </div>
+                          <div class="row-sub">本次建议引用内部规则 2 条、历史数据模式 3 条、行业通识 1 条；其中行业通识仅用于补充解释，不参与最终强结论。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">风险提醒</div>
+                            <div class="pill red">不可自动执行</div>
+                          </div>
+                          <div class="row-sub">如果媒体质量在未来 24 小时突变，建议回撤阈值要同步生效。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">执行影响</div>
+                            <div class="pill amber">影响收入</div>
+                          </div>
+                          <div class="row-sub">涉及 3 个主体、5 个媒体组、2 位责任人。</div>
+                        </div>
+                      </div>
+                      <div class="action-stack" style="padding: 0; border-top: 0;">
+                        <div class="btn">驳回并备注</div>
+                        <div class="btn ghost">要求补证据</div>
+                        <div class="btn primary">审批通过</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

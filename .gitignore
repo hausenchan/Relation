@@ -8,6 +8,8 @@ server/data.db-shm
 server/data.db-wal
 server/database.db
 server/uploads/
+data.db-shm
+data.db-wal
 
 # 本地问题截图
 bug*.jpg
@@ -23,6 +25,11 @@ npm-debug.log*
 
 # 采集器本地输出
 tmp/
+DaAgent/Distillation/output/
+DaAgent/Distillation/*.xls
+DaAgent/Distillation/*.xlsx
+DaAgent/Distillation/midmax_report_zhixiao_manifest.csv
+DaAgent/Distillation/midmax_report_zhixiao_manifest.json
 
 # 系统文件
 .DS_Store

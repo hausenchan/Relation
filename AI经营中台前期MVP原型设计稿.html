@@ -1,0 +1,1282 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI经营中台前期MVP原型设计稿</title>
+  <style>
+    :root {
+      --bg: #eef2f6;
+      --panel: #ffffff;
+      --line: #d9e2ec;
+      --text: #17212b;
+      --muted: #5f6b7a;
+      --subtle: #8a95a3;
+      --nav: #12263f;
+      --nav-soft: #1a395d;
+      --blue: #2563eb;
+      --blue-soft: #edf4ff;
+      --green: #15803d;
+      --green-soft: #edf9f0;
+      --amber: #b45309;
+      --amber-soft: #fff5e8;
+      --red: #c2410c;
+      --red-soft: #fff2eb;
+      --teal: #0f766e;
+      --teal-soft: #e9f7f5;
+      --shadow: 0 16px 40px rgba(15, 23, 42, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+
+    .page { min-height: 100vh; padding: 28px; }
+
+    .hero {
+      max-width: 1560px;
+      margin: 0 auto 22px;
+      display: grid;
+      grid-template-columns: minmax(320px, 1.25fr) minmax(320px, 0.95fr);
+      gap: 18px;
+    }
+
+    .hero-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px 22px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+    }
+
+    .title {
+      margin: 0 0 10px;
+      font-size: 30px;
+      line-height: 1.2;
+      font-weight: 760;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.8;
+    }
+
+    .meta-grid {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .meta-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f8fafc;
+      padding: 12px;
+    }
+
+    .meta-label {
+      color: var(--subtle);
+      font-size: 12px;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .meta-value {
+      font-size: 14px;
+      line-height: 1.7;
+      font-weight: 600;
+    }
+
+    .notes {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+
+    .boards {
+      max-width: 1560px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(620px, 1fr));
+      gap: 20px;
+    }
+
+    .artboard-title {
+      margin: 0 0 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .artboard-tag {
+      font-size: 12px;
+      color: var(--subtle);
+      font-weight: 600;
+    }
+
+    .browser {
+      background: #dbe4ed;
+      border-radius: 18px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .browser-shell {
+      background: var(--panel);
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+    }
+
+    .browser-top {
+      height: 46px;
+      border-bottom: 1px solid var(--line);
+      background: #f3f6f9;
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .traffic {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+    }
+
+    .dot.red { background: #ef4444; }
+    .dot.amber { background: #f59e0b; }
+    .dot.green { background: #22c55e; }
+
+    .url-bar {
+      flex: 1;
+      height: 30px;
+      border-radius: 999px;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      color: var(--subtle);
+      font-size: 12px;
+    }
+
+    .app {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: 760px;
+    }
+
+    .nav {
+      background: var(--nav);
+      color: rgba(255,255,255,0.88);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .brand {
+      padding: 18px 18px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .brand-title {
+      margin: 0;
+      color: #fff;
+      font-size: 16px;
+      font-weight: 760;
+    }
+
+    .brand-sub {
+      margin-top: 6px;
+      color: rgba(255,255,255,0.58);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .nav-group { padding: 14px 10px 0; }
+
+    .nav-caption {
+      padding: 0 8px 8px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.42);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .nav-item {
+      height: 36px;
+      border-radius: 8px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .nav-item.active {
+      background: var(--nav-soft);
+      color: #fff;
+    }
+
+    .nav-icon {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      background: rgba(255,255,255,0.16);
+      flex-shrink: 0;
+    }
+
+    .nav-foot {
+      margin-top: auto;
+      padding: 14px 12px 16px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .user-box {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(255,255,255,0.03);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #60a5fa, #14b8a6);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .user-name { color: #fff; font-size: 12px; font-weight: 700; }
+    .user-role { color: rgba(255,255,255,0.56); font-size: 12px; line-height: 1.5; }
+
+    .main {
+      background: #f5f8fb;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .toolbar {
+      height: 62px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,0.9);
+      padding: 0 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .toolbar-title {
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .toolbar-sub {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .search {
+      width: 220px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      font-size: 12px;
+      color: var(--subtle);
+    }
+
+    .btn {
+      height: 34px;
+      border-radius: 8px;
+      border: 1px solid #c9d4df;
+      background: #fff;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .btn.primary {
+      background: var(--blue);
+      color: #fff;
+      border-color: var(--blue);
+    }
+
+    .btn.ghost {
+      color: var(--blue);
+      background: #f8fbff;
+      border-color: #cfe0ff;
+    }
+
+    .content {
+      padding: 16px 18px 18px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .grid-4, .grid-3, .grid-2 {
+      display: grid;
+      gap: 12px;
+    }
+
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .card, .stat-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .card-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .card-title {
+      font-size: 13px;
+      font-weight: 720;
+    }
+
+    .card-link {
+      font-size: 12px;
+      color: var(--blue);
+      font-weight: 650;
+    }
+
+    .card-body { padding: 14px; }
+
+    .stat-card { padding: 14px; }
+
+    .stat-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 12px;
+    }
+
+    .stat-value {
+      font-size: 26px;
+      line-height: 1;
+      font-weight: 760;
+    }
+
+    .stat-note {
+      margin-top: 10px;
+      color: var(--subtle);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .pill {
+      height: 24px;
+      padding: 0 10px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .pill.blue { color: var(--blue); background: var(--blue-soft); }
+    .pill.green { color: var(--green); background: var(--green-soft); }
+    .pill.amber { color: var(--amber); background: var(--amber-soft); }
+    .pill.red { color: var(--red); background: var(--red-soft); }
+    .pill.teal { color: var(--teal); background: var(--teal-soft); }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tab {
+      height: 30px;
+      border-radius: 8px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .tab.active {
+      color: var(--blue);
+      border-color: #cfe0ff;
+      background: var(--blue-soft);
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .row {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .row-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .row-title { font-size: 13px; font-weight: 700; }
+    .row-sub { color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .mini-table th,
+    .mini-table td {
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    .mini-table th {
+      color: var(--subtle);
+      background: #fbfcfe;
+      font-weight: 650;
+    }
+
+    .mini-table tr:last-child td { border-bottom: 0; }
+
+    .three-col {
+      display: grid;
+      grid-template-columns: 0.92fr 1.08fr 0.88fr;
+      gap: 12px;
+    }
+
+    .panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .field { display: grid; gap: 6px; }
+    .label { color: var(--subtle); font-size: 11px; font-weight: 650; }
+
+    .input, .select-box, .textarea {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .input, .select-box {
+      height: 34px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+    }
+
+    .textarea {
+      min-height: 84px;
+      padding: 10px;
+      line-height: 1.6;
+    }
+
+    .split-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .evidence-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .hint {
+      color: var(--subtle);
+      font-size: 11px;
+    }
+
+    .scenario-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+      min-height: 170px;
+    }
+
+    .scenario-title {
+      font-size: 15px;
+      font-weight: 760;
+    }
+
+    .scenario-copy {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .tiny-line {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .tiny-tag {
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      color: var(--muted);
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      font-weight: 650;
+    }
+
+    @media (max-width: 1380px) {
+      .boards { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; }
+      .meta-grid, .grid-4, .grid-3, .grid-2, .three-col, .split-row { grid-template-columns: 1fr; }
+      .app { grid-template-columns: 1fr; }
+      .nav { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <section class="hero-card">
+        <h1 class="title">AI经营中台前期MVP原型设计稿</h1>
+        <p class="subtitle">
+          这版原型只服务于前期 MVP：先把本地蒸馏、Skill 调优、评测和最小调用入口做准，
+          不急着把复杂角色分发、外部系统大规模接入和完整组织化中台一次做满。
+        </p>
+        <div class="meta-grid">
+          <div class="meta-box">
+            <span class="meta-label">前期目标</span>
+            <div class="meta-value">先做准 output，再逐步打进组织中台</div>
+          </div>
+          <div class="meta-box">
+            <span class="meta-label">首批 Skill</span>
+            <div class="meta-value">C端预算业务线对比 / 预算建议、流量侧收入异常诊断</div>
+          </div>
+          <div class="meta-box">
+            <span class="meta-label">产品原则</span>
+            <div class="meta-value">蒸馏准、Skill 准、评测准、调用轻</div>
+          </div>
+        </div>
+      </section>
+      <aside class="hero-card">
+        <h2 style="margin:0 0 12px;font-size:15px;font-weight:720;">本版范围</h2>
+        <ul class="notes">
+          <li>保留 4 个核心模块：最小调用入口、蒸馏中心、Skill 调优台、评测台。</li>
+          <li>前期不强调复杂组织化首页、复杂审批流和全量业务线分发。</li>
+          <li>所有重点都围绕“output 是否准确、是否可解释、是否可复核”。</li>
+          <li>复杂的外部接入和角色分发作为后续扩展，不是前期阻塞项。</li>
+        </ul>
+      </aside>
+    </header>
+
+    <main class="boards">
+      <section>
+        <div class="artboard-title">
+          <span>01. 最小调用入口</span>
+          <span class="artboard-tag">只负责发起和返回结果</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span><span class="dot amber"></span><span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/mvp</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营MVP</h3>
+                  <div class="brand-sub">先把蒸馏和 Skill 调准，再逐步扩展到完整中台</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">MVP</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>最小调用入口</div>
+                  <div class="nav-item"><span class="nav-icon"></span>蒸馏中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>Skill调优台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测台</div>
+                </div>
+                <div class="nav-foot">
+                  <div class="user-box">
+                    <div class="avatar">M</div>
+                    <div>
+                      <div class="user-name">MVP试用入口</div>
+                      <div class="user-role">业务同学只需要能调用、看结果、提反馈</div>
+                    </div>
+                  </div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">最小调用入口</div>
+                    <div class="toolbar-sub">先不做复杂角色分发，只提供稳定、结构化、可反馈的调用界面。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="search">搜索 Skill 或历史运行</div>
+                    <div class="btn ghost">查看说明</div>
+                    <div class="btn primary">开始分析</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="grid-4">
+                    <div class="stat-card">
+                      <div class="stat-top"><span>已上线 Skill</span><span class="pill blue">MVP</span></div>
+                      <div class="stat-value">2</div>
+                      <div class="stat-note">只保留最核心、最容易验证价值的两个</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>今日调用</span><span class="pill green">稳定</span></div>
+                      <div class="stat-value">17</div>
+                      <div class="stat-note">当前以试点同学调用为主</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>采纳率</span><span class="pill amber">观察中</span></div>
+                      <div class="stat-value">49%</div>
+                      <div class="stat-note">先看 output 准不准，再谈全面推广</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>结构完整率</span><span class="pill teal">关键</span></div>
+                      <div class="stat-value">91%</div>
+                      <div class="stat-note">输出字段完整率是前期核心指标之一</div>
+                    </div>
+                  </div>
+
+                  <div class="grid-2">
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">可调用 Skill</div>
+                        <div class="card-link">全部</div>
+                      </div>
+                      <div class="card-body list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">C端预算业务线对比 / 预算建议</div>
+                            <div class="pill blue">预算侧</div>
+                          </div>
+                          <div class="row-sub">适合比较支小、微小、抖小、百度JS、百度搜索等业务线差异，并输出预算建议。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">流量侧收入异常诊断</div>
+                            <div class="pill teal">流量侧</div>
+                          </div>
+                          <div class="row-sub">适合定位收入、填充、展示、eCPM 波动原因，并输出证据与建议。</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">最近反馈</div>
+                        <div class="card-link">反馈台账</div>
+                      </div>
+                      <div class="card-body list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">预算建议证据充分</div>
+                            <div class="pill green">采纳</div>
+                          </div>
+                          <div class="row-sub">业务反馈：预算回收建议理由清楚，可直接落任务。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">异常诊断结论过早</div>
+                            <div class="pill red">需修正</div>
+                          </div>
+                          <div class="row-sub">业务反馈：地域维度证据不足，不应直接下最终结论。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="card">
+                    <div class="card-head">
+                      <div class="card-title">最近运行记录</div>
+                      <div class="card-link">运行日志</div>
+                    </div>
+                    <div class="card-body">
+                      <table class="mini-table">
+                        <thead>
+                          <tr>
+                            <th>时间</th>
+                            <th>Skill</th>
+                            <th>对象</th>
+                            <th>摘要</th>
+                            <th>状态</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td>10:42</td>
+                            <td>预算建议</td>
+                            <td>支小 / 微小 / 抖小</td>
+                            <td>建议回收抖小预算</td>
+                            <td><span class="pill green">已完成</span></td>
+                          </tr>
+                          <tr>
+                            <td>10:15</td>
+                            <td>异常诊断</td>
+                            <td>抖小 Android</td>
+                            <td>填充下滑 + 版本异常</td>
+                            <td><span class="pill blue">已返回</span></td>
+                          </tr>
+                          <tr>
+                            <td>09:58</td>
+                            <td>预算建议</td>
+                            <td>百度搜索</td>
+                            <td>建议先观察不加码</td>
+                            <td><span class="pill amber">待反馈</span></td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="artboard-title">
+          <span>02. 蒸馏中心</span>
+          <span class="artboard-tag">只关注产出高质量知识资产</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span><span class="dot amber"></span><span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/mvp/distill</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营MVP</h3>
+                  <div class="brand-sub">先不追求全量来源，先做准 few-shot、规则和案例</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">MVP</div>
+                  <div class="nav-item"><span class="nav-icon"></span>最小调用入口</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>蒸馏中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>Skill调优台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测台</div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">蒸馏中心</div>
+                    <div class="toolbar-sub">前期只产出 5 类核心资产：指标字典、规则卡片、案例卡片、数据模式卡片、few-shot 样例。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="btn">导入文档</div>
+                    <div class="btn">导入历史数据</div>
+                    <div class="btn primary">发布资产</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="grid-4">
+                    <div class="stat-card">
+                      <div class="stat-top"><span>规则卡片</span><span class="pill blue">已审核</span></div>
+                      <div class="stat-value">18</div>
+                      <div class="stat-note">只保留对当前 2 个 Skill 真有帮助的规则</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>案例卡片</span><span class="pill green">已沉淀</span></div>
+                      <div class="stat-value">31</div>
+                      <div class="stat-note">优先选有闭环结果的真实案例</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>few-shot 样例</span><span class="pill amber">关键</span></div>
+                      <div class="stat-value">64</div>
+                      <div class="stat-note">直接服务 Skill 调优和输出稳定性</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>待审核资产</span><span class="pill red">需处理</span></div>
+                      <div class="stat-value">9</div>
+                      <div class="stat-note">先确保资产质量，不追求数量</div>
+                    </div>
+                  </div>
+
+                  <div class="grid-3">
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">来源池</div>
+                        <div class="card-link">查看全部</div>
+                      </div>
+                      <div class="card-body list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">收入波动复盘纪要</div>
+                            <div class="pill blue">文档</div>
+                          </div>
+                          <div class="row-sub">目标产物：规则卡片 4 条，案例卡片 2 条。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">近180天收入历史</div>
+                            <div class="pill teal">数据</div>
+                          </div>
+                          <div class="row-sub">目标产物：数据模式卡片、few-shot 样例。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">策略负责人经验总结</div>
+                            <div class="pill amber">经验</div>
+                          </div>
+                          <div class="row-sub">目标产物：启发式规则，但需后续验证。</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">当前审核重点</div>
+                        <div class="card-link">审核台</div>
+                      </div>
+                      <div class="card-body list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">规则：高占比媒体填充优先检查</div>
+                            <div class="pill green">可发布</div>
+                          </div>
+                          <div class="row-sub">已被 4 个历史案例和 2 条 few-shot 样例验证。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">经验：频控收紧先看留存</div>
+                            <div class="pill amber">待验证</div>
+                          </div>
+                          <div class="row-sub">目前只有专家口述，没有足够历史证据，不进入强规则。</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">Skill 绑定资产</div>
+                        <div class="card-link">查看绑定</div>
+                      </div>
+                      <div class="card-body list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">预算建议 Skill</div>
+                            <div class="pill blue">26 项</div>
+                          </div>
+                          <div class="row-sub">规则 9 条，案例 10 条，few-shot 7 条。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">异常诊断 Skill</div>
+                            <div class="pill teal">30 项</div>
+                          </div>
+                          <div class="row-sub">规则 9 条，案例 12 条，数据模式 5 条，few-shot 4 条。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="artboard-title">
+          <span>03. Skill 调优台</span>
+          <span class="artboard-tag">先调输出，不急着训练模型</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span><span class="dot amber"></span><span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/mvp/skills</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营MVP</h3>
+                  <div class="brand-sub">先用蒸馏、Prompt、Workflow、few-shot 把 Skill 调准</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">MVP</div>
+                  <div class="nav-item"><span class="nav-icon"></span>最小调用入口</div>
+                  <div class="nav-item"><span class="nav-icon"></span>蒸馏中心</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>Skill调优台</div>
+                  <div class="nav-item"><span class="nav-icon"></span>评测台</div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">Skill 调优台</div>
+                    <div class="toolbar-sub">前期不先做模型训练，先调 prompt、few-shot、workflow、输出 schema 和证据要求。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="btn">复制版本</div>
+                    <div class="btn ghost">运行单条样例</div>
+                    <div class="btn primary">保存新版本</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="grid-2">
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">Skill 列表</div>
+                        <div class="card-link">仅 2 个</div>
+                      </div>
+                      <div class="card-body">
+                        <table class="mini-table">
+                          <thead>
+                            <tr>
+                              <th>Skill</th>
+                              <th>版本</th>
+                              <th>状态</th>
+                              <th>准确率</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td>budget_line_comparison</td>
+                              <td>v0.4</td>
+                              <td><span class="pill blue">调优中</span></td>
+                              <td>78%</td>
+                            </tr>
+                            <tr>
+                              <td>revenue_anomaly_diagnosis</td>
+                              <td>v0.3</td>
+                              <td><span class="pill green">稳定</span></td>
+                              <td>74%</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">budget_line_comparison · v0.4</div>
+                        <div class="card-link">调优详情</div>
+                      </div>
+                      <div class="card-body list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">当前改动</div>
+                            <div class="pill blue">few-shot增强</div>
+                          </div>
+                          <div class="row-sub">新增 6 条业务线对比样例，重点约束“先给对比结论，再给预算动作”。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">输出约束</div>
+                            <div class="pill amber">严格结构化</div>
+                          </div>
+                          <div class="row-sub">必须返回：结论摘要、业务线排序、证据、建议动作、风险、置信度。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">当前问题</div>
+                            <div class="pill red">待修复</div>
+                          </div>
+                          <div class="row-sub">对“证据不足”的场景仍然太爱下强结论，需要继续收紧表达。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="three-col">
+                    <div class="panel">
+                      <div class="field">
+                        <div class="label">输入样例</div>
+                        <div class="textarea">比较支小、抖小、百度搜索本周预算效率，给出是否回收或加码建议。</div>
+                      </div>
+                      <div class="field">
+                        <div class="label">few-shot 选择</div>
+                        <div class="select-box">预算业务线对比样例集 v3</div>
+                      </div>
+                      <div class="field">
+                        <div class="label">输出 schema</div>
+                        <div class="select-box">strict / budget_compare_v2</div>
+                      </div>
+                    </div>
+
+                    <div class="panel">
+                      <div class="row">
+                        <div class="row-top">
+                          <div class="row-title">当前输出</div>
+                          <div class="pill green">结构完整</div>
+                        </div>
+                        <div class="row-sub">结论：建议回收抖小预算，支小维持，百度搜索继续观察。</div>
+                      </div>
+                      <div class="row">
+                        <div class="row-top">
+                          <div class="row-title">证据引用</div>
+                          <div class="pill blue">3 条</div>
+                        </div>
+                        <div class="row-sub">收入趋势、预算效率、执行结果回看均已引用。</div>
+                      </div>
+                      <div class="row">
+                        <div class="row-top">
+                          <div class="row-title">推荐动作</div>
+                          <div class="pill amber">可执行</div>
+                        </div>
+                        <div class="row-sub">回收抖小 15%，转移至支小 10%，预留 5% 给百度搜索观察。</div>
+                      </div>
+                    </div>
+
+                    <div class="panel">
+                      <div class="row">
+                        <div class="row-top">
+                          <div class="row-title">调优建议</div>
+                          <div class="pill red">下一步</div>
+                        </div>
+                        <div class="row-sub">继续补“证据不足时降低置信度”的 few-shot；不要急着上训练。</div>
+                      </div>
+                      <div class="row">
+                        <div class="row-top">
+                          <div class="row-title">适合训练吗</div>
+                          <div class="pill amber">暂缓</div>
+                        </div>
+                        <div class="row-sub">先把 Prompt、Schema、Few-shot、Workflow 调到稳定，再决定是否做 SFT。</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="artboard-title">
+          <span>04. 评测台</span>
+          <span class="artboard-tag">前期最关键模块</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span><span class="dot amber"></span><span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com/ai/mvp/evals</div>
+            </div>
+            <div class="app">
+              <aside class="nav">
+                <div class="brand">
+                  <h3 class="brand-title">AI经营MVP</h3>
+                  <div class="brand-sub">没有评测，就谈不上“蒸馏准”和“Skill 准”</div>
+                </div>
+                <div class="nav-group">
+                  <div class="nav-caption">MVP</div>
+                  <div class="nav-item"><span class="nav-icon"></span>最小调用入口</div>
+                  <div class="nav-item"><span class="nav-icon"></span>蒸馏中心</div>
+                  <div class="nav-item"><span class="nav-icon"></span>Skill调优台</div>
+                  <div class="nav-item active"><span class="nav-icon"></span>评测台</div>
+                </div>
+              </aside>
+              <section class="main">
+                <div class="toolbar">
+                  <div>
+                    <div class="toolbar-title">评测台</div>
+                    <div class="toolbar-sub">前期只盯结构完整率、结论准确率、证据命中率、动作可执行率、采纳率这 5 个指标。</div>
+                  </div>
+                  <div class="toolbar-actions">
+                    <div class="btn">新增样本</div>
+                    <div class="btn ghost">运行回归</div>
+                    <div class="btn primary">生成报告</div>
+                  </div>
+                </div>
+                <div class="content">
+                  <div class="grid-4">
+                    <div class="stat-card">
+                      <div class="stat-top"><span>样本数</span><span class="pill blue">持续补充</span></div>
+                      <div class="stat-value">128</div>
+                      <div class="stat-note">预算建议 62，异常诊断 66</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>结构完整率</span><span class="pill green">达标</span></div>
+                      <div class="stat-value">91%</div>
+                      <div class="stat-note">前期最先要求稳定的指标</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>结论准确率</span><span class="pill amber">待提升</span></div>
+                      <div class="stat-value">76%</div>
+                      <div class="stat-note">仍有部分场景结论偏早</div>
+                    </div>
+                    <div class="stat-card">
+                      <div class="stat-top"><span>证据命中率</span><span class="pill teal">关键</span></div>
+                      <div class="stat-value">69%</div>
+                      <div class="stat-note">是当前最该重点提升的指标</div>
+                    </div>
+                  </div>
+
+                  <div class="grid-2">
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">版本对比</div>
+                        <div class="card-link">回归记录</div>
+                      </div>
+                      <div class="card-body">
+                        <table class="mini-table">
+                          <thead>
+                            <tr>
+                              <th>Skill</th>
+                              <th>版本</th>
+                              <th>准确率</th>
+                              <th>证据命中</th>
+                              <th>建议</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td>budget_line_comparison</td>
+                              <td>v0.4</td>
+                              <td>78%</td>
+                              <td>72%</td>
+                              <td><span class="pill blue">继续小流量试用</span></td>
+                            </tr>
+                            <tr>
+                              <td>budget_line_comparison</td>
+                              <td>v0.3</td>
+                              <td>69%</td>
+                              <td>61%</td>
+                              <td><span class="pill green">已淘汰</span></td>
+                            </tr>
+                            <tr>
+                              <td>revenue_anomaly_diagnosis</td>
+                              <td>v0.3</td>
+                              <td>74%</td>
+                              <td>69%</td>
+                              <td><span class="pill amber">需补样本</span></td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div class="card">
+                      <div class="card-head">
+                        <div class="card-title">问题归类</div>
+                        <div class="card-link">修复优先级</div>
+                      </div>
+                      <div class="card-body list">
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">证据不足但下强结论</div>
+                            <div class="pill red">P0</div>
+                          </div>
+                          <div class="row-sub">需要更多“证据不足时降级表达”的 few-shot 和规则约束。</div>
+                        </div>
+                        <div class="row">
+                          <div class="row-top">
+                            <div class="row-title">推荐动作不够可执行</div>
+                            <div class="pill amber">P1</div>
+                          </div>
+                          <div class="row-sub">需要把动作从“建议关注”改成可直接落任务的表达。</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

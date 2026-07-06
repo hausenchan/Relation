@@ -10,6 +10,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { useNavigate } from 'react-router-dom';
 import { agentsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 
@@ -99,6 +100,7 @@ function StatCard({ title, value, suffix, color }) {
 }
 
 export default function AgentOperations() {
+  const navigate = useNavigate();
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const { canWrite } = useAuth();
@@ -350,6 +352,7 @@ export default function AgentOperations() {
         </div>
         <Space wrap>
           <Button icon={<ReloadOutlined />} onClick={loadCore}>刷新</Button>
+          <Button icon={<RobotOutlined />} onClick={() => navigate('/agents/ai-training')}>进入 AI训练台</Button>
           {writable && <Button icon={<PlusOutlined />} onClick={openManual}>手动录入机会</Button>}
           {writable && (
             <Button type="primary" icon={<PlayCircleOutlined />} loading={runLoading} onClick={runBudgetResearch}>
@@ -358,6 +361,28 @@ export default function AgentOperations() {
           )}
         </Space>
       </Space>
+
+      <Card size="small" style={{ marginBottom: 16 }}>
+        <Space style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+          <div>
+            <Text strong style={{ fontSize: 14 }}>AI训练台</Text>
+            <div>
+              <Text type="secondary">
+                在 Agent 中台下新增 AI 会话训练入口，支持聊天留痕、优秀案例沉淀、Skill 工坊和评测中心。
+              </Text>
+            </div>
+          </div>
+          <Space wrap>
+            <Tag color="blue">会话工作台</Tag>
+            <Tag color="purple">案例库</Tag>
+            <Tag color="gold">Skill 工坊</Tag>
+            <Tag color="green">评测中心</Tag>
+            <Button type="primary" icon={<RobotOutlined />} onClick={() => navigate('/agents/ai-training')}>
+              打开 AI训练台
+            </Button>
+          </Space>
+        </Space>
+      </Card>
 
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         <Col xs={12} md={6}><StatCard title="预算机会" value={overview.total || 0} /></Col>

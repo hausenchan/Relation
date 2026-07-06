@@ -8,6 +8,9 @@
     "server": "node server/index.js",
     "client": "cd client && npm start",
     "ai-suggestions:sync": "node server/scripts/sync-ai-suggestions.js",
+    "wolai:import": "node scripts/wolai-importer/import-wolai-docs.js",
+    "wolai:collect": "node scripts/wolai-collector/collect-wolai-chrome.js",
+    "wolai:chrome": "node scripts/wolai-collector/start-chrome-debug.js",
     "mobile-task:collect": "node scripts/mobile-task-center-collector.js",
     "mobile-task:validate": "node scripts/mobile-task-center-collector.js --validate-config",
     "install:all": "npm install && cd client && npm install"

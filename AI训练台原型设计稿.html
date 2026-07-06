@@ -1,0 +1,1287 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI训练台原型设计稿</title>
+  <style>
+    :root {
+      --bg: #edf2f7;
+      --panel: #ffffff;
+      --panel-soft: #f7f9fc;
+      --line: #d7e0ea;
+      --line-dark: #c6d1de;
+      --text: #17212b;
+      --muted: #617082;
+      --subtle: #8b97a5;
+      --nav: #10243d;
+      --nav-soft: #173152;
+      --nav-line: rgba(255, 255, 255, 0.08);
+      --blue: #2563eb;
+      --blue-soft: #eaf1ff;
+      --teal: #0f766e;
+      --teal-soft: #e6f7f4;
+      --green: #15803d;
+      --green-soft: #ecf8ef;
+      --amber: #b45309;
+      --amber-soft: #fff4e5;
+      --red: #c2410c;
+      --red-soft: #fff0eb;
+      --purple: #7c3aed;
+      --purple-soft: #f3edff;
+      --shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+      --radius: 8px;
+      --browser-radius: 18px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+
+    .page {
+      min-height: 100vh;
+      padding: 28px;
+    }
+
+    .hero {
+      max-width: 1600px;
+      margin: 0 auto 24px;
+      display: grid;
+      grid-template-columns: minmax(320px, 1.25fr) minmax(320px, 0.95fr);
+      gap: 18px;
+    }
+
+    .hero-main,
+    .hero-side {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px 22px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+    }
+
+    .title {
+      margin: 0 0 10px;
+      font-size: 30px;
+      line-height: 1.18;
+      font-weight: 760;
+    }
+
+    .subtitle {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.8;
+      color: var(--muted);
+    }
+
+    .meta-grid {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .meta-box {
+      min-height: 96px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 12px;
+    }
+
+    .meta-label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--subtle);
+      font-size: 12px;
+    }
+
+    .meta-value {
+      font-size: 14px;
+      line-height: 1.7;
+      font-weight: 650;
+    }
+
+    .side-title {
+      margin: 0 0 12px;
+      font-size: 15px;
+      font-weight: 720;
+    }
+
+    .bullet-list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.85;
+    }
+
+    .boards {
+      max-width: 1600px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(620px, 1fr));
+      gap: 20px;
+      align-items: start;
+    }
+
+    .artboard-title {
+      margin: 0 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .artboard-tag {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--subtle);
+    }
+
+    .browser {
+      width: 100%;
+      aspect-ratio: 16 / 10;
+      min-height: 680px;
+      background: #dbe4ed;
+      border-radius: var(--browser-radius);
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .browser-shell {
+      height: 100%;
+      background: var(--panel);
+      border-radius: 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid rgba(15, 23, 42, 0.06);
+    }
+
+    .browser-top {
+      height: 46px;
+      background: #f3f6f9;
+      border-bottom: 1px solid var(--line);
+      padding: 0 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+
+    .traffic {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #d0d7df;
+    }
+
+    .dot.red { background: #ef4444; }
+    .dot.amber { background: #f59e0b; }
+    .dot.green { background: #22c55e; }
+
+    .url-bar {
+      flex: 1;
+      height: 30px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      color: var(--subtle);
+      font-size: 12px;
+    }
+
+    .app {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      background: #f4f7fb;
+    }
+
+    .sidebar {
+      width: 220px;
+      background: var(--nav);
+      color: #fff;
+      border-right: 1px solid var(--nav-line);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-head {
+      padding: 18px 16px 14px;
+      border-bottom: 1px solid var(--nav-line);
+    }
+
+    .brand {
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .brand-sub {
+      margin-top: 8px;
+      color: rgba(255,255,255,0.72);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .nav-section {
+      padding: 14px 12px 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .nav-item {
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: rgba(255,255,255,0.82);
+      background: transparent;
+      border: 1px solid transparent;
+    }
+
+    .nav-item.active {
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      border-color: rgba(255,255,255,0.12);
+    }
+
+    .workspace {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .toolbar {
+      height: 64px;
+      padding: 0 18px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      flex-shrink: 0;
+    }
+
+    .toolbar-left,
+    .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .page-name {
+      font-size: 18px;
+      font-weight: 760;
+      white-space: nowrap;
+    }
+
+    .chip-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .chip {
+      height: 30px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      color: var(--muted);
+    }
+
+    .chip.active {
+      border-color: #bcd0ff;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-weight: 650;
+    }
+
+    .btn {
+      height: 32px;
+      padding: 0 12px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #fff;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      color: var(--text);
+      font-weight: 650;
+    }
+
+    .btn.primary {
+      background: var(--blue);
+      border-color: var(--blue);
+      color: #fff;
+    }
+
+    .surface {
+      flex: 1;
+      min-height: 0;
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .stat-label {
+      font-size: 12px;
+      color: var(--subtle);
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: 760;
+    }
+
+    .stat-foot {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .content-grid {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr) 320px;
+      gap: 14px;
+    }
+
+    .panel {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-head {
+      padding: 14px 14px 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 720;
+    }
+
+    .panel-body {
+      flex: 1;
+      min-height: 0;
+      padding: 12px 14px 14px;
+      overflow: hidden;
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .list-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: #fff;
+    }
+
+    .list-item.active {
+      border-color: #bfd2ff;
+      background: var(--blue-soft);
+    }
+
+    .item-title {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.5;
+    }
+
+    .item-meta {
+      margin-top: 8px;
+      font-size: 12px;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+
+    .pill-row {
+      margin-top: 8px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      background: var(--panel-soft);
+    }
+
+    .pill.blue { color: var(--blue); background: var(--blue-soft); border-color: #c8d8ff; }
+    .pill.green { color: var(--green); background: var(--green-soft); border-color: #cdeed6; }
+    .pill.amber { color: var(--amber); background: var(--amber-soft); border-color: #f5ddb4; }
+    .pill.purple { color: var(--purple); background: var(--purple-soft); border-color: #dfcffd; }
+
+    .chat-flow {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .chat-scroll {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .bubble {
+      max-width: 90%;
+      border-radius: 8px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+
+    .bubble.user {
+      margin-left: auto;
+      background: var(--blue-soft);
+      border-color: #c6d7ff;
+    }
+
+    .bubble.ai {
+      background: #fff;
+    }
+
+    .bubble.system {
+      max-width: 100%;
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .action-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .input-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .textarea {
+      min-height: 82px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.8;
+      background: var(--panel-soft);
+    }
+
+    .section-stack {
+      display: grid;
+      gap: 12px;
+    }
+
+    .mini-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      padding: 12px;
+    }
+
+    .mini-title {
+      font-size: 12px;
+      color: var(--subtle);
+      margin-bottom: 8px;
+    }
+
+    .mini-text {
+      font-size: 13px;
+      line-height: 1.75;
+      color: var(--text);
+    }
+
+    .table {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .row {
+      display: grid;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .row:last-child {
+      border-bottom: 0;
+    }
+
+    .row.head {
+      background: var(--panel-soft);
+      color: var(--subtle);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .cell {
+      min-height: 44px;
+      padding: 12px;
+      border-right: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .cell:last-child {
+      border-right: 0;
+    }
+
+    .grid-4 { grid-template-columns: 1.1fr 1fr 0.8fr 0.8fr; }
+    .grid-5 { grid-template-columns: 1.1fr 0.9fr 0.8fr 0.8fr 0.8fr; }
+
+    .split {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 12px;
+      min-height: 0;
+    }
+
+    @media (max-width: 1400px) {
+      .hero,
+      .boards {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="hero">
+      <div class="hero-main">
+        <h1 class="title">AI训练台原型设计稿</h1>
+        <p class="subtitle">
+          面向运营、策略、负责人构建“会话工作台 + 案例沉淀 + Skill工坊 + 评测治理”的统一界面，
+          让高质量 AI 对话从个人经验升级为组织能力。
+        </p>
+        <div class="meta-grid">
+          <div class="meta-box">
+            <span class="meta-label">模块定位</span>
+            <div class="meta-value">Agent 中台下的 AI 训练与 Skill 沉淀中心</div>
+          </div>
+          <div class="meta-box">
+            <span class="meta-label">一期核心</span>
+            <div class="meta-value">聊天留痕、案例沉淀、Skill 草稿、评测发布</div>
+          </div>
+          <div class="meta-box">
+            <span class="meta-label">主要用户</span>
+            <div class="meta-value">运营、策略、负责人、AI训练管理员</div>
+          </div>
+          <div class="meta-box">
+            <span class="meta-label">设计原则</span>
+            <div class="meta-value">可留痕、可治理、可复用、可评测、可推广</div>
+          </div>
+        </div>
+      </div>
+      <div class="hero-side">
+        <h2 class="side-title">原型覆盖范围</h2>
+        <ul class="bullet-list">
+          <li>会话工作台：按人保存聊天记录，支持上下文挂载、评分、生成案例</li>
+          <li>优秀案例库：从高质量会话中筛选可复用方法，形成团队资产</li>
+          <li>Skill工坊：把案例加工为 Skill，配置输入、输出、Hook 和版本</li>
+          <li>评测中心：对 Skill 版本进行打分、对比、审核和发布</li>
+          <li>训练统计：帮助负责人发现“会聊的人”和“真正有效的方法”</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="boards">
+      <div class="artboard-wrap">
+        <div class="artboard-title">
+          <span>01. 会话工作台</span>
+          <span class="artboard-tag">运营 / 策略日常主入口</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com / agents / ai-training / sessions</div>
+            </div>
+            <div class="app">
+              <aside class="sidebar">
+                <div class="sidebar-head">
+                  <div class="brand">AI训练台</div>
+                  <div class="brand-sub">沉淀高质量对话，把个人方法转成团队 Skill</div>
+                </div>
+                <div class="nav-section">
+                  <div class="nav-item active">会话工作台</div>
+                  <div class="nav-item">优秀案例库</div>
+                  <div class="nav-item">Skill工坊</div>
+                  <div class="nav-item">评测中心</div>
+                  <div class="nav-item">训练统计</div>
+                </div>
+              </aside>
+              <main class="workspace">
+                <div class="toolbar">
+                  <div class="toolbar-left">
+                    <div class="page-name">会话工作台</div>
+                    <div class="chip-row">
+                      <span class="chip active">支小</span>
+                      <span class="chip">预算侧</span>
+                      <span class="chip">C端</span>
+                      <span class="chip">收入异常诊断</span>
+                    </div>
+                  </div>
+                  <div class="toolbar-right">
+                    <span class="btn">挂载文档</span>
+                    <span class="btn">选择 Skill</span>
+                    <span class="btn primary">新建会话</span>
+                  </div>
+                </div>
+                <div class="surface">
+                  <div class="cards">
+                    <div class="stat-card">
+                      <span class="stat-label">今日会话</span>
+                      <div class="stat-value">18</div>
+                      <div class="stat-foot">其中 6 条已进入案例候选</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">平均评分</span>
+                      <div class="stat-value">4.6</div>
+                      <div class="stat-foot">较上周提升 0.4</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">调用 Skill</span>
+                      <div class="stat-value">11</div>
+                      <div class="stat-foot">预算诊断 Skill 使用最多</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">生成任务</span>
+                      <div class="stat-value">5</div>
+                      <div class="stat-foot">3 条已进入执行状态</div>
+                    </div>
+                  </div>
+
+                  <div class="content-grid">
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">会话列表</div>
+                        <span class="btn">筛选</span>
+                      </div>
+                      <div class="panel-body">
+                        <div class="list">
+                          <div class="list-item active">
+                            <div class="item-title">支小收入回撤分析：乐响热闻口袋</div>
+                            <div class="item-meta">我 · 5 分钟前 · 已调用 Skill：收入诊断 v1.3</div>
+                            <div class="pill-row">
+                              <span class="pill blue">支小</span>
+                              <span class="pill amber">待沉淀</span>
+                            </div>
+                          </div>
+                          <div class="list-item">
+                            <div class="item-title">预算回补策略：独乐乐短剧</div>
+                            <div class="item-meta">我 · 32 分钟前 · 已生成任务草稿</div>
+                            <div class="pill-row">
+                              <span class="pill blue">预算侧</span>
+                              <span class="pill green">高质量</span>
+                            </div>
+                          </div>
+                          <div class="list-item">
+                            <div class="item-title">媒体结构复盘：音浪社</div>
+                            <div class="item-meta">团队 · 2 小时前 · 负责人已收藏</div>
+                            <div class="pill-row">
+                              <span class="pill purple">团队可见</span>
+                            </div>
+                          </div>
+                          <div class="list-item">
+                            <div class="item-title">日报生成模板优化</div>
+                            <div class="item-meta">我 · 昨天 · 已进入案例候选池</div>
+                            <div class="pill-row">
+                              <span class="pill amber">案例候选</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">聊天主窗口</div>
+                        <div class="chip-row">
+                          <span class="chip active">Skill：收入诊断 v1.3</span>
+                          <span class="chip">Hook：前置 + 后置</span>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="chat-flow">
+                          <div class="chat-scroll">
+                            <div class="bubble system">系统已自动挂载：近 30 天报表、最近 3 次复盘纪要、同类案例 4 条。</div>
+                            <div class="bubble user">
+                              帮我看下乐响热闻口袋最近 7 天收入为什么掉了，先按预算侧视角分析，再补一个是否需要跨流量侧联合排查的判断。
+                            </div>
+                            <div class="bubble ai">
+                              结论：近 7 日日均收入较前 7 日下降 26.6%，订单未同步下降，优先怀疑预算动作、入口质量或收入结构异常，而不是量级本身崩塌。<br><br>
+                              建议分三步：
+                              1. 先核查最近 3 天预算与入口切换；
+                              2. 对比核心媒体收入结构；
+                              3. 若媒体结构集中度显著上升，则触发跨流量侧联合复盘。
+                              <div class="pill-row">
+                                <span class="pill blue">证据充分</span>
+                                <span class="pill green">可转任务</span>
+                                <span class="pill amber">可沉淀案例</span>
+                              </div>
+                            </div>
+                            <div class="bubble user">
+                              如果我要把这套分析方法沉淀给新人，以后他们一上来就按这个结构问，应该怎么整理成模板？
+                            </div>
+                            <div class="bubble ai">
+                              我建议沉淀成一个“收入回撤排查” Skill：输入固定为产品名、时间窗、角色视角，输出固定为“结论摘要 / 证据 / 风险 / 下一步”。同时增加一个中间 Hook，在缺少时间范围时自动追问。
+                            </div>
+                          </div>
+                          <div class="action-row">
+                            <span class="btn">标记有帮助</span>
+                            <span class="btn">加入案例候选</span>
+                            <span class="btn">生成任务草稿</span>
+                            <span class="btn">转 Skill 候选</span>
+                          </div>
+                          <div class="input-box">
+                            <div class="chip-row">
+                              <span class="chip active">场景：收入异常诊断</span>
+                              <span class="chip">输出：结构化建议</span>
+                              <span class="chip">共享给团队</span>
+                            </div>
+                            <div class="textarea">继续追问：如果我要让 AI 自动判断“是否需要预算侧和流量侧联合复盘”，应该增加什么判断口径？</div>
+                            <div class="action-row">
+                              <span class="btn">插入模板</span>
+                              <span class="btn">引用案例</span>
+                              <span class="btn primary">发送</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">训练面板</div>
+                        <span class="btn">折叠</span>
+                      </div>
+                      <div class="panel-body">
+                        <div class="section-stack">
+                          <div class="mini-card">
+                            <div class="mini-title">当前上下文</div>
+                            <div class="mini-text">支小 · 预算侧 · 乐响热闻口袋<br>已挂载：报表 3、案例 4、文档 2、规则 1</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">会话质量分</div>
+                            <div class="mini-text">综合评分 92 / 100<br>证据引用完整，结构稳定，建议转案例候选。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">触发的 Hook</div>
+                            <div class="mini-text">前置 Hook：自动补近 30 天报表<br>中间 Hook：未触发追问<br>后置 Hook：可生成任务与案例</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">沉淀动作</div>
+                            <div class="action-row">
+                              <span class="btn">保存为模板</span>
+                              <span class="btn">加入优秀案例</span>
+                              <span class="btn primary">创建 Skill 候选</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </main>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="artboard-wrap">
+        <div class="artboard-title">
+          <span>02. 优秀案例库</span>
+          <span class="artboard-tag">高质量对话资产沉淀</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com / agents / ai-training / cases</div>
+            </div>
+            <div class="app">
+              <aside class="sidebar">
+                <div class="sidebar-head">
+                  <div class="brand">AI训练台</div>
+                  <div class="brand-sub">优秀案例从会话里抽出来，变成团队共同资产</div>
+                </div>
+                <div class="nav-section">
+                  <div class="nav-item">会话工作台</div>
+                  <div class="nav-item active">优秀案例库</div>
+                  <div class="nav-item">Skill工坊</div>
+                  <div class="nav-item">评测中心</div>
+                  <div class="nav-item">训练统计</div>
+                </div>
+              </aside>
+              <main class="workspace">
+                <div class="toolbar">
+                  <div class="toolbar-left">
+                    <div class="page-name">优秀案例库</div>
+                    <div class="chip-row">
+                      <span class="chip active">全部案例</span>
+                      <span class="chip">待审核</span>
+                      <span class="chip">支小</span>
+                      <span class="chip">预算分析</span>
+                    </div>
+                  </div>
+                  <div class="toolbar-right">
+                    <span class="btn">批量打标签</span>
+                    <span class="btn primary">新建案例</span>
+                  </div>
+                </div>
+                <div class="surface">
+                  <div class="cards">
+                    <div class="stat-card">
+                      <span class="stat-label">案例总数</span>
+                      <div class="stat-value">86</div>
+                      <div class="stat-foot">本周新增 14</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">待审核</span>
+                      <div class="stat-value">12</div>
+                      <div class="stat-foot">其中 5 条来自高评分会话</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">被引用次数</span>
+                      <div class="stat-value">241</div>
+                      <div class="stat-foot">日报和预算建议场景最高</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">可转 Skill</span>
+                      <div class="stat-value">9</div>
+                      <div class="stat-foot">满足结构稳定和复用频次要求</div>
+                    </div>
+                  </div>
+
+                  <div class="split">
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">案例列表</div>
+                        <span class="btn">排序：复用次数</span>
+                      </div>
+                      <div class="panel-body">
+                        <div class="list">
+                          <div class="list-item active">
+                            <div class="item-title">收入回撤分析：先看订单是否同步回落，再判断预算动作还是收入结构问题</div>
+                            <div class="item-meta">贡献人：张三 · 业务线：支小 · 角色：预算策略负责人</div>
+                            <div class="pill-row">
+                              <span class="pill blue">收入异常</span>
+                              <span class="pill green">已审核</span>
+                              <span class="pill purple">被引用 26 次</span>
+                            </div>
+                          </div>
+                          <div class="list-item">
+                            <div class="item-title">预算回补提问模板：分层回补，不一次性放量</div>
+                            <div class="item-meta">贡献人：李四 · 场景：预算建议</div>
+                            <div class="pill-row">
+                              <span class="pill amber">待转 Skill</span>
+                            </div>
+                          </div>
+                          <div class="list-item">
+                            <div class="item-title">日报生成模板：结论、证据、风险、动作四段式</div>
+                            <div class="item-meta">贡献人：王五 · 场景：日报</div>
+                            <div class="pill-row">
+                              <span class="pill green">稳定复用</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">案例详情</div>
+                        <div class="action-row">
+                          <span class="btn">查看原会话</span>
+                          <span class="btn primary">转 Skill 候选</span>
+                        </div>
+                      </div>
+                      <div class="panel-body">
+                        <div class="section-stack">
+                          <div class="mini-card">
+                            <div class="mini-title">优秀提问方式</div>
+                            <div class="mini-text">先要求按预算侧视角判断，再补一个“是否需要跨流量侧联合复盘”的二次判断。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">优秀追问方式</div>
+                            <div class="mini-text">继续追问“如果要给新人固化成模板，应该如何抽成结构化输出与追问逻辑”。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">复用价值</div>
+                            <div class="mini-text">适用于收入回撤但订单未同步回落的产品，可帮助新人避免一上来就把问题归因到流量量级。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">管理动作</div>
+                            <div class="action-row">
+                              <span class="btn">通过入库</span>
+                              <span class="btn">退回补充</span>
+                              <span class="btn primary">生成 Skill 草稿</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </main>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="artboard-wrap">
+        <div class="artboard-title">
+          <span>03. Skill工坊</span>
+          <span class="artboard-tag">案例加工、Hook 绑定、版本管理</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com / agents / ai-training / skills</div>
+            </div>
+            <div class="app">
+              <aside class="sidebar">
+                <div class="sidebar-head">
+                  <div class="brand">AI训练台</div>
+                  <div class="brand-sub">把优秀对话从“好聊天”变成“好 Skill”</div>
+                </div>
+                <div class="nav-section">
+                  <div class="nav-item">会话工作台</div>
+                  <div class="nav-item">优秀案例库</div>
+                  <div class="nav-item active">Skill工坊</div>
+                  <div class="nav-item">评测中心</div>
+                  <div class="nav-item">训练统计</div>
+                </div>
+              </aside>
+              <main class="workspace">
+                <div class="toolbar">
+                  <div class="toolbar-left">
+                    <div class="page-name">Skill工坊</div>
+                    <div class="chip-row">
+                      <span class="chip active">收入诊断 Skill</span>
+                      <span class="chip">版本 v1.3</span>
+                      <span class="chip">状态：待评测</span>
+                    </div>
+                  </div>
+                  <div class="toolbar-right">
+                    <span class="btn">复制版本</span>
+                    <span class="btn">运行评测</span>
+                    <span class="btn primary">提交审核</span>
+                  </div>
+                </div>
+                <div class="surface">
+                  <div class="split">
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">Skill 配置</div>
+                        <span class="btn">草稿自动保存</span>
+                      </div>
+                      <div class="panel-body">
+                        <div class="section-stack">
+                          <div class="mini-card">
+                            <div class="mini-title">基础信息</div>
+                            <div class="mini-text">Skill 名称：收入回撤排查<br>适用角色：运营 / 策略<br>适用业务线：支小 / 微小</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">输入结构</div>
+                            <div class="mini-text">产品名、时间窗、角色视角、是否需要跨团队判断、是否输出任务草稿。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">输出结构</div>
+                            <div class="mini-text">结论摘要 / 核心证据 / 风险提醒 / 下一步建议 / 是否建议联合复盘。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">推理步骤</div>
+                            <div class="mini-text">1. 看收入变化<br>2. 看订单是否同步变化<br>3. 看媒体结构集中度<br>4. 判断预算侧 or 流量侧优先级<br>5. 输出动作建议</div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">示例 / Hook / 版本信息</div>
+                        <span class="btn">查看历史版本</span>
+                      </div>
+                      <div class="panel-body">
+                        <div class="section-stack">
+                          <div class="mini-card">
+                            <div class="mini-title">引用案例</div>
+                            <div class="mini-text">已关联 6 条优秀案例，其中 3 条来自支小收入回撤会话，2 条来自日报结构化输出案例。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">Hook 配置</div>
+                            <div class="mini-text">前置：自动挂载近 30 天报表<br>中间：缺少时间窗时自动追问<br>后置：可生成任务草稿与案例候选</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">版本变更摘要</div>
+                            <div class="mini-text">v1.3 新增“是否需要跨流量侧复盘”的判断逻辑，并将输出模板统一为五段式。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">发布门槛</div>
+                            <div class="mini-text">要求准确性 ≥ 85，结构稳定性 ≥ 90，证据完整性 ≥ 80，且负责人审核通过。</div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </main>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="artboard-wrap">
+        <div class="artboard-title">
+          <span>04. 评测中心与训练统计</span>
+          <span class="artboard-tag">Skill 发布前治理 + 发现“会聊的人”</span>
+        </div>
+        <div class="browser">
+          <div class="browser-shell">
+            <div class="browser-top">
+              <div class="traffic">
+                <span class="dot red"></span>
+                <span class="dot amber"></span>
+                <span class="dot green"></span>
+              </div>
+              <div class="url-bar">relation.midongtech.com / agents / ai-training / eval</div>
+            </div>
+            <div class="app">
+              <aside class="sidebar">
+                <div class="sidebar-head">
+                  <div class="brand">AI训练台</div>
+                  <div class="brand-sub">让 Skill 先过评测，再进入团队大规模调用</div>
+                </div>
+                <div class="nav-section">
+                  <div class="nav-item">会话工作台</div>
+                  <div class="nav-item">优秀案例库</div>
+                  <div class="nav-item">Skill工坊</div>
+                  <div class="nav-item active">评测中心</div>
+                  <div class="nav-item">训练统计</div>
+                </div>
+              </aside>
+              <main class="workspace">
+                <div class="toolbar">
+                  <div class="toolbar-left">
+                    <div class="page-name">评测中心</div>
+                    <div class="chip-row">
+                      <span class="chip active">收入诊断 Skill v1.3</span>
+                      <span class="chip">评测集：预算侧核心样本</span>
+                    </div>
+                  </div>
+                  <div class="toolbar-right">
+                    <span class="btn">版本对比</span>
+                    <span class="btn primary">发起评测</span>
+                  </div>
+                </div>
+                <div class="surface">
+                  <div class="cards">
+                    <div class="stat-card">
+                      <span class="stat-label">准确性</span>
+                      <div class="stat-value">88</div>
+                      <div class="stat-foot">较 v1.2 提升 6 分</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">结构稳定性</span>
+                      <div class="stat-value">93</div>
+                      <div class="stat-foot">输出模板收敛明显</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">证据完整性</span>
+                      <div class="stat-value">84</div>
+                      <div class="stat-foot">仍有少量样本缺少媒体结构引用</div>
+                    </div>
+                    <div class="stat-card">
+                      <span class="stat-label">发布建议</span>
+                      <div class="stat-value">可审核</div>
+                      <div class="stat-foot">建议负责人确认后发布</div>
+                    </div>
+                  </div>
+
+                  <div class="split">
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">评测结果</div>
+                        <span class="btn">查看失败样本</span>
+                      </div>
+                      <div class="panel-body">
+                        <div class="table">
+                          <div class="row head grid-5">
+                            <div class="cell">样本</div>
+                            <div class="cell">场景</div>
+                            <div class="cell">准确性</div>
+                            <div class="cell">证据</div>
+                            <div class="cell">状态</div>
+                          </div>
+                          <div class="row grid-5">
+                            <div class="cell">乐响热闻口袋收入回撤</div>
+                            <div class="cell">预算诊断</div>
+                            <div class="cell">92</div>
+                            <div class="cell">完整</div>
+                            <div class="cell">通过</div>
+                          </div>
+                          <div class="row grid-5">
+                            <div class="cell">独乐乐短剧预算回补</div>
+                            <div class="cell">增长建议</div>
+                            <div class="cell">89</div>
+                            <div class="cell">完整</div>
+                            <div class="cell">通过</div>
+                          </div>
+                          <div class="row grid-5">
+                            <div class="cell">音浪社媒体结构复盘</div>
+                            <div class="cell">联合判断</div>
+                            <div class="cell">76</div>
+                            <div class="cell">偏弱</div>
+                            <div class="cell">待优化</div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="panel">
+                      <div class="panel-head">
+                        <div class="panel-title">训练统计</div>
+                        <span class="btn">切换：按人 / 按团队</span>
+                      </div>
+                      <div class="panel-body">
+                        <div class="table">
+                          <div class="row head grid-4">
+                            <div class="cell">人员</div>
+                            <div class="cell">高质量会话</div>
+                            <div class="cell">案例贡献</div>
+                            <div class="cell">Skill 贡献</div>
+                          </div>
+                          <div class="row grid-4">
+                            <div class="cell">张三（预算策略）</div>
+                            <div class="cell">26</div>
+                            <div class="cell">11</div>
+                            <div class="cell">3</div>
+                          </div>
+                          <div class="row grid-4">
+                            <div class="cell">李四（预算运营）</div>
+                            <div class="cell">18</div>
+                            <div class="cell">7</div>
+                            <div class="cell">1</div>
+                          </div>
+                          <div class="row grid-4">
+                            <div class="cell">王五（流量运营）</div>
+                            <div class="cell">14</div>
+                            <div class="cell">5</div>
+                            <div class="cell">1</div>
+                          </div>
+                        </div>
+                        <div class="section-stack" style="margin-top:12px;">
+                          <div class="mini-card">
+                            <div class="mini-title">负责人视角提示</div>
+                            <div class="mini-text">张三连续三周在“收入回撤分析”场景下输出稳定高质量会话，建议优先把其方法沉淀为团队标准 Skill。</div>
+                          </div>
+                          <div class="mini-card">
+                            <div class="mini-title">组织动作建议</div>
+                            <div class="action-row">
+                              <span class="btn">查看优秀会话</span>
+                              <span class="btn">指定为案例维护人</span>
+                              <span class="btn primary">发起 Skill 审核</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                </div>
+              </main>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
