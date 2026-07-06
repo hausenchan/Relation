@@ -24,6 +24,7 @@ const MENU_TREE = [
     key: 'biz-flow',
     children: [
       { title: '商机', key: '/leads' },
+      { title: 'Agent 中台', key: '/agents' },
       { title: '策略', key: '/strategies' },
       { title: '需求', key: '/dev-tasks' },
     ],

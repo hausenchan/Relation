@@ -10,6 +10,12 @@ const multer = require('multer');
 const { encryptRow, decryptRow, decryptRows } = require('./lib/cryptoDao');
 const { decrypt } = require('./lib/crypto');
 const NetworkCaptureManager = require('./lib/networkCapture');
+const {
+  ensureAiSuggestionTables,
+  getCurrentAiSuggestionFeed,
+  syncBundledAiSuggestionSeeds,
+  syncDistillationAiSuggestionFeed,
+} = require('./lib/aiSuggestionStore');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -397,6 +403,7 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 const DB_PATH = process.env.RELATION_DB_PATH || path.join(__dirname, 'data.db');
 const db = new Database(DB_PATH);
+const AI_SUGGESTION_DEFAULT_BUSINESS_LINE = 'zhixiao';
 
 function addColumnIfMissing(table, column, definition) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
@@ -411,6 +418,24 @@ function createIndexIfColumnExists(table, column, indexName, columnsSql) {
     db.exec(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${table}(${columnsSql})`);
   }
 }
+
+function bootstrapAiSuggestionSnapshots() {
+  ensureAiSuggestionTables(db);
+  try {
+    syncBundledAiSuggestionSeeds(db);
+  } catch (error) {
+    console.error('初始化 AI 建议 seed 失败:', error);
+  }
+  try {
+    syncDistillationAiSuggestionFeed(db, {
+      businessLine: AI_SUGGESTION_DEFAULT_BUSINESS_LINE,
+    });
+  } catch (error) {
+    console.error('同步本地蒸馏 AI 建议失败:', error);
+  }
+}
+
+bootstrapAiSuggestionSnapshots();
 
 // =========== 用户表 ===========
 db.exec(`
@@ -819,6 +844,184 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_notifications_created
     ON notifications(created_at);
 `);
+
+// =========== Agent 经营中台表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS agent_definitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_key TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    agent_type TEXT NOT NULL,
+    owner_role TEXT,
+    description TEXT,
+    scope TEXT,
+    guardrails TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_id INTEGER NOT NULL,
+    run_type TEXT NOT NULL DEFAULT 'manual',
+    trigger_source TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    input_summary TEXT,
+    output_summary TEXT,
+    metrics_json TEXT,
+    error_message TEXT,
+    started_at DATETIME,
+    finished_at DATETIME,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS agent_budget_opportunities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_run_id INTEGER,
+    budget_partner TEXT NOT NULL,
+    budget_product TEXT,
+    budget_source TEXT,
+    platform_type TEXT,
+    ad_format TEXT,
+    monetization_model TEXT,
+    acceptable_carriers TEXT,
+    target_media TEXT,
+    opportunity_score INTEGER DEFAULT 60,
+    confidence REAL DEFAULT 0.6,
+    priority TEXT DEFAULT 'medium',
+    status TEXT NOT NULL DEFAULT 'pending_review',
+    evidence_links TEXT,
+    evidence_summary TEXT,
+    fit_reason TEXT,
+    risk_notes TEXT,
+    next_action TEXT,
+    assignee_id INTEGER,
+    lead_id INTEGER,
+    task_id INTEGER,
+    review_note TEXT,
+    reviewed_by INTEGER,
+    reviewed_at DATETIME,
+    raw_payload TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS agent_notification_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    role_scope TEXT,
+    department_scope TEXT,
+    team_id INTEGER,
+    user_id INTEGER,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_id ON agent_runs(agent_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+  CREATE INDEX IF NOT EXISTS idx_agent_budget_status ON agent_budget_opportunities(status);
+  CREATE INDEX IF NOT EXISTS idx_agent_budget_assignee ON agent_budget_opportunities(assignee_id);
+  CREATE INDEX IF NOT EXISTS idx_agent_budget_score ON agent_budget_opportunities(opportunity_score);
+`);
+
+function seedAgentDefinitions() {
+  const agents = [
+    {
+      agent_key: 'orchestrator',
+      name: '总调度 Agent',
+      agent_type: 'orchestrator',
+      owner_role: 'cmo',
+      description: '拆解经营任务、分派专家 Agent、汇总建议并要求人工确认后执行。',
+      scope: 'Agent 编排、输出汇总、审批流转',
+      guardrails: '不得自动签约、自动改预算、自动发布产品；所有经营动作必须进入审核台。',
+    },
+    {
+      agent_key: 'budget_research',
+      name: '预算研究 Agent',
+      agent_type: 'expert',
+      owner_role: 'commercial',
+      description: '发现和评级上游预算机会，生成预算机会卡片、证据、风险和下一步动作。',
+      scope: '预算方、预算产品、广告样式、承接载体、商务对接建议',
+      guardrails: '只输出候选机会和建议，不自动联系客户，不自动创建外部平台配置。',
+    },
+    {
+      agent_key: 'media_research',
+      name: '媒体研究 Agent',
+      agent_type: 'expert',
+      owner_role: 'commercial',
+      description: '研究哪些 App 的任务中心、签到后非标位适合接入愉悦赚。',
+      scope: '媒体 App、任务中心入口、签到位、合作状态',
+      guardrails: '不自动完成任务、不模拟用户收益、不绕过第三方风控。',
+    },
+    {
+      agent_key: 'data_analysis',
+      name: '数据分析 Agent',
+      agent_type: 'expert',
+      owner_role: 'operation',
+      description: '生成日报、异常发现、收入变化解释和运营调整建议。',
+      scope: '收入、流量、任务完成、提现、广告指标',
+      guardrails: '不直接改配置，低风险建议也必须留痕。',
+    },
+    {
+      agent_key: 'commercial_product',
+      name: '广告产品商业化 Agent',
+      agent_type: 'expert',
+      owner_role: 'operation',
+      description: '设计资讯阅读、短剧、小游戏、答题、签到等预算承接玩法。',
+      scope: '商业化玩法、产品模块、广告位组合、实验策略',
+      guardrails: '不得生成违规诱导、虚假奖励或平台禁止的玩法。',
+    },
+    {
+      agent_key: 'asset_compliance',
+      name: '产品资产合规 Agent',
+      agent_type: 'expert',
+      owner_role: 'rd',
+      description: '管理主体、软著、域名、备案、应用状态、核减原因和处理策略。',
+      scope: '主体、软著、域名、备案、应用资产、核减记录',
+      guardrails: '不自动提交备案或外部法务材料，所有变更需人工复核。',
+    },
+    {
+      agent_key: 'development',
+      name: '开发 Agent',
+      agent_type: 'executor',
+      owner_role: 'rd',
+      description: '只接收已审核的标准化研发需求，辅助开发和验证。',
+      scope: '研发任务、代码实现、测试验证',
+      guardrails: '只处理已审批需求，不擅自变更生产配置。',
+    },
+  ];
+
+  const stmt = db.prepare(`
+    INSERT INTO agent_definitions (
+      agent_key, name, agent_type, owner_role, description, scope, guardrails, status, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 1)
+    ON CONFLICT(agent_key) DO UPDATE SET
+      name = excluded.name,
+      agent_type = excluded.agent_type,
+      owner_role = excluded.owner_role,
+      description = excluded.description,
+      scope = excluded.scope,
+      guardrails = excluded.guardrails,
+      updated_at = CURRENT_TIMESTAMP
+  `);
+  agents.forEach(agent => stmt.run(
+    agent.agent_key,
+    agent.name,
+    agent.agent_type,
+    agent.owner_role,
+    agent.description,
+    agent.scope,
+    agent.guardrails
+  ));
+}
+
+seedAgentDefinitions();
 
 // =========== 手机端任务中心采集表 ===========
 db.exec(`
@@ -1843,6 +2046,7 @@ const OPERATION_LOG_BUSINESS_MAP = {
   'follow-up-tasks': '待跟进任务',
   tasks: '商务任务',
   budgets: '预算管理',
+  agents: 'Agent 经营中台',
   reminders: '提醒事项',
   companies: '公司研究',
   company_entities: '公司主体',
@@ -1894,6 +2098,7 @@ const OPERATION_LOG_TABLE_MAP = {
   'follow-up-tasks': 'follow_up_tasks',
   tasks: 'tasks',
   budgets: 'budgets',
+  agents: 'agent_definitions',
   reminders: 'reminders',
   companies: 'companies',
   company_entities: 'company_entities',
@@ -1978,6 +2183,11 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/mobile-task-center\/records\/(\d+)\/review$/, businessType: '手机任务中心采集', table: 'mobile_task_records', idGroup: 1, action: '复核采集记录' },
   { pattern: /^\/mobile-task-center\/apps$/, businessType: '手机任务中心采集', table: 'mobile_task_apps', responseId: true, action: '保存采集 App' },
   { pattern: /^\/mobile-task-center\/apps\/(\d+)$/, businessType: '手机任务中心采集', table: 'mobile_task_apps', idGroup: 1 },
+  { pattern: /^\/agents\/budget-research\/run$/, businessType: 'Agent 经营中台', table: 'agent_runs', responseId: true, action: '运行预算研究 Agent' },
+  { pattern: /^\/agents\/budget-opportunities$/, businessType: 'Agent 经营中台', table: 'agent_budget_opportunities', responseId: true, action: '创建预算机会' },
+  { pattern: /^\/agents\/budget-opportunities\/(\d+)\/review$/, businessType: 'Agent 经营中台', table: 'agent_budget_opportunities', idGroup: 1, action: '审核预算机会' },
+  { pattern: /^\/agents\/notification-rules$/, businessType: 'Agent 经营中台', table: 'agent_notification_rules', responseId: true, action: '保存通知规则' },
+  { pattern: /^\/agents\/notification-rules\/(\d+)$/, businessType: 'Agent 经营中台', table: 'agent_notification_rules', idGroup: 1 },
   { pattern: /^\/network-capture\/start$/, businessType: '网络抓包', action: '启动代理' },
   { pattern: /^\/network-capture\/stop$/, businessType: '网络抓包', action: '停止代理' },
   { pattern: /^\/network-capture\/clear$/, businessType: '网络抓包', action: '清空记录' },
@@ -6803,6 +7013,736 @@ app.delete('/api/tasks/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// =========== Agent 经营中台 API ===========
+const AGENT_BUDGET_STATUSES = new Set(['pending_review', 'needs_info', 'accepted', 'rejected', 'closed']);
+const AGENT_BUDGET_PRIORITIES = new Set(['low', 'medium', 'high', 'urgent']);
+
+function parseJsonSafe(value, fallback = null) {
+  if (!value) return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeEvidenceLinks(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => String(item || '').trim()).filter(Boolean).join('\n');
+  }
+  return String(value || '').trim();
+}
+
+function normalizeAgentScore(value, fallback = 60) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+function normalizeAgentConfidence(value, fallback = 0.6) {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence)) return fallback;
+  return Math.max(0, Math.min(1, Number(confidence.toFixed(2))));
+}
+
+function getDefaultAgentAssigneeId() {
+  const preferred = db.prepare(`
+    SELECT id FROM users
+    WHERE account_status = 'active'
+      AND (department = 'commercial' OR role IN ('sales_director', 'cmo', 'admin'))
+    ORDER BY
+      CASE role
+        WHEN 'sales_director' THEN 1
+        WHEN 'cmo' THEN 2
+        WHEN 'admin' THEN 3
+        ELSE 4
+      END,
+      id ASC
+    LIMIT 1
+  `).get();
+  return preferred?.id || db.prepare("SELECT id FROM users WHERE account_status = 'active' ORDER BY id ASC LIMIT 1").get()?.id || 1;
+}
+
+function getAgentNotificationUserIds(eventType, fallbackUserIds = []) {
+  const ids = new Set(fallbackUserIds.filter(Boolean).map(Number));
+  const rules = db.prepare(`
+    SELECT * FROM agent_notification_rules
+    WHERE enabled = 1 AND event_type = ?
+  `).all(eventType);
+
+  rules.forEach(rule => {
+    if (rule.user_id) ids.add(Number(rule.user_id));
+    if (rule.team_id) {
+      getUsersByTeamIds([rule.team_id]).forEach(id => ids.add(Number(id)));
+    }
+    if (rule.department_scope) {
+      db.prepare('SELECT id FROM users WHERE account_status = ? AND department = ?')
+        .all('active', rule.department_scope)
+        .forEach(row => ids.add(Number(row.id)));
+    }
+    if (rule.role_scope) {
+      db.prepare(`
+        SELECT id FROM users
+        WHERE account_status = 'active'
+          AND (role = ? OR executive_role = ?)
+      `).all(rule.role_scope, rule.role_scope).forEach(row => ids.add(Number(row.id)));
+    }
+  });
+
+  if (ids.size === 0) {
+    db.prepare(`
+      SELECT id FROM users
+      WHERE account_status = 'active'
+        AND (department = 'commercial' OR role IN ('sales_director', 'cmo', 'admin') OR executive_role = 'cmo')
+    `).all().forEach(row => ids.add(Number(row.id)));
+  }
+
+  return [...ids].filter(Boolean);
+}
+
+function notifyAgentUsers(eventType, title, content, link, fallbackUserIds = []) {
+  getAgentNotificationUserIds(eventType, fallbackUserIds).forEach(userId => {
+    createNotification(userId, eventType, title, content, link);
+  });
+}
+
+function buildAgentBudgetVisibilityFilter(user, alias = 'abo') {
+  if (isAdmin(user.role) || isAdmin(user.executive_role)) return { sql: '', params: [] };
+  const col = alias ? `${alias}.` : '';
+  if (user.role === 'sales_director') {
+    const teamIds = getManagedTeamIds(user.id, user.role) || [];
+    const memberIds = getUsersByTeamIds(teamIds);
+    const ids = [...new Set([user.id, ...memberIds])];
+    return {
+      sql: ids.length
+        ? ` AND (${col}assignee_id IN (${ids.map(() => '?').join(',')}) OR ${col}created_by IN (${ids.map(() => '?').join(',')}))`
+        : ` AND (${col}assignee_id = ? OR ${col}created_by = ?)`,
+      params: ids.length ? [...ids, ...ids] : [user.id, user.id],
+    };
+  }
+  if (user.role === 'leader') {
+    const teamIds = getManagedTeamIds(user.id, user.role) || [];
+    const memberIds = getUsersByTeamIds(teamIds);
+    const ids = [...new Set([user.id, ...memberIds])];
+    return {
+      sql: ids.length
+        ? ` AND (${col}assignee_id IN (${ids.map(() => '?').join(',')}) OR ${col}created_by IN (${ids.map(() => '?').join(',')}))`
+        : ` AND (${col}assignee_id = ? OR ${col}created_by = ?)`,
+      params: ids.length ? [...ids, ...ids] : [user.id, user.id],
+    };
+  }
+  return {
+    sql: ` AND (${col}assignee_id = ? OR ${col}created_by = ?)`,
+    params: [user.id, user.id],
+  };
+}
+
+function mapAgentBudgetOpportunity(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    evidence_link_list: String(row.evidence_links || '')
+      .split(/\n|,/)
+      .map(item => item.trim())
+      .filter(Boolean),
+    raw_payload_json: parseJsonSafe(row.raw_payload, null),
+    metrics_json: parseJsonSafe(row.metrics_json, null),
+  };
+}
+
+function insertAgentBudgetOpportunity(data, actorId, agentRunId = null) {
+  const budgetPartner = String(data.budget_partner || '').trim();
+  if (!budgetPartner) return { error: '预算方必填' };
+  const priority = AGENT_BUDGET_PRIORITIES.has(data.priority) ? data.priority : 'medium';
+  const status = AGENT_BUDGET_STATUSES.has(data.status) ? data.status : 'pending_review';
+  const assigneeId = data.assignee_id || getDefaultAgentAssigneeId();
+  const result = db.prepare(`
+    INSERT INTO agent_budget_opportunities (
+      agent_run_id, budget_partner, budget_product, budget_source, platform_type, ad_format,
+      monetization_model, acceptable_carriers, target_media, opportunity_score, confidence,
+      priority, status, evidence_links, evidence_summary, fit_reason, risk_notes, next_action,
+      assignee_id, raw_payload, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    agentRunId || data.agent_run_id || null,
+    budgetPartner,
+    data.budget_product || null,
+    data.budget_source || null,
+    data.platform_type || null,
+    data.ad_format || null,
+    data.monetization_model || null,
+    data.acceptable_carriers || null,
+    data.target_media || null,
+    normalizeAgentScore(data.opportunity_score),
+    normalizeAgentConfidence(data.confidence),
+    priority,
+    status,
+    normalizeEvidenceLinks(data.evidence_links),
+    data.evidence_summary || null,
+    data.fit_reason || null,
+    data.risk_notes || null,
+    data.next_action || null,
+    assigneeId,
+    data.raw_payload ? JSON.stringify(data.raw_payload) : null,
+    actorId
+  );
+  return { id: result.lastInsertRowid, assigneeId };
+}
+
+function buildBudgetResearchCandidates(userId) {
+  const defaultAssigneeId = getDefaultAgentAssigneeId();
+  const activeBudgets = db.prepare(`
+    SELECT b.*
+    FROM budgets b
+    WHERE b.status IN ('new_entry', 'testing', 'tested', 'scaled')
+    ORDER BY
+      CASE b.potential_level WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+      b.updated_at DESC
+    LIMIT 8
+  `).all();
+
+  const recentLeads = decryptRows('leads', db.prepare(`
+    SELECT * FROM leads
+    WHERE source_type IN ('budget', 'budget_partner', 'agent_budget')
+      AND status != 'closed'
+    ORDER BY created_at DESC
+    LIMIT 8
+  `).all());
+
+  const assets = db.prepare(`
+    SELECT app_name, budget_type, platform, launch_status
+    FROM product_assets
+    ORDER BY updated_at DESC
+    LIMIT 12
+  `).all();
+
+  const candidates = [];
+  activeBudgets.forEach((budget, index) => {
+    const score = budget.potential_level === 'high' ? 88 : budget.potential_level === 'medium' ? 74 : 58;
+    candidates.push({
+      budget_partner: budget.source || budget.name,
+      budget_product: budget.name,
+      budget_source: '预算管理存量记录',
+      platform_type: budget.platform || '待确认',
+      ad_format: budget.ad_format || '待确认',
+      monetization_model: budget.method || 'SDK/小程序承接',
+      acceptable_carriers: budget.target || '支付宝小程序、微信小游戏、H5',
+      target_media: '任务中心/签到后非标位媒体',
+      opportunity_score: Math.max(50, score - index * 2),
+      confidence: budget.status === 'scaled' ? 0.86 : budget.status === 'tested' ? 0.78 : 0.68,
+      priority: score >= 80 ? 'high' : 'medium',
+      evidence_summary: `来自预算管理，当前状态：${budget.status || '未记录'}，潜力等级：${budget.potential_level || '未记录'}。`,
+      fit_reason: `已有预算记录可用于愉悦赚承接，建议核验 ${budget.platform || '可承接载体'} 与 ${budget.ad_format || '广告样式'} 是否适合任务中心入口。`,
+      risk_notes: '需人工确认预算真实性、结算口径、平台合规要求和可承接流量范围。',
+      next_action: '由商务负责人补齐预算联系人和测试条件，确认后转线索推进。',
+      assignee_id: defaultAssigneeId,
+      raw_payload: { source: 'budgets', source_id: budget.id },
+    });
+  });
+
+  recentLeads.forEach((lead, index) => {
+    candidates.push({
+      budget_partner: lead.contact_company || lead.title,
+      budget_product: lead.title,
+      budget_source: '线索池历史预算线索',
+      platform_type: '待确认',
+      ad_format: '待确认',
+      monetization_model: '待商务确认',
+      acceptable_carriers: '支付宝小程序、微信小游戏、H5',
+      target_media: '存量媒体和任务中心场景',
+      opportunity_score: Math.max(55, 72 - index * 3),
+      confidence: 0.62,
+      priority: lead.priority === 'high' ? 'high' : 'medium',
+      evidence_summary: `来自线索池，状态：${lead.status || '未记录'}，优先级：${lead.priority || '未记录'}。`,
+      fit_reason: '已有预算方向线索，可由预算研究 Agent 结构化补全并推动复核。',
+      risk_notes: '需确认线索时效性，避免重复跟进。',
+      next_action: '检查最近互动记录，补齐预算产品、广告样式和可测试入口。',
+      assignee_id: lead.assignee_id || defaultAssigneeId,
+      raw_payload: { source: 'leads', source_id: lead.id },
+    });
+  });
+
+  if (candidates.length === 0) {
+    candidates.push({
+      budget_partner: '支付宝灯火广告',
+      budget_product: '支付宝小程序任务预算',
+      budget_source: '人工种子样例',
+      platform_type: 'alipay_mini_program',
+      ad_format: '联盟广告/任务广告',
+      monetization_model: '任务中心入口承接后按广告收益分成',
+      acceptable_carriers: '支付宝小程序、H5',
+      target_media: '爱奇艺极速版等有任务中心/签到位的媒体',
+      opportunity_score: 76,
+      confidence: 0.52,
+      priority: 'medium',
+      evidence_summary: '根据当前业务模式生成的预算研究种子机会，用于启动审核流程。',
+      fit_reason: '与愉悦赚现有 SDK 入口和图示任务页高度匹配，可作为首批预算研究模板。',
+      risk_notes: '这是种子样例，必须由商务补证据后才能采纳推进。',
+      next_action: '补充预算方联系人、预算政策、结算规则和测试应用要求。',
+      assignee_id: defaultAssigneeId,
+      raw_payload: { source: 'seed', created_by: userId },
+    });
+  }
+
+  return candidates.slice(0, 12).map(candidate => {
+    const matchedAsset = assets.find(asset => (
+      candidate.platform_type && asset.platform && String(candidate.platform_type).includes(asset.platform)
+    )) || assets[0];
+    if (matchedAsset && !candidate.acceptable_carriers?.includes(matchedAsset.budget_type)) {
+      candidate.fit_reason += ` 可参考现有产品资产：${matchedAsset.app_name}（${matchedAsset.budget_type || '-'} / ${matchedAsset.launch_status || '-'}）。`;
+    }
+    return candidate;
+  });
+}
+
+app.get('/api/agents/definitions', (req, res) => {
+  const rows = db.prepare(`
+    SELECT ad.*,
+      (SELECT COUNT(*) FROM agent_runs ar WHERE ar.agent_id = ad.id) as run_count,
+      (SELECT MAX(created_at) FROM agent_runs ar WHERE ar.agent_id = ad.id) as last_run_at
+    FROM agent_definitions ad
+    ORDER BY
+      CASE ad.agent_key
+        WHEN 'orchestrator' THEN 1
+        WHEN 'budget_research' THEN 2
+        WHEN 'media_research' THEN 3
+        WHEN 'data_analysis' THEN 4
+        WHEN 'commercial_product' THEN 5
+        WHEN 'asset_compliance' THEN 6
+        WHEN 'development' THEN 7
+        ELSE 99
+      END
+  `).all();
+  res.json(rows);
+});
+
+app.get('/api/agents/runs', (req, res) => {
+  const { agent_key, status, limit = 50 } = req.query;
+  let q = `
+    SELECT ar.*, ad.name as agent_name, ad.agent_key, u.display_name as created_by_name
+    FROM agent_runs ar
+    LEFT JOIN agent_definitions ad ON ar.agent_id = ad.id
+    LEFT JOIN users u ON ar.created_by = u.id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (agent_key) { q += ' AND ad.agent_key = ?'; params.push(agent_key); }
+  if (status) { q += ' AND ar.status = ?'; params.push(status); }
+  q += ' ORDER BY ar.created_at DESC LIMIT ?';
+  params.push(Math.min(Number(limit) || 50, 200));
+  res.json(db.prepare(q).all(...params).map(row => ({
+    ...row,
+    metrics: parseJsonSafe(row.metrics_json, null),
+  })));
+});
+
+app.get('/api/agents/budget-opportunities/summary', (req, res) => {
+  const visibility = buildAgentBudgetVisibilityFilter(req.user, 'abo');
+  const baseSql = `FROM agent_budget_opportunities abo WHERE 1=1${visibility.sql}`;
+  const params = visibility.params;
+  const overview = db.prepare(`
+    SELECT
+      COUNT(*) as total,
+      SUM(CASE WHEN status = 'pending_review' THEN 1 ELSE 0 END) as pending_review,
+      SUM(CASE WHEN status = 'needs_info' THEN 1 ELSE 0 END) as needs_info,
+      SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END) as accepted,
+      SUM(CASE WHEN status IN ('rejected', 'closed') THEN 1 ELSE 0 END) as closed,
+      AVG(opportunity_score) as avg_score,
+      AVG(confidence) as avg_confidence
+    ${baseSql}
+  `).get(...params);
+  const statusStats = db.prepare(`
+    SELECT status, COUNT(*) as count
+    ${baseSql}
+    GROUP BY status
+    ORDER BY count DESC
+  `).all(...params);
+  const priorityStats = db.prepare(`
+    SELECT priority, COUNT(*) as count
+    ${baseSql}
+    GROUP BY priority
+    ORDER BY count DESC
+  `).all(...params);
+  res.json({ overview, status_stats: statusStats, priority_stats: priorityStats });
+});
+
+app.get('/api/agents/budget-opportunities', (req, res) => {
+  const { status, priority, assignee_id, keyword, limit = 100 } = req.query;
+  const visibility = buildAgentBudgetVisibilityFilter(req.user, 'abo');
+  let q = `
+    SELECT abo.*,
+      ar.created_at as agent_run_at,
+      ad.name as agent_name,
+      ua.display_name as assignee_name,
+      ur.display_name as reviewer_name,
+      uc.display_name as created_by_name,
+      l.title as lead_title,
+      t.title as task_title
+    FROM agent_budget_opportunities abo
+    LEFT JOIN agent_runs ar ON abo.agent_run_id = ar.id
+    LEFT JOIN agent_definitions ad ON ar.agent_id = ad.id
+    LEFT JOIN users ua ON abo.assignee_id = ua.id
+    LEFT JOIN users ur ON abo.reviewed_by = ur.id
+    LEFT JOIN users uc ON abo.created_by = uc.id
+    LEFT JOIN leads l ON abo.lead_id = l.id
+    LEFT JOIN tasks t ON abo.task_id = t.id
+    WHERE 1=1
+  `;
+  const params = [];
+  q += visibility.sql;
+  params.push(...visibility.params);
+  if (status) { q += ' AND abo.status = ?'; params.push(status); }
+  if (priority) { q += ' AND abo.priority = ?'; params.push(priority); }
+  if (assignee_id) { q += ' AND abo.assignee_id = ?'; params.push(assignee_id); }
+  if (keyword) {
+    q += ' AND (abo.budget_partner LIKE ? OR abo.budget_product LIKE ? OR abo.evidence_summary LIKE ?)';
+    params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+  }
+  q += ' ORDER BY abo.created_at DESC LIMIT ?';
+  params.push(Math.min(Number(limit) || 100, 300));
+  res.json(db.prepare(q).all(...params).map(row => mapAgentBudgetOpportunity({
+    ...row,
+    lead_title: decrypt(row.lead_title),
+    task_title: decrypt(row.task_title),
+  })));
+});
+
+app.get('/api/agents/budget-opportunities/:id', (req, res) => {
+  const row = db.prepare(`
+    SELECT abo.*,
+      ar.output_summary as run_output_summary,
+      ar.created_at as agent_run_at,
+      ad.name as agent_name,
+      ua.display_name as assignee_name,
+      ur.display_name as reviewer_name,
+      uc.display_name as created_by_name,
+      l.title as lead_title,
+      t.title as task_title
+    FROM agent_budget_opportunities abo
+    LEFT JOIN agent_runs ar ON abo.agent_run_id = ar.id
+    LEFT JOIN agent_definitions ad ON ar.agent_id = ad.id
+    LEFT JOIN users ua ON abo.assignee_id = ua.id
+    LEFT JOIN users ur ON abo.reviewed_by = ur.id
+    LEFT JOIN users uc ON abo.created_by = uc.id
+    LEFT JOIN leads l ON abo.lead_id = l.id
+    LEFT JOIN tasks t ON abo.task_id = t.id
+    WHERE abo.id = ?
+  `).get(req.params.id);
+  if (!row) return res.status(404).json({ error: '预算机会不存在' });
+  const visibility = buildAgentBudgetVisibilityFilter(req.user, 'abo');
+  if (visibility.sql) {
+    const allowed = db.prepare(`SELECT 1 FROM agent_budget_opportunities abo WHERE abo.id = ?${visibility.sql}`)
+      .get(req.params.id, ...visibility.params);
+    if (!allowed) return res.status(403).json({ error: '无权访问该预算机会' });
+  }
+  res.json(mapAgentBudgetOpportunity({
+    ...row,
+    lead_title: decrypt(row.lead_title),
+    task_title: decrypt(row.task_title),
+  }));
+});
+
+app.post('/api/agents/budget-opportunities', canWrite, (req, res) => {
+  const result = insertAgentBudgetOpportunity(req.body, req.user.id);
+  if (result.error) return res.status(400).json({ error: result.error });
+  notifyAgentUsers(
+    'agent_budget_opportunity_created',
+    '新增预算机会待审核',
+    `预算研究 Agent 记录了新的预算机会：${req.body.budget_partner}`,
+    '/agents/budget-opportunities',
+    [result.assigneeId]
+  );
+  res.json({ id: result.id });
+});
+
+app.post('/api/agents/budget-research/run', canWrite, (req, res) => {
+  const agent = db.prepare("SELECT * FROM agent_definitions WHERE agent_key = 'budget_research'").get();
+  if (!agent) return res.status(500).json({ error: '预算研究 Agent 未初始化' });
+  const inputSummary = req.body?.input_summary || '基于现有预算管理、线索池、产品资产生成预算机会候选。';
+  const run = db.prepare(`
+    INSERT INTO agent_runs (agent_id, run_type, trigger_source, status, input_summary, started_at, created_by)
+    VALUES (?, ?, ?, 'running', ?, CURRENT_TIMESTAMP, ?)
+  `).run(agent.id, req.body?.run_type || 'manual', req.body?.trigger_source || 'user', inputSummary, req.user.id);
+
+  try {
+    const candidates = buildBudgetResearchCandidates(req.user.id);
+    const created = candidates.map(candidate => insertAgentBudgetOpportunity(candidate, req.user.id, run.lastInsertRowid));
+    const successCount = created.filter(item => !item.error).length;
+    const metrics = {
+      candidates: candidates.length,
+      created: successCount,
+      source_mix: candidates.reduce((acc, item) => {
+        const source = item.raw_payload?.source || 'unknown';
+        acc[source] = (acc[source] || 0) + 1;
+        return acc;
+      }, {}),
+    };
+    const outputSummary = `生成 ${successCount} 条预算机会，全部进入人工审核台。`;
+    db.prepare(`
+      UPDATE agent_runs SET status = 'completed', output_summary = ?, metrics_json = ?, finished_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(outputSummary, JSON.stringify(metrics), run.lastInsertRowid);
+    notifyAgentUsers(
+      'agent_budget_research_completed',
+      '预算研究 Agent 已完成',
+      outputSummary,
+      '/agents/budget-opportunities',
+      [req.user.id]
+    );
+    res.json({ id: run.lastInsertRowid, created: successCount, output_summary: outputSummary, metrics });
+  } catch (e) {
+    db.prepare(`
+      UPDATE agent_runs SET status = 'failed', error_message = ?, finished_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(e.message, run.lastInsertRowid);
+    res.status(500).json({ error: e.message || '预算研究 Agent 运行失败' });
+  }
+});
+
+app.put('/api/agents/budget-opportunities/:id', canWrite, (req, res) => {
+  const existing = db.prepare('SELECT * FROM agent_budget_opportunities WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: '预算机会不存在' });
+  const {
+    budget_partner, budget_product, budget_source, platform_type, ad_format,
+    monetization_model, acceptable_carriers, target_media, opportunity_score,
+    confidence, priority, evidence_links, evidence_summary, fit_reason,
+    risk_notes, next_action, assignee_id,
+  } = req.body;
+  const normalizedPriority = priority === undefined
+    ? existing.priority
+    : (AGENT_BUDGET_PRIORITIES.has(priority) ? priority : existing.priority);
+  db.prepare(`
+    UPDATE agent_budget_opportunities SET
+      budget_partner = COALESCE(?, budget_partner),
+      budget_product = COALESCE(?, budget_product),
+      budget_source = COALESCE(?, budget_source),
+      platform_type = COALESCE(?, platform_type),
+      ad_format = COALESCE(?, ad_format),
+      monetization_model = COALESCE(?, monetization_model),
+      acceptable_carriers = COALESCE(?, acceptable_carriers),
+      target_media = COALESCE(?, target_media),
+      opportunity_score = COALESCE(?, opportunity_score),
+      confidence = COALESCE(?, confidence),
+      priority = COALESCE(?, priority),
+      evidence_links = COALESCE(?, evidence_links),
+      evidence_summary = COALESCE(?, evidence_summary),
+      fit_reason = COALESCE(?, fit_reason),
+      risk_notes = COALESCE(?, risk_notes),
+      next_action = COALESCE(?, next_action),
+      assignee_id = COALESCE(?, assignee_id),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    budget_partner || null,
+    budget_product || null,
+    budget_source || null,
+    platform_type || null,
+    ad_format || null,
+    monetization_model || null,
+    acceptable_carriers || null,
+    target_media || null,
+    opportunity_score === undefined ? null : normalizeAgentScore(opportunity_score),
+    confidence === undefined ? null : normalizeAgentConfidence(confidence),
+    normalizedPriority,
+    evidence_links === undefined ? null : normalizeEvidenceLinks(evidence_links),
+    evidence_summary || null,
+    fit_reason || null,
+    risk_notes || null,
+    next_action || null,
+    assignee_id || null,
+    req.params.id
+  );
+  res.json({ success: true });
+});
+
+app.post('/api/agents/budget-opportunities/:id/review', canWrite, (req, res) => {
+  const { action, review_note, assignee_id, create_task = true } = req.body;
+  const opportunity = db.prepare('SELECT * FROM agent_budget_opportunities WHERE id = ?').get(req.params.id);
+  if (!opportunity) return res.status(404).json({ error: '预算机会不存在' });
+
+  const reviewerId = req.user.id;
+  const nextAssigneeId = assignee_id || opportunity.assignee_id || getDefaultAgentAssigneeId();
+
+  if (action === 'needs_info') {
+    db.prepare(`
+      UPDATE agent_budget_opportunities SET
+        status = 'needs_info',
+        review_note = ?,
+        assignee_id = ?,
+        reviewed_by = ?,
+        reviewed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(review_note || null, nextAssigneeId, reviewerId, req.params.id);
+    notifyAgentUsers(
+      'agent_budget_opportunity_needs_info',
+      '预算机会需补充信息',
+      `${opportunity.budget_partner} 需要补充信息：${review_note || opportunity.next_action || '请完善证据和对接条件'}`,
+      '/agents/budget-opportunities',
+      [nextAssigneeId]
+    );
+    return res.json({ success: true, status: 'needs_info' });
+  }
+
+  if (action === 'reject' || action === 'close') {
+    const status = action === 'reject' ? 'rejected' : 'closed';
+    db.prepare(`
+      UPDATE agent_budget_opportunities SET
+        status = ?,
+        review_note = ?,
+        reviewed_by = ?,
+        reviewed_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(status, review_note || null, reviewerId, req.params.id);
+    return res.json({ success: true, status });
+  }
+
+  if (action !== 'accept') {
+    return res.status(400).json({ error: '审核动作不合法' });
+  }
+
+  const leadTitle = `预算机会：${opportunity.budget_partner}${opportunity.budget_product ? ` - ${opportunity.budget_product}` : ''}`;
+  const leadDescription = [
+    opportunity.evidence_summary && `证据摘要：${opportunity.evidence_summary}`,
+    opportunity.fit_reason && `适配理由：${opportunity.fit_reason}`,
+    opportunity.risk_notes && `风险提示：${opportunity.risk_notes}`,
+    opportunity.next_action && `下一步：${opportunity.next_action}`,
+    opportunity.evidence_links && `证据链接：\n${opportunity.evidence_links}`,
+  ].filter(Boolean).join('\n\n');
+  const encLead = encryptRow('leads', {
+    title: leadTitle,
+    source: '预算研究 Agent',
+    contact_company: opportunity.budget_partner,
+    description: leadDescription,
+    follow_result: review_note || '已由预算机会审核台采纳，进入商务跟进。',
+  });
+  const lead = db.prepare(`
+    INSERT INTO leads (
+      title, source, source_type, contact_company, description, follow_result,
+      status, assignee_id, priority, created_by
+    ) VALUES (?, ?, 'agent_budget', ?, ?, ?, 'new', ?, ?, ?)
+  `).run(
+    encLead.title,
+    encLead.source,
+    encLead.contact_company,
+    encLead.description,
+    encLead.follow_result,
+    nextAssigneeId,
+    opportunity.priority || 'medium',
+    reviewerId
+  );
+
+  let taskId = null;
+  if (create_task) {
+    const today = new Date().toISOString().slice(0, 10);
+    const due = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const assignee = db.prepare('SELECT team_id FROM users WHERE id = ?').get(nextAssigneeId);
+    const taskTitle = `跟进预算机会：${opportunity.budget_partner}`;
+    const taskDescription = [
+      `来源：预算研究 Agent`,
+      opportunity.budget_product && `预算产品：${opportunity.budget_product}`,
+      opportunity.platform_type && `平台类型：${opportunity.platform_type}`,
+      opportunity.ad_format && `广告形式：${opportunity.ad_format}`,
+      opportunity.next_action && `建议动作：${opportunity.next_action}`,
+      review_note && `审核备注：${review_note}`,
+    ].filter(Boolean).join('\n');
+    const encTask = encryptRow('tasks', { title: taskTitle, description: taskDescription });
+    const task = db.prepare(`
+      INSERT INTO tasks (
+        title, description, date, estimated_completion_date, estimated_hours, status,
+        priority, created_by, assigned_to, team_id, depth
+      ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0)
+    `).run(
+      encTask.title,
+      encTask.description,
+      today,
+      due,
+      2,
+      opportunity.priority === 'urgent' ? 'high' : opportunity.priority || 'medium',
+      reviewerId,
+      nextAssigneeId,
+      assignee?.team_id || null
+    );
+    taskId = task.lastInsertRowid;
+  }
+
+  db.prepare(`
+    UPDATE agent_budget_opportunities SET
+      status = 'accepted',
+      assignee_id = ?,
+      lead_id = ?,
+      task_id = ?,
+      review_note = ?,
+      reviewed_by = ?,
+      reviewed_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(nextAssigneeId, lead.lastInsertRowid, taskId, review_note || null, reviewerId, req.params.id);
+
+  notifyAgentUsers(
+    'agent_budget_opportunity_accepted',
+    '预算机会已采纳',
+    `${opportunity.budget_partner} 已转入线索池${taskId ? '并生成跟进任务' : ''}。`,
+    '/leads',
+    [nextAssigneeId]
+  );
+
+  res.json({ success: true, status: 'accepted', lead_id: lead.lastInsertRowid, task_id: taskId });
+});
+
+app.get('/api/agents/notification-rules', (req, res) => {
+  const rows = db.prepare(`
+    SELECT anr.*, u.display_name as user_name, t.name as team_name
+    FROM agent_notification_rules anr
+    LEFT JOIN users u ON anr.user_id = u.id
+    LEFT JOIN teams t ON anr.team_id = t.id
+    ORDER BY anr.created_at DESC
+  `).all();
+  res.json(rows);
+});
+
+app.post('/api/agents/notification-rules', canWrite, (req, res) => {
+  const { event_type, role_scope, department_scope, team_id, user_id, enabled = true } = req.body;
+  if (!event_type) return res.status(400).json({ error: '事件类型必填' });
+  const result = db.prepare(`
+    INSERT INTO agent_notification_rules (
+      event_type, role_scope, department_scope, team_id, user_id, enabled, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(event_type, role_scope || null, department_scope || null, team_id || null, user_id || null, enabled ? 1 : 0, req.user.id);
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/agents/notification-rules/:id', canWrite, (req, res) => {
+  const { event_type, role_scope, department_scope, team_id, user_id, enabled } = req.body;
+  db.prepare(`
+    UPDATE agent_notification_rules SET
+      event_type = COALESCE(?, event_type),
+      role_scope = ?,
+      department_scope = ?,
+      team_id = ?,
+      user_id = ?,
+      enabled = COALESCE(?, enabled),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    event_type || null,
+    role_scope || null,
+    department_scope || null,
+    team_id || null,
+    user_id || null,
+    enabled === undefined ? null : (enabled ? 1 : 0),
+    req.params.id
+  );
+  res.json({ success: true });
+});
+
+app.delete('/api/agents/notification-rules/:id', canWrite, (req, res) => {
+  db.prepare('DELETE FROM agent_notification_rules WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
+
 // =========== 预算管理 API ===========
 
 // 获取预算列表（按角色过滤）
@@ -7046,6 +7986,36 @@ app.get('/api/stats', (req, res) => {
     recentInteractions,
     showRelationshipPanels,
   });
+});
+
+app.get('/api/ai-suggestions', (req, res) => {
+  try {
+    const businessLine = String(req.query.business_line || AI_SUGGESTION_DEFAULT_BUSINESS_LINE).trim()
+      || AI_SUGGESTION_DEFAULT_BUSINESS_LINE;
+    let feed = getCurrentAiSuggestionFeed(db, businessLine);
+    if (!feed) {
+      try {
+        const syncResult = syncDistillationAiSuggestionFeed(db, { businessLine });
+        feed = syncResult?.feed || getCurrentAiSuggestionFeed(db, businessLine);
+      } catch (syncError) {
+        console.error(`按需同步 AI 建议失败(${businessLine}):`, syncError);
+      }
+    }
+    if (!feed) {
+      return res.status(503).json({
+        error: 'AI 建议数据暂未同步',
+        meta: {
+          business_line: businessLine,
+          unavailable: true,
+        },
+        suggestions: [],
+      });
+    }
+    return res.json(feed);
+  } catch (error) {
+    console.error('加载 AI 建议失败:', error);
+    return res.status(500).json({ error: '加载 AI 建议失败' });
+  }
 });
 
 // =========== 公司研究表 ===========

@@ -1,0 +1,208 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "generated_at": "2026-07-06T14:45:39.868Z",
+    "distillation_generated_at": "2026-07-06T01:45:45.723Z",
+    "business_line": "zhixiao",
+    "business_line_label": "支小",
+    "window_start": "2026-04-01",
+    "window_end": "2026-06-30",
+    "window_label": "2026-04-01 ~ 2026-06-30",
+    "eval_total_cases": 220,
+    "eval_pass_count": 220,
+    "eval_pass_rate": "100.00%",
+    "suggestion_count": 5,
+    "snapshot_key": "f68ef63171a7ca0db650ba808e505eebce9cf4d7"
+  },
+  "suggestions": [
+    {
+      "id": "ai-revenue-drop-乐响热闻口袋",
+      "title": "乐响热闻口袋近7日收入较前7日回落26.6%",
+      "priority": "high",
+      "status": "pending_review",
+      "confidence": 89,
+      "business_line": "支小",
+      "summary": "乐响热闻口袋近7日日均收入 3,708.51 元，较前7日日均 5,051.82 元下降 26.6%。建议先从预算动作和核心入口质量排查。",
+      "recommendation": "先复核 乐响热闻口袋 最近 3 天预算变更、入口切换与异常名单，再优先收缩低转化入口的试探量。",
+      "expected_impact": "先止住回撤段的无效消耗，再缩短异常定位时间。",
+      "window_label": "样本窗：2026-06-24 ~ 2026-06-30",
+      "scope_tags": [
+        "预算侧",
+        "收入回撤",
+        "支小"
+      ],
+      "evidence_sources": [
+        "支小应用收入",
+        "支小广告类型数据",
+        "支小应用维度数据",
+        "支小应用媒体占比"
+      ],
+      "evidence_highlights": [
+        "近7日日均收入 3,708.51 元，较前7日下降 26.6%。",
+        "近7日日均订单 55,237，较前7日变化 16.5%。",
+        "最新一天 河马剧场（实验组2-分成25%） 贡献订单占比 19%，需要同步核验入口结构是否过于集中。"
+      ],
+      "actions": [
+        "复核最近 3 天预算与入口变更清单",
+        "拉齐收入、订单与媒体结构的异常段",
+        "对低转化入口先做小幅收量并观察次日回传"
+      ],
+      "related_product_name": "乐响热闻口袋",
+      "related_subject_name": "广州辉响网络科技有限公司",
+      "business_side": "预算侧",
+      "budget_side": "C端",
+      "owner_role": "C端预算策略负责人",
+      "type": "revenue_diagnosis"
+    },
+    {
+      "id": "ai-growth-独乐乐短剧",
+      "title": "独乐乐短剧近7日收入提升22.6%，可分层回补预算",
+      "priority": "high",
+      "status": "ready_to_execute",
+      "confidence": 87,
+      "business_line": "支小",
+      "summary": "独乐乐短剧近7日日均收入 21,299.95 元，较前7日增长 22.6%；订单日均同步变化 10.8%。当前更适合小步回补，而不是一次性放量。",
+      "recommendation": "优先给 独乐乐短剧 做分层回补：先补核心入口 10% 左右，再连续观察 2-3 天收入与订单是否继续同向增长。",
+      "expected_impact": "把增长段延续下来，同时避免一次性抬量放大波动。",
+      "window_label": "样本窗：2026-06-24 ~ 2026-06-30",
+      "scope_tags": [
+        "预算侧",
+        "增长段",
+        "支小"
+      ],
+      "evidence_sources": [
+        "支小应用收入",
+        "支小广告类型数据",
+        "支小应用维度数据"
+      ],
+      "evidence_highlights": [
+        "近7日日均收入 21,299.95 元，较前7日增长 22.6%。",
+        "近7日日均订单 102,970，较前7日变化 10.8%。",
+        "最新一天收入 19,301.02 元，订单 123,530。"
+      ],
+      "actions": [
+        "给核心入口补 10% 左右测试量",
+        "按天跟踪收入与订单是否继续同向增长",
+        "若次日效率回落，优先撤回新增试探量"
+      ],
+      "related_product_name": "独乐乐短剧",
+      "related_subject_name": "广西盛悦网络科技有限公司",
+      "business_side": "预算侧",
+      "budget_side": "C端",
+      "owner_role": "C端预算运营负责人",
+      "type": "budget_adjustment"
+    },
+    {
+      "id": "ai-collaboration-声里人间",
+      "title": "声里人间收入回撤段需要预算侧与流量侧联合复盘",
+      "priority": "high",
+      "status": "pending_review",
+      "confidence": 87,
+      "business_line": "支小",
+      "summary": "声里人间近7日收入较前7日回落 14.2%。这个阶段更适合让预算侧和流量侧在同一观察窗内复盘预算动作与媒体结构，而不是分开看。",
+      "recommendation": "创建一条联合复盘任务，预算侧给出预算与入口变更记录，流量侧给出媒体结构与量级波动说明，当天完成一次口径对齐。",
+      "expected_impact": "减少跨角色反复对口径，缩短问题闭环时间。",
+      "window_label": "样本窗：2026-06-24 ~ 2026-06-30",
+      "scope_tags": [
+        "协同",
+        "联合复盘",
+        "支小"
+      ],
+      "evidence_sources": [
+        "支小应用收入",
+        "支小广告类型数据",
+        "支小应用维度数据",
+        "支小应用媒体占比"
+      ],
+      "evidence_highlights": [
+        "近7日日均收入 11,036.61 元，较前7日下降 14.2%。",
+        "近7日日均订单 70,211，需要与预算动作一起复核。",
+        "最新一天 河马剧场（实验组2-分成25%） 订单占比 22.3%，建议同步核验媒体结构是否放大了波动。"
+      ],
+      "actions": [
+        "创建预算侧/流量侧联合复盘任务",
+        "统一异常观察窗与复盘口径",
+        "沉淀一次可复用的收入回撤排查模板"
+      ],
+      "related_product_name": "声里人间",
+      "related_subject_name": "广州良程云启科技有限公司",
+      "business_side": "协同",
+      "budget_side": "共享",
+      "owner_role": "部门负责人",
+      "type": "collaboration"
+    },
+    {
+      "id": "ai-media-mix-音浪社",
+      "title": "音浪社订单向 河马剧场（实验组2-分成25%） 偏集中，建议补第二梯队测试量",
+      "priority": "medium",
+      "status": "ready_to_execute",
+      "confidence": 86,
+      "business_line": "支小",
+      "summary": "最新一天 音浪社 共产生 86,065 单，其中 河马剧场（实验组2-分成25%） 占 23.1%。当单媒体占比偏高时，日波动会更敏感。",
+      "recommendation": "保持 河马剧场（实验组2-分成25%） 核心量级不变，同时给 趣头条 等第二梯队媒体补一轮 2-3 天测试量。",
+      "expected_impact": "降低媒体过度集中的波动风险，让放量更平滑。",
+      "window_label": "样本窗：2026-06-30",
+      "scope_tags": [
+        "流量侧",
+        "媒体结构",
+        "支小"
+      ],
+      "evidence_sources": [
+        "支小应用媒体占比"
+      ],
+      "evidence_highlights": [
+        "河马剧场（实验组2-分成25%） 最新一天贡献订单 19,886，占比 23.1%。",
+        "趣头条 同期贡献订单 19,446，占比 22.6%。",
+        "该产品最新一天总订单 86,065，具备做结构微调的样本基础。"
+      ],
+      "actions": [
+        "拉出第二梯队媒体清单并分配小额测试量",
+        "连续观察 2-3 天订单占比和收入波动",
+        "保留高质量媒体的最小有效配额"
+      ],
+      "related_product_name": "音浪社",
+      "related_subject_name": "凤凰县容珍百货行",
+      "business_side": "流量侧",
+      "budget_side": "共享",
+      "owner_role": "流量运营",
+      "type": "media_mix"
+    },
+    {
+      "id": "ai-observing-垚盛商行",
+      "title": "垚盛商行收入开始抬头，但仍建议继续观察",
+      "priority": "low",
+      "status": "observing",
+      "confidence": 76,
+      "business_line": "支小",
+      "summary": "垚盛商行近7日日均收入 243.95 元，从低基数开始抬头，但当前绝对量仍不高，贸然扩量容易把判断做偏。",
+      "recommendation": "先保持当前量级，再补 2-3 天观察窗，等收入与订单继续同向增长后再决定是否加量。",
+      "expected_impact": "避免低基数误判，把试探量放在更稳的判断之后。",
+      "window_label": "样本窗：2026-06-24 ~ 2026-06-30",
+      "scope_tags": [
+        "观察",
+        "低基数增长",
+        "支小"
+      ],
+      "evidence_sources": [
+        "支小应用收入",
+        "支小广告类型数据"
+      ],
+      "evidence_highlights": [
+        "近7日日均收入 243.95 元，前7日日均 0 元。",
+        "近7日日均订单 0，当前仍属于小规模样本。",
+        "最新一天收入 480.52 元，建议先延长观察窗再决定动作。"
+      ],
+      "actions": [
+        "延长观察窗 2-3 天",
+        "补充渠道/入口质量信息",
+        "只保留当前有效量级，不提前放大试探量"
+      ],
+      "related_product_name": "垚盛商行",
+      "related_subject_name": "中山市奇轩电子商务有限公司",
+      "business_side": "预算侧",
+      "budget_side": "C端",
+      "owner_role": "C端预算策略负责人",
+      "type": "revenue_diagnosis"
+    }
+  ]
+}

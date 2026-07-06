@@ -10,7 +10,7 @@ import {
   BranchesOutlined, SolutionOutlined, ToolOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined,
   AppstoreOutlined, HistoryOutlined, GlobalOutlined, CloseOutlined,
-  ScheduleOutlined
+  RobotOutlined, ScheduleOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -33,6 +33,7 @@ const PAGE_TITLE_MAP = {
   '/goals': '目标管理',
   '/weekly-reports': '周报管理',
   '/leads': '商机',
+  '/agents': 'Agent 中台',
   '/strategies': '策略',
   '/dev-tasks': '需求',
   '/company-subjects': '主体管理',
@@ -325,6 +326,7 @@ import TaskBoard from './pages/TaskBoard';
 import Goals from './pages/Goals';
 import WeeklyReports from './pages/WeeklyReports';
 import Leads from './pages/Leads';
+import AgentOperations from './pages/AgentOperations';
 import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
 import ProductAssets from './pages/ProductAssets';
@@ -658,6 +660,7 @@ function AppLayout() {
   // ── 业务流转 ────────────────────────────────────────────────
   const bizFlowChildren = [
     canAccessMenu('/leads') && { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">商机</Link> },
+    canAccessMenu('/agents') && { key: '/agents', icon: <RobotOutlined />, label: <Link to="/agents">Agent 中台</Link> },
     canAccessMenu('/strategies') && { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
     canAccessMenu('/dev-tasks') && { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
   ].filter(Boolean);
@@ -1113,6 +1116,7 @@ function AppLayout() {
             <Route path="/goals" element={<PrivateRoute><Goals /></PrivateRoute>} />
             <Route path="/weekly-reports" element={<PrivateRoute><WeeklyReports /></PrivateRoute>} />
             <Route path="/leads" element={<PrivateRoute><Leads /></PrivateRoute>} />
+            <Route path="/agents" element={<PrivateRoute><AgentOperations /></PrivateRoute>} />
             <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
             <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />

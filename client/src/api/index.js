@@ -100,6 +100,10 @@ export const statsApi = {
   get: () => api.get('/stats').then(r => r.data),
 };
 
+export const aiSuggestionsApi = {
+  list: (params) => api.get('/ai-suggestions', { params }).then(r => r.data),
+};
+
 export const companiesApi = {
   list: (params) => api.get('/companies', { params }).then(r => r.data),
   get: (id) => api.get(`/companies/${id}`).then(r => r.data),
@@ -265,6 +269,22 @@ export const budgetsApi = {
   create: (data) => api.post('/budgets', data).then(r => r.data),
   update: (id, data) => api.put(`/budgets/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/budgets/${id}`).then(r => r.data),
+};
+
+export const agentsApi = {
+  definitions: () => api.get('/agents/definitions').then(r => r.data),
+  runs: (params) => api.get('/agents/runs', { params }).then(r => r.data),
+  runBudgetResearch: (data) => api.post('/agents/budget-research/run', data).then(r => r.data),
+  budgetSummary: () => api.get('/agents/budget-opportunities/summary').then(r => r.data),
+  budgetOpportunities: (params) => api.get('/agents/budget-opportunities', { params }).then(r => r.data),
+  getBudgetOpportunity: (id) => api.get(`/agents/budget-opportunities/${id}`).then(r => r.data),
+  createBudgetOpportunity: (data) => api.post('/agents/budget-opportunities', data).then(r => r.data),
+  updateBudgetOpportunity: (id, data) => api.put(`/agents/budget-opportunities/${id}`, data).then(r => r.data),
+  reviewBudgetOpportunity: (id, data) => api.post(`/agents/budget-opportunities/${id}/review`, data).then(r => r.data),
+  notificationRules: () => api.get('/agents/notification-rules').then(r => r.data),
+  createNotificationRule: (data) => api.post('/agents/notification-rules', data).then(r => r.data),
+  updateNotificationRule: (id, data) => api.put(`/agents/notification-rules/${id}`, data).then(r => r.data),
+  deleteNotificationRule: (id) => api.delete(`/agents/notification-rules/${id}`).then(r => r.data),
 };
 
 export const productAssetsApi = {

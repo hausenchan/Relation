@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Card, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions } from 'antd';
+import { Card, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip, Modal, Form, Input, Select, DatePicker, message, Popconfirm, Grid, Drawer, Descriptions, Empty } from 'antd';
 import {
   TeamOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   CheckOutlined, PlayCircleOutlined, FlagOutlined, UserOutlined,
-  ThunderboltOutlined, ScheduleOutlined, LikeFilled, CheckCircleFilled
+  ThunderboltOutlined, ScheduleOutlined, LikeFilled, CheckCircleFilled,
+  RobotOutlined, BulbOutlined, BarChartOutlined, FundOutlined, EyeOutlined
 } from '@ant-design/icons';
-import { statsApi, remindersApi, tasksApi, followUpTasksApi, usersApi } from '../api';
+import { statsApi, remindersApi, tasksApi, followUpTasksApi, usersApi, aiSuggestionsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -46,6 +47,7 @@ const TASK_TAB_KEYS = {
   assigned: 'assigned-tasks',
   watched: 'watched-tasks',
   team: 'team-tasks',
+  ai: 'ai-suggestions',
 };
 const TASK_STAT_FILTERS = {
   month: 'month',
@@ -55,11 +57,26 @@ const TASK_STAT_FILTERS = {
   todayDone: 'todayDone',
 };
 
+const aiSuggestionStatusMap = {
+  pending_review: { label: '待确认', color: 'gold', badge: 'warning' },
+  ready_to_execute: { label: '可执行', color: 'blue', badge: 'processing' },
+  observing: { label: '建议观察', color: 'default', badge: 'default' },
+};
+
+const aiSuggestionTypeMap = {
+  revenue_diagnosis: { label: '收入诊断', color: 'volcano' },
+  budget_adjustment: { label: '预算调整', color: 'geekblue' },
+  media_mix: { label: '媒体结构', color: 'cyan' },
+  collaboration: { label: '协同提醒', color: 'purple' },
+};
+
 const priorityMap = {
   high:   { label: '高', color: 'red' },
   medium: { label: '中', color: 'orange' },
   low:    { label: '低', color: 'default' },
 };
+const AI_SUGGESTION_PRIORITY_VALUES = ['high', 'medium', 'low'];
+const AI_SUGGESTION_STATUS_VALUES = Object.keys(aiSuggestionStatusMap);
 
 function CompletedBoostIcon() {
   return (
@@ -366,6 +383,17 @@ export default function Dashboard() {
   const [teamTaskAssignerFilter, setTeamTaskAssignerFilter] = useState([]);
   const [teamTaskFollowerFilter, setTeamTaskFollowerFilter] = useState([]);
   const [teamTaskTitleSearch, setTeamTaskTitleSearch] = useState('');
+  const [aiSuggestions, setAiSuggestions] = useState([]);
+  const [aiSuggestionMeta, setAiSuggestionMeta] = useState(null);
+  const [aiSuggestionsLoading, setAiSuggestionsLoading] = useState(true);
+  const [aiSuggestionLoadError, setAiSuggestionLoadError] = useState('');
+  const [aiSuggestionStatusFilter, setAiSuggestionStatusFilter] = useState(AI_SUGGESTION_STATUS_VALUES);
+  const [aiSuggestionPriorityFilter, setAiSuggestionPriorityFilter] = useState(AI_SUGGESTION_PRIORITY_VALUES);
+  const [aiSuggestionBusinessLineFilter, setAiSuggestionBusinessLineFilter] = useState([]);
+  const [aiSuggestionTypeFilter, setAiSuggestionTypeFilter] = useState([]);
+  const [aiSuggestionSearch, setAiSuggestionSearch] = useState('');
+  const [aiSuggestionDrawerOpen, setAiSuggestionDrawerOpen] = useState(false);
+  const [activeAiSuggestion, setActiveAiSuggestion] = useState(null);
   const [activeTaskTab, setActiveTaskTab] = useState(TASK_TAB_KEYS.execution);
   const [taskStatFilterByTab, setTaskStatFilterByTab] = useState({});
 
@@ -411,6 +439,14 @@ export default function Dashboard() {
   }, [taskColumnWidths]);
 
   useEffect(() => {
+    if (activeTaskTab !== TASK_TAB_KEYS.ai) return undefined;
+    const timer = setInterval(() => {
+      loadAiSuggestions({ silent: true });
+    }, 300000);
+    return () => clearInterval(timer);
+  }, [activeTaskTab, loadAiSuggestions]);
+
+  useEffect(() => {
     if (activeTaskTab === TASK_TAB_KEYS.team && !canViewTeamTasks) {
       setActiveTaskTab(TASK_TAB_KEYS.execution);
     }
@@ -442,6 +478,25 @@ export default function Dashboard() {
     if (timeDiff !== 0) return timeDiff;
     return priorityRank(a.priority) - priorityRank(b.priority);
   });
+
+  const loadAiSuggestions = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setAiSuggestionsLoading(true);
+    try {
+      const data = await aiSuggestionsApi.list({ business_line: 'zhixiao' });
+      setAiSuggestions(Array.isArray(data?.suggestions) ? data.suggestions : []);
+      setAiSuggestionMeta(data?.meta || null);
+      setAiSuggestionLoadError('');
+      return data;
+    } catch (err) {
+      console.error('加载 AI 建议失败:', err);
+      setAiSuggestions([]);
+      setAiSuggestionMeta(null);
+      setAiSuggestionLoadError(err.response?.data?.error || err.message || 'AI 建议暂不可用');
+      return null;
+    } finally {
+      if (!silent) setAiSuggestionsLoading(false);
+    }
+  }, []);
 
   const buildAssignedTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
@@ -708,6 +763,8 @@ export default function Dashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
+      const aiSuggestionsPromise = loadAiSuggestions();
+
       // 基础统计
       const statsData = await statsApi.get();
       setStats(statsData);
@@ -723,6 +780,7 @@ export default function Dashboard() {
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
       setWatchedTasks(buildWatchedTasks(allTasks, watchedFollowUpData));
       setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
+      await aiSuggestionsPromise;
 
     } catch (err) {
       console.error('加载数据失败:', err);
@@ -1052,6 +1110,72 @@ export default function Dashboard() {
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.team);
   });
 
+  const normalizedAiSuggestionKeyword = String(aiSuggestionSearch || '').trim().toLowerCase();
+  const filteredAiSuggestions = aiSuggestions.filter(item => {
+    if (!aiSuggestionStatusFilter.includes(item.status)) return false;
+    if (!aiSuggestionPriorityFilter.includes(item.priority)) return false;
+    if (aiSuggestionBusinessLineFilter.length > 0 && !aiSuggestionBusinessLineFilter.includes(item.business_line)) return false;
+    if (aiSuggestionTypeFilter.length > 0 && !aiSuggestionTypeFilter.includes(item.type)) return false;
+    if (!normalizedAiSuggestionKeyword) return true;
+    return [
+      item.title,
+      item.summary,
+      item.recommendation,
+      item.business_side,
+      item.business_line,
+      item.owner_role,
+      ...(item.scope_tags || []),
+      ...(item.evidence_sources || []),
+    ].some(value => String(value || '').toLowerCase().includes(normalizedAiSuggestionKeyword));
+  });
+  const aiSuggestionBusinessLineOptions = [...new Set(aiSuggestions.map(item => item.business_line).filter(Boolean))]
+    .map(value => ({ value, label: value }));
+  const aiSuggestionWindowText = aiSuggestionMeta?.window_start && aiSuggestionMeta?.window_end
+    ? `最近训练窗：${aiSuggestionMeta.business_line_label || '支小'} ${aiSuggestionMeta.window_start.slice(0, 7)} ~ ${aiSuggestionMeta.window_end.slice(0, 7)}`
+    : '最近训练窗：支小';
+  const aiSuggestionMetaText = aiSuggestionLoadError
+    || (
+      aiSuggestionMeta?.eval_total_cases && aiSuggestionMeta?.eval_pass_count
+        ? `评测通过 ${aiSuggestionMeta.eval_pass_count}/${aiSuggestionMeta.eval_total_cases}${aiSuggestionMeta.eval_pass_rate ? `，通过率 ${aiSuggestionMeta.eval_pass_rate}` : ''}`
+        : '蒸馏输出已按建议卡片整理，可直接转任务'
+    );
+  const activeAiSuggestionActions = Array.isArray(activeAiSuggestion?.actions) ? activeAiSuggestion.actions : [];
+  const activeAiSuggestionEvidenceSources = Array.isArray(activeAiSuggestion?.evidence_sources) ? activeAiSuggestion.evidence_sources : [];
+  const activeAiSuggestionEvidenceHighlights = Array.isArray(activeAiSuggestion?.evidence_highlights) ? activeAiSuggestion.evidence_highlights : [];
+
+  const aiSuggestionSummaryCards = [
+    {
+      title: 'AI建议',
+      value: filteredAiSuggestions.length,
+      icon: <RobotOutlined />,
+      gradient: 'linear-gradient(135deg, #4f46e5 0%, #2563eb 100%)',
+    },
+    {
+      title: '待确认',
+      value: filteredAiSuggestions.filter(item => item.status === 'pending_review').length,
+      icon: <BulbOutlined />,
+      gradient: 'linear-gradient(135deg, #f59e0b 0%, #f97316 100%)',
+    },
+    {
+      title: '高优先',
+      value: filteredAiSuggestions.filter(item => item.priority === 'high').length,
+      icon: <FlagOutlined />,
+      gradient: 'linear-gradient(135deg, #ef4444 0%, #fb7185 100%)',
+    },
+    {
+      title: '预算侧',
+      value: filteredAiSuggestions.filter(item => item.business_side === '预算侧').length,
+      icon: <FundOutlined />,
+      gradient: 'linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%)',
+    },
+    {
+      title: '流量侧',
+      value: filteredAiSuggestions.filter(item => item.business_side === '流量侧').length,
+      icon: <BarChartOutlined />,
+      gradient: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+    },
+  ];
+
   const taskStatCards = [
     {
       title: '本月任务',
@@ -1095,6 +1219,55 @@ export default function Dashboard() {
       ? <Tooltip title={value}>{value}</Tooltip>
       : <Text type="secondary">-</Text>
   );
+
+  const openAiSuggestionDrawer = (suggestion) => {
+    setActiveAiSuggestion(suggestion);
+    setAiSuggestionDrawerOpen(true);
+  };
+
+  const handleCreateTaskFromSuggestion = (suggestion) => {
+    if (!suggestion) return;
+    const actions = Array.isArray(suggestion.actions) ? suggestion.actions : [];
+    const evidenceSources = Array.isArray(suggestion.evidence_sources) ? suggestion.evidence_sources : [];
+    setEditing(null);
+    form.resetFields();
+    form.setFieldsValue({
+      title: `[AI建议] ${suggestion.title}`,
+      description: [
+        suggestion.summary,
+        '',
+        '建议动作：',
+        ...actions.map((item, index) => `${index + 1}. ${item}`),
+        '',
+        '证据来源：',
+        ...evidenceSources.map((item, index) => `${index + 1}. ${item}`),
+      ].join('\n'),
+      result: '',
+      date: dayjs(),
+      estimated_completion_date: dayjs().add(suggestion.priority === 'high' ? 1 : suggestion.priority === 'medium' ? 2 : 3, 'day'),
+      priority: suggestion.priority,
+      assigned_to: user?.id,
+      shared_to: [],
+      status: 'pending',
+    });
+    setAiSuggestionDrawerOpen(false);
+    setModalOpen(true);
+  };
+
+  const renderAiSuggestionConfidence = (confidence) => {
+    const color = confidence >= 88 ? '#16a34a' : confidence >= 80 ? '#2563eb' : '#d97706';
+    return (
+      <div style={{ minWidth: 92 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, color: '#64748b' }}>
+          <span>置信度</span>
+          <span style={{ color }}>{confidence}%</span>
+        </div>
+        <div style={{ width: '100%', height: 6, background: '#e2e8f0', borderRadius: 999 }}>
+          <div style={{ width: `${confidence}%`, height: '100%', borderRadius: 999, background: color }} />
+        </div>
+      </div>
+    );
+  };
 
   const sharedTaskColumn = {
     title: '共享人',
@@ -1564,6 +1737,103 @@ export default function Dashboard() {
     );
   };
 
+  const renderAiSuggestionCard = (record) => {
+    const typeMeta = aiSuggestionTypeMap[record.type] || { label: record.type, color: 'default' };
+    const statusMeta = aiSuggestionStatusMap[record.status] || { label: record.status, badge: 'default' };
+    const actions = Array.isArray(record.actions) ? record.actions : [];
+    const evidenceSources = Array.isArray(record.evidence_sources) ? record.evidence_sources : [];
+    const scopeTags = Array.isArray(record.scope_tags) ? record.scope_tags : [];
+
+    return (
+      <Card
+        key={record.id}
+        hoverable
+        style={{
+          borderRadius: 12,
+          border: '1px solid #e5e7eb',
+          boxShadow: '0 1px 3px rgba(15,23,42,0.04)',
+        }}
+        styles={{ body: { padding: isMobile ? 16 : 18 } }}
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Space wrap size={[8, 8]} style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space wrap size={[8, 8]}>
+              <Tag color={typeMeta.color}>{typeMeta.label}</Tag>
+              <Tag color={priorityMap[record.priority]?.color}>{priorityMap[record.priority]?.label || record.priority}</Tag>
+              <Tag>{record.business_side}</Tag>
+              <Tag>{record.business_line}</Tag>
+            </Space>
+            <Badge status={statusMeta.badge} text={statusMeta.label} />
+          </Space>
+
+          <div>
+            <Text strong style={{ display: 'block', fontSize: 16, marginBottom: 6, lineHeight: 1.5 }}>
+              {record.title}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {record.window_label} · 建议对象：{record.owner_role}
+            </Text>
+          </div>
+
+          <Typography.Paragraph
+            ellipsis={{ rows: 3, expandable: false }}
+            style={{ marginBottom: 0, color: '#1f2937' }}
+          >
+            {record.summary}
+          </Typography.Paragraph>
+
+          <div
+            style={{
+              padding: 12,
+              borderRadius: 10,
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <Text style={{ display: 'block', fontSize: 12, color: '#64748b', marginBottom: 8 }}>建议动作</Text>
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              {actions.slice(0, 2).map((action, index) => (
+                <Text key={action} style={{ fontSize: 13, lineHeight: 1.6 }}>
+                  {index + 1}. {action}
+                </Text>
+              ))}
+            </Space>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <Space direction="vertical" size={8} style={{ flex: 1, minWidth: 220 }}>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                预期效果：{record.expected_impact}
+              </Text>
+              <Space wrap size={[8, 8]}>
+                {evidenceSources.map(source => (
+                  <Tag key={source} style={{ marginInlineEnd: 0 }}>{source}</Tag>
+                ))}
+              </Space>
+            </Space>
+            {renderAiSuggestionConfidence(record.confidence)}
+          </div>
+
+          <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space wrap size={[8, 8]}>
+              {scopeTags.map(tag => (
+                <Tag key={tag} color="default" style={{ marginInlineEnd: 0 }}>{tag}</Tag>
+              ))}
+            </Space>
+            <Space wrap>
+              <Button size="small" icon={<EyeOutlined />} onClick={() => openAiSuggestionDrawer(record)}>
+                查看证据
+              </Button>
+              <Button size="small" type="primary" onClick={() => handleCreateTaskFromSuggestion(record)}>
+                转任务
+              </Button>
+            </Space>
+          </Space>
+        </Space>
+      </Card>
+    );
+  };
+
   const tabItems = [];
 
   tabItems.push(
@@ -1932,19 +2202,131 @@ export default function Dashboard() {
     });
   }
 
+  tabItems.push({
+    key: TASK_TAB_KEYS.ai,
+    label: (
+      <span>
+        <RobotOutlined /> AI建议
+        {filteredAiSuggestions.filter(item => item.status === 'pending_review').length > 0 && (
+          <Badge count={filteredAiSuggestions.filter(item => item.status === 'pending_review').length} style={{ marginLeft: 8 }} />
+        )}
+      </span>
+    ),
+    children: (
+      <div>
+        <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+          <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="搜索建议标题、摘要、证据来源"
+              value={aiSuggestionSearch}
+              onChange={event => setAiSuggestionSearch(event.target.value)}
+              style={isMobile ? { width: '100%' } : { width: 260 }}
+            />
+            <Select
+              mode="multiple"
+              placeholder="建议类型"
+              value={aiSuggestionTypeFilter}
+              onChange={setAiSuggestionTypeFilter}
+              style={isMobile ? { width: '100%' } : { minWidth: 180 }}
+              options={Object.entries(aiSuggestionTypeMap).map(([value, meta]) => ({ value, label: meta.label }))}
+            />
+            <Select
+              mode="multiple"
+              placeholder="业务线"
+              value={aiSuggestionBusinessLineFilter}
+              onChange={setAiSuggestionBusinessLineFilter}
+              style={isMobile ? { width: '100%' } : { minWidth: 140 }}
+              options={aiSuggestionBusinessLineOptions}
+            />
+            <Select
+              mode="multiple"
+              placeholder="优先级"
+              value={aiSuggestionPriorityFilter}
+              onChange={setAiSuggestionPriorityFilter}
+              style={isMobile ? { width: '100%' } : { minWidth: 140 }}
+              options={['high', 'medium', 'low'].map(value => ({ value, label: priorityMap[value]?.label || value }))}
+            />
+            <Select
+              mode="multiple"
+              placeholder="建议状态"
+              value={aiSuggestionStatusFilter}
+              onChange={setAiSuggestionStatusFilter}
+              style={isMobile ? { width: '100%' } : { minWidth: 180 }}
+              options={Object.entries(aiSuggestionStatusMap).map(([value, meta]) => ({ value, label: meta.label }))}
+            />
+            {(aiSuggestionSearch.trim()
+              || aiSuggestionTypeFilter.length > 0
+              || aiSuggestionBusinessLineFilter.length > 0
+              || aiSuggestionPriorityFilter.length !== AI_SUGGESTION_PRIORITY_VALUES.length
+              || aiSuggestionStatusFilter.length !== AI_SUGGESTION_STATUS_VALUES.length) && (
+              <Button
+                size="small"
+                onClick={() => {
+                  setAiSuggestionSearch('');
+                  setAiSuggestionTypeFilter([]);
+                  setAiSuggestionBusinessLineFilter([]);
+                  setAiSuggestionPriorityFilter(AI_SUGGESTION_PRIORITY_VALUES);
+                  setAiSuggestionStatusFilter(AI_SUGGESTION_STATUS_VALUES);
+                }}
+              >
+                重置筛选
+              </Button>
+            )}
+          </Space>
+        </div>
+
+        <div
+          style={{
+            marginBottom: 16,
+            padding: isMobile ? 14 : 16,
+            borderRadius: 12,
+            background: '#f8fafc',
+            border: '1px solid #e2e8f0',
+          }}
+        >
+          <Space direction={isMobile ? 'vertical' : 'horizontal'} size={isMobile ? 6 : 12} style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Text strong>{aiSuggestionWindowText}</Text>
+            <Text type="secondary">{aiSuggestionMetaText}</Text>
+          </Space>
+        </div>
+
+        {aiSuggestionsLoading ? (
+          <Card loading style={{ borderRadius: 12 }} />
+        ) : filteredAiSuggestions.length > 0 ? (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+              gap: 16,
+            }}
+          >
+            {filteredAiSuggestions.map(renderAiSuggestionCard)}
+          </div>
+        ) : (
+          <Card style={{ borderRadius: 12 }}>
+            <Empty description="当前筛选条件下暂无 AI 建议" />
+          </Card>
+        )}
+      </div>
+    ),
+  });
+
+  const topSummaryCards = activeTaskTab === TASK_TAB_KEYS.ai ? aiSuggestionSummaryCards : taskStatCards;
+
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
       {/* 统计卡片 */}
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(5, minmax(0, 1fr))',
+          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : `repeat(${Math.min(topSummaryCards.length, 5)}, minmax(0, 1fr))`,
           gap: isMobile ? 10 : 16,
           marginBottom: isMobile ? 16 : 24,
           width: '100%',
         }}
       >
-        {taskStatCards.map(card => {
+        {topSummaryCards.map(card => {
           const isFilterCard = Boolean(card.filterKey);
           const isActiveFilterCard = isFilterCard && taskStatFilterByTab[activeTaskTab] === card.filterKey;
           return (
@@ -2004,7 +2386,9 @@ export default function Dashboard() {
           items={tabItems}
           tabBarGutter={isMobile ? 12 : undefined}
           tabBarExtraContent={isMobile ? undefined : {
-            right: <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>,
+            right: activeTaskTab === TASK_TAB_KEYS.ai
+              ? <Text type="secondary" style={{ fontSize: 12 }}>{aiSuggestionMetaText}</Text>
+              : <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>,
           }}
         />
       </Card>
@@ -2133,6 +2517,69 @@ export default function Dashboard() {
           </Form.Item>
         </Form>
       </Modal>
+
+      <Drawer
+        title="AI建议详情"
+        open={aiSuggestionDrawerOpen}
+        onClose={() => setAiSuggestionDrawerOpen(false)}
+        width={isMobile ? '100%' : 560}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
+        extra={(
+          <Button type="primary" onClick={() => handleCreateTaskFromSuggestion(activeAiSuggestion)}>
+            转任务
+          </Button>
+        )}
+      >
+        {activeAiSuggestion && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Space wrap size={[8, 8]}>
+              <Tag color={aiSuggestionTypeMap[activeAiSuggestion.type]?.color}>{aiSuggestionTypeMap[activeAiSuggestion.type]?.label}</Tag>
+              <Tag color={priorityMap[activeAiSuggestion.priority]?.color}>{priorityMap[activeAiSuggestion.priority]?.label}</Tag>
+              <Tag>{activeAiSuggestion.business_side}</Tag>
+              <Tag>{activeAiSuggestion.business_line}</Tag>
+              <Badge status={aiSuggestionStatusMap[activeAiSuggestion.status]?.badge} text={aiSuggestionStatusMap[activeAiSuggestion.status]?.label} />
+            </Space>
+
+            <Descriptions column={1} bordered size="small">
+              <Descriptions.Item label="建议标题">{activeAiSuggestion.title}</Descriptions.Item>
+              <Descriptions.Item label="建议对象">{activeAiSuggestion.owner_role}</Descriptions.Item>
+              <Descriptions.Item label="蒸馏窗口">{activeAiSuggestion.window_label}</Descriptions.Item>
+              <Descriptions.Item label="建议摘要">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{activeAiSuggestion.summary}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="建议输出">
+                <div style={{ whiteSpace: 'pre-wrap' }}>{activeAiSuggestion.recommendation}</div>
+              </Descriptions.Item>
+              <Descriptions.Item label="预期效果">{activeAiSuggestion.expected_impact}</Descriptions.Item>
+            </Descriptions>
+
+            <Card size="small" title="建议动作" style={{ borderRadius: 10 }}>
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {activeAiSuggestionActions.map((action, index) => (
+                  <Text key={action}>{index + 1}. {action}</Text>
+                ))}
+              </Space>
+            </Card>
+
+            <Card size="small" title="证据摘要" style={{ borderRadius: 10 }}>
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <Space wrap size={[8, 8]}>
+                  {activeAiSuggestionEvidenceSources.map(source => (
+                    <Tag key={source}>{source}</Tag>
+                  ))}
+                </Space>
+                {activeAiSuggestionEvidenceHighlights.map((item, index) => (
+                  <Text key={item}>{index + 1}. {item}</Text>
+                ))}
+              </Space>
+            </Card>
+
+            <Card size="small" style={{ borderRadius: 10, background: '#f8fafc' }}>
+              {renderAiSuggestionConfidence(activeAiSuggestion.confidence)}
+            </Card>
+          </Space>
+        )}
+      </Drawer>
 
       <Drawer
         title="任务详情"
