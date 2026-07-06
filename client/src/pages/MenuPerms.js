@@ -59,6 +59,7 @@ const MENU_TREE = [
       { title: '审核与记录', key: '/gift-review' },
       { title: '礼品库', key: '/gifts' },
       { title: '出差申请', key: '/trips' },
+      { title: '出差协同', key: '/trip-collaboration' },
       { title: '费用统计', key: '/trip-stats' },
     ],
   },

@@ -1852,6 +1852,7 @@ const OPERATION_LOG_BUSINESS_MAP = {
   competitor_research: '竞品研究',
   groups: '出差小组',
   trips: '出差申请',
+  'trip-collaboration': '出差协同',
   trip_expenses: '费用明细',
   reports: '报销单',
   goals: '目标管理',
@@ -1902,6 +1903,7 @@ const OPERATION_LOG_TABLE_MAP = {
   competitor_research: 'competitor_research',
   groups: 'groups',
   trips: 'business_trips',
+  'trip-collaboration': 'trip_collaboration_trips',
   trip_expenses: 'trip_expenses',
   reports: 'expense_reports',
   goals: 'goals',
@@ -1944,6 +1946,10 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/trips\/(\d+)\/complete$/, businessType: '出差申请', table: 'business_trips', idGroup: 1, action: '标记完成' },
   { pattern: /^\/trips\/(\d+)\/expenses$/, businessType: '费用明细', table: 'trip_expenses', responseId: true },
   { pattern: /^\/trips\/(\d+)\/report$/, businessType: '报销单', table: 'expense_reports', responseId: true, action: '创建报销单' },
+  { pattern: /^\/trip-collaboration\/trips$/, businessType: '出差协同', table: 'trip_collaboration_trips', responseId: true, action: '创建行程' },
+  { pattern: /^\/trip-collaboration\/trips\/(\d+)$/, businessType: '出差协同', table: 'trip_collaboration_trips', idGroup: 1 },
+  { pattern: /^\/trip-collaboration\/trips\/(\d+)\/schedules$/, businessType: '出差协同日程', table: 'trip_collaboration_schedules', responseId: true, action: '创建日程' },
+  { pattern: /^\/trip-collaboration\/schedules\/(\d+)$/, businessType: '出差协同日程', table: 'trip_collaboration_schedules', idGroup: 1 },
   { pattern: /^\/reports\/(\d+)\/submit$/, businessType: '报销单', table: 'expense_reports', idGroup: 1, action: '提交报销' },
   { pattern: /^\/reports\/(\d+)\/approve$/, businessType: '报销单', table: 'expense_reports', idGroup: 1 },
   { pattern: /^\/product-assets\/import$/, businessType: '产品资产', table: 'product_assets', action: '导入' },
@@ -8775,6 +8781,441 @@ const userColsForGroup = db.prepare("PRAGMA table_info(users)").all().map(c => c
 if (!userColsForGroup.includes('group_id')) {
   db.exec("ALTER TABLE users ADD COLUMN group_id INTEGER DEFAULT NULL");
 }
+
+// =========== 出差协同建表 ===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS trip_collaboration_trips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME DEFAULT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS trip_collaboration_schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trip_id INTEGER NOT NULL,
+    schedule_date TEXT NOT NULL,
+    period TEXT NOT NULL,
+    time_text TEXT NOT NULL,
+    name TEXT NOT NULL,
+    map_address TEXT,
+    map_lng REAL,
+    map_lat REAL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    deleted_at DATETIME DEFAULT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS trip_collaboration_schedule_participants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    schedule_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(schedule_id, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_trip_collab_trips_dates ON trip_collaboration_trips(start_date, end_date);
+  CREATE INDEX IF NOT EXISTS idx_trip_collab_schedules_trip ON trip_collaboration_schedules(trip_id, schedule_date, period);
+  CREATE INDEX IF NOT EXISTS idx_trip_collab_participants_user ON trip_collaboration_schedule_participants(user_id);
+`);
+
+const TRIP_COLLABORATION_PERIODS = ['上午', '中午', '下午', '晚上'];
+const TRIP_COLLABORATION_PERIOD_SET = new Set(TRIP_COLLABORATION_PERIODS);
+
+function normalizeTripCollaborationText(value, maxLength = 200) {
+  const text = String(value ?? '').trim();
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
+function isIsoDateText(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ''))) return false;
+  return !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
+}
+
+function hasTripCollaborationAccess(user) {
+  if (!user) return false;
+  const role = String(user.role || '').toLowerCase();
+  const executiveRole = String(user.executive_role || '').toLowerCase();
+  return isAdmin(role)
+    || EXECUTIVE_ROLES.has(executiveRole)
+    || role === 'sales_director'
+    || user.department === 'commercial';
+}
+
+function requireTripCollaborationAccess(req, res, next) {
+  if (!hasTripCollaborationAccess(req.user)) {
+    return res.status(403).json({ error: '无权访问出差协同' });
+  }
+  return next();
+}
+
+function canManageTripCollaborationRecord(user, row) {
+  if (!user || !row) return false;
+  if (isAdmin(user.role) || isExecutiveIdentity(user) || user.role === 'sales_director' || user.role === 'leader') return true;
+  return Number(row.created_by) === Number(user.id);
+}
+
+function getTripCollaborationTrip(id) {
+  return db.prepare(`
+    SELECT t.*, COALESCE(u.display_name, u.username) as created_by_name
+    FROM trip_collaboration_trips t
+    LEFT JOIN users u ON t.created_by = u.id
+    WHERE t.id = ? AND t.deleted_at IS NULL
+  `).get(id);
+}
+
+function getTripCollaborationParticipantsBySchedule(scheduleId) {
+  return db.prepare(`
+    SELECT u.id, u.username, COALESCE(u.display_name, u.username) as name, u.department, u.role
+    FROM trip_collaboration_schedule_participants p
+    JOIN users u ON p.user_id = u.id
+    WHERE p.schedule_id = ?
+    ORDER BY COALESCE(u.display_name, u.username) ASC
+  `).all(scheduleId);
+}
+
+function getTripCollaborationParticipantsByTrip(trip) {
+  const participants = db.prepare(`
+    SELECT DISTINCT u.id, u.username, COALESCE(u.display_name, u.username) as name, u.department, u.role
+    FROM trip_collaboration_schedules s
+    JOIN trip_collaboration_schedule_participants p ON p.schedule_id = s.id
+    JOIN users u ON p.user_id = u.id
+    WHERE s.trip_id = ? AND s.deleted_at IS NULL
+    ORDER BY COALESCE(u.display_name, u.username) ASC
+  `).all(trip.id);
+
+  if (participants.length > 0 || !trip.created_by) return participants;
+  const creator = db.prepare(`
+    SELECT id, username, COALESCE(display_name, username) as name, department, role
+    FROM users
+    WHERE id = ?
+  `).get(trip.created_by);
+  return creator ? [creator] : [];
+}
+
+function serializeTripCollaborationTrip(trip, user) {
+  const participants = getTripCollaborationParticipantsByTrip(trip);
+  return {
+    ...trip,
+    schedule_count: Number(trip.schedule_count || 0),
+    participants,
+    participant_ids: participants.map(item => item.id),
+    participant_names: participants.map(item => item.name),
+    can_edit: canManageTripCollaborationRecord(user, trip),
+    can_delete: canManageTripCollaborationRecord(user, trip),
+  };
+}
+
+function serializeTripCollaborationSchedule(schedule, user) {
+  const participants = getTripCollaborationParticipantsBySchedule(schedule.id);
+  const manageSource = {
+    created_by: schedule.created_by,
+  };
+  return {
+    ...schedule,
+    participants,
+    participant_ids: participants.map(item => item.id),
+    participant_names: participants.map(item => item.name),
+    can_edit: canManageTripCollaborationRecord(user, manageSource) || Number(schedule.trip_created_by) === Number(user?.id),
+    can_delete: canManageTripCollaborationRecord(user, manageSource) || Number(schedule.trip_created_by) === Number(user?.id),
+  };
+}
+
+function normalizeTripCollaborationParticipantIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map(item => Number(item)).filter(item => Number.isInteger(item) && item > 0))];
+}
+
+function validateTripCollaborationParticipantIds(ids) {
+  if (!ids.length) return { error: '请选择参与人员' };
+  const rows = db.prepare(`
+    SELECT id
+    FROM users
+    WHERE COALESCE(account_status, 'active') = 'active'
+      AND id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids);
+  if (rows.length !== ids.length) return { error: '参与人员中包含无效账号' };
+  return { ids };
+}
+
+function replaceTripCollaborationParticipants(scheduleId, participantIds) {
+  db.prepare('DELETE FROM trip_collaboration_schedule_participants WHERE schedule_id = ?').run(scheduleId);
+  const insert = db.prepare(`
+    INSERT OR IGNORE INTO trip_collaboration_schedule_participants (schedule_id, user_id)
+    VALUES (?, ?)
+  `);
+  participantIds.forEach(userId => insert.run(scheduleId, userId));
+}
+
+function getTripCollaborationSchedule(id) {
+  return db.prepare(`
+    SELECT s.*, t.created_by as trip_created_by, t.start_date, t.end_date
+    FROM trip_collaboration_schedules s
+    JOIN trip_collaboration_trips t ON s.trip_id = t.id
+    WHERE s.id = ? AND s.deleted_at IS NULL AND t.deleted_at IS NULL
+  `).get(id);
+}
+
+// =========== 出差协同 API ===========
+app.get('/api/trip-collaboration/trips', requireTripCollaborationAccess, (req, res) => {
+  const { name, start_date_from, end_date_to, person_id } = req.query;
+  let q = `
+    SELECT t.*, COALESCE(u.display_name, u.username) as created_by_name,
+      (
+        SELECT COUNT(*)
+        FROM trip_collaboration_schedules s
+        WHERE s.trip_id = t.id AND s.deleted_at IS NULL
+      ) as schedule_count
+    FROM trip_collaboration_trips t
+    LEFT JOIN users u ON t.created_by = u.id
+    WHERE t.deleted_at IS NULL
+  `;
+  const params = [];
+
+  const keyword = normalizeTripCollaborationText(name, 80);
+  if (keyword) {
+    q += ' AND t.name LIKE ?';
+    params.push(`%${keyword}%`);
+  }
+  if (start_date_from && isIsoDateText(start_date_from)) {
+    q += ' AND t.start_date >= ?';
+    params.push(start_date_from);
+  }
+  if (end_date_to && isIsoDateText(end_date_to)) {
+    q += ' AND t.end_date <= ?';
+    params.push(end_date_to);
+  }
+  const personId = Number(person_id);
+  if (Number.isInteger(personId) && personId > 0) {
+    q += `
+      AND (
+        t.created_by = ?
+        OR EXISTS (
+          SELECT 1
+          FROM trip_collaboration_schedules s
+          JOIN trip_collaboration_schedule_participants p ON p.schedule_id = s.id
+          WHERE s.trip_id = t.id AND s.deleted_at IS NULL AND p.user_id = ?
+        )
+      )
+    `;
+    params.push(personId, personId);
+  }
+
+  q += ' ORDER BY t.start_date DESC, t.id DESC';
+  const rows = db.prepare(q).all(...params).map(row => serializeTripCollaborationTrip(row, req.user));
+  res.json(rows);
+});
+
+app.post('/api/trip-collaboration/trips', requireTripCollaborationAccess, canWrite, (req, res) => {
+  const name = normalizeTripCollaborationText(req.body.name, 120);
+  const startDate = normalizeTripCollaborationText(req.body.start_date, 20);
+  const endDate = normalizeTripCollaborationText(req.body.end_date, 20);
+  if (!name) return res.status(400).json({ error: '行程名称必填' });
+  if (!isIsoDateText(startDate) || !isIsoDateText(endDate)) return res.status(400).json({ error: '开始日期和结束日期必填' });
+  if (startDate > endDate) return res.status(400).json({ error: '开始日期不能晚于结束日期' });
+
+  const result = db.prepare(`
+    INSERT INTO trip_collaboration_trips (name, start_date, end_date, created_by)
+    VALUES (?, ?, ?, ?)
+  `).run(name, startDate, endDate, req.user.id);
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/trip-collaboration/trips/:id', requireTripCollaborationAccess, canWrite, (req, res) => {
+  const trip = getTripCollaborationTrip(req.params.id);
+  if (!trip) return res.status(404).json({ error: '行程不存在' });
+  if (!canManageTripCollaborationRecord(req.user, trip)) return res.status(403).json({ error: '无权编辑该行程' });
+
+  const name = normalizeTripCollaborationText(req.body.name, 120);
+  const startDate = normalizeTripCollaborationText(req.body.start_date, 20);
+  const endDate = normalizeTripCollaborationText(req.body.end_date, 20);
+  if (!name) return res.status(400).json({ error: '行程名称必填' });
+  if (!isIsoDateText(startDate) || !isIsoDateText(endDate)) return res.status(400).json({ error: '开始日期和结束日期必填' });
+  if (startDate > endDate) return res.status(400).json({ error: '开始日期不能晚于结束日期' });
+
+  const outsideCount = db.prepare(`
+    SELECT COUNT(*) as count
+    FROM trip_collaboration_schedules
+    WHERE trip_id = ? AND deleted_at IS NULL AND (schedule_date < ? OR schedule_date > ?)
+  `).get(req.params.id, startDate, endDate).count;
+  if (outsideCount > 0) return res.status(400).json({ error: '已有日程超出新的行程日期范围，请先调整日程' });
+
+  db.prepare(`
+    UPDATE trip_collaboration_trips
+    SET name = ?, start_date = ?, end_date = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(name, startDate, endDate, req.params.id);
+  res.json({ success: true });
+});
+
+app.delete('/api/trip-collaboration/trips/:id', requireTripCollaborationAccess, canWrite, (req, res) => {
+  const trip = getTripCollaborationTrip(req.params.id);
+  if (!trip) return res.status(404).json({ error: '行程不存在' });
+  if (!canManageTripCollaborationRecord(req.user, trip)) return res.status(403).json({ error: '无权删除该行程' });
+
+  const deleteTrip = db.transaction((tripId) => {
+    db.prepare(`
+      UPDATE trip_collaboration_trips
+      SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(tripId);
+    db.prepare(`
+      UPDATE trip_collaboration_schedules
+      SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE trip_id = ? AND deleted_at IS NULL
+    `).run(tripId);
+  });
+  deleteTrip(req.params.id);
+  res.json({ success: true });
+});
+
+app.get('/api/trip-collaboration/trips/:id/schedules', requireTripCollaborationAccess, (req, res) => {
+  const trip = getTripCollaborationTrip(req.params.id);
+  if (!trip) return res.status(404).json({ error: '行程不存在' });
+  const { person_id } = req.query;
+  let q = `
+    SELECT s.*, COALESCE(u.display_name, u.username) as created_by_name, t.created_by as trip_created_by
+    FROM trip_collaboration_schedules s
+    JOIN trip_collaboration_trips t ON s.trip_id = t.id
+    LEFT JOIN users u ON s.created_by = u.id
+    WHERE s.trip_id = ? AND s.deleted_at IS NULL AND t.deleted_at IS NULL
+  `;
+  const params = [req.params.id];
+  const personId = Number(person_id);
+  if (Number.isInteger(personId) && personId > 0) {
+    q += `
+      AND EXISTS (
+        SELECT 1
+        FROM trip_collaboration_schedule_participants p
+        WHERE p.schedule_id = s.id AND p.user_id = ?
+      )
+    `;
+    params.push(personId);
+  }
+  q += `
+    ORDER BY s.schedule_date ASC,
+      CASE s.period
+        WHEN '上午' THEN 1
+        WHEN '中午' THEN 2
+        WHEN '下午' THEN 3
+        WHEN '晚上' THEN 4
+        ELSE 9
+      END,
+      s.time_text ASC,
+      s.id ASC
+  `;
+  const rows = db.prepare(q).all(...params).map(row => serializeTripCollaborationSchedule(row, req.user));
+  res.json(rows);
+});
+
+app.post('/api/trip-collaboration/trips/:id/schedules', requireTripCollaborationAccess, canWrite, (req, res) => {
+  const trip = getTripCollaborationTrip(req.params.id);
+  if (!trip) return res.status(404).json({ error: '行程不存在' });
+
+  const scheduleDate = normalizeTripCollaborationText(req.body.schedule_date, 20);
+  const period = normalizeTripCollaborationText(req.body.period, 20);
+  const timeText = normalizeTripCollaborationText(req.body.time_text, 40);
+  const name = normalizeTripCollaborationText(req.body.name, 120);
+  const mapAddress = normalizeTripCollaborationText(req.body.map_address, 500);
+  const participantIds = normalizeTripCollaborationParticipantIds(req.body.participant_ids);
+  const participantCheck = validateTripCollaborationParticipantIds(participantIds);
+
+  if (!isIsoDateText(scheduleDate)) return res.status(400).json({ error: '日期必填' });
+  if (scheduleDate < trip.start_date || scheduleDate > trip.end_date) return res.status(400).json({ error: '日程日期必须在行程日期范围内' });
+  if (!TRIP_COLLABORATION_PERIOD_SET.has(period)) return res.status(400).json({ error: '时段不合法' });
+  if (!timeText) return res.status(400).json({ error: '时间必填' });
+  if (!name) return res.status(400).json({ error: '日程名称必填' });
+  if (participantCheck.error) return res.status(400).json({ error: participantCheck.error });
+
+  const createSchedule = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO trip_collaboration_schedules (
+        trip_id, schedule_date, period, time_text, name, map_address, map_lng, map_lat, created_by
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      req.params.id,
+      scheduleDate,
+      period,
+      timeText,
+      name,
+      mapAddress || null,
+      req.body.map_lng || null,
+      req.body.map_lat || null,
+      req.user.id
+    );
+    replaceTripCollaborationParticipants(result.lastInsertRowid, participantIds);
+    db.prepare('UPDATE trip_collaboration_trips SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.params.id);
+    return result.lastInsertRowid;
+  });
+
+  res.json({ id: createSchedule() });
+});
+
+app.put('/api/trip-collaboration/schedules/:id', requireTripCollaborationAccess, canWrite, (req, res) => {
+  const schedule = getTripCollaborationSchedule(req.params.id);
+  if (!schedule) return res.status(404).json({ error: '日程不存在' });
+  if (!canManageTripCollaborationRecord(req.user, schedule) && Number(schedule.trip_created_by) !== Number(req.user.id)) {
+    return res.status(403).json({ error: '无权编辑该日程' });
+  }
+
+  const scheduleDate = normalizeTripCollaborationText(req.body.schedule_date, 20);
+  const period = normalizeTripCollaborationText(req.body.period, 20);
+  const timeText = normalizeTripCollaborationText(req.body.time_text, 40);
+  const name = normalizeTripCollaborationText(req.body.name, 120);
+  const mapAddress = normalizeTripCollaborationText(req.body.map_address, 500);
+  const participantIds = normalizeTripCollaborationParticipantIds(req.body.participant_ids);
+  const participantCheck = validateTripCollaborationParticipantIds(participantIds);
+
+  if (!isIsoDateText(scheduleDate)) return res.status(400).json({ error: '日期必填' });
+  if (scheduleDate < schedule.start_date || scheduleDate > schedule.end_date) return res.status(400).json({ error: '日程日期必须在行程日期范围内' });
+  if (!TRIP_COLLABORATION_PERIOD_SET.has(period)) return res.status(400).json({ error: '时段不合法' });
+  if (!timeText) return res.status(400).json({ error: '时间必填' });
+  if (!name) return res.status(400).json({ error: '日程名称必填' });
+  if (participantCheck.error) return res.status(400).json({ error: participantCheck.error });
+
+  const updateSchedule = db.transaction(() => {
+    db.prepare(`
+      UPDATE trip_collaboration_schedules
+      SET schedule_date = ?, period = ?, time_text = ?, name = ?, map_address = ?,
+        map_lng = ?, map_lat = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      scheduleDate,
+      period,
+      timeText,
+      name,
+      mapAddress || null,
+      req.body.map_lng || null,
+      req.body.map_lat || null,
+      req.params.id
+    );
+    replaceTripCollaborationParticipants(req.params.id, participantIds);
+    db.prepare('UPDATE trip_collaboration_trips SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(schedule.trip_id);
+  });
+  updateSchedule();
+  res.json({ success: true });
+});
+
+app.delete('/api/trip-collaboration/schedules/:id', requireTripCollaborationAccess, canWrite, (req, res) => {
+  const schedule = getTripCollaborationSchedule(req.params.id);
+  if (!schedule) return res.status(404).json({ error: '日程不存在' });
+  if (!canManageTripCollaborationRecord(req.user, schedule) && Number(schedule.trip_created_by) !== Number(req.user.id)) {
+    return res.status(403).json({ error: '无权删除该日程' });
+  }
+  db.prepare(`
+    UPDATE trip_collaboration_schedules
+    SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(req.params.id);
+  db.prepare('UPDATE trip_collaboration_trips SET updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(schedule.trip_id);
+  res.json({ success: true });
+});
 
 // =========== 小组 API ===========
 app.get('/api/groups', (req, res) => {

@@ -1,0 +1,1428 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>出差协同原型</title>
+  <style>
+    :root {
+      --bg: #eef3f7;
+      --panel: #ffffff;
+      --panel-soft: #f8fbfd;
+      --line: #d8e4ef;
+      --line-dark: #bed0df;
+      --text: #102338;
+      --muted: #5a7088;
+      --subtle: #8aa0b5;
+      --nav: #10243d;
+      --nav-soft: #173152;
+      --primary: #2d7bdc;
+      --primary-soft: #e7f2ff;
+      --teal: #13a6b6;
+      --teal-soft: #e5f7fa;
+      --green: #1f8f55;
+      --green-soft: #eaf7ef;
+      --amber: #b36b00;
+      --amber-soft: #fff5df;
+      --red: #cc3d3d;
+      --shadow: 0 14px 32px rgba(15, 35, 56, 0.12);
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+      letter-spacing: 0;
+    }
+
+    button {
+      border: 0;
+      cursor: pointer;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+    }
+
+    .side {
+      background: var(--nav);
+      color: rgba(255,255,255,0.86);
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .brand {
+      padding: 18px 18px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .brand-title {
+      margin: 0;
+      color: #fff;
+      font-size: 17px;
+      font-weight: 760;
+    }
+
+    .brand-sub {
+      margin-top: 6px;
+      color: rgba(255,255,255,0.58);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .nav-group {
+      padding: 14px 10px 4px;
+    }
+
+    .nav-title {
+      padding: 8px 10px;
+      color: rgba(255,255,255,0.46);
+      font-size: 12px;
+    }
+
+    .nav-item {
+      height: 38px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-radius: 8px;
+      color: rgba(255,255,255,0.78);
+      font-size: 14px;
+    }
+
+    .nav-item.active {
+      background: rgba(45,123,220,0.24);
+      color: #fff;
+      box-shadow: inset 3px 0 0 #69b4ff;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+    }
+
+    .topbar {
+      height: 58px;
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+      padding: 0 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .crumb {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 2px;
+    }
+
+    .page-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .role-pill {
+      height: 34px;
+      min-width: 188px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+      color: var(--text);
+      padding: 0 10px;
+    }
+
+    .btn {
+      height: 34px;
+      min-width: 34px;
+      border-radius: 8px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      white-space: nowrap;
+      color: var(--text);
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .btn.primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+      font-weight: 700;
+    }
+
+    .btn.soft {
+      background: var(--primary-soft);
+      color: var(--primary);
+      border-color: #cbe3ff;
+      font-weight: 700;
+    }
+
+    .btn.danger {
+      color: var(--red);
+      border-color: #ffd5d5;
+      background: #fff7f7;
+    }
+
+    .btn.icon {
+      padding: 0;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      font-weight: 800;
+    }
+
+    .content {
+      padding: 18px 20px 24px;
+      min-width: 0;
+      flex: 1;
+      display: grid;
+      grid-template-columns: 430px minmax(660px, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: 0 6px 18px rgba(15, 35, 56, 0.05);
+      min-width: 0;
+    }
+
+    .panel-head {
+      min-height: 54px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 760;
+    }
+
+    .panel-sub {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .filters {
+      padding: 12px 14px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfdff;
+    }
+
+    .field {
+      min-width: 0;
+    }
+
+    .field.full {
+      grid-column: 1 / -1;
+    }
+
+    .label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #52708c;
+    }
+
+    .input,
+    .select,
+    .textarea {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      outline: 0;
+    }
+
+    .input,
+    .select {
+      height: 36px;
+      padding: 0 10px;
+    }
+
+    .textarea {
+      min-height: 92px;
+      padding: 10px;
+      resize: vertical;
+    }
+
+    .trip-list {
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: calc(100vh - 248px);
+      overflow: auto;
+    }
+
+    .trip-row {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+    }
+
+    .trip-row.active {
+      border-color: #9fcbff;
+      background: #f4f9ff;
+      box-shadow: 0 0 0 2px rgba(45,123,220,0.08);
+    }
+
+    .trip-name {
+      font-weight: 760;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+
+    .trip-meta {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+    }
+
+    .people {
+      margin-top: 9px;
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+
+    .tag {
+      min-height: 24px;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 9px;
+      background: var(--teal-soft);
+      color: #128493;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .tag.gray {
+      background: #eef2f5;
+      color: var(--muted);
+    }
+
+    .tag.amber {
+      background: var(--amber-soft);
+      color: var(--amber);
+    }
+
+    .row-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-end;
+    }
+
+    .schedule-panel {
+      min-height: calc(100vh - 100px);
+      overflow: hidden;
+    }
+
+    .schedule-tools {
+      padding: 12px 14px;
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 170px auto;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      align-items: end;
+      background: #fbfdff;
+    }
+
+    .schedule-scroll {
+      overflow: auto;
+      max-height: calc(100vh - 190px);
+    }
+
+    .schedule-grid {
+      display: grid;
+      grid-template-columns: 92px repeat(var(--day-count), minmax(190px, 1fr));
+      min-width: calc(92px + var(--day-count) * 190px);
+    }
+
+    .grid-cell {
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      min-height: 150px;
+      background: #f9fcff;
+      position: relative;
+      padding: 12px 12px 14px;
+    }
+
+    .corner,
+    .date-head,
+    .period-head {
+      background: #fff;
+    }
+
+    .corner,
+    .date-head {
+      min-height: 76px;
+    }
+
+    .date-cn {
+      font-size: 18px;
+      font-weight: 760;
+      margin-bottom: 8px;
+    }
+
+    .date-en {
+      font-size: 12px;
+      color: #507093;
+      font-weight: 700;
+    }
+
+    .period-head {
+      display: flex;
+      align-items: flex-start;
+      color: var(--text);
+      font-weight: 760;
+      font-size: 15px;
+    }
+
+    .cell-plus {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #e2f0ff;
+      color: var(--primary);
+      font-size: 18px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .empty {
+      height: 100%;
+      min-height: 120px;
+      display: flex;
+      align-items: center;
+      color: #66809a;
+      font-size: 13px;
+      padding-top: 20px;
+    }
+
+    .schedule-card {
+      margin-top: 38px;
+      border: 1px solid #cde5fb;
+      background: linear-gradient(135deg, #ffffff 0%, #f1f9ff 100%);
+      border-radius: 8px;
+      padding: 10px 11px;
+      min-height: 104px;
+      box-shadow: 0 4px 12px rgba(45, 123, 220, 0.06);
+      position: relative;
+    }
+
+    .schedule-card + .schedule-card {
+      margin-top: 10px;
+    }
+
+    .schedule-card .delete {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      border: 1px solid #d5e6f5;
+      background: #fff;
+      color: #5c7490;
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    .time {
+      margin-left: 26px;
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .schedule-name {
+      margin: 6px 0 8px;
+      font-size: 14px;
+      font-weight: 760;
+      line-height: 1.45;
+      word-break: break-word;
+      padding-right: 58px;
+    }
+
+    .card-actions {
+      position: absolute;
+      top: 36px;
+      right: 10px;
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      max-width: 90px;
+    }
+
+    .mini-btn {
+      min-height: 25px;
+      border-radius: 999px;
+      padding: 0 8px;
+      background: #e9f4ff;
+      color: var(--primary);
+      border: 1px solid #c7e0fa;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .card-people {
+      padding-top: 4px;
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+
+    .lock {
+      margin: 42px auto;
+      max-width: 560px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 30px;
+      text-align: center;
+      box-shadow: var(--shadow);
+      display: none;
+    }
+
+    .lock-title {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    .lock-text {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.8;
+    }
+
+    .modal-mask,
+    .map-mask {
+      position: fixed;
+      inset: 0;
+      background: rgba(16, 35, 56, 0.38);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 50;
+    }
+
+    .modal-mask.open,
+    .map-mask.open {
+      display: flex;
+    }
+
+    .modal {
+      width: min(980px, 100%);
+      max-height: calc(100vh - 48px);
+      overflow: auto;
+      background: #fff;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .modal.small {
+      width: min(620px, 100%);
+    }
+
+    .modal-head {
+      min-height: 58px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .modal-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 760;
+    }
+
+    .modal-body {
+      padding: 18px;
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px 18px;
+    }
+
+    .check-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px 14px;
+    }
+
+    .check-item {
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 0 12px;
+      font-weight: 700;
+      color: #1d3955;
+      background: #fff;
+    }
+
+    .modal-foot {
+      padding: 14px 18px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      background: #fbfdff;
+    }
+
+    .map-modal {
+      width: min(1120px, 100%);
+      height: min(720px, calc(100vh - 48px));
+      background: #fff;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: 54px 1fr;
+    }
+
+    .map-head {
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      background: #f7fafc;
+    }
+
+    .map-content {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      min-height: 0;
+    }
+
+    .search-side {
+      border-right: 1px solid var(--line);
+      overflow: auto;
+      background: #fff;
+    }
+
+    .search-box {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .result {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .result-title {
+      font-weight: 760;
+      margin-bottom: 7px;
+    }
+
+    .result-sub {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .fake-map {
+      position: relative;
+      overflow: hidden;
+      background:
+        linear-gradient(90deg, rgba(255,255,255,0.9) 10px, transparent 10px) 0 0 / 140px 140px,
+        linear-gradient(rgba(255,255,255,0.9) 10px, transparent 10px) 0 0 / 140px 140px,
+        #bce9b8;
+    }
+
+    .road {
+      position: absolute;
+      background: #fff;
+      border: 1px solid #d5dfe9;
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.55);
+    }
+
+    .road.r1 { width: 78%; height: 16px; left: 8%; top: 34%; transform: rotate(-2deg); }
+    .road.r2 { width: 16px; height: 86%; left: 42%; top: 5%; }
+    .road.r3 { width: 62%; height: 16px; left: 24%; top: 76%; transform: rotate(3deg); }
+    .road.r4 { width: 16px; height: 58%; left: 78%; top: 24%; }
+
+    .building {
+      position: absolute;
+      right: 9%;
+      top: 30%;
+      width: 34%;
+      height: 45%;
+      background: rgba(147, 199, 240, 0.7);
+      border: 2px solid #62a6df;
+      border-radius: 6px;
+    }
+
+    .pin {
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      border-radius: 50% 50% 50% 0;
+      background: #ef3e34;
+      transform: rotate(-45deg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.18);
+    }
+
+    .pin span { transform: rotate(45deg); }
+    .pin.p1 { right: 23%; top: 47%; }
+    .pin.p2 { right: 17%; top: 58%; }
+    .pin.p3 { right: 31%; top: 64%; }
+    .pin.p4 { left: 54%; top: 52%; }
+
+    .map-label {
+      position: absolute;
+      right: 15%;
+      top: 39%;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.86);
+      color: #2d6c9f;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      transform: translateX(-50%);
+      background: rgba(16,35,56,0.92);
+      color: #fff;
+      border-radius: 999px;
+      padding: 10px 16px;
+      font-size: 13px;
+      z-index: 80;
+      display: none;
+    }
+
+    .toast.show {
+      display: block;
+    }
+
+    @media (max-width: 1180px) {
+      .app { grid-template-columns: 72px minmax(0, 1fr); }
+      .brand-sub,
+      .nav-title,
+      .nav-text { display: none; }
+      .brand { padding: 18px 12px; text-align: center; }
+      .brand-title { font-size: 13px; }
+      .content { grid-template-columns: 1fr; }
+      .trip-list { max-height: none; }
+      .schedule-panel { min-height: 600px; }
+    }
+
+    @media (max-width: 760px) {
+      .app { display: block; }
+      .side { display: none; }
+      .topbar {
+        height: auto;
+        padding: 12px;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .top-actions { width: 100%; justify-content: stretch; }
+      .top-actions > * { flex: 1; }
+      .content { padding: 12px; }
+      .filters,
+      .schedule-tools,
+      .form-grid,
+      .check-grid,
+      .map-content {
+        grid-template-columns: 1fr;
+      }
+      .modal-mask,
+      .map-mask { padding: 10px; }
+      .schedule-grid {
+        grid-template-columns: 76px repeat(var(--day-count), minmax(170px, 1fr));
+        min-width: calc(76px + var(--day-count) * 170px);
+      }
+      .grid-cell { padding: 10px; }
+      .date-cn { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand">
+        <h1 class="brand-title">Relation</h1>
+        <div class="brand-sub">AI 经营中台</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-title">工作台</div>
+        <div class="nav-item"><span>⌂</span><span class="nav-text">工作台</span></div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-title">商务协作</div>
+        <div class="nav-item"><span>◉</span><span class="nav-text">公司研究</span></div>
+        <div class="nav-item"><span>◎</span><span class="nav-text">人脉管理</span></div>
+        <div class="nav-item"><span>◇</span><span class="nav-text">互动记录</span></div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-title">团队管理</div>
+        <div class="nav-item"><span>▦</span><span class="nav-text">任务看板</span></div>
+        <div class="nav-item"><span>▧</span><span class="nav-text">客户答谢</span></div>
+        <div class="nav-item"><span>✈</span><span class="nav-text">出差申请</span></div>
+        <div class="nav-item active"><span>▣</span><span class="nav-text">出差协同</span></div>
+        <div class="nav-item"><span>↗</span><span class="nav-text">费用统计</span></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="crumb">团队管理 / 出差协同</div>
+          <h2 class="page-title">出差协同</h2>
+        </div>
+        <div class="top-actions">
+          <select class="role-pill" id="roleSelect" aria-label="当前角色">
+            <option value="commercial">商务成员：石海韵</option>
+            <option value="cxo">CXO：CEO / COO / CTO / CMO</option>
+            <option value="rd">研发成员：默认不可见</option>
+          </select>
+          <button class="btn primary" id="addTripTop" title="新增行程"><span>＋</span>新增行程</button>
+        </div>
+      </header>
+
+      <section class="lock" id="lockView">
+        <h3 class="lock-title">当前账号无权限查看出差协同</h3>
+        <p class="lock-text">该模块默认仅商务部门、管理员和 CEO / COO / CTO / CMO 可见。</p>
+      </section>
+
+      <section class="content" id="workspace">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <h3 class="panel-title">行程列表</h3>
+              <div class="panel-sub" id="tripCountText">共 0 个行程</div>
+            </div>
+            <button class="btn soft" id="addTripSide" title="新增行程">＋ 行程</button>
+          </div>
+
+          <div class="filters">
+            <div class="field full">
+              <label class="label" for="filterName">行程名称</label>
+              <input class="input" id="filterName" placeholder="输入关键词模糊筛选" />
+            </div>
+            <div class="field">
+              <label class="label" for="filterStart">开始时间</label>
+              <input class="input" type="date" id="filterStart" />
+            </div>
+            <div class="field">
+              <label class="label" for="filterEnd">结束时间</label>
+              <input class="input" type="date" id="filterEnd" />
+            </div>
+            <div class="field full">
+              <label class="label" for="filterPerson">人员姓名</label>
+              <select class="select" id="filterPerson"></select>
+            </div>
+          </div>
+
+          <div class="trip-list" id="tripList"></div>
+        </section>
+
+        <section class="panel schedule-panel">
+          <div class="panel-head">
+            <div>
+              <h3 class="panel-title" id="activeTripTitle">请选择行程</h3>
+              <div class="panel-sub" id="activeTripMeta">按行程日期范围逐天展示</div>
+            </div>
+            <button class="btn" id="editTripBtn" title="编辑当前行程">编辑行程</button>
+          </div>
+
+          <div class="schedule-tools">
+            <div class="field">
+              <label class="label" for="tripSelect">当前行程</label>
+              <select class="select" id="tripSelect"></select>
+            </div>
+            <div class="field">
+              <label class="label" for="gridPerson">只看人员</label>
+              <select class="select" id="gridPerson"></select>
+            </div>
+            <button class="btn primary" id="addScheduleBtn" title="为当前行程新增日程">＋ 新建日程</button>
+          </div>
+
+          <div class="schedule-scroll">
+            <div class="schedule-grid" id="scheduleGrid"></div>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-mask" id="tripModal">
+    <div class="modal small" role="dialog" aria-modal="true" aria-labelledby="tripModalTitle">
+      <div class="modal-head">
+        <h3 class="modal-title" id="tripModalTitle">新增行程</h3>
+        <button class="btn icon" data-close="tripModal" title="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field full">
+            <label class="label" for="tripName">行程名称</label>
+            <input class="input" id="tripName" placeholder="如：北京华北渠道拜访" />
+          </div>
+          <div class="field">
+            <label class="label" for="tripStart">开始日期</label>
+            <input class="input" type="date" id="tripStart" />
+          </div>
+          <div class="field">
+            <label class="label" for="tripEnd">结束日期</label>
+            <input class="input" type="date" id="tripEnd" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close="tripModal">取消</button>
+        <button class="btn primary" id="saveTripBtn">保存行程</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="scheduleModal">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="scheduleModalTitle">
+      <div class="modal-head">
+        <h3 class="modal-title" id="scheduleModalTitle">新建日程</h3>
+        <button class="btn icon" data-close="scheduleModal" title="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-grid">
+          <div class="field">
+            <label class="label" for="scheduleDate">日期</label>
+            <select class="select" id="scheduleDate"></select>
+          </div>
+          <div class="field">
+            <label class="label" for="schedulePeriod">时段</label>
+            <select class="select" id="schedulePeriod">
+              <option value="上午">上午</option>
+              <option value="中午">中午</option>
+              <option value="下午">下午</option>
+              <option value="晚上">晚上</option>
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="scheduleTime">时间</label>
+            <input class="input" id="scheduleTime" placeholder="如：10:00 或 10:15-13:15" />
+          </div>
+          <div class="field">
+            <label class="label" for="scheduleName">日程名称</label>
+            <input class="input" id="scheduleName" placeholder="如：客户拜访" />
+          </div>
+          <div class="field full">
+            <label class="label" for="scheduleAddress">地图地址</label>
+            <textarea class="textarea" id="scheduleAddress" placeholder="如：北京市朝阳区天辰东路 1 号院亚洲金融大厦 C 座"></textarea>
+          </div>
+          <div class="field full">
+            <label class="label">参与人员</label>
+            <div class="check-grid" id="participantChecks"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" data-close="scheduleModal">取消</button>
+        <button class="btn primary" id="saveScheduleBtn">保存日程</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="map-mask" id="mapModal">
+    <div class="map-modal" role="dialog" aria-modal="true" aria-labelledby="mapTitle">
+      <div class="map-head">
+        <strong id="mapTitle">查看地图</strong>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <a class="btn soft" id="openAmapLink" href="#" target="_blank" rel="noreferrer">打开高德地图</a>
+          <button class="btn icon" data-close="mapModal" title="关闭">×</button>
+        </div>
+      </div>
+      <div class="map-content">
+        <aside class="search-side">
+          <div class="search-box">
+            <input class="input" id="mapQuery" readonly />
+          </div>
+          <div class="result">
+            <div class="result-title">1. 亚洲金融大厦 C 座</div>
+            <div class="result-sub">北京市朝阳区天辰东路 1 号院<br />去手机查看详情</div>
+          </div>
+          <div class="result">
+            <div class="result-title">2. 亚洲金融大厦</div>
+            <div class="result-sub">天辰路 1 号院，临近地铁站</div>
+          </div>
+          <div class="result">
+            <div class="result-title">3. 周边停车场</div>
+            <div class="result-sub">可作为打车/停车备选点</div>
+          </div>
+        </aside>
+        <div class="fake-map" aria-label="地图预览">
+          <div class="road r1"></div>
+          <div class="road r2"></div>
+          <div class="road r3"></div>
+          <div class="road r4"></div>
+          <div class="building"></div>
+          <div class="map-label">亚洲金融大厦</div>
+          <div class="pin p1"><span>1</span></div>
+          <div class="pin p2"><span>6</span></div>
+          <div class="pin p3"><span>2</span></div>
+          <div class="pin p4"><span>4</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    const periods = ['上午', '中午', '下午', '晚上'];
+    const employees = [
+      { id: 'u1', name: '石海韵', department: '商务' },
+      { id: 'u2', name: '龙旖旎', department: '商务' },
+      { id: 'u3', name: '张学成', department: '商务' },
+      { id: 'u4', name: '林若然', department: '商务' },
+      { id: 'u5', name: '陈牧远', department: '商务' },
+      { id: 'u6', name: '王予安', department: '产运' }
+    ];
+
+    let trips = [
+      { id: 't1', name: '北京华北渠道拜访', start: '2026-06-01', end: '2026-06-05', creator: 'u1' },
+      { id: 't2', name: '上海客户年度复盘', start: '2026-06-08', end: '2026-06-10', creator: 'u2' },
+      { id: 't3', name: '深圳展会联合走访', start: '2026-06-15', end: '2026-06-17', creator: 'u3' }
+    ];
+
+    let schedules = [
+      { id: 's1', tripId: 't1', date: '2026-06-01', period: '上午', time: '10:15-13:15', name: '飞机', address: '北京市朝阳区天辰东路 1 号院亚洲金融大厦 C 座', participants: ['u1', 'u2', 'u3'] },
+      { id: 's2', tripId: 't1', date: '2026-06-02', period: '上午', time: '11:00', name: '腾讯地图', address: '北京市朝阳区天辰东路 1 号院亚洲金融大厦', participants: ['u2', 'u3'] },
+      { id: 's3', tripId: 't1', date: '2026-06-01', period: '下午', time: '16:00', name: '车旺大卡', address: '北京市朝阳区北辰西路 8 号', participants: ['u3', 'u2'] },
+      { id: 's4', tripId: 't1', date: '2026-06-02', period: '下午', time: '14:00', name: '恒生活', address: '北京市朝阳区望京 SOHO', participants: ['u3', 'u2'] },
+      { id: 's5', tripId: 't1', date: '2026-06-02', period: '下午', time: '16:00', name: '墨迹天气极速版', address: '北京市朝阳区酒仙桥路 10 号', participants: ['u3'] },
+      { id: 's6', tripId: 't2', date: '2026-06-08', period: '上午', time: '10:00', name: '客户复盘会', address: '上海市浦东新区陆家嘴环路 1000 号', participants: ['u1', 'u4'] },
+      { id: 's7', tripId: 't3', date: '2026-06-16', period: '下午', time: '15:00', name: '展会渠道洽谈', address: '深圳市福田区福华三路深圳会展中心', participants: ['u3', 'u5'] }
+    ];
+
+    let activeTripId = 't1';
+    let editingTripId = null;
+    let editingScheduleId = null;
+
+    const $ = (id) => document.getElementById(id);
+    const getEmployee = (id) => employees.find(item => item.id === id);
+    const employeeName = (id) => getEmployee(id)?.name || id;
+    const dateFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' });
+    const weekFormatter = new Intl.DateTimeFormat('en-US', { weekday: 'short' });
+
+    function showToast(text) {
+      const toast = $('toast');
+      toast.textContent = text;
+      toast.classList.add('show');
+      window.setTimeout(() => toast.classList.remove('show'), 1800);
+    }
+
+    function datesBetween(start, end) {
+      const result = [];
+      const cursor = new Date(start + 'T00:00:00');
+      const endDate = new Date(end + 'T00:00:00');
+      while (cursor <= endDate) {
+        result.push(cursor.toISOString().slice(0, 10));
+        cursor.setDate(cursor.getDate() + 1);
+      }
+      return result;
+    }
+
+    function formatCnDate(dateText) {
+      return dateFormatter.format(new Date(dateText + 'T00:00:00'));
+    }
+
+    function formatWeek(dateText) {
+      return weekFormatter.format(new Date(dateText + 'T00:00:00'));
+    }
+
+    function tripPeople(tripId) {
+      const ids = new Set();
+      schedules.filter(item => item.tripId === tripId).forEach(item => item.participants.forEach(id => ids.add(id)));
+      const trip = trips.find(item => item.id === tripId);
+      if (ids.size === 0 && trip?.creator) ids.add(trip.creator);
+      return Array.from(ids);
+    }
+
+    function filteredTrips() {
+      const name = $('filterName').value.trim();
+      const start = $('filterStart').value;
+      const end = $('filterEnd').value;
+      const person = $('filterPerson').value;
+      return trips.filter(trip => {
+        if (name && !trip.name.includes(name)) return false;
+        if (start && trip.start < start) return false;
+        if (end && trip.end > end) return false;
+        if (person && !tripPeople(trip.id).includes(person)) return false;
+        return true;
+      });
+    }
+
+    function syncPersonOptions() {
+      const selects = [$('filterPerson'), $('gridPerson')];
+      selects.forEach(select => {
+        const current = select.value;
+        select.innerHTML = '<option value="">全部人员</option>' + employees.map(item => `<option value="${item.id}">${item.name}</option>`).join('');
+        select.value = current;
+      });
+    }
+
+    function renderTripList() {
+      const list = filteredTrips();
+      $('tripCountText').textContent = `共 ${list.length} 个行程`;
+      $('tripList').innerHTML = list.map(trip => {
+        const people = tripPeople(trip.id);
+        const count = schedules.filter(item => item.tripId === trip.id).length;
+        return `
+          <article class="trip-row ${trip.id === activeTripId ? 'active' : ''}">
+            <div>
+              <div class="trip-name">${trip.name}</div>
+              <div class="trip-meta">
+                <span>开始：${trip.start}</span>
+                <span>结束：${trip.end}</span>
+                <span>${count} 个日程</span>
+              </div>
+              <div class="people">
+                ${people.map(id => `<span class="tag">${employeeName(id)}</span>`).join('') || '<span class="tag gray">暂无人员</span>'}
+              </div>
+            </div>
+            <div class="row-actions">
+              <button class="btn soft" data-trip-select="${trip.id}" title="查看日程">查看</button>
+              <button class="btn primary" data-trip-schedule="${trip.id}" title="新建日程">＋ 新建日程</button>
+            </div>
+          </article>
+        `;
+      }).join('') || '<div style="padding:28px;text-align:center;color:#7a8fa5;">暂无符合条件的行程</div>';
+    }
+
+    function renderTripSelect() {
+      const options = trips.map(trip => `<option value="${trip.id}">${trip.name}</option>`).join('');
+      $('tripSelect').innerHTML = options;
+      $('tripSelect').value = activeTripId;
+    }
+
+    function renderScheduleGrid() {
+      const trip = trips.find(item => item.id === activeTripId) || trips[0];
+      if (!trip) return;
+      activeTripId = trip.id;
+      const days = datesBetween(trip.start, trip.end);
+      const person = $('gridPerson').value || $('filterPerson').value;
+      $('activeTripTitle').textContent = trip.name;
+      $('activeTripMeta').textContent = `${trip.start} 至 ${trip.end}，${days.length} 天`;
+      $('scheduleGrid').style.setProperty('--day-count', days.length);
+
+      let html = '<div class="grid-cell corner"></div>';
+      html += days.map(day => `
+        <div class="grid-cell date-head">
+          <div class="date-cn">${formatCnDate(day)}</div>
+          <div class="date-en">${formatWeek(day)}</div>
+        </div>
+      `).join('');
+
+      periods.forEach(period => {
+        html += `<div class="grid-cell period-head">${period}</div>`;
+        days.forEach(day => {
+          const cellSchedules = schedules
+            .filter(item => item.tripId === trip.id && item.date === day && item.period === period)
+            .filter(item => !person || item.participants.includes(person))
+            .sort((a, b) => a.time.localeCompare(b.time));
+          html += `
+            <div class="grid-cell">
+              <button class="cell-plus" data-cell-add="${day}|${period}" title="添加日程">+</button>
+              ${cellSchedules.length ? cellSchedules.map(scheduleCard).join('') : '<div class="empty">暂无安排</div>'}
+            </div>
+          `;
+        });
+      });
+
+      $('scheduleGrid').innerHTML = html;
+    }
+
+    function scheduleCard(item) {
+      return `
+        <article class="schedule-card">
+          <button class="delete" data-delete-schedule="${item.id}" title="删除日程">×</button>
+          <div class="time">${item.time}</div>
+          <div class="schedule-name">${item.name}</div>
+          <div class="card-actions">
+            <button class="mini-btn" data-map="${item.id}" title="查看地图">查看地图</button>
+            <button class="mini-btn" data-edit-schedule="${item.id}" title="编辑日程">编辑</button>
+          </div>
+          <div class="card-people">
+            ${item.participants.map(id => `<span class="tag">${employeeName(id)}</span>`).join('')}
+          </div>
+        </article>
+      `;
+    }
+
+    function renderScheduleDateOptions(tripId) {
+      const trip = trips.find(item => item.id === tripId);
+      if (!trip) return;
+      $('scheduleDate').innerHTML = datesBetween(trip.start, trip.end)
+        .map(day => `<option value="${day}">${formatCnDate(day)} (${formatWeek(day)})</option>`)
+        .join('');
+    }
+
+    function renderParticipantChecks(selected = []) {
+      $('participantChecks').innerHTML = employees.map(item => `
+        <label class="check-item">
+          <input type="checkbox" value="${item.id}" ${selected.includes(item.id) ? 'checked' : ''} />
+          <span>${item.name}</span>
+        </label>
+      `).join('');
+    }
+
+    function openTripModal(tripId = null) {
+      editingTripId = tripId;
+      const trip = trips.find(item => item.id === tripId);
+      $('tripModalTitle').textContent = trip ? '编辑行程' : '新增行程';
+      $('tripName').value = trip?.name || '';
+      $('tripStart').value = trip?.start || '2026-06-18';
+      $('tripEnd').value = trip?.end || '2026-06-20';
+      $('tripModal').classList.add('open');
+    }
+
+    function openScheduleModal(prefill = {}) {
+      const trip = trips.find(item => item.id === activeTripId);
+      if (!trip) return;
+      editingScheduleId = prefill.id || null;
+      renderScheduleDateOptions(trip.id);
+      $('scheduleModalTitle').textContent = editingScheduleId ? '编辑日程' : '新建日程';
+      $('scheduleDate').value = prefill.date || trip.start;
+      $('schedulePeriod').value = prefill.period || '上午';
+      $('scheduleTime').value = prefill.time || '10:00';
+      $('scheduleName').value = prefill.name || '';
+      $('scheduleAddress').value = prefill.address || '北京市朝阳区天辰东路 1 号院亚洲金融大厦 C 座';
+      renderParticipantChecks(prefill.participants || ['u1']);
+      $('scheduleModal').classList.add('open');
+    }
+
+    function saveTrip() {
+      const name = $('tripName').value.trim();
+      const start = $('tripStart').value;
+      const end = $('tripEnd').value;
+      if (!name || !start || !end) return showToast('请填写行程名称、开始日期和结束日期');
+      if (start > end) return showToast('开始日期不能晚于结束日期');
+      if (editingTripId) {
+        const trip = trips.find(item => item.id === editingTripId);
+        Object.assign(trip, { name, start, end });
+        showToast('行程已保存');
+      } else {
+        const id = 't' + Date.now();
+        trips.unshift({ id, name, start, end, creator: 'u1' });
+        activeTripId = id;
+        showToast('行程已新增');
+      }
+      $('tripModal').classList.remove('open');
+      renderAll();
+    }
+
+    function saveSchedule() {
+      const participants = Array.from($('participantChecks').querySelectorAll('input:checked')).map(item => item.value);
+      const payload = {
+        tripId: activeTripId,
+        date: $('scheduleDate').value,
+        period: $('schedulePeriod').value,
+        time: $('scheduleTime').value.trim(),
+        name: $('scheduleName').value.trim(),
+        address: $('scheduleAddress').value.trim(),
+        participants
+      };
+      if (!payload.date || !payload.period || !payload.time || !payload.name) return showToast('请填写日期、时段、时间和日程名称');
+      if (participants.length === 0) return showToast('请至少选择一名参与人员');
+      if (editingScheduleId) {
+        const item = schedules.find(schedule => schedule.id === editingScheduleId);
+        Object.assign(item, payload);
+        showToast('日程已保存');
+      } else {
+        schedules.push({ id: 's' + Date.now(), ...payload });
+        showToast('日程已新增');
+      }
+      $('scheduleModal').classList.remove('open');
+      renderAll();
+    }
+
+    function openMap(scheduleId) {
+      const item = schedules.find(schedule => schedule.id === scheduleId);
+      if (!item) return;
+      const query = encodeURIComponent(item.address || item.name);
+      const webUrl = `https://ditu.amap.com/search?query=${query}&src=team-board&callnative=0&innersrc=uriapi`;
+      $('mapTitle').textContent = item.name + ' / 查看地图';
+      $('mapQuery').value = item.address || item.name;
+      $('openAmapLink').href = webUrl;
+      if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        $('openAmapLink').textContent = '打开高德地图 App';
+      } else {
+        $('openAmapLink').textContent = '打开高德地图网页端';
+      }
+      $('mapModal').classList.add('open');
+    }
+
+    function applyRole() {
+      const forbidden = $('roleSelect').value === 'rd';
+      $('workspace').style.display = forbidden ? 'none' : 'grid';
+      $('lockView').style.display = forbidden ? 'block' : 'none';
+    }
+
+    function renderAll() {
+      syncPersonOptions();
+      if (!trips.some(item => item.id === activeTripId)) activeTripId = trips[0]?.id;
+      renderTripSelect();
+      renderTripList();
+      renderScheduleGrid();
+      applyRole();
+    }
+
+    document.addEventListener('click', (event) => {
+      const closeId = event.target.dataset.close;
+      if (closeId) $(closeId).classList.remove('open');
+      const tripSelect = event.target.dataset.tripSelect;
+      if (tripSelect) {
+        activeTripId = tripSelect;
+        renderAll();
+      }
+      const tripSchedule = event.target.dataset.tripSchedule;
+      if (tripSchedule) {
+        activeTripId = tripSchedule;
+        renderAll();
+        openScheduleModal();
+      }
+      const cellAdd = event.target.dataset.cellAdd;
+      if (cellAdd) {
+        const [date, period] = cellAdd.split('|');
+        openScheduleModal({ date, period });
+      }
+      const editSchedule = event.target.dataset.editSchedule;
+      if (editSchedule) {
+        const item = schedules.find(schedule => schedule.id === editSchedule);
+        openScheduleModal(item);
+      }
+      const deleteSchedule = event.target.dataset.deleteSchedule;
+      if (deleteSchedule && confirm('确认删除该日程？')) {
+        schedules = schedules.filter(schedule => schedule.id !== deleteSchedule);
+        showToast('日程已删除');
+        renderAll();
+      }
+      const mapId = event.target.dataset.map;
+      if (mapId) openMap(mapId);
+    });
+
+    ['filterName', 'filterStart', 'filterEnd', 'filterPerson'].forEach(id => {
+      $(id).addEventListener('input', () => {
+        if (id === 'filterPerson') $('gridPerson').value = $(id).value;
+        renderTripList();
+        renderScheduleGrid();
+      });
+      $(id).addEventListener('change', () => {
+        if (id === 'filterPerson') $('gridPerson').value = $(id).value;
+        renderTripList();
+        renderScheduleGrid();
+      });
+    });
+
+    $('gridPerson').addEventListener('change', () => {
+      $('filterPerson').value = $('gridPerson').value;
+      renderTripList();
+      renderScheduleGrid();
+    });
+
+    $('tripSelect').addEventListener('change', () => {
+      activeTripId = $('tripSelect').value;
+      renderAll();
+    });
+
+    $('roleSelect').addEventListener('change', applyRole);
+    $('addTripTop').addEventListener('click', () => openTripModal());
+    $('addTripSide').addEventListener('click', () => openTripModal());
+    $('editTripBtn').addEventListener('click', () => openTripModal(activeTripId));
+    $('saveTripBtn').addEventListener('click', saveTrip);
+    $('addScheduleBtn').addEventListener('click', () => openScheduleModal());
+    $('saveScheduleBtn').addEventListener('click', saveSchedule);
+
+    renderAll();
+  </script>
+</body>
+</html>

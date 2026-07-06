@@ -219,6 +219,17 @@ export const tripsApi = {
   stats: (params) => api.get('/trips/stats/summary', { params }).then(r => r.data),
 };
 
+export const tripCollaborationApi = {
+  listTrips: (params) => api.get('/trip-collaboration/trips', { params }).then(r => r.data),
+  createTrip: (data) => api.post('/trip-collaboration/trips', data).then(r => r.data),
+  updateTrip: (id, data) => api.put(`/trip-collaboration/trips/${id}`, data).then(r => r.data),
+  deleteTrip: (id) => api.delete(`/trip-collaboration/trips/${id}`).then(r => r.data),
+  listSchedules: (tripId, params) => api.get(`/trip-collaboration/trips/${tripId}/schedules`, { params }).then(r => r.data),
+  createSchedule: (tripId, data) => api.post(`/trip-collaboration/trips/${tripId}/schedules`, data).then(r => r.data),
+  updateSchedule: (id, data) => api.put(`/trip-collaboration/schedules/${id}`, data).then(r => r.data),
+  deleteSchedule: (id) => api.delete(`/trip-collaboration/schedules/${id}`).then(r => r.data),
+};
+
 export const expensesApi = {
   update: (id, data) => api.put(`/trip_expenses/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/trip_expenses/${id}`).then(r => r.data),

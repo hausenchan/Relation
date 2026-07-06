@@ -9,7 +9,8 @@ import {
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined,
-  AppstoreOutlined, HistoryOutlined, GlobalOutlined, CloseOutlined
+  AppstoreOutlined, HistoryOutlined, GlobalOutlined, CloseOutlined,
+  ScheduleOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
@@ -49,6 +50,7 @@ const PAGE_TITLE_MAP = {
   '/gift-review': '审核与记录',
   '/gifts': '礼品库',
   '/trips': '出差申请',
+  '/trip-collaboration': '出差协同',
   '/trip-stats': '费用统计',
   '/budgets': '预算管理',
   '/executive': '经营概览',
@@ -310,6 +312,7 @@ import Gifts from './pages/Gifts';
 import GiftPlans from './pages/GiftPlans';
 import GiftReview from './pages/GiftReview';
 import Trips from './pages/Trips';
+import TripCollaboration from './pages/TripCollaboration';
 import TripStats from './pages/TripStats';
 import Budgets from './pages/Budgets';
 import MenuPerms from './pages/MenuPerms';
@@ -709,6 +712,7 @@ function AppLayout() {
 
   // ── 团队管理 ────────────────────────────────────────────────
   const canViewTaskBoard = ['leader', 'sales_director', 'admin'].includes(user?.role) || (user?.managed_team_ids?.length > 0);
+  const canViewTripCollaboration = isAdmin(user) || user?.department === 'commercial' || user?.role === 'sales_director';
   const teamChildren = [
     canAccessMenu('/task-board') && canViewTaskBoard && {
       key: '/task-board', icon: <ApartmentOutlined />, label: <Link to="/task-board">任务看板</Link>,
@@ -738,6 +742,9 @@ function AppLayout() {
           {pendingTripCount > 0 && <Badge count={pendingTripCount} size="small" style={{ marginLeft: 8 }} />}
         </span>
       ),
+    },
+    canViewTripCollaboration && {
+      key: '/trip-collaboration', icon: <ScheduleOutlined />, label: <Link to="/trip-collaboration">出差协同</Link>,
     },
     canAccessMenu('/trip-stats') && {
       key: '/trip-stats', icon: <RiseOutlined />, label: <Link to="/trip-stats">费用统计</Link>,
@@ -1092,6 +1099,7 @@ function AppLayout() {
             <Route path="/teams" element={<PrivateRoute adminOnly><Teams /></PrivateRoute>} />
             <Route path="/project-groups" element={<PrivateRoute adminOnly><ProjectGroups /></PrivateRoute>} />
             <Route path="/trips" element={<PrivateRoute><Trips /></PrivateRoute>} />
+            <Route path="/trip-collaboration" element={<PrivateRoute><TripCollaboration /></PrivateRoute>} />
             <Route path="/trip-stats" element={<PrivateRoute><TripStats /></PrivateRoute>} />
             <Route path="/budgets" element={<PrivateRoute><Budgets /></PrivateRoute>} />
             <Route path="/menu-perms" element={<PrivateRoute adminOnly><MenuPerms /></PrivateRoute>} />
