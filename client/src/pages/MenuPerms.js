@@ -12,6 +12,14 @@ const { useBreakpoint } = Grid;
 const MENU_TREE = [
   { title: '工作台', key: '/' },
   {
+    title: 'Agent中台',
+    key: 'agent-center',
+    children: [
+      { title: '经营台', key: '/agents' },
+      { title: 'AI训练台', key: '/agents/ai-training' },
+    ],
+  },
+  {
     title: '目标计划',
     key: 'goal-plan',
     children: [
@@ -24,14 +32,6 @@ const MENU_TREE = [
     key: 'biz-flow',
     children: [
       { title: '商机', key: '/leads' },
-      {
-        title: 'Agent 中台',
-        key: 'agent-center',
-        children: [
-          { title: '经营台', key: '/agents' },
-          { title: 'AI训练台', key: '/agents/ai-training' },
-        ],
-      },
       { title: '策略', key: '/strategies' },
       { title: '需求', key: '/dev-tasks' },
     ],

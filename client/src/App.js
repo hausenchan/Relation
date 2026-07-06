@@ -33,7 +33,7 @@ const PAGE_TITLE_MAP = {
   '/goals': '目标管理',
   '/weekly-reports': '周报管理',
   '/leads': '商机',
-  '/agents': 'Agent 中台',
+  '/agents': 'Agent中台',
   '/agents/ai-training': 'AI训练台',
   '/strategies': '策略',
   '/dev-tasks': '需求',
@@ -475,7 +475,7 @@ function AppLayout() {
   const sidebarCollapsedStorageKey = 'relation.appSidebarCollapsed.v1';
   const mobileMenuOpenStorageKey = 'relation.appMobileMenuOpen.v1';
   const menuOpenKeysStorageKey = 'relation.appMenuOpenKeys.v1';
-  const defaultMenuOpenKeys = ['goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'common-tools', 'system'];
+  const defaultMenuOpenKeys = ['agent-center', 'goal-plan', 'biz-flow', 'asset-mgmt', 'biz-coop', 'team-mgmt', 'common-tools', 'system'];
   const tabStorageKey = `${WORKSPACE_TABS_STORAGE_PREFIX}.${user?.id || user?.username || 'guest'}`;
   const [pendingCount, setPendingCount] = useState(0);
   const [pendingGiftCount, setPendingGiftCount] = useState(0);
@@ -661,17 +661,17 @@ function AppLayout() {
 
   // ── 业务流转 ────────────────────────────────────────────────
   const canAccessAgentHub = canAccessMenu('/agents') || canAccessMenu('/agents/ai-training');
+  const agentCenterItem = canAccessAgentHub && {
+    key: 'agent-center',
+    icon: <RobotOutlined />,
+    label: 'Agent中台',
+    children: [
+      canAccessMenu('/agents') && { key: '/agents', icon: <AppstoreOutlined />, label: <Link to="/agents">经营台</Link> },
+      canAccessAgentHub && { key: '/agents/ai-training', icon: <MessageOutlined />, label: <Link to="/agents/ai-training">AI训练台</Link> },
+    ].filter(Boolean),
+  };
   const bizFlowChildren = [
     canAccessMenu('/leads') && { key: '/leads', icon: <FunnelPlotOutlined />, label: <Link to="/leads">商机</Link> },
-    canAccessAgentHub && {
-      key: 'agent-center',
-      icon: <RobotOutlined />,
-      label: 'Agent 中台',
-      children: [
-        canAccessMenu('/agents') && { key: '/agents', icon: <AppstoreOutlined />, label: <Link to="/agents">经营台</Link> },
-        canAccessAgentHub && { key: '/agents/ai-training', icon: <MessageOutlined />, label: <Link to="/agents/ai-training">AI训练台</Link> },
-      ].filter(Boolean),
-    },
     canAccessMenu('/strategies') && { key: '/strategies', icon: <BranchesOutlined />, label: <Link to="/strategies">策略</Link> },
     canAccessMenu('/dev-tasks') && { key: '/dev-tasks', icon: <ToolOutlined />, label: <Link to="/dev-tasks">需求</Link> },
   ].filter(Boolean);
@@ -778,6 +778,8 @@ function AppLayout() {
   const menuItems = [
     // 工作台
     canAccessMenu('/') && { key: '/', icon: <DashboardOutlined />, label: <Link to="/">工作台</Link> },
+    // Agent中台
+    agentCenterItem,
     // 目标与计划
     goalChildren.length > 0 && {
       key: 'goal-plan', icon: <AimOutlined />, label: '目标计划',

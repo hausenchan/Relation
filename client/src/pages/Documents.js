@@ -9967,7 +9967,6 @@ export default function Documents() {
                   />
                 </Tooltip>
               )}
-              {!isFolderSidebarCollapsed && <Title level={4} style={{ margin: 0 }}>文档中心</Title>}
             </Space>
             {!isFolderSidebarCollapsed && (
               <Space size={6}>
