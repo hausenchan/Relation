@@ -20,6 +20,7 @@ const {
 const {
   estimateTokenCount,
   generateAiTrainingSkillResponse,
+  getLlmRuntimeStatus,
   inferSectionTitles,
   scoreAiTrainingEvalOutput,
   selectRelevantSuggestions,
@@ -9220,7 +9221,7 @@ function buildAiTrainingFallbackSkillBundle(sessionLike) {
   return {
     skill: {
       id: null,
-      name: `${sceneLabel} 通用助手`,
+      name: `${sceneLabel} 系统分析助手`,
       scene_code: sessionLike?.scene_code || 'general_chat',
       business_line: sessionLike?.business_line || null,
       business_side: sessionLike?.business_side || null,
@@ -9229,8 +9230,8 @@ function buildAiTrainingFallbackSkillBundle(sessionLike) {
     },
     version: {
       id: null,
-      version_no: 'virtual',
-      version_label: '会话通用版',
+      version_no: 'system-default',
+      version_label: '系统默认模板',
       system_prompt: [
         `你是一个聚焦 ${sceneLabel} 的业务分析助手。`,
         `业务线：${businessLine}。`,
@@ -11318,6 +11319,15 @@ app.get('/api/agents/ai-training/stats', (req, res) => {
   } catch (error) {
     console.error('加载 AI 训练统计失败:', error);
     res.status(500).json({ error: '加载训练统计失败' });
+  }
+});
+
+app.get('/api/agents/ai-training/runtime-status', (req, res) => {
+  try {
+    res.json(getLlmRuntimeStatus());
+  } catch (error) {
+    console.error('加载 AI 训练运行状态失败:', error);
+    res.status(500).json({ error: '加载 AI 训练运行状态失败' });
   }
 });
 

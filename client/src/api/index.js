@@ -308,6 +308,7 @@ export const aiTrainingApi = {
   rollbackSkill: (id) => api.post(`/agents/ai-training/skills/${id}/rollback`).then(r => r.data),
   listEvalRuns: (params) => api.get('/agents/ai-training/eval-runs', { params }).then(r => r.data),
   getStats: () => api.get('/agents/ai-training/stats').then(r => r.data),
+  getRuntimeStatus: () => api.get('/agents/ai-training/runtime-status').then(r => r.data),
 };
 
 export const productAssetsApi = {

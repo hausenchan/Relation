@@ -7,6 +7,9 @@ const SCENE_SUGGESTION_TYPE_MAP = {
   general_chat: ['revenue_diagnosis', 'budget_adjustment', 'collaboration', 'media_mix'],
 };
 
+const DEFAULT_LLM_MODEL = 'gpt-5.5';
+const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
+
 function normalizeText(value) {
   return String(value || '').trim();
 }
@@ -170,6 +173,79 @@ function buildRiskReminders(session, matchedSuggestions, followUpQuestions) {
   return risks.slice(0, 3);
 }
 
+function buildAnalysisProcess({
+  session,
+  skill,
+  version,
+  promptSignals,
+  matchedSuggestions,
+  examples,
+  followUpQuestions,
+  runtimeMode,
+  modelName = null,
+  modelError = null,
+}) {
+  const sceneLabel = normalizeText(session.scene_label || skill?.scene_code || '当前场景');
+  const roleLabel = normalizeText(session.role_scope || session.business_side || skill?.role_scope || '当前角色');
+  const businessLineLabel = normalizeText(session.business_line || skill?.business_line || '当前业务线');
+  const exampleTitles = (examples || [])
+    .map(item => normalizeText(item.source_case_title || item.note_text))
+    .filter(Boolean)
+    .slice(0, 2);
+  const suggestionTitles = (matchedSuggestions || [])
+    .map(item => normalizeText(item.title))
+    .filter(Boolean)
+    .slice(0, 3);
+
+  const inputStepParts = [];
+  inputStepParts.push(promptSignals?.has_time_range ? '已识别时间范围' : '缺少时间范围');
+  inputStepParts.push(promptSignals?.has_compare_window ? '已识别对照窗口' : '缺少明确对照窗口');
+  inputStepParts.push(promptSignals?.has_role_scope ? '角色视角明确' : '角色视角待补充');
+
+  const evidenceParts = [];
+  if (suggestionTitles.length > 0) evidenceParts.push(`命中 ${suggestionTitles.length} 条建议证据`);
+  if (exampleTitles.length > 0) evidenceParts.push(`参考 ${exampleTitles.length} 条案例示例`);
+  if (evidenceParts.length === 0) evidenceParts.push('当前主要依赖会话上下文和输出模板');
+
+  const judgementStep = session.scene_code === 'revenue_diagnosis'
+    ? '优先判断预算动作、入口质量和收入结构，再决定是否需要跨侧复盘。'
+    : session.scene_code === 'budget_advice'
+      ? '优先判断趋势连续性和承接质量，再决定试探回补还是继续观察。'
+      : '先统一问题口径，再把结论、证据和动作拆开输出。';
+
+  const processSummary = [
+    `已按 ${businessLineLabel} / ${sceneLabel} / ${roleLabel} 识别问题场景。`,
+    suggestionTitles.length > 0 || exampleTitles.length > 0
+      ? `结合 ${suggestionTitles.length} 条建议证据与 ${exampleTitles.length} 条示例，整理结构化判断。`
+      : '当前未命中外部证据，主要依赖模型或规则链路做首轮判断。',
+    followUpQuestions.length > 0 ? `仍有 ${followUpQuestions.length} 个关键口径需要补齐。` : '当前输入口径基本可直接产出结论。',
+  ].join('');
+
+  return {
+    summary: processSummary,
+    steps: [
+      `场景识别：${businessLineLabel} / ${sceneLabel} / ${roleLabel}`,
+      `输入校验：${inputStepParts.join('，')}`,
+      `证据装载：${evidenceParts.join('，')}`,
+      `判断路径：${judgementStep}`,
+      ...(followUpQuestions.length > 0 ? [`待补问题：${followUpQuestions.join('；')}`] : []),
+    ],
+    trace_tags: [
+      runtimeMode === 'llm' ? `模型:${modelName || '系统模型'}` : '规则链路',
+      skill?.name ? `Skill:${skill.name}` : '未绑定Skill',
+      `${matchedSuggestions.length}条建议证据`,
+      `${exampleTitles.length}条例子`,
+    ],
+    source_titles: {
+      suggestions: suggestionTitles,
+      examples: exampleTitles,
+    },
+    model_error: modelError || null,
+    follow_up_required: followUpQuestions.length > 0,
+    llm_backed: runtimeMode === 'llm',
+  };
+}
+
 function buildDeterministicSkillResponse({
   session,
   skill,
@@ -231,6 +307,16 @@ function buildDeterministicSkillResponse({
   }
 
   const risks = buildRiskReminders(session, matchedSuggestions, followUpQuestions);
+  const analysisProcess = buildAnalysisProcess({
+    session,
+    skill,
+    version,
+    promptSignals,
+    matchedSuggestions,
+    examples,
+    followUpQuestions,
+    runtimeMode: 'deterministic',
+  });
   const confidence = Math.max(
     58,
     Math.min(
@@ -254,6 +340,7 @@ function buildDeterministicSkillResponse({
       related_subject_name: item.related_subject_name || null,
       type: item.type,
     })),
+    analysis_process: analysisProcess,
     runtime_meta: {
       mode: 'deterministic',
       skill_id: skill?.id || null,
@@ -262,6 +349,8 @@ function buildDeterministicSkillResponse({
       skill_version_no: version?.version_no || null,
       matched_suggestion_ids: matchedSuggestions.map(item => item.id),
       matched_suggestion_count: matchedSuggestions.length,
+      model_name: null,
+      llm_enabled: false,
     },
   };
 
@@ -293,6 +382,7 @@ function buildDeterministicSkillResponse({
     actions,
     section_titles: sectionTitles,
     confidence,
+    analysis_process: analysisProcess,
     runtime_mode: 'deterministic',
   };
 }
@@ -318,8 +408,9 @@ function buildModelSystemPrompt({ session, skill, version, sectionTitles }) {
     normalizeText(version?.system_prompt || skill?.description || '你是一个业务分析助手。'),
     normalizeText(version?.guardrails_text || ''),
     '请严格输出 JSON 对象，不要输出额外解释。',
-    `JSON 字段必须包含：summary, evidence, risk_reminders, actions, follow_up_questions, confidence。`,
-    `evidence, risk_reminders, actions, follow_up_questions 必须是字符串数组。`,
+    `JSON 字段必须包含：summary, evidence, risk_reminders, actions, follow_up_questions, confidence, reasoning_summary, analysis_steps。`,
+    `evidence, risk_reminders, actions, follow_up_questions, analysis_steps 必须是字符串数组。`,
+    'reasoning_summary 是给业务同学看的简短分析过程摘要，不要输出内部原始思维链。',
     `最终展示会按以下章节落地：${sectionTitles.join(' / ')}。`,
     `当前业务线：${normalizeText(session.business_line || skill?.business_line || '当前业务线')}。`,
     `当前视角：${normalizeText(session.role_scope || session.business_side || skill?.role_scope || '当前角色')}。`,
@@ -391,6 +482,25 @@ function normalizeModelStructuredResponse(payload, baseResponse, skill, version,
     : baseResponse.structured.follow_up_questions;
   const confidence = Math.max(0, Math.min(100, Number(payload?.confidence || baseResponse.confidence || 0)));
   const sectionTitles = baseResponse.section_titles;
+  const reasoningSummary = normalizeText(
+    payload?.reasoning_summary
+    || payload?.analysis_process?.summary
+    || baseResponse.analysis_process?.summary
+    || ''
+  );
+  const analysisSteps = Array.isArray(payload?.analysis_steps) && payload.analysis_steps.length > 0
+    ? payload.analysis_steps.map(item => normalizeText(item)).filter(Boolean)
+    : (
+      Array.isArray(payload?.analysis_process?.steps) && payload.analysis_process.steps.length > 0
+        ? payload.analysis_process.steps.map(item => normalizeText(item)).filter(Boolean)
+        : (baseResponse.analysis_process?.steps || [])
+    );
+  const analysisProcess = {
+    ...(baseResponse.analysis_process || {}),
+    summary: reasoningSummary || baseResponse.analysis_process?.summary || '',
+    steps: analysisSteps,
+    llm_backed: true,
+  };
 
   const structured = {
     summary,
@@ -400,6 +510,7 @@ function normalizeModelStructuredResponse(payload, baseResponse, skill, version,
     follow_up_questions: followUpQuestions,
     confidence,
     references: baseResponse.structured.references,
+    analysis_process: analysisProcess,
     runtime_meta: {
       mode: 'llm',
       skill_id: skill?.id || null,
@@ -408,6 +519,8 @@ function normalizeModelStructuredResponse(payload, baseResponse, skill, version,
       skill_version_no: version?.version_no || null,
       matched_suggestion_ids: matchedSuggestions.map(item => item.id),
       matched_suggestion_count: matchedSuggestions.length,
+      model_name: null,
+      llm_enabled: true,
     },
   };
 
@@ -438,25 +551,96 @@ function normalizeModelStructuredResponse(payload, baseResponse, skill, version,
     evidence,
     actions,
     confidence,
+    analysis_process: analysisProcess,
     runtime_mode: 'llm',
     section_titles: sectionTitles,
   };
 }
 
 function getLlmConfig() {
-  const apiKey = process.env.AI_TRAINING_LLM_API_KEY || process.env.OPENAI_API_KEY || '';
-  const model = process.env.AI_TRAINING_LLM_MODEL || process.env.OPENAI_MODEL || '';
-  if (!apiKey || !model) return null;
-  const baseUrl = normalizeText(process.env.AI_TRAINING_LLM_BASE_URL || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1');
-  const timeoutMs = Math.max(5000, Number(process.env.AI_TRAINING_LLM_TIMEOUT_MS || 25000));
+  const apiKey = process.env.AI_TRAINING_LLM_API_KEY
+    || process.env.AI_API_KEY
+    || process.env.LLM_API_KEY
+    || process.env.OPENAI_API_KEY
+    || '';
+  const model = normalizeText(process.env.AI_TRAINING_LLM_MODEL
+    || process.env.AI_MODEL
+    || process.env.LLM_MODEL
+    || process.env.OPENAI_MODEL
+    || DEFAULT_LLM_MODEL);
+  if (!apiKey) return null;
+  const baseUrl = normalizeText(
+    process.env.AI_TRAINING_LLM_BASE_URL
+    || process.env.AI_BASE_URL
+    || process.env.LLM_BASE_URL
+    || process.env.OPENAI_BASE_URL
+    || DEFAULT_LLM_BASE_URL
+  );
+  const timeoutMs = Math.max(5000, Number(
+    process.env.AI_TRAINING_LLM_TIMEOUT_MS
+    || process.env.AI_TIMEOUT_MS
+    || process.env.LLM_TIMEOUT_MS
+    || 25000
+  ));
   return {
     apiKey,
     model,
     baseUrl: baseUrl.replace(/\/+$/g, ''),
     timeoutMs,
-    temperature: Number.isFinite(Number(process.env.AI_TRAINING_LLM_TEMPERATURE))
-      ? Number(process.env.AI_TRAINING_LLM_TEMPERATURE)
+    temperature: Number.isFinite(Number(
+      process.env.AI_TRAINING_LLM_TEMPERATURE
+      || process.env.AI_TEMPERATURE
+      || process.env.LLM_TEMPERATURE
+    ))
+      ? Number(process.env.AI_TRAINING_LLM_TEMPERATURE
+        || process.env.AI_TEMPERATURE
+        || process.env.LLM_TEMPERATURE)
       : 0.2,
+  };
+}
+
+function getLlmRuntimeStatus() {
+  const config = getLlmConfig();
+  const targetModel = normalizeText(process.env.AI_TRAINING_LLM_MODEL
+    || process.env.AI_MODEL
+    || process.env.LLM_MODEL
+    || process.env.OPENAI_MODEL
+    || DEFAULT_LLM_MODEL);
+  const targetBaseUrl = normalizeText(process.env.AI_TRAINING_LLM_BASE_URL
+    || process.env.AI_BASE_URL
+    || process.env.LLM_BASE_URL
+    || process.env.OPENAI_BASE_URL
+    || DEFAULT_LLM_BASE_URL);
+  if (!config) {
+    let displayBaseUrl = targetBaseUrl;
+    try {
+      displayBaseUrl = new URL(targetBaseUrl).origin;
+    } catch {}
+    return {
+      llm_enabled: false,
+      preferred_runtime: 'deterministic',
+      model_name: targetModel,
+      base_url: displayBaseUrl,
+      target_model_name: targetModel,
+      fallback_enabled: true,
+      status_text: `目标模型为 ${targetModel}，但当前缺少 API Key，训练台会先走规则模式。`,
+      setup_hint: '请在服务端配置 AI_TRAINING_LLM_API_KEY、AI_API_KEY、LLM_API_KEY 或 OPENAI_API_KEY。',
+    };
+  }
+
+  let baseUrl = config.baseUrl;
+  try {
+    baseUrl = new URL(config.baseUrl).origin;
+  } catch {}
+  return {
+    llm_enabled: true,
+    preferred_runtime: 'llm',
+    model_name: config.model,
+    base_url: baseUrl,
+    target_model_name: config.model,
+    fallback_enabled: true,
+    status_text: `当前默认接入系统小模型 ${config.model}，规则链路仅作兜底。`,
+    setup_hint: null,
   };
 }
 
@@ -508,8 +692,17 @@ async function generateAiTrainingSkillResponse({
   });
   const config = getLlmConfig();
   if (!config) {
+    const runtimeMeta = {
+      ...(baseResponse.structured.runtime_meta || {}),
+      model_name: null,
+      llm_enabled: false,
+    };
     return {
       ...baseResponse,
+      structured: {
+        ...baseResponse.structured,
+        runtime_meta: runtimeMeta,
+      },
       follow_up_questions: followUpQuestions,
       prompt_signals: promptSignals,
       llm_usage: null,
@@ -531,8 +724,31 @@ async function generateAiTrainingSkillResponse({
     const content = normalizeText(completion?.choices?.[0]?.message?.content || '');
     const parsed = tryParseJsonPayload(content);
     if (!parsed) {
+      const fallbackAnalysis = buildAnalysisProcess({
+        session,
+        skill,
+        version,
+        promptSignals,
+        matchedSuggestions,
+        examples,
+        followUpQuestions,
+        runtimeMode: 'deterministic',
+        modelName: completion?.model || config.model,
+        modelError: 'llm_response_not_json',
+      });
       return {
         ...baseResponse,
+        structured: {
+          ...baseResponse.structured,
+          analysis_process: fallbackAnalysis,
+          runtime_meta: {
+            ...(baseResponse.structured.runtime_meta || {}),
+            mode: 'deterministic_fallback',
+            model_name: completion?.model || config.model,
+            llm_enabled: true,
+          },
+        },
+        analysis_process: fallbackAnalysis,
         follow_up_questions: followUpQuestions,
         prompt_signals: promptSignals,
         llm_usage: completion?.usage || null,
@@ -541,6 +757,11 @@ async function generateAiTrainingSkillResponse({
       };
     }
     const normalized = normalizeModelStructuredResponse(parsed, baseResponse, skill, version, matchedSuggestions);
+    normalized.structured.runtime_meta = {
+      ...(normalized.structured.runtime_meta || {}),
+      model_name: completion?.model || config.model,
+      llm_enabled: true,
+    };
     return {
       ...normalized,
       follow_up_questions: followUpQuestions,
@@ -548,8 +769,31 @@ async function generateAiTrainingSkillResponse({
       llm_usage: completion?.usage || null,
     };
   } catch (error) {
+    const fallbackAnalysis = buildAnalysisProcess({
+      session,
+      skill,
+      version,
+      promptSignals,
+      matchedSuggestions,
+      examples,
+      followUpQuestions,
+      runtimeMode: 'deterministic',
+      modelName: config.model,
+      modelError: error.message,
+    });
     return {
       ...baseResponse,
+      structured: {
+        ...baseResponse.structured,
+        analysis_process: fallbackAnalysis,
+        runtime_meta: {
+          ...(baseResponse.structured.runtime_meta || {}),
+          mode: 'deterministic_fallback',
+          model_name: config.model,
+          llm_enabled: true,
+        },
+      },
+      analysis_process: fallbackAnalysis,
       follow_up_questions: followUpQuestions,
       prompt_signals: promptSignals,
       llm_usage: null,
@@ -634,6 +878,7 @@ function estimateTokenCount(value) {
 module.exports = {
   extractPromptSignals,
   generateAiTrainingSkillResponse,
+  getLlmRuntimeStatus,
   inferSectionTitles,
   selectRelevantSuggestions,
   scoreAiTrainingEvalOutput,

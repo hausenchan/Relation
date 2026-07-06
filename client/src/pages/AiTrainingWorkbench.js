@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Card, Col, Descriptions, Empty, Form, Grid, Input, List, Modal,
+  Alert, Button, Card, Col, Collapse, Descriptions, Empty, Form, Grid, Input, List, Modal,
   Progress, Row, Select, Space, Spin, Tabs, Tag, Typography, message,
 } from 'antd';
 import {
@@ -133,8 +133,8 @@ function formatScorePercent(value) {
 function runtimeModeTag(mode) {
   const map = {
     llm: { color: 'green', label: 'LLM' },
-    deterministic: { color: 'blue', label: 'Skill Runtime' },
-    deterministic_fallback: { color: 'gold', label: 'Skill 回退' },
+    deterministic: { color: 'blue', label: '规则模式' },
+    deterministic_fallback: { color: 'gold', label: '模型回退' },
   };
   const current = map[mode] || { color: 'default', label: mode || 'Runtime' };
   return <Tag color={current.color}>{current.label}</Tag>;
@@ -145,6 +145,7 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
   const isAssistant = item.message_role === 'assistant';
   const bubbleBg = isUser ? '#edf4ff' : '#ffffff';
   const runtimeMeta = item.structured_json?.runtime_meta || null;
+  const analysisProcess = item.structured_json?.analysis_process || null;
 
   return (
     <div
@@ -165,6 +166,7 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
               {formatTime(item.created_at)}
             </Text>
             {isAssistant && runtimeMeta?.mode && runtimeModeTag(runtimeMeta.mode)}
+            {isAssistant && runtimeMeta?.model_name ? <Tag color="green">{runtimeMeta.model_name}</Tag> : null}
             {isAssistant && runtimeMeta?.skill_name ? <Tag color="geekblue">{runtimeMeta.skill_name}</Tag> : null}
             {isAssistant && runtimeMeta?.skill_version_no ? <Tag>版本 {runtimeMeta.skill_version_no}</Tag> : null}
             {!isUser && qualityTag(item.avg_rating ? Math.round(item.avg_rating * 20) : null)}
@@ -191,6 +193,46 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
                 <Tag key={`${item.id}-action-${index}`}>{action}</Tag>
               ))}
             </Space>
+          )}
+
+          {isAssistant && analysisProcess && (
+            <Collapse
+              size="small"
+              items={[
+                {
+                  key: 'analysis-process',
+                  label: '分析过程',
+                  children: (
+                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                      {analysisProcess.summary ? (
+                        <Text type="secondary" style={{ lineHeight: 1.8 }}>
+                          {analysisProcess.summary}
+                        </Text>
+                      ) : null}
+                      {Array.isArray(analysisProcess.trace_tags) && analysisProcess.trace_tags.length > 0 ? (
+                        <Space size={[6, 6]} wrap>
+                          {analysisProcess.trace_tags.map((tag, index) => (
+                            <Tag key={`${item.id}-trace-tag-${index}`}>{tag}</Tag>
+                          ))}
+                        </Space>
+                      ) : null}
+                      {Array.isArray(analysisProcess.steps) && analysisProcess.steps.length > 0 ? (
+                        <div>
+                          {analysisProcess.steps.map((step, index) => (
+                            <div key={`${item.id}-analysis-step-${index}`} style={{ color: '#475569', lineHeight: 1.8 }}>
+                              {index + 1}. {step}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {analysisProcess.model_error ? (
+                        <Text type="warning">模型回退原因：{analysisProcess.model_error}</Text>
+                      ) : null}
+                    </Space>
+                  ),
+                },
+              ]}
+            />
           )}
 
           {isAssistant && (
@@ -246,6 +288,7 @@ export default function AiTrainingWorkbench() {
     published_cases: 0,
     pending_candidates: 0,
   });
+  const [runtimeStatus, setRuntimeStatus] = useState(null);
   const [filters, setFilters] = useState({ scene_code: '', business_line: '', keyword: '' });
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -285,6 +328,15 @@ export default function AiTrainingWorkbench() {
       published_cases: Number(data?.published_cases || 0),
       pending_candidates: Number(data?.pending_candidates || 0),
     });
+  }, []);
+
+  const loadRuntimeStatus = useCallback(async () => {
+    try {
+      const data = await aiTrainingApi.getRuntimeStatus();
+      setRuntimeStatus(data || null);
+    } catch (error) {
+      message.error(error.response?.data?.error || '加载 AI 运行状态失败');
+    }
   }, []);
 
   const loadSessions = useCallback(async () => {
@@ -396,6 +448,7 @@ export default function AiTrainingWorkbench() {
   const refreshCore = useCallback(async () => {
     await Promise.all([
       loadOverview(),
+      loadRuntimeStatus(),
       loadSessions(),
       loadCaseLibrary(),
       loadSkills(),
@@ -403,11 +456,11 @@ export default function AiTrainingWorkbench() {
       loadStats(),
       selectedSkillId ? loadSkillDetail(selectedSkillId) : Promise.resolve(),
     ]);
-  }, [loadCaseLibrary, loadEvalRuns, loadOverview, loadSessions, loadSkillDetail, loadSkills, loadStats, selectedSkillId]);
+  }, [loadCaseLibrary, loadEvalRuns, loadOverview, loadRuntimeStatus, loadSessions, loadSkillDetail, loadSkills, loadStats, selectedSkillId]);
 
   useEffect(() => {
-    void Promise.all([loadOverview(), loadCaseLibrary(), loadSkills(), loadEvalRuns(), loadStats()]);
-  }, [loadCaseLibrary, loadEvalRuns, loadOverview, loadSkills, loadStats]);
+    void Promise.all([loadOverview(), loadRuntimeStatus(), loadCaseLibrary(), loadSkills(), loadEvalRuns(), loadStats()]);
+  }, [loadCaseLibrary, loadEvalRuns, loadOverview, loadRuntimeStatus, loadSkills, loadStats]);
 
   useEffect(() => {
     void loadSessions();
@@ -849,6 +902,19 @@ export default function AiTrainingWorkbench() {
                     权限：{currentSession.visibility_scope === 'team' ? '团队共享' : '仅自己'}
                     <br />
                     创建人：{currentSession.owner_user_name || '我'}
+                  </Paragraph>
+                </Card>
+
+                <Card size="small" bodyStyle={{ padding: 12 }}>
+                  <Text type="secondary">当前运行引擎</Text>
+                  <Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
+                    {lastAssistantMessage?.structured_json?.runtime_meta?.model_name
+                      ? `系统小模型：${lastAssistantMessage.structured_json.runtime_meta.model_name}`
+                      : runtimeStatus?.llm_enabled
+                        ? `系统小模型待调用：${runtimeStatus.model_name || '已接通'}`
+                        : `目标模型：${runtimeStatus?.target_model_name || runtimeStatus?.model_name || 'gpt-5.5'}（缺少 API Key）`}
+                    <br />
+                    路径：{lastAssistantMessage?.structured_json?.runtime_meta?.mode || runtimeStatus?.preferred_runtime || 'deterministic'}
                   </Paragraph>
                 </Card>
 
@@ -1543,6 +1609,20 @@ export default function AiTrainingWorkbench() {
           {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateSessionModal()}>新建训练会话</Button>}
         </Space>
       </Space>
+
+      {runtimeStatus ? (
+        <Alert
+          style={{ marginBottom: 16 }}
+          type={runtimeStatus.llm_enabled ? 'success' : 'warning'}
+          showIcon
+          message={runtimeStatus.status_text || (runtimeStatus.llm_enabled ? '已接入系统小模型' : '当前使用规则模式')}
+          description={
+            runtimeStatus.llm_enabled
+              ? `默认运行方式：${runtimeStatus.model_name || '系统小模型'}${runtimeStatus.base_url ? ` · ${runtimeStatus.base_url}` : ''}。未命中 Skill 时也会优先走模型分析。`
+              : `${runtimeStatus.setup_hint || '当前未配置系统模型，训练台会先走规则模式。'} 目标模型：${runtimeStatus.target_model_name || runtimeStatus.model_name || 'gpt-5.5'}。`
+          }
+        />
+      ) : null}
 
       <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
         {overviewCards.map((item) => (
