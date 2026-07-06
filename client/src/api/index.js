@@ -28,6 +28,9 @@ export const authApi = {
   me: () => api.get('/auth/me').then(r => r.data),
   logout: () => api.post('/auth/logout').then(r => r.data),
   changePassword: (data) => api.put('/auth/password', data).then(r => r.data),
+  getAiModelSetting: () => api.get('/auth/ai-model-setting').then(r => r.data),
+  saveAiModelSetting: (data) => api.put('/auth/ai-model-setting', data).then(r => r.data),
+  testAiModelSetting: (data) => api.post('/auth/ai-model-setting/test', data).then(r => r.data),
 };
 
 export const usersApi = {

@@ -176,4 +176,9 @@ module.exports = {
     indexed: [],
     skip: true,
   },
+
+  user_ai_model_settings: {
+    fields: ['api_key'],
+    indexed: [],
+  },
 };

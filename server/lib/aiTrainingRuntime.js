@@ -557,60 +557,86 @@ function normalizeModelStructuredResponse(payload, baseResponse, skill, version,
   };
 }
 
-function getLlmConfig() {
-  const apiKey = process.env.AI_TRAINING_LLM_API_KEY
-    || process.env.AI_API_KEY
-    || process.env.LLM_API_KEY
-    || process.env.OPENAI_API_KEY
-    || '';
-  const model = normalizeText(process.env.AI_TRAINING_LLM_MODEL
+function getEnvLlmModel() {
+  return normalizeText(process.env.AI_TRAINING_LLM_MODEL
     || process.env.AI_MODEL
     || process.env.LLM_MODEL
     || process.env.OPENAI_MODEL
     || DEFAULT_LLM_MODEL);
-  if (!apiKey) return null;
-  const baseUrl = normalizeText(
-    process.env.AI_TRAINING_LLM_BASE_URL
+}
+
+function getEnvLlmBaseUrl() {
+  return normalizeText(process.env.AI_TRAINING_LLM_BASE_URL
     || process.env.AI_BASE_URL
     || process.env.LLM_BASE_URL
     || process.env.OPENAI_BASE_URL
-    || DEFAULT_LLM_BASE_URL
-  );
-  const timeoutMs = Math.max(5000, Number(
+    || DEFAULT_LLM_BASE_URL);
+}
+
+function getEnvLlmTimeoutMs() {
+  return Math.max(5000, Number(
     process.env.AI_TRAINING_LLM_TIMEOUT_MS
     || process.env.AI_TIMEOUT_MS
     || process.env.LLM_TIMEOUT_MS
     || 25000
   ));
+}
+
+function getEnvLlmTemperature() {
+  return Number.isFinite(Number(
+    process.env.AI_TRAINING_LLM_TEMPERATURE
+    || process.env.AI_TEMPERATURE
+    || process.env.LLM_TEMPERATURE
+  ))
+    ? Number(process.env.AI_TRAINING_LLM_TEMPERATURE
+      || process.env.AI_TEMPERATURE
+      || process.env.LLM_TEMPERATURE)
+    : 0.2;
+}
+
+function getLlmConfig(overrides = null) {
+  const overrideApiKey = normalizeText(overrides?.apiKey || overrides?.api_key);
+  const apiKey = overrideApiKey || process.env.AI_TRAINING_LLM_API_KEY
+    || process.env.AI_API_KEY
+    || process.env.LLM_API_KEY
+    || process.env.OPENAI_API_KEY
+    || '';
+  if (!apiKey) return null;
+
+  const model = normalizeText(
+    overrideApiKey
+      ? (overrides?.model || overrides?.model_name || DEFAULT_LLM_MODEL)
+      : getEnvLlmModel()
+  );
+  const baseUrl = normalizeText(
+    overrideApiKey
+      ? (overrides?.baseUrl || overrides?.base_url || DEFAULT_LLM_BASE_URL)
+      : getEnvLlmBaseUrl()
+  );
+  const timeoutMs = Math.max(5000, Number(
+    overrideApiKey
+      ? (overrides?.timeoutMs || overrides?.timeout_ms || 25000)
+      : getEnvLlmTimeoutMs()
+  ));
+  const overrideTemperature = Number(overrides?.temperature);
+
   return {
     apiKey,
-    model,
-    baseUrl: baseUrl.replace(/\/+$/g, ''),
+    model: model || DEFAULT_LLM_MODEL,
+    baseUrl: (baseUrl || DEFAULT_LLM_BASE_URL).replace(/\/+$/g, ''),
     timeoutMs,
-    temperature: Number.isFinite(Number(
-      process.env.AI_TRAINING_LLM_TEMPERATURE
-      || process.env.AI_TEMPERATURE
-      || process.env.LLM_TEMPERATURE
-    ))
-      ? Number(process.env.AI_TRAINING_LLM_TEMPERATURE
-        || process.env.AI_TEMPERATURE
-        || process.env.LLM_TEMPERATURE)
-      : 0.2,
+    temperature: overrideApiKey && Number.isFinite(overrideTemperature)
+      ? overrideTemperature
+      : getEnvLlmTemperature(),
+    source: overrideApiKey ? (overrides?.source || 'user') : 'env',
+    provider: overrideApiKey ? (overrides?.provider || 'openai') : 'openai',
   };
 }
 
-function getLlmRuntimeStatus() {
-  const config = getLlmConfig();
-  const targetModel = normalizeText(process.env.AI_TRAINING_LLM_MODEL
-    || process.env.AI_MODEL
-    || process.env.LLM_MODEL
-    || process.env.OPENAI_MODEL
-    || DEFAULT_LLM_MODEL);
-  const targetBaseUrl = normalizeText(process.env.AI_TRAINING_LLM_BASE_URL
-    || process.env.AI_BASE_URL
-    || process.env.LLM_BASE_URL
-    || process.env.OPENAI_BASE_URL
-    || DEFAULT_LLM_BASE_URL);
+function getLlmRuntimeStatus(overrides = null) {
+  const config = getLlmConfig(overrides);
+  const targetModel = normalizeText(config?.model || getEnvLlmModel());
+  const targetBaseUrl = normalizeText(config?.baseUrl || getEnvLlmBaseUrl());
   if (!config) {
     let displayBaseUrl = targetBaseUrl;
     try {
@@ -622,6 +648,7 @@ function getLlmRuntimeStatus() {
       model_name: targetModel,
       base_url: displayBaseUrl,
       target_model_name: targetModel,
+      config_source: 'none',
       fallback_enabled: true,
       status_text: `目标模型为 ${targetModel}，但当前缺少 API Key，训练台会先走规则模式。`,
       setup_hint: '请在服务端配置 AI_TRAINING_LLM_API_KEY、AI_API_KEY、LLM_API_KEY 或 OPENAI_API_KEY。',
@@ -638,8 +665,12 @@ function getLlmRuntimeStatus() {
     model_name: config.model,
     base_url: baseUrl,
     target_model_name: config.model,
+    config_source: config.source || 'env',
+    provider: config.provider || 'openai',
     fallback_enabled: true,
-    status_text: `当前默认接入系统小模型 ${config.model}，规则链路仅作兜底。`,
+    status_text: config.source === 'user'
+      ? `个人模型 Key 已启用：${config.model}，规则链路仅作兜底。`
+      : `当前默认接入系统小模型 ${config.model}，规则链路仅作兜底。`,
     setup_hint: null,
   };
 }
@@ -669,6 +700,30 @@ async function postChatCompletion(config, payload, useJsonMode = true) {
   return response.json();
 }
 
+async function testLlmConnection(llmConfigOverride = null) {
+  const config = getLlmConfig(llmConfigOverride);
+  if (!config) {
+    throw new Error('缺少 API Key，无法测试模型连接');
+  }
+  const completion = await postChatCompletion(config, {
+    messages: [
+      { role: 'system', content: '你是一个模型连接测试助手。' },
+      { role: 'user', content: '请只回复 ok。' },
+    ],
+  }, false);
+  let baseUrl = config.baseUrl;
+  try {
+    baseUrl = new URL(config.baseUrl).origin;
+  } catch {}
+  return {
+    success: true,
+    model_name: completion?.model || config.model,
+    base_url: baseUrl,
+    config_source: config.source || 'env',
+    usage: completion?.usage || null,
+  };
+}
+
 async function generateAiTrainingSkillResponse({
   session,
   skill,
@@ -677,6 +732,7 @@ async function generateAiTrainingSkillResponse({
   matchedSuggestions,
   examples,
   recentMessages,
+  llmConfigOverride = null,
 }) {
   const promptSignals = extractPromptSignals(promptText, session);
   const followUpQuestions = buildFollowUpQuestions(version, session, promptSignals, matchedSuggestions);
@@ -690,12 +746,13 @@ async function generateAiTrainingSkillResponse({
     promptSignals,
     followUpQuestions,
   });
-  const config = getLlmConfig();
+  const config = getLlmConfig(llmConfigOverride);
   if (!config) {
     const runtimeMeta = {
       ...(baseResponse.structured.runtime_meta || {}),
       model_name: null,
       llm_enabled: false,
+      model_config_source: 'none',
     };
     return {
       ...baseResponse,
@@ -746,6 +803,7 @@ async function generateAiTrainingSkillResponse({
             mode: 'deterministic_fallback',
             model_name: completion?.model || config.model,
             llm_enabled: true,
+            model_config_source: config.source || 'env',
           },
         },
         analysis_process: fallbackAnalysis,
@@ -761,6 +819,7 @@ async function generateAiTrainingSkillResponse({
       ...(normalized.structured.runtime_meta || {}),
       model_name: completion?.model || config.model,
       llm_enabled: true,
+      model_config_source: config.source || 'env',
     };
     return {
       ...normalized,
@@ -791,6 +850,7 @@ async function generateAiTrainingSkillResponse({
           mode: 'deterministic_fallback',
           model_name: config.model,
           llm_enabled: true,
+          model_config_source: config.source || 'env',
         },
       },
       analysis_process: fallbackAnalysis,
@@ -882,5 +942,6 @@ module.exports = {
   inferSectionTitles,
   selectRelevantSuggestions,
   scoreAiTrainingEvalOutput,
+  testLlmConnection,
   estimateTokenCount,
 };

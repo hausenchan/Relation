@@ -24,6 +24,7 @@ const {
   inferSectionTitles,
   scoreAiTrainingEvalOutput,
   selectRelevantSuggestions,
+  testLlmConnection,
 } = require('./lib/aiTrainingRuntime');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -470,6 +471,23 @@ db.exec(`
     can_read INTEGER DEFAULT 1,
     can_write INTEGER DEFAULT 0,
     UNIQUE(user_id, module)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_ai_model_settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE,
+    provider TEXT NOT NULL DEFAULT 'openai',
+    base_url TEXT,
+    model TEXT,
+    api_key TEXT,
+    key_mask TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    last_tested_at DATETIME,
+    last_test_status TEXT,
+    last_test_message TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 `);
 
@@ -3736,6 +3754,154 @@ function buildUserFilter(userId, role, tableAlias) {
   };
 }
 
+const DEFAULT_USER_AI_MODEL = 'gpt-5.5';
+const DEFAULT_USER_AI_BASE_URL = 'https://api.openai.com/v1';
+
+function normalizeAiModelProvider(value) {
+  const provider = String(value || 'openai').trim().toLowerCase();
+  if (['openai', 'openai_compatible'].includes(provider)) return provider;
+  return 'openai_compatible';
+}
+
+function normalizeAiModelName(value) {
+  const model = String(value || DEFAULT_USER_AI_MODEL).trim();
+  return model ? model.slice(0, 120) : DEFAULT_USER_AI_MODEL;
+}
+
+function normalizeAiModelBaseUrl(value) {
+  const raw = String(value || DEFAULT_USER_AI_BASE_URL).trim().replace(/\/+$/g, '');
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('invalid protocol');
+    }
+    return raw;
+  } catch {
+    throw new Error('Base URL 格式不正确，请填写 http(s) 地址');
+  }
+}
+
+function normalizeAiModelEnabled(value) {
+  if (value === false || value === 0 || value === '0' || value === 'false') return 0;
+  return 1;
+}
+
+function maskAiApiKey(value) {
+  const key = String(value || '').trim();
+  if (!key) return null;
+  if (key.length <= 10) return `${key.slice(0, 2)}...${key.slice(-2)}`;
+  return `${key.slice(0, 6)}...${key.slice(-4)}`;
+}
+
+function sanitizeAiModelErrorMessage(value) {
+  return String(value || '模型连接失败')
+    .replace(/Bearer\s+[^\s"']+/ig, 'Bearer ***')
+    .replace(/sk-[A-Za-z0-9_-]{8,}/g, 'sk-***')
+    .slice(0, 300);
+}
+
+function getUserAiModelSettingRow(userId) {
+  const row = db.prepare('SELECT * FROM user_ai_model_settings WHERE user_id = ?').get(userId);
+  return row ? decryptRow('user_ai_model_settings', row) : null;
+}
+
+function serializeUserAiModelSetting(row) {
+  const safeRow = row || {};
+  return {
+    provider: safeRow.provider || 'openai',
+    base_url: safeRow.base_url || DEFAULT_USER_AI_BASE_URL,
+    model: safeRow.model || DEFAULT_USER_AI_MODEL,
+    key_mask: safeRow.key_mask || maskAiApiKey(safeRow.api_key),
+    has_key: Boolean(String(safeRow.api_key || '').trim()),
+    enabled: row ? Number(safeRow.enabled) !== 0 : true,
+    last_tested_at: safeRow.last_tested_at || null,
+    last_test_status: safeRow.last_test_status || null,
+    last_test_message: safeRow.last_test_message || null,
+    updated_at: safeRow.updated_at || null,
+  };
+}
+
+function getUserAiModelConfig(userId) {
+  const row = getUserAiModelSettingRow(userId);
+  if (!row || Number(row.enabled) === 0 || !String(row.api_key || '').trim()) return null;
+  return {
+    source: 'user',
+    provider: row.provider || 'openai',
+    apiKey: String(row.api_key || '').trim(),
+    model: row.model || DEFAULT_USER_AI_MODEL,
+    baseUrl: row.base_url || DEFAULT_USER_AI_BASE_URL,
+  };
+}
+
+function saveUserAiModelSetting(userId, payload = {}) {
+  const existing = getUserAiModelSettingRow(userId);
+  const provider = normalizeAiModelProvider(payload.provider ?? existing?.provider);
+  const baseUrl = normalizeAiModelBaseUrl(payload.base_url ?? existing?.base_url);
+  const model = normalizeAiModelName(payload.model ?? existing?.model);
+  const enabled = normalizeAiModelEnabled(payload.enabled ?? existing?.enabled ?? 1);
+  const hasIncomingKey = Object.prototype.hasOwnProperty.call(payload, 'api_key');
+  const incomingKey = hasIncomingKey ? String(payload.api_key || '').trim() : '';
+  let apiKey = existing?.api_key || null;
+  let keyMask = existing?.key_mask || maskAiApiKey(existing?.api_key);
+
+  if (payload.clear_api_key === true) {
+    apiKey = null;
+    keyMask = null;
+  } else if (incomingKey) {
+    apiKey = incomingKey;
+    keyMask = maskAiApiKey(incomingKey);
+  }
+
+  const enc = encryptRow('user_ai_model_settings', { api_key: apiKey });
+  if (existing) {
+    db.prepare(`
+      UPDATE user_ai_model_settings
+      SET provider = ?, base_url = ?, model = ?, api_key = ?, key_mask = ?, enabled = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ?
+    `).run(provider, baseUrl, model, enc.api_key || null, keyMask, enabled, userId);
+  } else {
+    db.prepare(`
+      INSERT INTO user_ai_model_settings (
+        user_id, provider, base_url, model, api_key, key_mask, enabled
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(userId, provider, baseUrl, model, enc.api_key || null, keyMask, enabled);
+  }
+  return serializeUserAiModelSetting(getUserAiModelSettingRow(userId));
+}
+
+function buildUserAiModelTestConfig(userId, payload = {}) {
+  const existing = getUserAiModelSettingRow(userId);
+  const incomingKey = Object.prototype.hasOwnProperty.call(payload, 'api_key')
+    ? String(payload.api_key || '').trim()
+    : '';
+  const apiKey = incomingKey || String(existing?.api_key || '').trim();
+  if (!apiKey) {
+    throw new Error('请先填写个人 API Key 后再测试连接');
+  }
+  return {
+    source: 'user',
+    provider: normalizeAiModelProvider(payload.provider ?? existing?.provider),
+    apiKey,
+    model: normalizeAiModelName(payload.model ?? existing?.model),
+    baseUrl: normalizeAiModelBaseUrl(payload.base_url ?? existing?.base_url),
+    timeoutMs: 15000,
+  };
+}
+
+function updateUserAiModelTestStatus(userId, status, messageText) {
+  const exists = db.prepare('SELECT id FROM user_ai_model_settings WHERE user_id = ?').get(userId);
+  if (!exists) return;
+  db.prepare(`
+    UPDATE user_ai_model_settings
+    SET last_tested_at = CURRENT_TIMESTAMP,
+      last_test_status = ?,
+      last_test_message = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE user_id = ?
+  `).run(status, sanitizeAiModelErrorMessage(messageText), userId);
+}
+
 // =========== 认证 API ===========
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
@@ -3844,6 +4010,53 @@ app.put('/api/auth/password', auth, (req, res) => {
   }
   db.prepare('UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.user.id);
   res.json({ success: true });
+});
+
+app.get('/api/auth/ai-model-setting', auth, (req, res) => {
+  try {
+    res.json({
+      setting: serializeUserAiModelSetting(getUserAiModelSettingRow(req.user.id)),
+      runtime_status: getLlmRuntimeStatus(getUserAiModelConfig(req.user.id)),
+    });
+  } catch (error) {
+    console.error('读取个人模型设置失败:', error);
+    res.status(500).json({ error: '读取个人模型设置失败' });
+  }
+});
+
+app.put('/api/auth/ai-model-setting', auth, (req, res) => {
+  try {
+    const setting = saveUserAiModelSetting(req.user.id, req.body || {});
+    res.json({
+      success: true,
+      setting,
+      runtime_status: getLlmRuntimeStatus(getUserAiModelConfig(req.user.id)),
+    });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '保存个人模型设置失败' });
+  }
+});
+
+app.post('/api/auth/ai-model-setting/test', auth, async (req, res) => {
+  try {
+    const config = buildUserAiModelTestConfig(req.user.id, req.body || {});
+    const result = await testLlmConnection(config);
+    updateUserAiModelTestStatus(req.user.id, 'success', `连接成功：${result.model_name || config.model}`);
+    res.json({
+      success: true,
+      message: `连接成功：${result.model_name || config.model}`,
+      result,
+      setting: serializeUserAiModelSetting(getUserAiModelSettingRow(req.user.id)),
+    });
+  } catch (error) {
+    const safeMessage = sanitizeAiModelErrorMessage(error.message || '模型连接失败');
+    updateUserAiModelTestStatus(req.user.id, 'failed', safeMessage);
+    res.status(400).json({
+      success: false,
+      error: safeMessage,
+      setting: serializeUserAiModelSetting(getUserAiModelSettingRow(req.user.id)),
+    });
+  }
 });
 
 // admin 重置他人密码
@@ -9680,7 +9893,7 @@ function ensureAiTrainingEvalCasesForSkill(skillRow, versionRow, actorUserId) {
   return { evalSet, evalCases };
 }
 
-async function runAiTrainingSkillEvaluation(skillRow, versionRow, actorUserId) {
+async function runAiTrainingSkillEvaluation(skillRow, versionRow, actorUserId, llmConfigOverride = null) {
   const skill = normalizeAiTrainingSkillRow(skillRow);
   const version = normalizeAiTrainingSkillVersionRow(versionRow);
 
@@ -9719,6 +9932,7 @@ async function runAiTrainingSkillEvaluation(skillRow, versionRow, actorUserId) {
       matchedSuggestions,
       examples,
       recentMessages: [],
+      llmConfigOverride,
     });
     const scores = scoreAiTrainingEvalOutput({
       promptText: evalCase.input_text || '',
@@ -10716,6 +10930,7 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
     const runtimeBundle = skillBinding || buildAiTrainingFallbackSkillBundle(session);
     const recentMessages = getAiTrainingRecentMessagesForRuntime(session.id, 6);
     const suggestionFeed = getCurrentAiSuggestionFeed(db, session.business_line || null);
+    const llmConfigOverride = getUserAiModelConfig(req.user.id);
     const matchedSuggestions = selectRelevantSuggestions(
       suggestionFeed,
       {
@@ -10738,6 +10953,7 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
       matchedSuggestions,
       examples: runtimeBundle.examples || [],
       recentMessages,
+      llmConfigOverride,
     });
     const runtimeLatencyMs = Date.now() - runtimeStartedAt;
     const tokenIn = Number(
@@ -11246,7 +11462,12 @@ app.post('/api/agents/ai-training/skills/:id/evaluate', canWrite, async (req, re
     const versionRow = db.prepare('SELECT * FROM ai_training_skill_versions WHERE id = ?').get(latestVersionId);
     if (!versionRow) return res.status(404).json({ error: 'Skill 版本不存在' });
 
-    const evalRunRow = await runAiTrainingSkillEvaluation(skillRow, versionRow, req.user.id);
+    const evalRunRow = await runAiTrainingSkillEvaluation(
+      skillRow,
+      versionRow,
+      req.user.id,
+      getUserAiModelConfig(req.user.id),
+    );
     const detail = getAiTrainingSkillDetailForUser(req.params.id, req.user);
     res.json({
       success: true,
@@ -11324,7 +11545,7 @@ app.get('/api/agents/ai-training/stats', (req, res) => {
 
 app.get('/api/agents/ai-training/runtime-status', (req, res) => {
   try {
-    res.json(getLlmRuntimeStatus());
+    res.json(getLlmRuntimeStatus(getUserAiModelConfig(req.user.id)));
   } catch (error) {
     console.error('加载 AI 训练运行状态失败:', error);
     res.status(500).json({ error: '加载 AI 训练运行状态失败' });
