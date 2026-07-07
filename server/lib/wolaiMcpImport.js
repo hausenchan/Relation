@@ -364,8 +364,11 @@ function hasInlineMark(marks, pattern) {
   if (isPlainObject(marks)) {
     return Object.entries(marks).some(([key, value]) => {
       if (value === true) return pattern.test(key);
+      if (value === false || value == null) return false;
       if (Array.isArray(value) || isPlainObject(value)) return hasInlineMark(value, pattern);
-      return pattern.test(`${key}:${value}`);
+      const text = String(value || '').trim();
+      if (!text || /^(false|null|undefined|0)$/i.test(text)) return false;
+      return pattern.test(`${key}:${text}`);
     });
   }
   return false;
@@ -1056,6 +1059,56 @@ function collectBlocksText(blocks = []) {
   }).filter(Boolean).join('\n');
 }
 
+function normalizePlainText(value = '') {
+  return stripHtml(value)
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function isListBlock(block) {
+  return block?.type === 'bullet' || block?.type === 'numbered' || block?.type === 'fold-list';
+}
+
+function normalizeListIndents(blocks = []) {
+  const listBlocks = blocks.filter(isListBlock);
+  if (!listBlocks.length) return blocks;
+  const indents = listBlocks
+    .map(block => Number(block?.meta?.indent))
+    .filter(value => Number.isFinite(value));
+  if (!indents.length) return blocks;
+  const minIndent = Math.min(...indents);
+  if (minIndent <= 0) return blocks;
+  return blocks.map(block => {
+    if (!isListBlock(block)) return block;
+    const indent = Number(block?.meta?.indent);
+    if (!Number.isFinite(indent)) return block;
+    return {
+      ...block,
+      meta: {
+        ...(block.meta || {}),
+        indent: Math.max(0, indent - minIndent),
+      },
+    };
+  });
+}
+
+function removeLeadingDuplicateTitleBlock(blocks = [], title = '') {
+  const normalizedTitle = normalizePlainText(title);
+  if (!normalizedTitle) return blocks;
+  const nextBlocks = [...blocks];
+  while (nextBlocks.length) {
+    const first = nextBlocks[0];
+    const firstText = normalizePlainText(first?.content || first?.meta?.url || '');
+    if (firstText !== normalizedTitle) break;
+    nextBlocks.shift();
+  }
+  return nextBlocks;
+}
+
+function cleanImportedBlocks(blocks = [], title = '') {
+  return normalizeListIndents(removeLeadingDuplicateTitleBlock(blocks, title));
+}
+
 function normalizeImportedContent({ result, target, tool }) {
   const toolName = tool?.name || '';
   if (!isContentTool(tool)) {
@@ -1110,6 +1163,7 @@ function normalizeImportedContent({ result, target, tool }) {
   }
 
   const title = payloads.map(findTitle).find(Boolean) || '';
+  blocks = cleanImportedBlocks(blocks, title);
   const sourceUrl = payloads.map(findSourceUrl).find(Boolean) || target.url || '';
   const contentText = collectBlocksText(blocks);
   const targetMatched = containsTargetReference(payloads, target) || containsTargetReference(sourceUrl, target);
