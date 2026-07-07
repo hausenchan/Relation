@@ -335,17 +335,18 @@ export default function TripCollaboration() {
   };
 
   const openMap = (schedule) => {
-    if (!schedule.map_address) {
+    const mapAddress = String(schedule.map_address || '').trim();
+    if (!mapAddress) {
       message.warning('该日程未填写地图地址');
       return;
     }
-    const webUrl = buildAmapWebUrl(schedule.map_address);
+    const webUrl = buildAmapWebUrl(mapAddress);
     const isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
     if (!isPhone) {
       window.open(webUrl, '_blank', 'noopener,noreferrer');
       return;
     }
-    window.location.href = buildAmapAppUrl(schedule.map_address);
+    window.location.href = buildAmapAppUrl(mapAddress);
     window.setTimeout(() => {
       window.open(webUrl, '_blank', 'noopener,noreferrer');
     }, 900);
@@ -434,79 +435,100 @@ export default function TripCollaboration() {
     );
   };
 
-  const renderScheduleCard = (schedule) => (
-    <div
-      key={schedule.id}
-      style={{
-        position: 'relative',
-        border: '1px solid #cfe5ff',
-        borderRadius: 8,
-        background: 'linear-gradient(135deg, #ffffff 0%, #f3f9ff 100%)',
-        padding: '9px 10px 10px',
-        minHeight: 112,
-        boxShadow: '0 4px 12px rgba(22, 119, 255, 0.06)',
-      }}
-    >
-      {schedule.can_delete && (
-        <Popconfirm title="确认删除该日程？" onConfirm={() => deleteSchedule(schedule)} okText="删除" cancelText="取消">
-          <Button
-            size="small"
-            shape="circle"
-            icon={<CloseOutlined />}
-            title="删除日程"
-            style={{
-              position: 'absolute',
-              top: 8,
-              left: 8,
-              width: 22,
-              height: 22,
-              minWidth: 22,
-            }}
-          />
-        </Popconfirm>
-      )}
-      <div style={{ paddingLeft: 28, paddingRight: 82, color: '#1677ff', fontSize: 12, fontWeight: 700 }}>
-        {schedule.time_text}
-      </div>
+  const renderScheduleCard = (schedule) => {
+    const hasMapAddress = Boolean(String(schedule.map_address || '').trim());
+    return (
       <div
-        title={schedule.name}
+        key={schedule.id}
         style={{
-          marginTop: 6,
-          paddingRight: 82,
-          lineHeight: 1.45,
-          fontSize: 14,
-          fontWeight: 700,
-          wordBreak: 'break-word',
+          position: 'relative',
+          border: '1px solid #cfe5ff',
+          borderRadius: 8,
+          background: 'linear-gradient(135deg, #ffffff 0%, #f3f9ff 100%)',
+          padding: '9px 10px 10px',
+          minHeight: 112,
+          boxShadow: '0 4px 12px rgba(22, 119, 255, 0.06)',
+          overflow: 'hidden',
         }}
       >
-        {schedule.name}
-      </div>
-      <Space
-        size={4}
-        direction="vertical"
-        style={{
-          position: 'absolute',
-          top: 32,
-          right: 9,
-          alignItems: 'flex-end',
-        }}
-      >
-        <Button size="small" type="link" icon={<EnvironmentOutlined />} onClick={() => openMap(schedule)} style={{ padding: 0 }}>
-          查看地图
-        </Button>
-        {schedule.can_edit && (
-          <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openScheduleModal(schedule, {}, selectedTrip)} style={{ padding: 0 }}>
-            编辑
-          </Button>
+        {schedule.can_delete && (
+          <Popconfirm title="确认删除该日程？" onConfirm={() => deleteSchedule(schedule)} okText="删除" cancelText="取消">
+            <Button
+              size="small"
+              shape="circle"
+              icon={<CloseOutlined />}
+              title="删除日程"
+              style={{
+                position: 'absolute',
+                top: 8,
+                left: 8,
+                width: 22,
+                height: 22,
+                minWidth: 22,
+              }}
+            />
+          </Popconfirm>
         )}
-      </Space>
-      <Space size={[4, 4]} wrap style={{ marginTop: 10 }}>
-        {(schedule.participant_names || []).map(name => (
-          <Tag key={name} color="cyan" style={{ marginInlineEnd: 0 }}>{name}</Tag>
-        ))}
-      </Space>
-    </div>
-  );
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: 8,
+            flexWrap: 'wrap',
+            paddingLeft: schedule.can_delete ? 28 : 0,
+          }}
+        >
+          <div style={{ flex: '1 1 116px', minWidth: 0 }}>
+            <div style={{ color: '#1677ff', fontSize: 12, fontWeight: 700, lineHeight: '22px' }}>
+              {schedule.time_text}
+            </div>
+            <div
+              title={schedule.name}
+              style={{
+                marginTop: 6,
+                lineHeight: 1.45,
+                fontSize: 14,
+                fontWeight: 700,
+                wordBreak: 'break-word',
+                overflowWrap: 'anywhere',
+              }}
+            >
+              {schedule.name}
+            </div>
+          </div>
+          <div
+            style={{
+              flex: '0 1 auto',
+              minWidth: 0,
+              display: 'flex',
+              justifyContent: 'flex-end',
+              alignItems: 'center',
+              gap: '2px 8px',
+              flexWrap: 'wrap',
+              maxWidth: '100%',
+            }}
+          >
+            {hasMapAddress && (
+              <Button size="small" type="link" icon={<EnvironmentOutlined />} onClick={() => openMap(schedule)} style={{ padding: 0, height: 22 }}>
+                查看地图
+              </Button>
+            )}
+            {schedule.can_edit && (
+              <Button size="small" type="link" icon={<EditOutlined />} onClick={() => openScheduleModal(schedule, {}, selectedTrip)} style={{ padding: 0, height: 22 }}>
+                编辑
+              </Button>
+            )}
+          </div>
+        </div>
+        <Space size={[4, 4]} wrap style={{ marginTop: 10, maxWidth: '100%' }}>
+          {(schedule.participant_names || []).map(name => (
+            <Tag key={name} color="cyan" style={{ marginInlineEnd: 0, maxWidth: '100%', whiteSpace: 'normal' }}>{name}</Tag>
+          ))}
+        </Space>
+      </div>
+    );
+  };
 
   const renderScheduleGrid = () => {
     if (!selectedTrip) {
