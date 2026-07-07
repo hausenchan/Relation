@@ -245,6 +245,13 @@ function getRandomDebugPort() {
   return 9300 + Math.floor(Math.random() * 600);
 }
 
+function compactErrorText(value, limit = 1600) {
+  return String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, limit);
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -264,50 +271,72 @@ async function waitForChromeCdp(cdpBase, timeoutMs = 10000) {
   throw new Error(lastError?.message || '自动 Chrome 调试端口启动超时');
 }
 
-function buildManagedChromeArgs({ port, profileDir, headless }) {
+function removeChromeProfileLocks(profileDir) {
+  ['SingletonLock', 'SingletonSocket', 'SingletonCookie'].forEach(filename => {
+    try {
+      fs.rmSync(path.join(profileDir, filename), { force: true, recursive: true });
+    } catch {}
+  });
+}
+
+function buildManagedChromeArgs({ port, profileDir, headless, headlessMode }) {
   const args = [
+    `--remote-debugging-address=127.0.0.1`,
     `--remote-debugging-port=${port}`,
     `--user-data-dir=${profileDir}`,
+    '--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
     '--no-first-run',
     '--no-default-browser-check',
+    '--no-service-autorun',
     '--disable-background-networking',
+    '--disable-background-timer-throttling',
     '--disable-dev-shm-usage',
+    '--disable-default-apps',
     '--disable-extensions',
     '--disable-features=Translate,BackForwardCache',
     '--disable-blink-features=AutomationControlled',
+    '--disable-breakpad',
+    '--disable-crash-reporter',
+    '--disable-renderer-backgrounding',
+    '--disable-sync',
+    '--hide-scrollbars',
+    '--metrics-recording-only',
+    '--mute-audio',
+    '--password-store=basic',
     '--remote-allow-origins=*',
+    '--use-mock-keychain',
     '--window-size=1440,1200',
     'about:blank',
   ];
+  if (process.platform === 'linux') {
+    args.unshift('--disable-setuid-sandbox');
+    args.unshift('--no-sandbox');
+    args.unshift('--no-zygote');
+  }
   if (headless) {
-    args.unshift('--headless=new');
+    args.unshift(headlessMode === 'legacy' ? '--headless' : `--headless=${headlessMode || 'new'}`);
     args.unshift('--disable-gpu');
-    if (process.platform === 'linux') args.unshift('--no-sandbox');
   }
   return args;
 }
 
-async function captureByManagedChrome(url, options = {}) {
-  const chrome = resolveChromeExecutable();
-  if (!chrome) throw new Error('未找到可用的 Chrome/Chromium');
-  const profileDir = path.resolve(
-    options.autoChromeProfileDir
-      || process.env.WOLAI_CHROME_PROFILE_DIR
-      || defaultChromeProfileDir
-  );
+async function captureByManagedChromeOnce(url, options, launchMode) {
+  const { chrome, profileDir, headless, headlessMode } = launchMode;
   fs.mkdirSync(profileDir, { recursive: true });
+  if (options.clearChromeProfileLocks !== false) removeChromeProfileLocks(profileDir);
   const port = Number(options.autoChromePort) || getRandomDebugPort();
   const cdp = `http://127.0.0.1:${port}`;
-  const headless = options.autoChromeHeadless !== undefined
-    ? Boolean(options.autoChromeHeadless)
-    : process.env.WOLAI_AUTO_CHROME_HEADLESS === '1';
-  const chromeArgs = buildManagedChromeArgs({ port, profileDir, headless });
+  const chromeArgs = buildManagedChromeArgs({ port, profileDir, headless, headlessMode });
   const child = spawn(chrome, chromeArgs, {
     detached: false,
-    stdio: 'ignore',
+    stdio: ['ignore', 'ignore', 'pipe'],
   });
   let closed = false;
   let launchError = null;
+  let stderrText = '';
+  child.stderr?.on('data', chunk => {
+    stderrText = `${stderrText}${chunk.toString()}`.slice(-4000);
+  });
   child.once('error', error => {
     launchError = error;
     closed = true;
@@ -328,15 +357,45 @@ async function captureByManagedChrome(url, options = {}) {
       method: headless ? 'chrome-auto-headless' : 'chrome-auto',
     };
   } catch (error) {
+    const stderrHint = compactErrorText(stderrText);
+    const details = [error.message, stderrHint ? `stderr:${stderrHint}` : ''].filter(Boolean).join('；');
     if (closed) {
-      throw new Error(`自动 Chrome 启动失败，请确认服务器可运行 Chrome/Chromium。${error.message}`);
+      throw new Error(`自动 Chrome 启动失败，请确认服务器可运行 Chrome/Chromium。${details}`);
     }
-    throw error;
+    throw new Error(details || error.message);
   } finally {
     try {
       if (!closed) child.kill();
     } catch {}
   }
+}
+
+async function captureByManagedChrome(url, options = {}) {
+  const chrome = resolveChromeExecutable();
+  if (!chrome) throw new Error('未找到可用的 Chrome/Chromium');
+  const profileDir = path.resolve(
+    options.autoChromeProfileDir
+      || process.env.WOLAI_CHROME_PROFILE_DIR
+      || defaultChromeProfileDir
+  );
+  const headless = options.autoChromeHeadless !== undefined
+    ? Boolean(options.autoChromeHeadless)
+    : process.env.WOLAI_AUTO_CHROME_HEADLESS === '1';
+  const headlessModes = headless ? ['new', 'chrome', 'legacy'] : [null];
+  const errors = [];
+  for (const headlessMode of headlessModes) {
+    try {
+      return await captureByManagedChromeOnce(url, options, {
+        chrome,
+        profileDir,
+        headless,
+        headlessMode,
+      });
+    } catch (error) {
+      errors.push(`${headlessMode || 'window'}:${error.message}`);
+    }
+  }
+  throw new Error(errors.join('；'));
 }
 
 function findMatchingWolaiTab(tabs, targetUrl) {
