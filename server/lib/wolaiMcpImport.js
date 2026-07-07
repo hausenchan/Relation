@@ -348,13 +348,201 @@ function tryParseJson(value) {
   return null;
 }
 
-function getNodeText(node) {
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function flattenArrayText(value) {
+  if (!Array.isArray(value)) return String(value || '');
+  return value.flat(Infinity).map(item => String(item ?? '')).join(' ');
+}
+
+function hasInlineMark(marks, pattern) {
+  if (!marks) return false;
+  if (typeof marks === 'string') return pattern.test(marks);
+  if (Array.isArray(marks)) return pattern.test(flattenArrayText(marks));
+  if (isPlainObject(marks)) {
+    return Object.entries(marks).some(([key, value]) => {
+      if (value === true) return pattern.test(key);
+      if (Array.isArray(value) || isPlainObject(value)) return hasInlineMark(value, pattern);
+      return pattern.test(`${key}:${value}`);
+    });
+  }
+  return false;
+}
+
+function pickInlineColor(marks, keys) {
+  if (!marks) return '';
+  const keyPattern = new RegExp(`^(${keys.join('|')})$`, 'i');
+  const validColor = value => {
+    const color = String(value || '').trim();
+    if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
+    if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(color)) return color;
+    if (/^[a-z]+$/i.test(color)) return color;
+    return '';
+  };
+  if (Array.isArray(marks)) {
+    for (const item of marks) {
+      if (Array.isArray(item) && item.length >= 2 && keyPattern.test(String(item[0] || ''))) {
+        const color = validColor(item[1]);
+        if (color) return color;
+      }
+      const nested = pickInlineColor(item, keys);
+      if (nested) return nested;
+    }
+  }
+  if (isPlainObject(marks)) {
+    for (const [key, value] of Object.entries(marks)) {
+      if (keyPattern.test(key)) {
+        const color = validColor(value);
+        if (color) return color;
+      }
+      if (Array.isArray(value) || isPlainObject(value)) {
+        const nested = pickInlineColor(value, keys);
+        if (nested) return nested;
+      }
+    }
+  }
+  return '';
+}
+
+function applyInlineMarks(html, marks) {
+  let output = String(html || '');
+  if (!stripHtml(output)) return output;
+  if (hasInlineMark(marks, /bold|strong|加粗/i)) output = `<strong>${output}</strong>`;
+  if (hasInlineMark(marks, /italic|em|斜体/i)) output = `<em>${output}</em>`;
+  if (hasInlineMark(marks, /underline|下划线/i)) output = `<u>${output}</u>`;
+  if (hasInlineMark(marks, /strike|strikethrough|delete|删除线/i)) output = `<s>${output}</s>`;
+  if (hasInlineMark(marks, /code|代码/i)) output = `<code>${output}</code>`;
+  const color = pickInlineColor(marks, ['color', 'textColor', 'text_color']);
+  const backgroundColor = pickInlineColor(marks, ['backgroundColor', 'background_color', 'bgColor', 'bg_color']);
+  const style = [
+    color ? `color: ${color}` : '',
+    backgroundColor ? `background-color: ${backgroundColor}` : '',
+  ].filter(Boolean).join('; ');
+  if (style) output = `<span style="${escapeHtml(style)}">${output}</span>`;
+  return output;
+}
+
+function pickInlineMarkSource(value = {}, annotations = null) {
+  if (!isPlainObject(value)) return annotations || {};
+  return {
+    annotations,
+    marks: value.marks,
+    mark: value.mark,
+    styles: value.styles,
+    style: value.style,
+    decorations: value.decorations,
+    bold: value.bold,
+    strong: value.strong,
+    italic: value.italic,
+    underline: value.underline,
+    strikethrough: value.strikethrough,
+    strike: value.strike,
+    code: value.code,
+    color: value.color,
+    textColor: value.textColor,
+    text_color: value.text_color,
+    backgroundColor: value.backgroundColor,
+    background_color: value.background_color,
+    bgColor: value.bgColor,
+    bg_color: value.bg_color,
+  };
+}
+
+function isLikelyWolaiRecordKey(value = '') {
+  const key = String(value || '').trim();
+  if (!/^[A-Za-z0-9_-]{8,}$/.test(key)) return false;
+  return !/^(metadata|children|content|blocks|items|page|document|data)$/i.test(key);
+}
+
+function isWolaiBlockLikeObject(value, fallbackKey = '') {
+  if (!isPlainObject(value)) return false;
+  const explicitId = value.id || value.block_id || value.blockId;
+  const keyedId = isLikelyWolaiRecordKey(fallbackKey) ? fallbackKey : '';
+  const id = explicitId || keyedId;
+  const hasText = value.title !== undefined
+    || value.content !== undefined
+    || value.text !== undefined
+    || value.plain_text !== undefined
+    || value.markdown !== undefined;
+  const hasBlockMeta = value.parent_id !== undefined
+    || value.parentId !== undefined
+    || value.parent_type !== undefined
+    || value.parentType !== undefined
+    || value.type !== undefined
+    || value.block_type !== undefined
+    || value.blockType !== undefined
+    || value.kind !== undefined;
+  if (!id) return false;
+  if (hasBlockMeta) return true;
+  return hasText && !/^(page|document|meta|metadata)$/i.test(String(fallbackKey || ''));
+}
+
+function isRichTextTuple(value) {
+  return Array.isArray(value)
+    && typeof value[0] === 'string'
+    && value.length <= 3
+    && (Array.isArray(value[1]) || isPlainObject(value[1]) || value[1] == null);
+}
+
+function extractInlineHtml(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    return escapeHtml(value);
+  }
+  if (Array.isArray(value)) {
+    if (isRichTextTuple(value)) return applyInlineMarks(escapeHtml(value[0]), value[1]);
+    if (value.some(item => isWolaiBlockLikeObject(item))) return '';
+    return value.map(item => extractInlineHtml(item)).join('');
+  }
+  if (!isPlainObject(value)) return '';
+  if (value.blocks || value.children || value.items || value.rows || value.table) return '';
+
+  const annotations = value.annotations || value.annotation || value.marks || value.mark || value.styles || value.style || value.decorations;
+  const textObject = isPlainObject(value.text) ? value.text : null;
+  const candidates = [
+    value.plain_text,
+    value.plainText,
+    textObject?.content,
+    textObject?.text,
+    typeof value.text === 'string' ? value.text : undefined,
+    value.content,
+    value.title,
+    value.value,
+    value.name,
+    value.markdown,
+  ];
+  for (const candidate of candidates) {
+    const html = extractInlineHtml(candidate);
+    if (stripHtml(html)) return applyInlineMarks(html, pickInlineMarkSource(value, annotations));
+  }
+  return '';
+}
+
+function getNodeHtml(node) {
   if (node == null) return '';
-  if (typeof node === 'string' || typeof node === 'number') return String(node);
-  const candidate = node.content ?? node.text ?? node.title ?? node.name ?? node.plain_text ?? node.markdown ?? node.value ?? '';
-  if (Array.isArray(candidate)) return candidate.map(getNodeText).filter(Boolean).join('');
-  if (typeof candidate === 'object') return getNodeText(candidate);
-  return String(candidate || '');
+  if (typeof node === 'string' || typeof node === 'number') return escapeHtml(node);
+  if (!isPlainObject(node)) return extractInlineHtml(node);
+  const candidates = [
+    node.title,
+    node.content,
+    node.text,
+    node.plain_text,
+    node.plainText,
+    node.markdown,
+    node.value,
+    node.name,
+  ];
+  for (const candidate of candidates) {
+    const html = extractInlineHtml(candidate);
+    if (stripHtml(html)) return html;
+  }
+  return '';
+}
+
+function getNodeText(node) {
+  return stripHtml(getNodeHtml(node));
 }
 
 function mapNodeType(node) {
@@ -362,8 +550,8 @@ function mapNodeType(node) {
   const level = Number(node?.level || node?.heading_level || raw.match(/heading[_-]?([1-6])/)?.[1] || 0);
   if (/heading|title|header/.test(raw) || level) return `heading${Math.min(Math.max(level || 1, 1), 3)}`;
   if (/todo|check/.test(raw)) return 'todo';
-  if (/number|ordered/.test(raw)) return 'numbered';
-  if (/bullet|list/.test(raw)) return 'bullet';
+  if (/enum|number|ordered|ol/.test(raw)) return 'numbered';
+  if (/bullet|unordered|ul|list/.test(raw)) return 'bullet';
   if (/quote/.test(raw)) return 'quote';
   if (/code/.test(raw)) return 'code';
   if (/divider|hr|separator/.test(raw)) return 'divider';
@@ -533,6 +721,202 @@ function findSourceUrl(value) {
   return '';
 }
 
+function normalizeRecordId(value = '') {
+  return String(value || '').trim();
+}
+
+function getObjectValueByKeys(value, keys = []) {
+  if (!isPlainObject(value)) return undefined;
+  for (const key of keys) {
+    if (value[key] !== undefined) return value[key];
+  }
+  return undefined;
+}
+
+function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
+  const id = normalizeRecordId(
+    getObjectValueByKeys(rawRecord, ['id', 'block_id', 'blockId'])
+      || (isLikelyWolaiRecordKey(fallbackId) ? fallbackId : '')
+  );
+  const html = getNodeHtml({
+    title: rawRecord.title,
+    content: rawRecord.content,
+    text: rawRecord.text,
+    plain_text: rawRecord.plain_text ?? rawRecord.plainText,
+    markdown: rawRecord.markdown,
+    value: rawRecord.value,
+    name: rawRecord.name,
+  });
+  const plainText = stripHtml(html);
+  if (!plainText) return null;
+  return {
+    id: id || `wolai_record_${order}`,
+    parentId: normalizeRecordId(getObjectValueByKeys(rawRecord, ['parent_id', 'parentId', 'parent_block_id', 'parentBlockId'])),
+    parentType: String(getObjectValueByKeys(rawRecord, ['parent_type', 'parentType']) || ''),
+    type: String(getObjectValueByKeys(rawRecord, ['type', 'block_type', 'blockType', 'kind']) || ''),
+    level: Number(getObjectValueByKeys(rawRecord, ['level', 'heading_level', 'headingLevel']) || 0),
+    checked: Boolean(getObjectValueByKeys(rawRecord, ['checked', 'done', 'completed'])),
+    language: String(getObjectValueByKeys(rawRecord, ['language', 'lang']) || ''),
+    html,
+    order,
+  };
+}
+
+function collectWolaiRecordsFromPayload(value, records = [], state = { order: 0 }, fallbackKey = '') {
+  if (!value) return records;
+  if (Array.isArray(value)) {
+    value.forEach(item => collectWolaiRecordsFromPayload(item, records, state));
+    return records;
+  }
+  if (!isPlainObject(value)) return records;
+
+  if (isWolaiBlockLikeObject(value, fallbackKey)) {
+    const record = normalizeWolaiRecord(value, state.order, fallbackKey);
+    state.order += 1;
+    if (record) records.push(record);
+  }
+
+  Object.entries(value).forEach(([key, child]) => {
+    if (['title', 'content', 'text', 'plain_text', 'plainText', 'markdown', 'value', 'name'].includes(key)) return;
+    if (child && typeof child === 'object') collectWolaiRecordsFromPayload(child, records, state, key);
+  });
+  return records;
+}
+
+function parseJsonLikeScalar(value = '') {
+  const raw = String(value || '').trim().replace(/[,;]\s*$/g, '');
+  if (!raw) return '';
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw.replace(/^["']|["']$/g, '');
+  }
+}
+
+function appendJsonLikeRecord(records, current) {
+  if (!current || !Array.isArray(current.titleParts) || !current.titleParts.length) return;
+  const html = current.titleParts.map(part => escapeHtml(part)).join('');
+  if (!stripHtml(html)) return;
+  records.push({
+    id: current.id || `wolai_text_record_${records.length}`,
+    parentId: current.parentId || '',
+    parentType: current.parentType || '',
+    type: current.type || '',
+    level: Number(current.level || 0),
+    checked: Boolean(current.checked),
+    language: current.language || '',
+    html,
+    order: records.length,
+  });
+}
+
+function extractWolaiRecordsFromJsonLikeText(text = '') {
+  const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const records = [];
+  let current = null;
+  const ensureCurrent = () => {
+    if (!current) current = { titleParts: [] };
+    return current;
+  };
+
+  lines.forEach(line => {
+    const match = line.match(/^["']?([A-Za-z_][\w-]*)["']?\s*:\s*([\s\S]+)$/);
+    if (!match) return;
+    const key = match[1];
+    const value = parseJsonLikeScalar(match[2]);
+    if (key === 'id' || key === 'block_id' || key === 'blockId') {
+      if (current?.id || current?.titleParts?.length) {
+        appendJsonLikeRecord(records, current);
+        current = null;
+      }
+      ensureCurrent().id = String(value || '');
+      return;
+    }
+    if (['title', 'content', 'text', 'plain_text', 'plainText', 'markdown', 'value'].includes(key)) {
+      const part = stripHtml(getNodeHtml(value));
+      if (part) ensureCurrent().titleParts.push(part);
+      return;
+    }
+    if (!current) return;
+    if (['parent_id', 'parentId', 'parent_block_id', 'parentBlockId'].includes(key)) current.parentId = String(value || '');
+    else if (['parent_type', 'parentType'].includes(key)) current.parentType = String(value || '');
+    else if (['type', 'block_type', 'blockType', 'kind'].includes(key)) current.type = String(value || '');
+    else if (['level', 'heading_level', 'headingLevel'].includes(key)) current.level = Number(value || 0);
+    else if (['checked', 'done', 'completed'].includes(key)) current.checked = value === true || value === 'true';
+    else if (['language', 'lang'].includes(key)) current.language = String(value || '');
+  });
+  appendJsonLikeRecord(records, current);
+  return records;
+}
+
+function inferWolaiRecordType(record = {}) {
+  const hint = `${record.type || ''} ${record.parentType || ''} ${record.inferredType || ''}`.toLowerCase();
+  if (/heading|header|title/.test(hint) || record.level) return `heading${Math.min(Math.max(Number(record.level) || 2, 1), 3)}`;
+  if (/todo|check/.test(hint)) return 'todo';
+  if (/enum|number|ordered|ol/.test(hint)) return 'numbered';
+  if (/bullet|unordered|ul/.test(hint)) return 'bullet';
+  if (/quote/.test(hint)) return 'quote';
+  if (/code/.test(hint)) return 'code';
+  if (/divider|hr|separator/.test(hint)) return 'divider';
+  if (/image|picture/.test(hint)) return 'image';
+  if (/table|database/.test(hint)) return 'table-simple';
+  return 'paragraph';
+}
+
+function recordsToBlocks(records = [], seed) {
+  const normalized = records
+    .filter(record => record && stripHtml(record.html))
+    .filter((record, index, list) => (
+      index === list.findIndex(other => other.id === record.id && stripHtml(other.html) === stripHtml(record.html))
+    ))
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+  if (!normalized.length) return [];
+
+  const byId = new Map();
+  normalized.forEach(record => byId.set(record.id, record));
+  normalized.forEach(record => {
+    const parent = byId.get(record.parentId);
+    if (parent && record.parentType && !parent.inferredType) parent.inferredType = record.parentType;
+  });
+
+  const depthMemo = new Map();
+  const getDepth = (record, stack = new Set()) => {
+    if (!record?.parentId || stack.has(record.id)) return 0;
+    if (depthMemo.has(record.id)) return depthMemo.get(record.id);
+    const parent = byId.get(record.parentId);
+    if (!parent) {
+      depthMemo.set(record.id, 0);
+      return 0;
+    }
+    stack.add(record.id);
+    const depth = Math.min(getDepth(parent, stack) + 1, 8);
+    stack.delete(record.id);
+    depthMemo.set(record.id, depth);
+    return depth;
+  };
+
+  const makeBlock = makeBlockFactory(seed);
+  return normalized.map(record => {
+    const type = inferWolaiRecordType(record);
+    const meta = {};
+    if (type === 'numbered' || type === 'bullet') meta.indent = getDepth(record);
+    if (record.language) meta.language = record.language;
+    return makeBlock(type, type === 'divider' ? '' : record.html, {
+      checked: record.checked,
+      meta,
+    });
+  });
+}
+
+function looksLikeJsonDumpText(text = '') {
+  const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length < 4) return false;
+  const jsonFieldLines = lines.filter(line => /^["']?[A-Za-z_][\w-]*["']?\s*:/.test(line)).length;
+  const quotedIdLines = lines.filter(line => /^["'][A-Za-z0-9_-]{8,}["'][,;:]?$/.test(line)).length;
+  const hasWolaiFields = lines.some(line => /^["']?(title|parent_id|parent_type|created_at|edited_at|version)["']?\s*:/.test(line));
+  return hasWolaiFields && (jsonFieldLines + quotedIdLines) / lines.length > 0.35;
+}
+
 function nodesToBlocks(nodes, seed) {
   const makeBlock = makeBlockFactory(seed);
   const blocks = [];
@@ -552,9 +936,10 @@ function nodesToBlocks(nodes, seed) {
       if (url) blocks.push(makeBlock('image', String(url), { meta: { url: String(url), alt: node.alt || node.caption || '' } }));
       return;
     }
-    const text = getNodeText(node);
+    const html = getNodeHtml(node);
+    const text = stripHtml(html);
     if (!text && !['todo'].includes(type)) return;
-    blocks.push(makeBlock(type, escapeHtml(text), {
+    blocks.push(makeBlock(type, html, {
       checked: Boolean(node.checked || node.done || node.completed),
       meta: {
         ...(node.indent !== undefined ? { indent: Number(node.indent) || 0 } : {}),
@@ -702,10 +1087,25 @@ function normalizeImportedContent({ result, target, tool }) {
   }
   const parsedTextJson = tryParseJson(text);
   const payloads = [...structured, parsedTextJson].filter(Boolean);
+  let blocks = [];
+  for (const payload of payloads) {
+    const wolaiRecords = collectWolaiRecordsFromPayload(payload);
+    const wolaiBlocks = filterBlocks(recordsToBlocks(wolaiRecords, target.raw), target);
+    if (wolaiBlocks.length) {
+      blocks = wolaiBlocks;
+      break;
+    }
+  }
+  if (!blocks.length && text) {
+    const wolaiRecords = extractWolaiRecordsFromJsonLikeText(text);
+    blocks = filterBlocks(recordsToBlocks(wolaiRecords, target.raw), target);
+  }
   const nodes = [];
-  payloads.forEach(payload => collectStructuredNodes(payload, nodes, { allowCollectionKeys: true }));
-  let blocks = filterBlocks(nodesToBlocks(nodes, target.raw), target);
-  if (!blocks.length && text && !looksLikeDiscoveryText(text, target)) {
+  if (!blocks.length) {
+    payloads.forEach(payload => collectStructuredNodes(payload, nodes, { allowCollectionKeys: true }));
+    blocks = filterBlocks(nodesToBlocks(nodes, target.raw), target);
+  }
+  if (!blocks.length && text && !looksLikeDiscoveryText(text, target) && !looksLikeJsonDumpText(text)) {
     blocks = filterBlocks(parseTextToBlocks(text, target.raw), target);
   }
 
