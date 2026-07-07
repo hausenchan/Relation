@@ -189,15 +189,37 @@ function isLikelyUrl(value = '') {
   return /^https?:\/\//i.test(String(value || '').trim());
 }
 
-function scoreTool(tool) {
+function getToolText(tool) {
   const name = String(tool?.name || '').toLowerCase();
   const desc = String(tool?.description || '').toLowerCase();
-  const text = `${name} ${desc}`;
+  return `${name} ${desc}`;
+}
+
+function isDiscoveryTool(tool) {
+  const text = getToolText(tool);
+  if (/search|query|find|lookup|搜索|检索|查找/.test(text)) return true;
+  if (/all[_-]?pages|recent|目录|列表|最近/.test(text)) return true;
+  if (/space|workspace|database|collection|空间/.test(text) && /list|tree|catalog|目录|列表|列出/.test(text)) return true;
+  return /\blist\b|list_|_list|列出/.test(text) && !/block|child|children|content|正文|块|子级/.test(text);
+}
+
+function isContentTool(tool) {
+  const text = getToolText(tool);
+  if (isDiscoveryTool(tool)) return false;
+  const hasReadVerb = /get|read|fetch|retrieve|export|detail|load|open|获取|读取|导出|详情/.test(text)
+    || (/\blist\b|list_|_list|列出/.test(text) && /block|child|children|content|正文|块|子级/.test(text));
+  const hasContentTarget = /page|block|document|doc|content|child|children|正文|页面|文档|内容|块|子级/.test(text);
+  return hasReadVerb && hasContentTarget;
+}
+
+function scoreTool(tool) {
+  const text = getToolText(tool);
   let score = 0;
   if (/page|block|document|doc|content|children|页面|文档|内容|块/.test(text)) score += 8;
-  if (/get|read|fetch|retrieve|export|detail|list|获取|读取|导出|详情/.test(text)) score += 6;
+  if (/get|read|fetch|retrieve|export|detail|获取|读取|导出|详情/.test(text)) score += 8;
+  if (/\blist\b|list_|_list|列出/.test(text) && /block|child|children|content|正文|块|子级/.test(text)) score += 4;
   if (/wolai|我来/.test(text)) score += 2;
-  if (/search|query|find|搜索/.test(text)) score -= 3;
+  if (isDiscoveryTool(tool)) score -= 30;
   if (/create|update|delete|write|新增|删除|更新/.test(text)) score -= 10;
   return score;
 }
@@ -368,23 +390,79 @@ function normalizeTableRows(node) {
   };
 }
 
-function collectStructuredNodes(value, nodes = []) {
+function collectStructuredNodes(value, nodes = [], options = {}) {
   if (!value) return nodes;
   if (Array.isArray(value)) {
-    value.forEach(item => collectStructuredNodes(item, nodes));
+    value.forEach(item => collectStructuredNodes(item, nodes, options));
     return nodes;
   }
   if (typeof value !== 'object') return nodes;
+  const hasBlockType = Boolean(value.type || value.block_type || value.kind);
+  const hasBodyText = value.text !== undefined
+    || value.content !== undefined
+    || value.plain_text !== undefined
+    || value.markdown !== undefined
+    || value.value !== undefined;
+  const hasTable = Boolean(value.rows || value.table);
   if (
-    value.type || value.block_type || value.kind || value.content || value.text || value.title
-    || value.rows || value.table || value.children
+    hasBlockType || hasBodyText || hasTable
   ) {
     nodes.push(value);
   }
-  ['blocks', 'children', 'content', 'items', 'results', 'data', 'pages'].forEach(key => {
-    if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes);
+  ['page', 'document', 'data', 'blocks', 'children', 'content'].forEach(key => {
+    if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, options);
   });
+  if (options.allowCollectionKeys) {
+    ['items', 'rows', 'cells'].forEach(key => {
+      if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, options);
+    });
+  }
   return nodes;
+}
+
+function containsTargetReference(value, target) {
+  const needles = [
+    target.url,
+    target.raw,
+    target.pageId,
+    target.pageId ? decodeURIComponent(target.pageId) : '',
+  ]
+    .map(item => String(item || '').trim())
+    .filter(item => item.length >= 6);
+  if (!needles.length) return false;
+  const haystack = typeof value === 'string'
+    ? value
+    : JSON.stringify(value || {});
+  return needles.some(needle => haystack.includes(needle));
+}
+
+function looksLikeDiscoveryText(text = '', target) {
+  const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  if (lines.length < 6) return false;
+  const shortLineRatio = lines.filter(line => line.length <= 40).length / lines.length;
+  const hasTarget = containsTargetReference(text, target);
+  return shortLineRatio > 0.75 && !hasTarget;
+}
+
+function filterBlocks(blocks = [], target) {
+  const seen = new Set();
+  const filtered = [];
+  blocks.forEach(block => {
+    const text = stripHtml(block?.content || block?.meta?.url || '').trim();
+    if (!text && block?.type !== 'divider' && block?.type !== 'table-simple') return;
+    const key = `${block?.type || ''}:${text}:${JSON.stringify(block?.meta || {})}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    filtered.push(block);
+  });
+  if (filtered.length >= 6) {
+    const headingLike = filtered.filter(block => /^heading/.test(block?.type || '') || block?.type === 'paragraph');
+    const shortHeadingRatio = headingLike.length
+      ? headingLike.filter(block => stripHtml(block.content).length <= 40).length / headingLike.length
+      : 0;
+    if (shortHeadingRatio > 0.85 && !containsTargetReference(filtered, target)) return [];
+  }
+  return filtered;
 }
 
 function findTitle(value) {
@@ -555,27 +633,47 @@ function collectBlocksText(blocks = []) {
   }).filter(Boolean).join('\n');
 }
 
-function normalizeImportedContent({ result, target, toolName }) {
+function normalizeImportedContent({ result, target, tool }) {
+  const toolName = tool?.name || '';
+  if (!isContentTool(tool)) {
+    return {
+      title: '',
+      source_url: target.url || '',
+      source_record_key: `wolai_mcp:${target.pageId || sha256(target.raw).slice(0, 24)}`,
+      source_payload_hash: sha256(JSON.stringify({ target: target.raw, skipped_tool: toolName })),
+      capture_method: `wolai-mcp:${toolName}`,
+      warnings: [`已跳过 MCP 发现/搜索工具 ${toolName}，避免把搜索结果当正文导入`],
+      blocks: [],
+      content_text: '',
+    };
+  }
   const { text, structured } = collectTextFromToolResult(result);
   const parsedTextJson = tryParseJson(text);
   const payloads = [...structured, parsedTextJson].filter(Boolean);
   const nodes = [];
-  payloads.forEach(payload => collectStructuredNodes(payload, nodes));
-  let blocks = nodesToBlocks(nodes, target.raw);
-  if (!blocks.length && text) blocks = parseTextToBlocks(text, target.raw);
+  payloads.forEach(payload => collectStructuredNodes(payload, nodes, { allowCollectionKeys: true }));
+  let blocks = filterBlocks(nodesToBlocks(nodes, target.raw), target);
+  if (!blocks.length && text && !looksLikeDiscoveryText(text, target)) {
+    blocks = filterBlocks(parseTextToBlocks(text, target.raw), target);
+  }
 
   const title = payloads.map(findTitle).find(Boolean) || '';
   const sourceUrl = payloads.map(findSourceUrl).find(Boolean) || target.url || '';
   const contentText = collectBlocksText(blocks);
+  const targetMatched = containsTargetReference(payloads, target) || containsTargetReference(sourceUrl, target);
   return {
     title,
     source_url: sourceUrl,
     source_record_key: `wolai_mcp:${target.pageId || sha256(target.raw).slice(0, 24)}`,
     source_payload_hash: sha256(JSON.stringify({ target: target.raw, text, payloads })),
     capture_method: `wolai-mcp:${toolName}`,
-    warnings: blocks.length ? [] : ['MCP 已返回结果，但未解析出可导入正文'],
+    warnings: [
+      ...(!targetMatched && blocks.length ? ['MCP 结果未显式包含目标页面标识，已按读取工具返回内容导入'] : []),
+      ...(!blocks.length ? ['MCP 已返回结果，但未解析出目标页面正文'] : []),
+    ],
     blocks,
     content_text: contentText,
+    target_matched: targetMatched,
   };
 }
 
@@ -598,15 +696,16 @@ async function importWolaiMcpToBlocks(options = {}) {
   if (!tools.length) throw new Error('Wolai MCP 未返回可用工具');
 
   const errors = [];
-  const candidates = tools.filter(tool => scoreTool(tool) > 0).slice(0, 8);
-  const fallbackCandidates = candidates.length ? candidates : tools.slice(0, 8);
+  const skippedDiscoveryTools = tools.filter(isDiscoveryTool).map(tool => tool.name);
+  const contentCandidates = tools.filter(isContentTool).slice(0, 10);
+  const fallbackCandidates = contentCandidates.length ? contentCandidates : [];
   for (const tool of fallbackCandidates) {
     const argsVariants = buildArgumentsForTool(tool, target).slice(0, 8);
     for (const args of argsVariants) {
       try {
         // eslint-disable-next-line no-await-in-loop
         const result = await client.callTool(tool.name, args);
-        const imported = normalizeImportedContent({ result, target, toolName: tool.name });
+        const imported = normalizeImportedContent({ result, target, tool });
         if (imported.blocks.length) {
           return {
             ...imported,
@@ -624,7 +723,7 @@ async function importWolaiMcpToBlocks(options = {}) {
     }
   }
 
-  throw new Error(`未能通过 Wolai MCP 读取页面内容。可用工具：${tools.map(tool => tool.name).join('、')}。尝试结果：${errors.slice(0, 6).join('；')}`);
+  throw new Error(`未能通过 Wolai MCP 读取目标页面正文。已跳过搜索/列表类工具：${skippedDiscoveryTools.join('、') || '无'}。可用工具：${tools.map(tool => tool.name).join('、')}。尝试结果：${errors.slice(0, 6).join('；') || '没有发现可读取页面正文的工具'}`);
 }
 
 module.exports = {
