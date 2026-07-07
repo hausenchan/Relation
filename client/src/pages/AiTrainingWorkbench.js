@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Button, Card, Col, Collapse, Descriptions, Empty, Form, Grid, Input, List, Modal,
-  Progress, Row, Select, Space, Spin, Switch, Tabs, Tag, Typography, message,
+  Progress, Row, Select, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, message,
 } from 'antd';
 import {
   ArrowLeftOutlined, BarChartOutlined, CheckCircleOutlined, DislikeOutlined,
   FileAddOutlined, FolderAddOutlined, LikeOutlined, MessageOutlined,
-  PlusOutlined, ReadOutlined, ReloadOutlined, SendOutlined, SettingOutlined, TeamOutlined,
-  ToolOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, ReadOutlined, ReloadOutlined,
+  SendOutlined, SettingOutlined, TeamOutlined, ToolOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -69,6 +69,7 @@ const AI_MODEL_PROVIDER_OPTIONS = [
 ];
 
 const DEFAULT_AI_MODEL_BASE_URL = 'https://ai.midongtech.com/v1';
+const SESSION_LIST_COLLAPSED_STORAGE_KEY = 'aiTraining.sessionListCollapsed';
 
 const SESSION_CREATE_INITIAL_VALUES = {
   title: undefined,
@@ -83,6 +84,29 @@ const SESSION_CREATE_INITIAL_VALUES = {
 
 function formatTime(value) {
   return value ? dayjs(value).format('MM-DD HH:mm') : '-';
+}
+
+function formatAmount(value) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return '-';
+  return numeric.toLocaleString('zh-CN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatLatency(ms) {
+  const value = Number(ms || 0);
+  if (!value) return '';
+  if (value < 1000) return `${value}ms`;
+  const seconds = Math.round(value / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
+function clipDisplayText(value, maxLength = 80) {
+  const chars = Array.from(String(value || '').trim());
+  return chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}...` : chars.join('');
 }
 
 function qualityColor(score) {
@@ -140,6 +164,7 @@ function formatScorePercent(value) {
 function runtimeModeTag(mode) {
   const map = {
     llm: { color: 'green', label: 'LLM' },
+    local_fact: { color: 'cyan', label: '本地事实' },
     deterministic: { color: 'blue', label: '规则模式' },
     deterministic_fallback: { color: 'gold', label: '模型回退' },
   };
@@ -150,7 +175,192 @@ function runtimeModeTag(mode) {
 function runtimeSourceLabel(source) {
   if (source === 'user') return '个人模型';
   if (source === 'env') return '系统小模型';
+  if (source === 'local_fact') return '本地事实库';
   return '规则模式';
+}
+
+function AssistantProcessingBubble({ promptText }) {
+  const steps = [
+    '已理解问题口径',
+    '正在匹配 Skill 与本地事实',
+    '正在整理正式结果',
+  ];
+  return (
+    <div style={{ alignSelf: 'flex-start', width: '100%' }}>
+      <Card size="small" bodyStyle={{ padding: 12, background: '#ffffff' }} style={{ borderColor: '#dbeafe' }}>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Space size={8} wrap>
+            <Tag color="purple">AI</Tag>
+            <Tag color="processing">处理中</Tag>
+          </Space>
+          <div style={{ padding: 10, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+            <Text strong>我已收到你的问题。</Text>
+            <div style={{ color: '#64748b', marginTop: 6, lineHeight: 1.7 }}>
+              {promptText ? clipDisplayText(promptText, 90) : '正在读取当前会话上下文。'}
+            </div>
+          </div>
+          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+            {steps.map((step, index) => (
+              <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#64748b' }}>
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: index === steps.length - 1 ? '#60a5fa' : '#93c5fd',
+                    boxShadow: index === steps.length - 1 ? '0 0 0 4px rgba(96, 165, 250, 0.16)' : 'none',
+                    flex: '0 0 auto',
+                  }}
+                />
+                <Text type="secondary">{step}</Text>
+              </div>
+            ))}
+          </Space>
+        </Space>
+      </Card>
+    </div>
+  );
+}
+
+function AssistantDataTable({ columns = [], rows = [] }) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const safeColumns = (Array.isArray(columns) && columns.length > 0
+    ? columns
+    : Object.keys(rows[0] || {}).map((key) => ({ key, title: key }))
+  ).filter((column) => column?.key);
+  const tableColumns = safeColumns.map((column) => ({
+    title: column.title || column.key,
+    dataIndex: column.key,
+    key: column.key,
+    ellipsis: column.key !== 'revenue_amount',
+    align: column.key === 'revenue_amount' ? 'right' : 'left',
+    render: (value) => (column.key === 'revenue_amount' ? formatAmount(value) : (value || '-')),
+  }));
+  return (
+    <Table
+      size="small"
+      rowKey={(row, index) => `${row.app_id || row.app_name || row.date || 'row'}-${index}`}
+      columns={tableColumns}
+      dataSource={rows}
+      pagination={false}
+      scroll={{ x: true }}
+      style={{ marginTop: 8 }}
+    />
+  );
+}
+
+function AssistantResult({ item }) {
+  const structured = item.structured_json || {};
+  const summary = structured.summary || item.content_text || '';
+  const evidence = Array.isArray(item.evidence_json) && item.evidence_json.length > 0
+    ? item.evidence_json
+    : (structured.evidence || []);
+  const actions = Array.isArray(item.actions_json) && item.actions_json.length > 0
+    ? item.actions_json
+    : (structured.actions || []);
+  const riskReminders = Array.isArray(structured.risk_reminders) ? structured.risk_reminders : [];
+  const dataRows = Array.isArray(structured.data_preview) ? structured.data_preview : [];
+  const dataColumns = Array.isArray(structured.data_columns) ? structured.data_columns : [];
+  const total = structured.data_total || null;
+
+  return (
+    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+      <div style={{ padding: 12, border: '1px solid #dbeafe', borderRadius: 8, background: '#f8fbff' }}>
+        <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>已理解</Text>
+        <Text strong style={{ lineHeight: 1.8 }}>{summary || '已根据当前会话上下文生成回复。'}</Text>
+      </div>
+
+      <div style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fff' }}>
+        <Text strong style={{ display: 'block', marginBottom: 8 }}>正式结果</Text>
+        {total?.row_count ? (
+          <Text style={{ display: 'block', marginBottom: 8 }}>
+            共 {total.row_count} 条明细，合计收入 {formatAmount(total.revenue_amount)} 元。
+          </Text>
+        ) : null}
+        <AssistantDataTable columns={dataColumns} rows={dataRows} />
+        {!dataRows.length ? (
+          <Text style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>{item.content_text || '-'}</Text>
+        ) : null}
+      </div>
+
+      {evidence.length > 0 ? (
+        <div style={{ padding: 12, border: '1px solid #e5e7eb', borderRadius: 8, background: '#fafbfd' }}>
+          <Text strong style={{ display: 'block', marginBottom: 6 }}>核心证据</Text>
+          {evidence.map((text, index) => (
+            <div key={`${item.id}-evidence-${index}`} style={{ color: '#475569', lineHeight: 1.8 }}>
+              {index + 1}. {text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {riskReminders.length > 0 ? (
+        <div style={{ padding: 12, border: '1px solid #fde68a', borderRadius: 8, background: '#fffbeb' }}>
+          <Text strong style={{ display: 'block', marginBottom: 6 }}>风险提醒</Text>
+          {riskReminders.map((text, index) => (
+            <div key={`${item.id}-risk-${index}`} style={{ color: '#92400e', lineHeight: 1.8 }}>
+              {index + 1}. {text}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {actions.length > 0 ? (
+        <Space size={[6, 6]} wrap>
+          {actions.map((action, index) => (
+            <Tag key={`${item.id}-action-${index}`} color="blue">{action}</Tag>
+          ))}
+        </Space>
+      ) : null}
+    </Space>
+  );
+}
+
+function AssistantProcessCollapse({ item, analysisProcess }) {
+  if (!analysisProcess) return null;
+  const latency = formatLatency(item.latency_ms);
+  const stepCount = Array.isArray(analysisProcess.steps) ? analysisProcess.steps.length : 0;
+  const label = `已处理${latency ? ` ${latency}` : ''}${stepCount ? ` · ${stepCount} 步` : ''}`;
+  return (
+    <Collapse
+      size="small"
+      ghost
+      items={[
+        {
+          key: 'analysis-process',
+          label,
+          children: (
+            <Space direction="vertical" size={10} style={{ width: '100%' }}>
+              {analysisProcess.summary ? (
+                <Text type="secondary" style={{ lineHeight: 1.8 }}>
+                  {analysisProcess.summary}
+                </Text>
+              ) : null}
+              {Array.isArray(analysisProcess.trace_tags) && analysisProcess.trace_tags.length > 0 ? (
+                <Space size={[6, 6]} wrap>
+                  {analysisProcess.trace_tags.map((tag, index) => (
+                    <Tag key={`${item.id}-trace-tag-${index}`}>{tag}</Tag>
+                  ))}
+                </Space>
+              ) : null}
+              {Array.isArray(analysisProcess.steps) && analysisProcess.steps.length > 0 ? (
+                <div>
+                  {analysisProcess.steps.map((step, index) => (
+                    <div key={`${item.id}-analysis-step-${index}`} style={{ color: '#475569', lineHeight: 1.8 }}>
+                      {index + 1}. {step}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {analysisProcess.model_error ? (
+                <Text type="warning">模型回退原因：{analysisProcess.model_error}</Text>
+              ) : null}
+            </Space>
+          ),
+        },
+      ]}
+    />
+  );
 }
 
 function ChatBubble({ item, writable, onFeedback, onAction }) {
@@ -185,67 +395,15 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
             {!isUser && qualityTag(item.avg_rating ? Math.round(item.avg_rating * 20) : null)}
           </Space>
 
-          <Text style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
-            {item.content_text || '-'}
-          </Text>
-
-          {isAssistant && Array.isArray(item.evidence_json) && item.evidence_json.length > 0 && (
-            <Card size="small" bodyStyle={{ padding: 10, background: '#fafbfd' }}>
-              <Text strong style={{ display: 'block', marginBottom: 6 }}>建议证据</Text>
-              {item.evidence_json.map((evidence, index) => (
-                <div key={`${item.id}-evidence-${index}`} style={{ color: '#64748b', lineHeight: 1.7 }}>
-                  {index + 1}. {evidence}
-                </div>
-              ))}
-            </Card>
-          )}
-
-          {isAssistant && Array.isArray(item.actions_json) && item.actions_json.length > 0 && (
-            <Space size={[6, 6]} wrap>
-              {item.actions_json.map((action, index) => (
-                <Tag key={`${item.id}-action-${index}`}>{action}</Tag>
-              ))}
-            </Space>
-          )}
-
-          {isAssistant && analysisProcess && (
-            <Collapse
-              size="small"
-              items={[
-                {
-                  key: 'analysis-process',
-                  label: '分析过程',
-                  children: (
-                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                      {analysisProcess.summary ? (
-                        <Text type="secondary" style={{ lineHeight: 1.8 }}>
-                          {analysisProcess.summary}
-                        </Text>
-                      ) : null}
-                      {Array.isArray(analysisProcess.trace_tags) && analysisProcess.trace_tags.length > 0 ? (
-                        <Space size={[6, 6]} wrap>
-                          {analysisProcess.trace_tags.map((tag, index) => (
-                            <Tag key={`${item.id}-trace-tag-${index}`}>{tag}</Tag>
-                          ))}
-                        </Space>
-                      ) : null}
-                      {Array.isArray(analysisProcess.steps) && analysisProcess.steps.length > 0 ? (
-                        <div>
-                          {analysisProcess.steps.map((step, index) => (
-                            <div key={`${item.id}-analysis-step-${index}`} style={{ color: '#475569', lineHeight: 1.8 }}>
-                              {index + 1}. {step}
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      {analysisProcess.model_error ? (
-                        <Text type="warning">模型回退原因：{analysisProcess.model_error}</Text>
-                      ) : null}
-                    </Space>
-                  ),
-                },
-              ]}
-            />
+          {isAssistant ? (
+            <>
+              <AssistantProcessCollapse item={item} analysisProcess={analysisProcess} />
+              <AssistantResult item={item} />
+            </>
+          ) : (
+            <Text style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8 }}>
+              {item.content_text || '-'}
+            </Text>
           )}
 
           {isAssistant && (
@@ -316,6 +474,14 @@ export default function AiTrainingWorkbench() {
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [composeValue, setComposeValue] = useState('');
   const [sending, setSending] = useState(false);
+  const [pendingPrompt, setPendingPrompt] = useState('');
+  const [sessionListCollapsed, setSessionListCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(SESSION_LIST_COLLAPSED_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
   const [caseCandidates, setCaseCandidates] = useState([]);
   const [publishedCases, setPublishedCases] = useState([]);
   const [libraryLoading, setLibraryLoading] = useState(false);
@@ -510,6 +676,15 @@ export default function AiTrainingWorkbench() {
   }, [loadSessions]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SESSION_LIST_COLLAPSED_STORAGE_KEY,
+        sessionListCollapsed ? '1' : '0',
+      );
+    } catch {}
+  }, [sessionListCollapsed]);
+
+  useEffect(() => {
     if (!selectedSessionId && sessions.length > 0) {
       setSelectedSessionId(sessions[0].id);
       return;
@@ -679,15 +854,18 @@ export default function AiTrainingWorkbench() {
     const content = composeValue.trim();
     if (!content || !selectedSessionId) return;
     setSending(true);
+    setPendingPrompt(content);
+    setComposeValue('');
     try {
       const result = await aiTrainingApi.createMessage(selectedSessionId, { content_text: content });
       setMessages(result.messages || []);
-      setComposeValue('');
       await Promise.all([loadOverview(), loadSessions(), loadCaseLibrary()]);
     } catch (error) {
+      setComposeValue(content);
       message.error(error.response?.data?.error || '发送失败');
     } finally {
       setSending(false);
+      setPendingPrompt('');
     }
   };
 
@@ -814,6 +992,7 @@ export default function AiTrainingWorkbench() {
     { title: '案例库沉淀', value: overview.published_cases, foot: '已进入团队案例库' },
     { title: '待审核候选', value: overview.pending_candidates, foot: '等待负责人处理' },
   ];
+  const isSessionListCollapsed = !isMobile && sessionListCollapsed;
 
   const sessionTab = (
     <div>
@@ -841,62 +1020,105 @@ export default function AiTrainingWorkbench() {
       </Space>
 
       <Row gutter={[12, 12]}>
-        <Col xs={24} xl={6}>
-          <Card
-            title="会话列表"
-            extra={
-              <Space>
-                <Button icon={<ReloadOutlined />} onClick={loadSessions} />
-                {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateSessionModal()}>新建</Button>}
-              </Space>
-            }
-            bodyStyle={{ padding: 12 }}
-          >
-            <Spin spinning={sessionsLoading}>
-              {sessions.length === 0 ? (
-                <Empty description="还没有训练会话" />
-              ) : (
-                <List
-                  dataSource={sessions}
-                  renderItem={(item, index) => (
-                    <List.Item style={{ padding: 0, border: 0, marginBottom: index === sessions.length - 1 ? 0 : 10 }}>
-                      <Card
-                        size="small"
-                        hoverable
-                        onClick={() => setSelectedSessionId(item.id)}
-                        style={{
-                          width: '100%',
-                          background: item.id === selectedSessionId ? '#f7faff' : '#fff',
-                          borderColor: item.id === selectedSessionId ? '#b9d1ff' : '#e5e7eb',
-                        }}
-                        bodyStyle={{ padding: 12 }}
-                      >
-                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                          <Text strong>{item.title || '未命名会话'}</Text>
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            {item.owner_user_name || '我'} · {item.scene_label || '通用训练'}
-                          </Text>
-                          <Space size={[6, 6]} wrap>
-                            <Tag>{item.business_line || '未分配业务线'}</Tag>
-                            <Tag>{item.business_side || '未设视角'}</Tag>
-                            {item.skill_name ? <Tag color="geekblue">{item.skill_name}</Tag> : <Tag>未绑定 Skill</Tag>}
-                            <Tag>{item.message_count || 0} 条消息</Tag>
-                            {qualityTag(item.quality_score)}
-                          </Space>
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            最近更新：{formatTime(item.last_message_at || item.updated_at || item.created_at)}
-                          </Text>
-                        </Space>
-                      </Card>
-                    </List.Item>
-                  )}
+        <Col xs={24} xl={isSessionListCollapsed ? 1 : 6}>
+          {isSessionListCollapsed ? (
+            <div
+              style={{
+                minHeight: 420,
+                border: '1px solid #f0f0f0',
+                borderRadius: 8,
+                background: '#fff',
+                display: 'flex',
+                justifyContent: 'center',
+                paddingTop: 10,
+              }}
+            >
+              <Tooltip title="展开会话列表">
+                <Button
+                  type="text"
+                  size="small"
+                  aria-label="展开会话列表"
+                  aria-expanded={false}
+                  icon={<MenuUnfoldOutlined />}
+                  onClick={() => setSessionListCollapsed(false)}
+                  style={{ width: 32, height: 32 }}
                 />
-              )}
-            </Spin>
-          </Card>
+              </Tooltip>
+            </div>
+          ) : (
+            <Card
+              title={
+                <Space size={8}>
+                  {!isMobile && (
+                    <Tooltip title="收起会话列表">
+                      <Button
+                        type="text"
+                        size="small"
+                        aria-label="收起会话列表"
+                        aria-expanded
+                        icon={<MenuFoldOutlined />}
+                        onClick={() => setSessionListCollapsed(true)}
+                        style={{ width: 32, height: 32 }}
+                      />
+                    </Tooltip>
+                  )}
+                  <span>会话列表</span>
+                </Space>
+              }
+              extra={
+                <Space>
+                  <Button icon={<ReloadOutlined />} onClick={loadSessions} />
+                  {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateSessionModal()}>新建</Button>}
+                </Space>
+              }
+              bodyStyle={{ padding: 12 }}
+            >
+              <Spin spinning={sessionsLoading}>
+                {sessions.length === 0 ? (
+                  <Empty description="还没有训练会话" />
+                ) : (
+                  <List
+                    dataSource={sessions}
+                    renderItem={(item, index) => (
+                      <List.Item style={{ padding: 0, border: 0, marginBottom: index === sessions.length - 1 ? 0 : 10 }}>
+                        <Card
+                          size="small"
+                          hoverable
+                          onClick={() => setSelectedSessionId(item.id)}
+                          style={{
+                            width: '100%',
+                            background: item.id === selectedSessionId ? '#f7faff' : '#fff',
+                            borderColor: item.id === selectedSessionId ? '#b9d1ff' : '#e5e7eb',
+                          }}
+                          bodyStyle={{ padding: 12 }}
+                        >
+                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                            <Text strong>{item.title || '未命名会话'}</Text>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              {item.owner_user_name || '我'} · {item.scene_label || '通用训练'}
+                            </Text>
+                            <Space size={[6, 6]} wrap>
+                              <Tag>{item.business_line || '未分配业务线'}</Tag>
+                              <Tag>{item.business_side || '未设视角'}</Tag>
+                              {item.skill_name ? <Tag color="geekblue">{item.skill_name}</Tag> : <Tag>未绑定 Skill</Tag>}
+                              <Tag>{item.message_count || 0} 条消息</Tag>
+                              {qualityTag(item.quality_score)}
+                            </Space>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              最近更新：{formatTime(item.last_message_at || item.updated_at || item.created_at)}
+                            </Text>
+                          </Space>
+                        </Card>
+                      </List.Item>
+                    )}
+                  />
+                )}
+              </Spin>
+            </Card>
+          )}
         </Col>
 
-        <Col xs={24} xl={11}>
+        <Col xs={24} xl={isSessionListCollapsed ? 16 : 11}>
           <Card
             title={currentSession ? currentSession.title : '聊天主窗口'}
             extra={
@@ -917,18 +1139,36 @@ export default function AiTrainingWorkbench() {
             ) : (
               <Spin spinning={messagesLoading}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minHeight: 420 }}>
-                  {messages.length === 0 ? (
+                  {messages.length === 0 && !pendingPrompt ? (
                     <Empty description="还没有对话，先发一条训练指令" />
                   ) : (
-                    messages.map((item) => (
-                      <ChatBubble
-                        key={item.id}
-                        item={item}
-                        writable={writable}
-                        onFeedback={handleFeedback}
-                        onAction={handleMessageAction}
-                      />
-                    ))
+                    <>
+                      {messages.map((item) => (
+                        <ChatBubble
+                          key={item.id}
+                          item={item}
+                          writable={writable}
+                          onFeedback={handleFeedback}
+                          onAction={handleMessageAction}
+                        />
+                      ))}
+                      {sending && pendingPrompt ? (
+                        <>
+                          <ChatBubble
+                            item={{
+                              id: 'pending-user-message',
+                              message_role: 'user',
+                              content_text: pendingPrompt,
+                              created_at: new Date().toISOString(),
+                            }}
+                            writable={false}
+                            onFeedback={handleFeedback}
+                            onAction={handleMessageAction}
+                          />
+                          <AssistantProcessingBubble promptText={pendingPrompt} />
+                        </>
+                      ) : null}
+                    </>
                   )}
                 </div>
 

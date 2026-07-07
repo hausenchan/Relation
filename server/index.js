@@ -9119,10 +9119,45 @@ const AI_TRAINING_SCENE_LABELS = {
 };
 
 const AI_TRAINING_FEEDBACK_TYPES = new Set(['helpful', 'not_helpful', 'inaccurate', 'incomplete', 'reusable']);
+const ZHIXIAO_FACT_PACK_PATH = path.join(
+  __dirname,
+  '..',
+  'DaAgent',
+  'Distillation',
+  'output',
+  'training',
+  'zhixiao_resolved_fact_pack.sqlite',
+);
 
 function clipAiTrainingText(value, maxLength = 32) {
   const chars = Array.from(String(value || '').trim());
   return chars.length > maxLength ? `${chars.slice(0, maxLength).join('')}...` : chars.join('');
+}
+
+function formatAiTrainingAmount(value, fractionDigits = 2) {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return '0.00';
+  return numeric.toLocaleString('zh-CN', {
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  });
+}
+
+function extractAiTrainingDate(text) {
+  const match = String(text || '').match(/20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}/);
+  if (!match) return null;
+  const [year, month, day] = match[0].replace(/[/.]/g, '-').split('-');
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function isZhixiaoAppRevenueDetailPrompt(text, session = {}) {
+  const raw = String(text || '');
+  const normalized = raw.toLowerCase();
+  const isZhixiao = raw.includes('支小') || normalized.includes('zhixiao') || session.business_line === 'zhixiao';
+  const asksRevenue = raw.includes('收入') || normalized.includes('revenue');
+  const asksApp = raw.includes('应用') || raw.includes('小程序') || raw.includes('应用包') || normalized.includes('app');
+  const asksDetail = raw.includes('明细') || raw.includes('拆分') || raw.includes('列表') || raw.includes('按') || normalized.includes('detail');
+  return Boolean(isZhixiao && asksRevenue && asksApp && asksDetail && extractAiTrainingDate(raw));
 }
 
 function getAiTrainingSceneLabel(sceneCode) {
@@ -9185,6 +9220,154 @@ function normalizeAiTrainingMessageRow(row) {
     helpful_count: Number(base?.helpful_count || 0),
     not_helpful_count: Number(base?.not_helpful_count || 0),
     my_rating: base?.my_rating === null || base?.my_rating === undefined ? null : Number(base.my_rating),
+  };
+}
+
+function queryZhixiaoAppRevenueDetails(targetDate) {
+  if (!targetDate || !fs.existsSync(ZHIXIAO_FACT_PACK_PATH)) return null;
+  let factDb = null;
+  try {
+    factDb = new Database(ZHIXIAO_FACT_PACK_PATH, { readonly: true, fileMustExist: true });
+    const rows = factDb.prepare(`
+      SELECT
+        date(window_start) as date,
+        product_key as app_id,
+        product_name as app_name,
+        subject_name as subject,
+        metric_value as revenue_amount
+      FROM fact_candidates
+      WHERE business_line = 'zhixiao'
+        AND date(window_start) = ?
+        AND metric_name = '收入'
+        AND report_name_cn = '支小应用收入'
+      ORDER BY metric_value DESC, product_name ASC
+    `).all(targetDate).map((row) => ({
+      date: row.date,
+      app_id: row.app_id || '',
+      app_name: row.app_name || '',
+      subject: row.subject || '',
+      revenue_amount: Number(row.revenue_amount || 0),
+    }));
+    if (!rows.length) return null;
+    return {
+      rows,
+      totalRevenue: rows.reduce((sum, row) => sum + Number(row.revenue_amount || 0), 0),
+      sourcePath: ZHIXIAO_FACT_PACK_PATH,
+    };
+  } catch (error) {
+    console.error('读取支小应用收入事实库失败:', error);
+    return null;
+  } finally {
+    try {
+      if (factDb) factDb.close();
+    } catch {}
+  }
+}
+
+function buildZhixiaoAppRevenueRuntimeResponse({ session, skill, version, promptText }) {
+  const targetDate = extractAiTrainingDate(promptText);
+  if (!isZhixiaoAppRevenueDetailPrompt(promptText, session) || !targetDate) return null;
+  const result = queryZhixiaoAppRevenueDetails(targetDate);
+  if (!result) return null;
+
+  const rows = result.rows;
+  const previewRows = rows.slice(0, 10);
+  const totalText = formatAiTrainingAmount(result.totalRevenue);
+  const sectionTitles = ['结论摘要', '核心证据', '风险提醒', '下一步建议'];
+  const summary = `已命中本地蒸馏事实库：${targetDate} 支小按应用拆分收入明细共 ${rows.length} 条，合计收入 ${totalText} 元。`;
+  const evidence = [
+    `查询口径：business_line=zhixiao，report_name_cn=支小应用收入，metric_name=收入，date(window_start)=${targetDate}。`,
+    `字段满足要求：日期、应用ID、应用名称、收入金额；源表没有安卓包名，因此用支付宝小程序ID作为应用标识。`,
+    `Top 1 为 ${previewRows[0]?.app_name || '-'}，收入 ${formatAiTrainingAmount(previewRows[0]?.revenue_amount)} 元。`,
+  ];
+  const risks = [
+    '源数据字段为支付宝小程序ID，不是安卓 package_name；如需安卓包名，需要补充应用资产映射表。',
+    '当前返回的是单日收入事实，不应用近7日日均或异常建议替代。',
+  ];
+  const actions = [
+    '可直接按 date、app_id、app_name、revenue_amount 四列接入下游分析。',
+    '若要进入产品资产维度，可用 app_id 或 app_name 关联资产表补齐包名。',
+  ];
+  const analysisProcess = {
+    summary: `先识别日期、业务线、拆分维度和目标指标，再查询本地支小蒸馏事实库并校验行数与收入合计。`,
+    steps: [
+      `识别问题：用户需要 ${targetDate}、支小、按应用拆分、收入明细。`,
+      '定位数据源：使用本地 DaAgent 蒸馏产物 fact_candidates 表，而不是近7日建议卡片。',
+      `过滤事实：report_name_cn=支小应用收入，metric_name=收入，date(window_start)=${targetDate}。`,
+      `校验输出：共 ${rows.length} 条应用明细，合计收入 ${totalText} 元，并按收入金额降序展示预览。`,
+    ],
+    trace_tags: ['本地事实命中', '支小应用收入', targetDate, '按应用拆分'],
+    llm_backed: false,
+  };
+
+  const dataColumns = [
+    { key: 'date', title: '日期' },
+    { key: 'app_id', title: '应用ID' },
+    { key: 'app_name', title: '应用名称' },
+    { key: 'revenue_amount', title: '收入金额' },
+  ];
+  const tableLines = [
+    '| 日期 | 应用ID | 应用名称 | 收入金额 |',
+    '|---|---:|---|---:|',
+    ...previewRows.map((row) => `| ${row.date} | ${row.app_id} | ${row.app_name} | ${formatAiTrainingAmount(row.revenue_amount)} |`),
+  ];
+  const contentText = [
+    '已提供并确认可接入。',
+    '',
+    `结果概况：${rows.length} 条应用明细，合计收入 ${totalText} 元。`,
+    '源表没有安卓包名字段，使用 app_id + app_name 作为“应用包/应用名称”标识。',
+    '',
+    '前 10 条：',
+    ...tableLines,
+    '',
+    '接入口径：fact_candidates 表，过滤 business_line=zhixiao、report_name_cn=支小应用收入、metric_name=收入、目标日期。',
+  ].join('\n');
+
+  const structured = {
+    summary,
+    evidence,
+    risk_reminders: risks,
+    actions,
+    follow_up_questions: [],
+    confidence: 96,
+    references: [{
+      id: 'zhixiao_app_revenue_fact_pack',
+      title: '支小应用收入事实库',
+      type: 'local_fact',
+      source_path: result.sourcePath,
+    }],
+    analysis_process: analysisProcess,
+    data_columns: dataColumns,
+    data_preview: previewRows,
+    data_rows: rows,
+    data_total: {
+      row_count: rows.length,
+      revenue_amount: Number(result.totalRevenue.toFixed(4)),
+    },
+    runtime_meta: {
+      mode: 'local_fact',
+      skill_id: skill?.id || null,
+      skill_name: skill?.name || null,
+      skill_version_id: version?.id || null,
+      skill_version_no: version?.version_no || null,
+      matched_suggestion_ids: [],
+      matched_suggestion_count: 0,
+      model_name: 'local-distill-facts',
+      llm_enabled: false,
+      model_config_source: 'local_fact',
+    },
+  };
+
+  return {
+    contentText,
+    structured,
+    evidence,
+    actions,
+    section_titles: sectionTitles,
+    confidence: 96,
+    analysis_process: analysisProcess,
+    runtime_mode: 'local_fact',
+    llm_usage: null,
   };
 }
 
@@ -11476,20 +11659,29 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
       { limit: 3 },
     );
 
+    const runtimeSession = {
+      ...session,
+      scene_label: session.scene_label || getAiTrainingSceneLabel(session.scene_code),
+    };
     const runtimeStartedAt = Date.now();
-    const runtimeResponse = await generateAiTrainingSkillResponse({
-      session: {
-        ...session,
-        scene_label: session.scene_label || getAiTrainingSceneLabel(session.scene_code),
-      },
+    let runtimeResponse = buildZhixiaoAppRevenueRuntimeResponse({
+      session: runtimeSession,
       skill: runtimeBundle.skill,
       version: runtimeBundle.version,
       promptText: contentText,
-      matchedSuggestions,
-      examples: runtimeBundle.examples || [],
-      recentMessages,
-      llmConfigOverride,
     });
+    if (!runtimeResponse) {
+      runtimeResponse = await generateAiTrainingSkillResponse({
+        session: runtimeSession,
+        skill: runtimeBundle.skill,
+        version: runtimeBundle.version,
+        promptText: contentText,
+        matchedSuggestions,
+        examples: runtimeBundle.examples || [],
+        recentMessages,
+        llmConfigOverride,
+      });
+    }
     const runtimeLatencyMs = Date.now() - runtimeStartedAt;
     const tokenIn = Number(
       runtimeResponse?.llm_usage?.prompt_tokens
@@ -11508,7 +11700,9 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
       binding: runtimeBundle,
       runtimeResponse,
     });
-    const sourceKind = runtimeBundle?.skill?.id
+    const sourceKind = runtimeResponse?.runtime_mode === 'local_fact'
+      ? 'local_fact'
+      : runtimeBundle?.skill?.id
       ? (runtimeResponse?.runtime_mode === 'llm' ? 'llm' : 'skill_runtime')
       : 'session_runtime';
 
