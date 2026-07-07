@@ -8,7 +8,8 @@ const SCENE_SUGGESTION_TYPE_MAP = {
 };
 
 const DEFAULT_LLM_MODEL = 'gpt-5.5';
-const DEFAULT_LLM_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_LLM_BASE_URL = 'https://ai.midongtech.com/v1';
+const OPENAI_COMPATIBLE_V1_HOSTS = new Set(['ai.midongtech.com', 'api.openai.com']);
 
 function normalizeText(value) {
   return String(value || '').trim();
@@ -21,6 +22,31 @@ function clipText(value, maxLength = 48) {
 
 function compactWhitespace(value) {
   return normalizeText(value).replace(/\s+/g, ' ');
+}
+
+function normalizeLlmBaseUrl(value) {
+  const raw = normalizeText(value || DEFAULT_LLM_BASE_URL).replace(/\/+$/g, '');
+  try {
+    const parsed = new URL(raw);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    if (OPENAI_COMPATIBLE_V1_HOSTS.has(parsed.hostname) && (!parsed.pathname || parsed.pathname === '/')) {
+      parsed.pathname = '/v1';
+    }
+    return parsed.toString().replace(/\/+$/g, '');
+  } catch {
+    return raw;
+  }
+}
+
+function formatLlmBaseUrlForDisplay(value) {
+  return normalizeLlmBaseUrl(value);
+}
+
+function buildChatCompletionsUrl(baseUrl) {
+  return `${formatLlmBaseUrlForDisplay(baseUrl)}/chat/completions`;
 }
 
 function buildKeywordSet(value) {
@@ -623,13 +649,13 @@ function getLlmConfig(overrides = null) {
   return {
     apiKey,
     model: model || DEFAULT_LLM_MODEL,
-    baseUrl: (baseUrl || DEFAULT_LLM_BASE_URL).replace(/\/+$/g, ''),
+    baseUrl: normalizeLlmBaseUrl(baseUrl || DEFAULT_LLM_BASE_URL),
     timeoutMs,
     temperature: overrideApiKey && Number.isFinite(overrideTemperature)
       ? overrideTemperature
       : getEnvLlmTemperature(),
     source: overrideApiKey ? (overrides?.source || 'user') : 'env',
-    provider: overrideApiKey ? (overrides?.provider || 'openai') : 'openai',
+    provider: overrideApiKey ? (overrides?.provider || 'openai_compatible') : 'openai_compatible',
   };
 }
 
@@ -638,10 +664,7 @@ function getLlmRuntimeStatus(overrides = null) {
   const targetModel = normalizeText(config?.model || getEnvLlmModel());
   const targetBaseUrl = normalizeText(config?.baseUrl || getEnvLlmBaseUrl());
   if (!config) {
-    let displayBaseUrl = targetBaseUrl;
-    try {
-      displayBaseUrl = new URL(targetBaseUrl).origin;
-    } catch {}
+    const displayBaseUrl = formatLlmBaseUrlForDisplay(targetBaseUrl);
     return {
       llm_enabled: false,
       preferred_runtime: 'deterministic',
@@ -655,10 +678,7 @@ function getLlmRuntimeStatus(overrides = null) {
     };
   }
 
-  let baseUrl = config.baseUrl;
-  try {
-    baseUrl = new URL(config.baseUrl).origin;
-  } catch {}
+  const baseUrl = formatLlmBaseUrlForDisplay(config.baseUrl);
   return {
     llm_enabled: true,
     preferred_runtime: 'llm',
@@ -666,21 +686,13 @@ function getLlmRuntimeStatus(overrides = null) {
     base_url: baseUrl,
     target_model_name: config.model,
     config_source: config.source || 'env',
-    provider: config.provider || 'openai',
+    provider: config.provider || 'openai_compatible',
     fallback_enabled: true,
     status_text: config.source === 'user'
       ? `个人模型 Key 已启用：${config.model}，规则链路仅作兜底。`
       : `当前默认接入系统小模型 ${config.model}，规则链路仅作兜底。`,
     setup_hint: null,
   };
-}
-
-function getUrlOrigin(value) {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return normalizeText(value || DEFAULT_LLM_BASE_URL);
-  }
 }
 
 function getUrlHostname(value) {
@@ -703,24 +715,33 @@ function normalizeLlmHttpErrorMessage(status, text) {
   }
 }
 
+function normalizeLlmNonJsonResponseMessage(config, contentType) {
+  const typeText = normalizeText(contentType || 'unknown content-type');
+  return `模型接口返回非 JSON 响应（${typeText}）：当前请求地址为 ${buildChatCompletionsUrl(config?.baseUrl)}。如果这是公司 AI 网关，请确认 Base URL 填写到 /v1，例如 https://ai.midongtech.com/v1。`;
+}
+
+function normalizeLlmJsonParseErrorMessage(config) {
+  return `模型接口 JSON 解析失败：当前请求地址为 ${buildChatCompletionsUrl(config?.baseUrl)}。请确认该地址是 OpenAI 兼容接口，而不是网关管理后台或网页地址。`;
+}
+
 function buildLlmFetchFailureMessage(error, config) {
-  const origin = getUrlOrigin(config?.baseUrl);
+  const baseUrl = formatLlmBaseUrlForDisplay(config?.baseUrl);
   const hostname = getUrlHostname(config?.baseUrl);
   const cause = error?.cause || {};
   const code = cause.code || cause.name || error?.code || error?.name || '';
   const detail = code ? `（${code}）` : '';
 
   if (error?.name === 'TimeoutError' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT') {
-    return `模型接口连接超时${detail}：服务端在 ${Math.round(Number(config?.timeoutMs || 0) / 1000) || 15} 秒内无法访问 ${origin}。请确认服务器网络可达，或把 Base URL 改为公司可访问的 OpenAI 兼容网关地址。`;
+    return `模型接口连接超时${detail}：服务端在 ${Math.round(Number(config?.timeoutMs || 0) / 1000) || 15} 秒内无法访问 ${baseUrl}。请确认服务器网络可达，或把 Base URL 改为公司可访问的 OpenAI 兼容网关地址。`;
   }
   if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) {
     return `模型接口域名解析失败${detail}：服务端无法解析 ${hostname}。请检查 DNS、服务器网络，或把 Base URL 改为可访问的 OpenAI 兼容网关地址。`;
   }
   if (['ECONNREFUSED', 'ECONNRESET', 'UND_ERR_SOCKET'].includes(code)) {
-    return `模型接口连接失败${detail}：服务端访问 ${origin} 时连接被拒绝或中断。请确认该 Base URL 在服务器环境可访问。`;
+    return `模型接口连接失败${detail}：服务端访问 ${baseUrl} 时连接被拒绝或中断。请确认该 Base URL 在服务器环境可访问。`;
   }
   if (String(error?.message || '').includes('fetch failed')) {
-    return `服务端访问模型接口失败：无法连接 ${origin}。如果线上服务器不能直连 OpenAI，请在 Base URL 填写公司可访问的 OpenAI 兼容网关地址，或为服务器配置网络代理。`;
+    return `服务端访问模型接口失败：无法连接 ${baseUrl}。如果线上服务器不能直连 OpenAI，请在 Base URL 填写公司可访问的 OpenAI 兼容网关地址，或为服务器配置网络代理。`;
   }
   return `服务端访问模型接口失败${detail}：${normalizeText(error?.message || '未知网络错误')}。请确认 Base URL 在服务器环境可访问。`;
 }
@@ -752,7 +773,16 @@ async function postChatCompletion(config, payload, useJsonMode = true) {
     const text = await response.text();
     throw new Error(normalizeLlmHttpErrorMessage(response.status, text));
   }
-  return response.json();
+  const contentType = response.headers.get('content-type') || '';
+  const text = await response.text();
+  if (!String(contentType).toLowerCase().includes('application/json')) {
+    throw new Error(normalizeLlmNonJsonResponseMessage(config, contentType));
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(normalizeLlmJsonParseErrorMessage(config));
+  }
 }
 
 async function testLlmConnection(llmConfigOverride = null) {
@@ -766,10 +796,7 @@ async function testLlmConnection(llmConfigOverride = null) {
       { role: 'user', content: '请只回复 ok。' },
     ],
   }, false);
-  let baseUrl = config.baseUrl;
-  try {
-    baseUrl = new URL(config.baseUrl).origin;
-  } catch {}
+  const baseUrl = formatLlmBaseUrlForDisplay(config.baseUrl);
   return {
     success: true,
     model_name: completion?.model || config.model,

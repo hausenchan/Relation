@@ -3766,10 +3766,11 @@ function buildUserFilter(userId, role, tableAlias) {
 }
 
 const DEFAULT_USER_AI_MODEL = 'gpt-5.5';
-const DEFAULT_USER_AI_BASE_URL = 'https://api.openai.com/v1';
+const DEFAULT_USER_AI_BASE_URL = 'https://ai.midongtech.com/v1';
+const OPENAI_COMPATIBLE_V1_HOSTS = new Set(['ai.midongtech.com', 'api.openai.com']);
 
 function normalizeAiModelProvider(value) {
-  const provider = String(value || 'openai').trim().toLowerCase();
+  const provider = String(value || 'openai_compatible').trim().toLowerCase();
   if (['openai', 'openai_compatible'].includes(provider)) return provider;
   return 'openai_compatible';
 }
@@ -3786,7 +3787,14 @@ function normalizeAiModelBaseUrl(value) {
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       throw new Error('invalid protocol');
     }
-    return raw;
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    if (OPENAI_COMPATIBLE_V1_HOSTS.has(parsed.hostname) && (!parsed.pathname || parsed.pathname === '/')) {
+      parsed.pathname = '/v1';
+    }
+    return parsed.toString().replace(/\/+$/g, '');
   } catch {
     throw new Error('Base URL 格式不正确，请填写 http(s) 地址');
   }
@@ -3819,7 +3827,7 @@ function getUserAiModelSettingRow(userId) {
 function serializeUserAiModelSetting(row) {
   const safeRow = row || {};
   return {
-    provider: safeRow.provider || 'openai',
+    provider: safeRow.provider || 'openai_compatible',
     base_url: safeRow.base_url || DEFAULT_USER_AI_BASE_URL,
     model: safeRow.model || DEFAULT_USER_AI_MODEL,
     key_mask: safeRow.key_mask || maskAiApiKey(safeRow.api_key),
@@ -3837,7 +3845,7 @@ function getUserAiModelConfig(userId) {
   if (!row || Number(row.enabled) === 0 || !String(row.api_key || '').trim()) return null;
   return {
     source: 'user',
-    provider: row.provider || 'openai',
+    provider: row.provider || 'openai_compatible',
     apiKey: String(row.api_key || '').trim(),
     model: row.model || DEFAULT_USER_AI_MODEL,
     baseUrl: row.base_url || DEFAULT_USER_AI_BASE_URL,

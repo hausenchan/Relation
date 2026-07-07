@@ -68,6 +68,8 @@ const AI_MODEL_PROVIDER_OPTIONS = [
   { value: 'openai_compatible', label: 'OpenAI 兼容接口' },
 ];
 
+const DEFAULT_AI_MODEL_BASE_URL = 'https://ai.midongtech.com/v1';
+
 const SESSION_CREATE_INITIAL_VALUES = {
   title: undefined,
   scene_code: 'revenue_diagnosis',
@@ -358,8 +360,8 @@ export default function AiTrainingWorkbench() {
 
   const fillModelSettingForm = useCallback((setting) => {
     modelSettingForm.setFieldsValue({
-      provider: setting?.provider || 'openai',
-      base_url: setting?.base_url || 'https://api.openai.com/v1',
+      provider: setting?.provider || 'openai_compatible',
+      base_url: setting?.base_url || DEFAULT_AI_MODEL_BASE_URL,
       model: setting?.model || 'gpt-5.5',
       api_key: '',
       enabled: setting?.enabled !== false,
@@ -1575,14 +1577,14 @@ export default function AiTrainingWorkbench() {
               type="warning"
               showIcon
               message="测试连接由服务端发起"
-              description="如果 Base URL 使用 api.openai.com 但服务器网络不能直连 OpenAI，会提示连接失败；这种情况请填写公司可访问的 OpenAI 兼容网关地址。"
+              description="请填写服务端可访问的 OpenAI 兼容接口地址；公司统一 AI 网关需要填到 /v1，例如 https://ai.midongtech.com/v1。"
             />
             <Form
               form={modelSettingForm}
               layout="vertical"
               initialValues={{
-                provider: 'openai',
-                base_url: 'https://api.openai.com/v1',
+                provider: 'openai_compatible',
+                base_url: DEFAULT_AI_MODEL_BASE_URL,
                 model: 'gpt-5.5',
                 enabled: true,
               }}
@@ -1602,10 +1604,10 @@ export default function AiTrainingWorkbench() {
               <Form.Item
                 label="Base URL"
                 name="base_url"
-                extra="需要填写服务端可访问的 /v1 地址，例如官方地址或公司统一模型网关。"
+                extra="需要填写服务端可访问的 /v1 地址，例如公司统一模型网关。"
                 rules={[{ required: true, message: '请输入 Base URL' }]}
               >
-                <Input placeholder="https://api.openai.com/v1" />
+                <Input placeholder={DEFAULT_AI_MODEL_BASE_URL} />
               </Form.Item>
               <Form.Item
                 label={modelSetting?.key_mask ? `API Key（已保存 ${modelSetting.key_mask}）` : 'API Key'}
