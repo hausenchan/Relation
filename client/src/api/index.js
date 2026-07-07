@@ -354,6 +354,8 @@ export const documentsApi = {
   create: (data) => api.post('/documents', data).then(r => r.data),
   importWolaiUrl: (data) => api.post('/documents/import/wolai-url', data).then(r => r.data),
   importWolaiUrlToDocument: (id, data) => api.post(`/documents/${id}/import/wolai-url`, data).then(r => r.data),
+  importWolaiMcp: (data) => api.post('/documents/import/wolai-mcp', data).then(r => r.data),
+  importWolaiMcpToDocument: (id, data) => api.post(`/documents/${id}/import/wolai-mcp`, data).then(r => r.data),
   importFile: (formData, config = {}) => api.post('/documents/import/file', formData, config).then(r => r.data),
   importFileToDocument: (id, formData, config = {}) => api.post(`/documents/${id}/import/file`, formData, config).then(r => r.data),
   update: (id, data) => api.put(`/documents/${id}`, data).then(r => r.data),

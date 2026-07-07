@@ -3439,6 +3439,8 @@ export default function Documents() {
     wolaiImportForm.setFieldsValue({
       import_mode: 'url',
       url: '',
+      mcp_target: '',
+      mcp_token: '',
       title: '',
       domain: selectedFolder?.domain || (domainFilter === 'all' ? 'general' : domainFilter),
       project_group_id: selectedFolder?.project_group_id || undefined,
@@ -3459,8 +3461,10 @@ export default function Documents() {
     setDocumentImportFileList([]);
     wolaiImportForm.resetFields();
     wolaiImportForm.setFieldsValue({
-      import_mode: 'url',
-      url: doc.source_url || '',
+      import_mode: doc.source_system === 'wolai_mcp' ? 'wolai_mcp' : 'url',
+      url: doc.source_system === 'wolai_mcp' ? '' : (doc.source_url || ''),
+      mcp_target: doc.source_system === 'wolai_mcp' ? (doc.source_url || doc.source_record_key || '') : '',
+      mcp_token: '',
     });
     setWolaiImportOpen(true);
   };
@@ -3475,6 +3479,10 @@ export default function Documents() {
         wolaiImportForm.setFields([{ name: 'url', errors: ['请填写 URL'] }]);
         return;
       }
+      if (importMode === 'wolai_mcp' && !String(values.mcp_target || '').trim()) {
+        wolaiImportForm.setFields([{ name: 'mcp_target', errors: ['请填写 Wolai 页面 URL 或页面 ID'] }]);
+        return;
+      }
       if (importMode === 'file' && !documentImportFileList.length) {
         message.warning('请选择要导入的本地文件');
         return;
@@ -3485,15 +3493,23 @@ export default function Documents() {
           message.warning('你没有更新该文档正文的权限');
           return;
         }
-        const doc = importMode === 'file'
-          ? await documentsApi.importFileToDocument(
+        let doc;
+        if (importMode === 'file') {
+          doc = await documentsApi.importFileToDocument(
             targetDoc.id,
             buildDocumentImportFileFormData(values, documentImportFileList[0])
-          )
-          : await documentsApi.importWolaiUrlToDocument(targetDoc.id, {
+          );
+        } else if (importMode === 'wolai_mcp') {
+          doc = await documentsApi.importWolaiMcpToDocument(targetDoc.id, {
+            target: values.mcp_target,
+            token: values.mcp_token,
+          });
+        } else {
+          doc = await documentsApi.importWolaiUrlToDocument(targetDoc.id, {
             url: values.url,
             prefer_chrome: true,
           });
+        }
         const docId = getDocTabId(doc.id);
         const blocks = contentToBlocks(doc.content);
         lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(doc.title || '', blocks);
@@ -3509,19 +3525,35 @@ export default function Documents() {
         if (warnings.length) {
           message.warning('文档已更新，但导入过程有提示，可查看改动历史备注');
         } else {
-          message.success(importMode === 'file' ? '已导入本地文件内容并更新文档' : '已从 URL 更新文档内容');
+          message.success(importMode === 'file'
+            ? '已导入本地文件内容并更新文档'
+            : importMode === 'wolai_mcp'
+              ? '已从 Wolai MCP 更新文档内容'
+              : '已从 URL 更新文档内容');
         }
         return;
       }
-      const doc = importMode === 'file'
-        ? await documentsApi.importFile(buildDocumentImportFileFormData(values, documentImportFileList[0]))
-        : await documentsApi.importWolaiUrl({
+      let doc;
+      if (importMode === 'file') {
+        doc = await documentsApi.importFile(buildDocumentImportFileFormData(values, documentImportFileList[0]));
+      } else if (importMode === 'wolai_mcp') {
+        doc = await documentsApi.importWolaiMcp({
+          ...values,
+          target: values.mcp_target,
+          token: values.mcp_token,
+          title: values.title || undefined,
+          project_group_id: values.project_group_id || null,
+          folder_id: values.folder_id || null,
+        });
+      } else {
+        doc = await documentsApi.importWolaiUrl({
           ...values,
           title: values.title || undefined,
           project_group_id: values.project_group_id || null,
           folder_id: values.folder_id || null,
           prefer_chrome: true,
         });
+      }
       setWolaiImportOpen(false);
       setWolaiImportTargetDoc(null);
       setDocumentImportFileList([]);
@@ -3532,7 +3564,11 @@ export default function Documents() {
       if (warnings.length) {
         message.warning('文档已导入，但导入过程有提示，可查看改动历史备注');
       } else {
-        message.success(importMode === 'file' ? '已导入本地文件内容并新建文档' : '已从 URL 导入文档');
+        message.success(importMode === 'file'
+          ? '已导入本地文件内容并新建文档'
+          : importMode === 'wolai_mcp'
+            ? '已从 Wolai MCP 导入文档'
+            : '已从 URL 导入文档');
       }
     } catch (err) {
       const hint = err.response?.data?.hint;
@@ -10808,9 +10844,16 @@ export default function Documents() {
                 if (event.target.value === 'file') {
                   wolaiImportForm.setFields([{ name: 'url', errors: [] }]);
                 }
+                if (event.target.value === 'url') {
+                  wolaiImportForm.setFields([{ name: 'mcp_target', errors: [] }]);
+                }
+                if (event.target.value === 'wolai_mcp') {
+                  wolaiImportForm.setFields([{ name: 'url', errors: [] }]);
+                }
               }}
             >
               <Radio.Button value="url">URL</Radio.Button>
+              <Radio.Button value="wolai_mcp">Wolai MCP</Radio.Button>
               <Radio.Button value="file">本地文件</Radio.Button>
             </Radio.Group>
           </Form.Item>
@@ -10840,6 +10883,25 @@ export default function Documents() {
                       </Space>
                     </Upload.Dragger>
                   </Form.Item>
+                );
+              }
+              if (importMode === 'wolai_mcp') {
+                return (
+                  <>
+                    <Form.Item
+                      name="mcp_target"
+                      label="Wolai 页面 URL / 页面 ID"
+                      rules={[{ required: true, message: '请填写 Wolai 页面 URL 或页面 ID' }]}
+                    >
+                      <Input placeholder="https://www.wolai.com/... 或页面 ID" />
+                    </Form.Item>
+                    <Form.Item name="mcp_token" label="MCP Token">
+                      <Input.Password placeholder="Bearer Token，可留空使用服务器 WOLAI_MCP_TOKEN" autoComplete="off" />
+                    </Form.Item>
+                    <Text type="secondary" style={{ display: 'block', marginTop: -8, marginBottom: 16, fontSize: 12 }}>
+                      Token 仅用于本次导入请求，不会保存到文档；服务器已配置 WOLAI_MCP_TOKEN 时可留空。
+                    </Text>
+                  </>
                 );
               }
               return (
@@ -10893,8 +10955,8 @@ export default function Documents() {
           )}
           <Text type="secondary">
             {isWolaiImportUpdateMode
-              ? 'URL 导入会采集页面正文；本地文件会解析正文并转换为文档内容。导入成功后将覆盖当前文档内容，原文件会保留用于下载追溯。'
-              : 'URL 导入会采集页面正文；本地文件会解析正文并转换为文档内容。导入成功后将创建新文档，原文件会保留用于下载追溯。'}
+              ? 'URL 导入会采集页面正文；Wolai MCP 会通过授权 Token 读取页面内容；本地文件会解析正文并转换为文档内容。导入成功后将覆盖当前文档内容。'
+              : 'URL 导入会采集页面正文；Wolai MCP 会通过授权 Token 读取页面内容；本地文件会解析正文并转换为文档内容。导入成功后将创建新文档。'}
           </Text>
         </Form>
       </Modal>

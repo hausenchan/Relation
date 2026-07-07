@@ -11,6 +11,7 @@ const { encryptRow, decryptRow, decryptRows } = require('./lib/cryptoDao');
 const { decrypt } = require('./lib/crypto');
 const NetworkCaptureManager = require('./lib/networkCapture');
 const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
+const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
 const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
 const {
   ensureAiSuggestionTables,
@@ -5494,6 +5495,84 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
   }
 });
 
+app.post('/api/documents/import/wolai-mcp', canWrite, async (req, res) => {
+  const target = String(req.body?.target || req.body?.url || req.body?.page_id || '').trim();
+  if (!target) return res.status(400).json({ error: '请填写 Wolai 页面 URL 或页面 ID' });
+
+  try {
+    const imported = await importWolaiMcpToBlocks({
+      target,
+      title: req.body?.title,
+      token: req.body?.token,
+      endpoint: req.body?.endpoint,
+    });
+    const content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    const contentText = imported.content_text || extractDocumentText(content);
+    const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
+    const id = createDocumentRecord({
+      ...req.body,
+      title: imported.title || req.body?.title || 'Wolai MCP 导入文档',
+      content,
+      content_text: contentText,
+      tags: [...new Set(['wolai-mcp-import', ...tags])],
+      current_version: req.body?.current_version || 'V1.0',
+      width_mode: req.body?.width_mode || 'full',
+    }, req.user);
+    db.prepare(`
+      UPDATE documents SET
+        source_system = 'wolai_mcp',
+        source_record_key = ?,
+        source_url = ?,
+        source_payload_hash = ?,
+        import_batch_no = ?,
+        import_status = ?,
+        quality_status = ?,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      imported.source_record_key,
+      imported.source_url || target,
+      imported.source_payload_hash,
+      `wolai_mcp_${Date.now()}`,
+      'imported',
+      contentText.trim() ? (imported.warnings?.length ? 'warning' : 'pass') : 'warning',
+      req.user.id,
+      id
+    );
+    db.prepare(`
+      INSERT INTO document_change_logs (document_id, version, changed_by, summary, detail_text, remark)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      'V1.0',
+      req.user.id,
+      '从 Wolai MCP 导入',
+      [
+        `来源：${imported.source_url || target}`,
+        `采集方式：${imported.capture_method}`,
+        imported.tool_name ? `MCP 工具：${imported.tool_name}` : '',
+      ].filter(Boolean).join('\n'),
+      imported.warnings?.length ? imported.warnings.join('；') : null
+    );
+    const row = getVisibleDocument(id, req.user);
+    res.json({
+      ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
+      import_meta: {
+        capture_method: imported.capture_method,
+        source_type: 'wolai_mcp',
+        tool_name: imported.tool_name,
+        warnings: imported.warnings || [],
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      error: error.message || 'Wolai MCP 导入失败',
+      hint: '请确认 Wolai MCP Token 有空间访问权限；如果服务器已配置 WOLAI_MCP_TOKEN，前端 Token 可留空。',
+    });
+  }
+});
+
 app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
   const validation = validateDocumentImportFile(req.file);
   if (validation.error) {
@@ -5691,6 +5770,99 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
     res.status(400).json({
       error: error.message || 'URL 导入失败',
       hint: '系统会自动启动 Chrome 渲染页面并采集正文；如果仍失败，请确认服务器安装了 Chrome/Chromium，且该 URL 对当前登录态或公开访问可见。',
+    });
+  }
+});
+
+app.post('/api/documents/:id/import/wolai-mcp', canWrite, async (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+
+  const target = String(req.body?.target || req.body?.url || req.body?.page_id || doc.source_url || '').trim();
+  if (!target) return res.status(400).json({ error: '请填写 Wolai 页面 URL 或页面 ID' });
+
+  try {
+    const imported = await importWolaiMcpToBlocks({
+      target,
+      title: doc.title,
+      token: req.body?.token,
+      endpoint: req.body?.endpoint,
+    });
+    const content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    const storedContent = JSON.stringify(content);
+    const contentText = imported.content_text || extractDocumentText(content);
+    const beforeSnapshot = {
+      title: doc.title,
+      content: doc.content,
+      content_text: doc.content_text,
+    };
+    const afterSnapshot = {
+      title: doc.title,
+      content: storedContent,
+      content_text: contentText,
+    };
+    const updateFromWolaiMcp = db.transaction(() => {
+      db.prepare(`
+        UPDATE documents SET
+          content = ?,
+          content_text = ?,
+          summary = ?,
+          source_system = 'wolai_mcp',
+          source_record_key = ?,
+          source_url = ?,
+          source_payload_hash = ?,
+          import_batch_no = ?,
+          import_status = ?,
+          quality_status = ?,
+          updated_by = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        storedContent,
+        contentText,
+        buildDocumentSummary(contentText),
+        imported.source_record_key,
+        imported.source_url || target,
+        imported.source_payload_hash,
+        `wolai_mcp_update_${Date.now()}`,
+        'imported',
+        contentText.trim() ? (imported.warnings?.length ? 'warning' : 'pass') : 'warning',
+        req.user.id,
+        doc.id
+      );
+      insertDocumentEditRecord(doc.id, req.user.id, 'wolai_mcp_import', beforeSnapshot, afterSnapshot);
+      db.prepare(`
+        INSERT INTO document_change_logs (document_id, version, changed_by, summary, detail_text, remark)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        doc.id,
+        doc.current_version || 'V1.0',
+        req.user.id,
+        '从 Wolai MCP 更新正文',
+        [
+          `来源：${imported.source_url || target}`,
+          `采集方式：${imported.capture_method}`,
+          imported.tool_name ? `MCP 工具：${imported.tool_name}` : '',
+        ].filter(Boolean).join('\n'),
+        imported.warnings?.length ? imported.warnings.join('；') : null
+      );
+    });
+    updateFromWolaiMcp();
+    const row = getVisibleDocument(doc.id, req.user);
+    res.json({
+      ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
+      import_meta: {
+        capture_method: imported.capture_method,
+        source_type: 'wolai_mcp',
+        tool_name: imported.tool_name,
+        warnings: imported.warnings || [],
+      },
+    });
+  } catch (error) {
+    res.status(400).json({
+      error: error.message || 'Wolai MCP 导入失败',
+      hint: '请确认 Wolai MCP Token 有空间访问权限；如果服务器已配置 WOLAI_MCP_TOKEN，前端 Token 可留空。',
     });
   }
 });
