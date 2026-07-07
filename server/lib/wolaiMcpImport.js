@@ -250,8 +250,9 @@ function getSchemaRequired(tool) {
 function valueForProperty(name, schema, target) {
   const key = String(name || '').toLowerCase();
   if (/url|link|href/.test(key)) return target.url || target.raw;
-  if (/page.*id|page_id|pageid|block.*id|block_id|blockid|section.*id|section_id|sectionid|record.*key/.test(key)) return target.pageId || target.raw;
-  if (/^id$|uuid|node/.test(key)) return target.pageId || target.raw;
+  if (/page.*id|page_id|pageid/.test(key)) return target.pageId || target.blockId || target.raw;
+  if (/block.*id|block_id|blockid|section.*id|section_id|sectionid|record.*key/.test(key)) return target.blockId || target.pageId || target.raw;
+  if (/^id$|uuid|node/.test(key)) return target.blockId || target.pageId || target.raw;
   if (/query|keyword|search|title|text|q/.test(key)) return target.raw;
   if (/recursive|children|include|with.*content|content|blocks/.test(key) && schema?.type === 'boolean') return true;
   if (/limit|max|count|size|page_size/.test(key) && ['number', 'integer'].includes(schema?.type)) return 500;
@@ -266,6 +267,19 @@ function buildArgumentsForTool(tool, target) {
   const propertyNames = Object.keys(properties);
   const required = getSchemaRequired(tool);
   if (!propertyNames.length) {
+    if (target.blockId) {
+      return [
+        { page_id: target.pageId || target.blockId, section_id: target.blockId },
+        { page_id: target.pageId || target.blockId, block_id: target.blockId },
+        { pageId: target.pageId || target.blockId, sectionId: target.blockId },
+        { pageId: target.pageId || target.blockId, blockId: target.blockId },
+        { section_id: target.blockId },
+        { block_id: target.blockId },
+        { id: target.blockId },
+        { sectionId: target.blockId },
+        { blockId: target.blockId },
+      ];
+    }
     return [
       target.url ? { url: target.url } : null,
       { page_id: target.pageId || target.raw },
@@ -293,11 +307,27 @@ function buildArgumentsForTool(tool, target) {
     variants.push(
       { ...base, page_id: target.pageId },
       { ...base, pageId: target.pageId },
+      { ...base, id: target.blockId || target.pageId }
+    );
+  }
+  if (target.blockId) {
+    variants.push(
+      { ...base, block_id: target.blockId },
+      { ...base, blockId: target.blockId },
+      { ...base, section_id: target.blockId },
+      { ...base, sectionId: target.blockId },
+      { ...base, id: target.blockId },
+      { ...base, page_id: target.pageId || target.blockId, block_id: target.blockId },
+      { ...base, page_id: target.pageId || target.blockId, section_id: target.blockId },
+      { ...base, pageId: target.pageId || target.blockId, blockId: target.blockId },
+      { ...base, pageId: target.pageId || target.blockId, sectionId: target.blockId }
+    );
+  } else if (target.pageId) {
+    variants.push(
       { ...base, block_id: target.pageId },
       { ...base, blockId: target.pageId },
       { ...base, section_id: target.pageId },
-      { ...base, sectionId: target.pageId },
-      { ...base, id: target.pageId }
+      { ...base, sectionId: target.pageId }
     );
   }
   variants.push({ ...base, query: target.raw });
@@ -898,8 +928,30 @@ function recordsToBlocks(records = [], seed) {
     return depth;
   };
 
+  const childrenByParentId = new Map();
+  normalized.forEach(record => {
+    const parentId = record.parentId || '';
+    if (!parentId || !byId.has(parentId)) return;
+    if (!childrenByParentId.has(parentId)) childrenByParentId.set(parentId, []);
+    childrenByParentId.get(parentId).push(record);
+  });
+  childrenByParentId.forEach(children => children.sort((a, b) => (a.order || 0) - (b.order || 0)));
+
+  const ordered = [];
+  const emitted = new Set();
+  const appendTree = (record) => {
+    if (!record || emitted.has(record.id)) return;
+    emitted.add(record.id);
+    ordered.push(record);
+    (childrenByParentId.get(record.id) || []).forEach(appendTree);
+  };
+  normalized
+    .filter(record => !record.parentId || !byId.has(record.parentId))
+    .forEach(appendTree);
+  normalized.forEach(appendTree);
+
   const makeBlock = makeBlockFactory(seed);
-  return normalized.map(record => {
+  return ordered.map(record => {
     const type = inferWolaiRecordType(record);
     const meta = {};
     if (type === 'numbered' || type === 'bullet') meta.indent = getDepth(record);
@@ -918,6 +970,113 @@ function looksLikeJsonDumpText(text = '') {
   const quotedIdLines = lines.filter(line => /^["'][A-Za-z0-9_-]{8,}["'][,;:]?$/.test(line)).length;
   const hasWolaiFields = lines.some(line => /^["']?(title|parent_id|parent_type|created_at|edited_at|version)["']?\s*:/.test(line));
   return hasWolaiFields && (jsonFieldLines + quotedIdLines) / lines.length > 0.35;
+}
+
+function parseToolContent(result) {
+  const { text, structured } = collectTextFromToolResult(result);
+  const parsedTextJson = tryParseJson(text);
+  const payloads = [...structured, parsedTextJson].filter(Boolean);
+  const wolaiRecords = [];
+  payloads.forEach(payload => collectWolaiRecordsFromPayload(payload, wolaiRecords));
+  if (!wolaiRecords.length && text) {
+    wolaiRecords.push(...extractWolaiRecordsFromJsonLikeText(text));
+  }
+  return {
+    text,
+    structured,
+    parsedTextJson,
+    payloads,
+    wolaiRecords,
+  };
+}
+
+function mergeWolaiRecords(records = []) {
+  const byKey = new Map();
+  records.forEach((record, index) => {
+    if (!record || !record.id || !stripHtml(record.html)) return;
+    const key = record.id;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...record, order: Number.isFinite(Number(record.order)) ? Number(record.order) : index });
+      return;
+    }
+    byKey.set(key, {
+      ...existing,
+      ...record,
+      html: stripHtml(record.html).length >= stripHtml(existing.html).length ? record.html : existing.html,
+      parentId: record.parentId || existing.parentId,
+      parentType: record.parentType || existing.parentType,
+      type: record.type || existing.type,
+      inferredType: record.inferredType || existing.inferredType,
+      order: Math.min(Number(existing.order) || 0, Number(record.order) || index),
+    });
+  });
+  return Array.from(byKey.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
+}
+
+async function expandWolaiRecordsWithChildCalls({ client, tool, target, records, maxCalls = 120 }) {
+  let mergedRecords = mergeWolaiRecords(records);
+  if (!mergedRecords.length || mergedRecords.length > 80) return mergedRecords;
+
+  const seenCallIds = new Set([target.pageId].filter(Boolean));
+  const queuedIds = new Set();
+  const queue = [];
+  const enqueue = (id) => {
+    const normalized = normalizeRecordId(id);
+    if (!normalized || seenCallIds.has(normalized) || queuedIds.has(normalized)) return;
+    queuedIds.add(normalized);
+    queue.push(normalized);
+  };
+  mergedRecords.forEach(record => enqueue(record.id));
+
+  let callCount = 0;
+  while (queue.length && callCount < maxCalls) {
+    const blockId = queue.shift();
+    queuedIds.delete(blockId);
+    if (!blockId || seenCallIds.has(blockId)) continue;
+    seenCallIds.add(blockId);
+
+    const childTarget = {
+      raw: blockId,
+      url: '',
+      pageId: target.pageId || blockId,
+      blockId,
+    };
+    const argsVariants = buildArgumentsForTool(tool, childTarget).slice(0, 4);
+    for (const args of argsVariants) {
+      callCount += 1;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const result = await client.callTool(tool.name, args);
+        const toolErrorMessage = getMcpToolResultErrorMessage(result, childTarget);
+        if (toolErrorMessage) continue;
+        const parsed = parseToolContent(result);
+        const nextRecords = mergeWolaiRecords(parsed.wolaiRecords);
+        if (!nextRecords.length) continue;
+        const existingIds = new Set(mergedRecords.map(record => record.id));
+        const newRecords = nextRecords.filter(record => record.id && !existingIds.has(record.id));
+        const metadataChanged = nextRecords.some(record => {
+          const existing = mergedRecords.find(item => item.id === record.id);
+          return existing && ((!existing.parentId && record.parentId) || (!existing.type && record.type) || (!existing.parentType && record.parentType));
+        });
+        if (!newRecords.length && !metadataChanged) continue;
+        const orderBase = mergedRecords.length + 1;
+        nextRecords.forEach((record, index) => {
+          if (!record.parentId && record.id !== blockId) record.parentId = blockId;
+          record.order = orderBase + index;
+        });
+        newRecords.forEach(record => {
+          enqueue(record.id);
+        });
+        mergedRecords = mergeWolaiRecords([...mergedRecords, ...nextRecords]);
+        break;
+      } catch {
+        // Try the next argument variant; child blocks often reject leaf ids.
+      }
+      if (callCount >= maxCalls) break;
+    }
+  }
+  return mergedRecords;
 }
 
 function nodesToBlocks(nodes, seed) {
@@ -1123,7 +1282,7 @@ function normalizeImportedContent({ result, target, tool }) {
       content_text: '',
     };
   }
-  const { text, structured } = collectTextFromToolResult(result);
+  const { text } = collectTextFromToolResult(result);
   const toolErrorMessage = getMcpToolResultErrorMessage(result, target);
   if (toolErrorMessage) {
     return {
@@ -1138,19 +1297,10 @@ function normalizeImportedContent({ result, target, tool }) {
       tool_error: toolErrorMessage,
     };
   }
-  const parsedTextJson = tryParseJson(text);
-  const payloads = [...structured, parsedTextJson].filter(Boolean);
+  const parsedContent = parseToolContent(result);
+  const { payloads, wolaiRecords } = parsedContent;
   let blocks = [];
-  for (const payload of payloads) {
-    const wolaiRecords = collectWolaiRecordsFromPayload(payload);
-    const wolaiBlocks = filterBlocks(recordsToBlocks(wolaiRecords, target.raw), target);
-    if (wolaiBlocks.length) {
-      blocks = wolaiBlocks;
-      break;
-    }
-  }
-  if (!blocks.length && text) {
-    const wolaiRecords = extractWolaiRecordsFromJsonLikeText(text);
+  if (wolaiRecords.length) {
     blocks = filterBlocks(recordsToBlocks(wolaiRecords, target.raw), target);
   }
   const nodes = [];
@@ -1180,6 +1330,7 @@ function normalizeImportedContent({ result, target, tool }) {
     blocks,
     content_text: contentText,
     target_matched: targetMatched,
+    wolai_records: wolaiRecords,
   };
 }
 
@@ -1193,6 +1344,7 @@ async function importWolaiMcpToBlocks(options = {}) {
     raw: rawTarget,
     url: isLikelyUrl(rawTarget) ? rawTarget : '',
     pageId: extractWolaiPageId(rawTarget),
+    blockId: '',
   };
 
   const client = new McpHttpClient({ endpoint, token });
@@ -1216,7 +1368,31 @@ async function importWolaiMcpToBlocks(options = {}) {
           errors.push(`${tool.name}: ${toolErrorMessage}`);
           continue;
         }
-        const imported = normalizeImportedContent({ result, target, tool });
+        let imported = normalizeImportedContent({ result, target, tool });
+        if (imported.wolai_records?.length) {
+          // eslint-disable-next-line no-await-in-loop
+          const expandedRecords = await expandWolaiRecordsWithChildCalls({
+            client,
+            tool,
+            target,
+            records: imported.wolai_records,
+          });
+          if (expandedRecords.length > imported.wolai_records.length) {
+            const expandedBlocks = cleanImportedBlocks(
+              filterBlocks(recordsToBlocks(expandedRecords, target.raw), target),
+              imported.title
+            );
+            if (expandedBlocks.length > imported.blocks.length) {
+              imported = {
+                ...imported,
+                warnings: [...(imported.warnings || []), `已递归读取 ${expandedRecords.length - imported.wolai_records.length} 个 Wolai 子块`],
+                blocks: expandedBlocks,
+                content_text: collectBlocksText(expandedBlocks),
+                wolai_records: expandedRecords,
+              };
+            }
+          }
+        }
         if (imported.blocks.length) {
           return {
             ...imported,
