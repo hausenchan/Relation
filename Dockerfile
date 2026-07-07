@@ -41,6 +41,7 @@ RUN apt-get update \
       ca-certificates \
       fonts-liberation \
       fonts-noto-cjk \
+      xvfb \
     && rm -rf /var/lib/apt/lists/*
 
 # ------------------------

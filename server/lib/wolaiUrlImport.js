@@ -241,6 +241,10 @@ function resolveChromeExecutable() {
   return '';
 }
 
+function resolveXvfbRunExecutable() {
+  return resolveExecutableOnPath('xvfb-run');
+}
+
 function getRandomDebugPort() {
   return 9300 + Math.floor(Math.random() * 600);
 }
@@ -321,13 +325,17 @@ function buildManagedChromeArgs({ port, profileDir, headless, headlessMode }) {
 }
 
 async function captureByManagedChromeOnce(url, options, launchMode) {
-  const { chrome, profileDir, headless, headlessMode } = launchMode;
+  const { chrome, profileDir, headless, headlessMode, xvfbRun } = launchMode;
   fs.mkdirSync(profileDir, { recursive: true });
   if (options.clearChromeProfileLocks !== false) removeChromeProfileLocks(profileDir);
   const port = Number(options.autoChromePort) || getRandomDebugPort();
   const cdp = `http://127.0.0.1:${port}`;
   const chromeArgs = buildManagedChromeArgs({ port, profileDir, headless, headlessMode });
-  const child = spawn(chrome, chromeArgs, {
+  const executable = xvfbRun || chrome;
+  const args = xvfbRun
+    ? ['-a', '--server-args=-screen 0 1440x1200x24', chrome, ...chromeArgs]
+    : chromeArgs;
+  const child = spawn(executable, args, {
     detached: false,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
@@ -354,7 +362,7 @@ async function captureByManagedChromeOnce(url, options, launchMode) {
     });
     return {
       ...captured,
-      method: headless ? 'chrome-auto-headless' : 'chrome-auto',
+      method: xvfbRun ? 'chrome-auto-xvfb' : (headless ? 'chrome-auto-headless' : 'chrome-auto'),
     };
   } catch (error) {
     const stderrHint = compactErrorText(stderrText);
@@ -381,18 +389,26 @@ async function captureByManagedChrome(url, options = {}) {
   const headless = options.autoChromeHeadless !== undefined
     ? Boolean(options.autoChromeHeadless)
     : process.env.WOLAI_AUTO_CHROME_HEADLESS === '1';
-  const headlessModes = headless ? ['new', 'chrome', 'legacy'] : [null];
+  const xvfbRun = process.env.WOLAI_AUTO_CHROME_XVFB === '0' ? '' : resolveXvfbRunExecutable();
+  const launchModes = headless
+    ? ['new', 'chrome', 'legacy'].map(headlessMode => ({ headless: true, headlessMode }))
+    : [{ headless: false, headlessMode: null }];
+  if (xvfbRun) {
+    launchModes.push({ headless: false, headlessMode: null, xvfbRun });
+  }
   const errors = [];
-  for (const headlessMode of headlessModes) {
+  for (const launchMode of launchModes) {
+    const modeLabel = launchMode.xvfbRun
+      ? 'xvfb'
+      : (launchMode.headless ? launchMode.headlessMode : 'window');
     try {
       return await captureByManagedChromeOnce(url, options, {
         chrome,
         profileDir,
-        headless,
-        headlessMode,
+        ...launchMode,
       });
     } catch (error) {
-      errors.push(`${headlessMode || 'window'}:${error.message}`);
+      errors.push(`${modeLabel}:${error.message}`);
     }
   }
   throw new Error(errors.join('；'));
