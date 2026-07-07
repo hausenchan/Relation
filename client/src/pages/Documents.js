@@ -306,7 +306,6 @@ const documentImportFileExts = [
   'xls', 'xlsx', 'xlsm', 'xlsb', 'csv', 'tsv', 'et', 'ett', 'ods', 'numbers',
   'ppt', 'pptx', 'pps', 'ppsx', 'dps', 'dpt', 'odp', 'key',
   'txt', 'md', 'markdown', 'json', 'log', 'xml', 'yaml', 'yml',
-  'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2',
   'vsdx', 'drawio', 'xmind', 'mind', 'mm',
   'eml', 'msg',
 ];
@@ -3405,7 +3404,7 @@ export default function Documents() {
   const validateDocumentImportFile = (file) => {
     const ext = getFileExt(file?.name);
     if (!documentImportFileExts.includes(ext)) {
-      message.error('请上传 Word、PDF、PPT、Excel、XMind、TXT 等常见非视频文件');
+      message.error('请上传 Word、PDF、PPT、Excel、XMind、TXT 等常见文档文件');
       return Upload.LIST_IGNORE;
     }
     if (String(file?.type || '').startsWith('video/') || String(file?.type || '').startsWith('audio/')) {
@@ -3510,7 +3509,7 @@ export default function Documents() {
         if (warnings.length) {
           message.warning('文档已更新，但导入过程有提示，可查看改动历史备注');
         } else {
-          message.success(importMode === 'file' ? '已从本地文件更新文档内容' : '已从 URL 更新文档内容');
+          message.success(importMode === 'file' ? '已导入本地文件内容并更新文档' : '已从 URL 更新文档内容');
         }
         return;
       }
@@ -3533,7 +3532,7 @@ export default function Documents() {
       if (warnings.length) {
         message.warning('文档已导入，但导入过程有提示，可查看改动历史备注');
       } else {
-        message.success(importMode === 'file' ? '已从本地文件导入文档' : '已从 URL 导入文档');
+        message.success(importMode === 'file' ? '已导入本地文件内容并新建文档' : '已从 URL 导入文档');
       }
     } catch (err) {
       const hint = err.response?.data?.hint;
@@ -10836,7 +10835,7 @@ export default function Documents() {
                         <UploadOutlined style={{ color: '#64748b', fontSize: 20 }} />
                         <Text>拖入或选择文件</Text>
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          支持 Word、PDF、PPT、Excel、XMind、TXT 等常见非视频文件，单个文件不超过 50MB
+                          支持 Word、PDF、PPT、Excel、XMind、TXT 等常见文档内容导入，单个文件不超过 50MB
                         </Text>
                       </Space>
                     </Upload.Dragger>
@@ -10894,8 +10893,8 @@ export default function Documents() {
           )}
           <Text type="secondary">
             {isWolaiImportUpdateMode
-              ? 'URL 导入会采集页面正文；本地文件会作为附件导入，文本类文件会抽取预览。导入成功后将覆盖当前文档内容。'
-              : 'URL 导入会采集页面正文；本地文件会作为附件导入，文本类文件会抽取预览。导入成功后将创建新文档。'}
+              ? 'URL 导入会采集页面正文；本地文件会解析正文并转换为文档内容。导入成功后将覆盖当前文档内容，原文件会保留用于下载追溯。'
+              : 'URL 导入会采集页面正文；本地文件会解析正文并转换为文档内容。导入成功后将创建新文档，原文件会保留用于下载追溯。'}
           </Text>
         </Form>
       </Modal>

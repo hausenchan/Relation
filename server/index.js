@@ -11,6 +11,7 @@ const { encryptRow, decryptRow, decryptRows } = require('./lib/cryptoDao');
 const { decrypt } = require('./lib/crypto');
 const NetworkCaptureManager = require('./lib/networkCapture');
 const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
+const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
 const {
   ensureAiSuggestionTables,
   getCurrentAiSuggestionFeed,
@@ -82,7 +83,6 @@ const documentImportFileExtensions = new Set([
   'xls', 'xlsx', 'xlsm', 'xlsb', 'csv', 'tsv', 'et', 'ett', 'ods', 'numbers',
   'ppt', 'pptx', 'pps', 'ppsx', 'dps', 'dpt', 'odp', 'key',
   'txt', 'md', 'markdown', 'json', 'log', 'xml', 'yaml', 'yml',
-  'zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2',
   'vsdx', 'drawio', 'xmind', 'mind', 'mm',
   'eml', 'msg',
 ]);
@@ -4822,20 +4822,12 @@ function validateDocumentImportFile(file) {
   const ext = getFileExtFromName(filename);
   const mime = String(file.mimetype || '').toLowerCase();
   if (!ext || !documentImportFileExtensions.has(ext)) {
-    return { error: '暂不支持该文件格式，请上传 Word、PDF、PPT、Excel、XMind、TXT 等常见非视频文件' };
+    return { error: '暂不支持该文件格式，请上传 Word、PDF、PPT、Excel、XMind、TXT 等常见文档文件' };
   }
   if (mime.startsWith('video/') || mime.startsWith('audio/')) {
     return { error: '导入不支持视频或音频文件，请使用文档类文件' };
   }
   return { filename, ext, mime };
-}
-
-function readDocumentImportTextPreview(file, ext) {
-  if (!file?.filename || !documentTextPreviewExtensions.has(ext)) return '';
-  const filePath = path.join(UPLOADS_DIR, file.filename);
-  if (!fs.existsSync(filePath)) return '';
-  const content = fs.readFileSync(filePath, 'utf8');
-  return content.replace(/\r\n/g, '\n').slice(0, 20000);
 }
 
 function getUploadedFileHash(file) {
@@ -4873,18 +4865,16 @@ function createDocumentAttachmentRecord(docId, file, userId, { blockId = null, d
   return serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid));
 }
 
-function buildDocumentImportBlocks(attachment, textPreview = '') {
-  const blocks = [];
+function buildDocumentImportFallbackBlocks(attachment, message = '暂未解析出可展示正文，已保留原文件。') {
   const displayName = attachment.display_name || attachment.filename || '导入文件';
-  blocks.push({
+  return [{
     id: makeDocumentBlockId('b_import_note'),
     type: 'paragraph',
-    content: `已导入本地文件：${displayName}`,
+    content: message,
     checked: false,
     highlight: '',
     meta: {},
-  });
-  blocks.push({
+  }, {
     id: attachment.block_id || makeDocumentBlockId('b_import_file'),
     type: 'attachment',
     content: displayName,
@@ -4904,34 +4894,54 @@ function buildDocumentImportBlocks(attachment, textPreview = '') {
       created_at: attachment.created_at || '',
       updated_at: attachment.updated_at || '',
     },
-  });
-  const previewText = String(textPreview || '').trim();
-  if (previewText) {
-    blocks.push({
-      id: makeDocumentBlockId('b_import_text_title'),
-      type: 'heading2',
-      content: '文本预览',
-      checked: false,
-      highlight: '',
-      meta: {},
-    });
-    previewText
-      .split('\n')
-      .map(line => line.trim())
-      .filter(Boolean)
-      .slice(0, 120)
-      .forEach(line => {
-        blocks.push({
-          id: makeDocumentBlockId('b_import_text'),
-          type: 'paragraph',
-          content: line,
-          checked: false,
-          highlight: '',
-          meta: {},
-        });
-      });
+  }];
+}
+
+function buildDocumentFileImportContent(parsedImport, attachment) {
+  const parsedBlocks = Array.isArray(parsedImport?.blocks) ? parsedImport.blocks.filter(Boolean) : [];
+  const extracted = Boolean(parsedImport?.content_extracted && parsedBlocks.length);
+  const displayName = attachment.display_name || attachment.filename || '导入文件';
+  if (!extracted && String(attachment.mimetype || '').startsWith('image/') && attachment.url) {
+    const content = {
+      blocks: [{
+        id: makeDocumentBlockId('b_import_image'),
+        type: 'image',
+        content: attachment.url,
+        checked: false,
+        highlight: '',
+        meta: {
+          url: attachment.url,
+          filename: displayName,
+          attachment_id: attachment.id,
+          filepath: attachment.filepath || '',
+          mimetype: attachment.mimetype || '',
+        },
+      }],
+    };
+    return {
+      content,
+      contentText: displayName,
+      contentExtracted: true,
+      parser: 'image',
+      warnings: [],
+    };
   }
-  return blocks;
+  const fallbackMessage = parsedImport?.warnings?.[0] || '暂未解析出可展示正文，已保留原文件。';
+  const blocks = extracted
+    ? parsedBlocks
+    : buildDocumentImportFallbackBlocks(attachment, fallbackMessage);
+  const content = { blocks };
+  const contentText = extracted
+    ? (parsedImport.content_text || extractDocumentText(content))
+    : extractDocumentText(content);
+  const warnings = Array.isArray(parsedImport?.warnings) ? parsedImport.warnings : [];
+  return {
+    content,
+    contentText,
+    contentExtracted: extracted,
+    parser: parsedImport?.parser || '',
+    warnings: extracted ? warnings : [...new Set([...warnings, '暂未解析出可展示正文，已保留原文件'])],
+  };
 }
 
 function buildDocumentVisibilityFilter(user, alias = 'd') {
@@ -5484,7 +5494,7 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
   }
 });
 
-app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
   const validation = validateDocumentImportFile(req.file);
   if (validation.error) {
     cleanupUploadedFiles(req.file ? [req.file] : []);
@@ -5495,7 +5505,13 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
   try {
     const filename = validation.filename;
     const fileHash = getUploadedFileHash(req.file);
-    const defaultTitle = filename.replace(/\.[^.]+$/, '') || filename || '文件导入文档';
+    const parsedImport = await parseDocumentImportFileToBlocks({
+      filePath: path.join(UPLOADS_DIR, req.file.filename),
+      filename,
+      ext: validation.ext,
+      mimetype: validation.mime,
+    });
+    const defaultTitle = parsedImport.title || filename.replace(/\.[^.]+$/, '') || filename || '文件导入文档';
     const id = createDocumentRecord({
       ...req.body,
       title: String(req.body?.title || '').trim() || defaultTitle,
@@ -5511,9 +5527,9 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
       displayName: filename,
     });
     attachmentCreated = true;
-    const textPreview = readDocumentImportTextPreview(req.file, validation.ext);
-    const content = { blocks: buildDocumentImportBlocks(attachment, textPreview) };
-    const contentText = extractDocumentText(content);
+    const importedContent = buildDocumentFileImportContent(parsedImport, attachment);
+    const content = importedContent.content;
+    const contentText = importedContent.contentText;
     db.prepare(`
       UPDATE documents SET
         content = ?,
@@ -5538,7 +5554,7 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
       fileHash,
       `file_import_${Date.now()}`,
       'imported',
-      contentText.trim() ? 'pass' : 'warning',
+      contentText.trim() && !importedContent.warnings.length ? 'pass' : 'warning',
       req.user.id,
       id
     );
@@ -5550,8 +5566,16 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
       'V1.0',
       req.user.id,
       '导入本地文件',
-      `文件：${attachment.display_name}\n格式：${attachment.file_ext || validation.ext}\n大小：${attachment.size || 0} bytes`,
-      textPreview ? '已抽取文本预览' : '该文件已作为附件导入'
+      [
+        `文件：${attachment.display_name}`,
+        `格式：${attachment.file_ext || validation.ext}`,
+        `大小：${attachment.size || 0} bytes`,
+        importedContent.parser ? `解析器：${importedContent.parser}` : '',
+        `正文块数：${content.blocks.length}`,
+      ].filter(Boolean).join('\n'),
+      importedContent.warnings.length
+        ? importedContent.warnings.join('；')
+        : '已解析文件正文并写入文档内容'
     );
     const row = getVisibleDocument(id, req.user);
     res.json({
@@ -5560,8 +5584,9 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
         source_type: 'file',
         file_ext: attachment.file_ext || validation.ext,
         attachment_id: attachment.id,
-        text_preview: Boolean(textPreview),
-        warnings: textPreview ? [] : ['该文件格式不支持直接抽取正文，已作为附件导入'],
+        content_extracted: importedContent.contentExtracted,
+        parser: importedContent.parser,
+        warnings: importedContent.warnings,
       },
     });
   } catch (error) {
@@ -5670,7 +5695,7 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
   }
 });
 
-app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) {
     cleanupUploadedFiles(req.file ? [req.file] : []);
@@ -5690,16 +5715,22 @@ app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpl
   try {
     const filename = validation.filename;
     const fileHash = getUploadedFileHash(req.file);
+    const parsedImport = await parseDocumentImportFileToBlocks({
+      filePath: path.join(UPLOADS_DIR, req.file.filename),
+      filename,
+      ext: validation.ext,
+      mimetype: validation.mime,
+    });
     const attachmentBlockId = makeDocumentBlockId('b_import_file');
     const attachment = createDocumentAttachmentRecord(doc.id, req.file, req.user.id, {
       blockId: attachmentBlockId,
       displayName: filename,
     });
     attachmentCreated = true;
-    const textPreview = readDocumentImportTextPreview(req.file, validation.ext);
-    const content = { blocks: buildDocumentImportBlocks(attachment, textPreview) };
+    const importedContent = buildDocumentFileImportContent(parsedImport, attachment);
+    const content = importedContent.content;
     const storedContent = JSON.stringify(content);
-    const contentText = extractDocumentText(content);
+    const contentText = importedContent.contentText;
     const beforeSnapshot = {
       title: doc.title,
       content: doc.content,
@@ -5735,7 +5766,7 @@ app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpl
         fileHash,
         `file_import_update_${Date.now()}`,
         'imported',
-        contentText.trim() ? 'pass' : 'warning',
+        contentText.trim() && !importedContent.warnings.length ? 'pass' : 'warning',
         req.user.id,
         doc.id
       );
@@ -5748,8 +5779,16 @@ app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpl
         doc.current_version || 'V1.0',
         req.user.id,
         '导入本地文件更新正文',
-        `文件：${attachment.display_name}\n格式：${attachment.file_ext || validation.ext}\n大小：${attachment.size || 0} bytes`,
-        textPreview ? '已抽取文本预览' : '该文件已作为附件导入'
+        [
+          `文件：${attachment.display_name}`,
+          `格式：${attachment.file_ext || validation.ext}`,
+          `大小：${attachment.size || 0} bytes`,
+          importedContent.parser ? `解析器：${importedContent.parser}` : '',
+          `正文块数：${content.blocks.length}`,
+        ].filter(Boolean).join('\n'),
+        importedContent.warnings.length
+          ? importedContent.warnings.join('；')
+          : '已解析文件正文并写入文档内容'
       );
     });
     updateFromFile();
@@ -5760,8 +5799,9 @@ app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpl
         source_type: 'file',
         file_ext: attachment.file_ext || validation.ext,
         attachment_id: attachment.id,
-        text_preview: Boolean(textPreview),
-        warnings: textPreview ? [] : ['该文件格式不支持直接抽取正文，已作为附件导入'],
+        content_extracted: importedContent.contentExtracted,
+        parser: importedContent.parser,
+        warnings: importedContent.warnings,
       },
     });
   } catch (error) {
