@@ -250,7 +250,7 @@ function getSchemaRequired(tool) {
 function valueForProperty(name, schema, target) {
   const key = String(name || '').toLowerCase();
   if (/url|link|href/.test(key)) return target.url || target.raw;
-  if (/page.*id|page_id|pageid|block.*id|block_id|blockid|record.*key/.test(key)) return target.pageId || target.raw;
+  if (/page.*id|page_id|pageid|block.*id|block_id|blockid|section.*id|section_id|sectionid|record.*key/.test(key)) return target.pageId || target.raw;
   if (/^id$|uuid|node/.test(key)) return target.pageId || target.raw;
   if (/query|keyword|search|title|text|q/.test(key)) return target.raw;
   if (/recursive|children|include|with.*content|content|blocks/.test(key) && schema?.type === 'boolean') return true;
@@ -271,6 +271,8 @@ function buildArgumentsForTool(tool, target) {
       { page_id: target.pageId || target.raw },
       { pageId: target.pageId || target.raw },
       { id: target.pageId || target.raw },
+      { section_id: target.pageId || target.raw },
+      { sectionId: target.pageId || target.raw },
       { query: target.raw },
       {},
     ].filter(Boolean);
@@ -281,7 +283,7 @@ function buildArgumentsForTool(tool, target) {
     const value = valueForProperty(name, properties[name], target);
     const key = String(name).toLowerCase();
     const shouldSet = required.includes(name)
-      || /url|link|href|page.*id|page_id|pageid|block.*id|block_id|blockid|^id$|query|keyword|search|title|text|q|recursive|children|include|limit|max|count|size|page_size/.test(key);
+      || /url|link|href|page.*id|page_id|pageid|block.*id|block_id|blockid|section.*id|section_id|sectionid|^id$|query|keyword|search|title|text|q|recursive|children|include|limit|max|count|size|page_size/.test(key);
     if (shouldSet && value !== undefined) base[name] = value;
   });
 
@@ -292,6 +294,9 @@ function buildArgumentsForTool(tool, target) {
       { ...base, page_id: target.pageId },
       { ...base, pageId: target.pageId },
       { ...base, block_id: target.pageId },
+      { ...base, blockId: target.pageId },
+      { ...base, section_id: target.pageId },
+      { ...base, sectionId: target.pageId },
       { ...base, id: target.pageId }
     );
   }
@@ -434,6 +439,39 @@ function containsTargetReference(value, target) {
     ? value
     : JSON.stringify(value || {});
   return needles.some(needle => haystack.includes(needle));
+}
+
+function looksLikeMcpToolErrorText(text = '', target = {}) {
+  const normalized = stripHtml(text)
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!normalized) return false;
+
+  const errorPatterns = [
+    /section\s*不(?:存在|可用)/i,
+    /(?:page|block|document|content)\s*(?:not found|does not exist|is missing)/i,
+    /(?:页面|文档|块|内容|资源)\s*(?:不存在|未找到|找不到|已删除)/,
+    /(?:无权限|没有权限|访问受限|未授权|鉴权失败|认证失败)/,
+    /(?:unauthorized|forbidden|permission denied|invalid token|token expired)/i,
+  ];
+  if (!errorPatterns.some(pattern => pattern.test(normalized))) return false;
+
+  const isShortError = normalized.length <= 260 && normalized.split(/[。.!?！？]/).filter(Boolean).length <= 3;
+  if (isShortError) return true;
+  return containsTargetReference(normalized, target) && normalized.length <= 800;
+}
+
+function getMcpToolResultErrorMessage(result, target) {
+  const { text } = collectTextFromToolResult(result);
+  const explicitError = result?.isError === true || result?.is_error === true;
+  const normalizedText = stripHtml(text).replace(/\s+/g, ' ').trim();
+  if (explicitError) {
+    return normalizedText.slice(0, 240) || 'MCP 工具返回错误结果';
+  }
+  if (looksLikeMcpToolErrorText(normalizedText, target)) {
+    return normalizedText.slice(0, 240);
+  }
+  return '';
 }
 
 function looksLikeDiscoveryText(text = '', target) {
@@ -648,6 +686,20 @@ function normalizeImportedContent({ result, target, tool }) {
     };
   }
   const { text, structured } = collectTextFromToolResult(result);
+  const toolErrorMessage = getMcpToolResultErrorMessage(result, target);
+  if (toolErrorMessage) {
+    return {
+      title: '',
+      source_url: target.url || '',
+      source_record_key: `wolai_mcp:${target.pageId || sha256(target.raw).slice(0, 24)}`,
+      source_payload_hash: sha256(JSON.stringify({ target: target.raw, tool_error: toolErrorMessage })),
+      capture_method: `wolai-mcp:${toolName}`,
+      warnings: [`MCP 工具 ${toolName} 返回错误：${toolErrorMessage}`],
+      blocks: [],
+      content_text: '',
+      tool_error: toolErrorMessage,
+    };
+  }
   const parsedTextJson = tryParseJson(text);
   const payloads = [...structured, parsedTextJson].filter(Boolean);
   const nodes = [];
@@ -705,6 +757,11 @@ async function importWolaiMcpToBlocks(options = {}) {
       try {
         // eslint-disable-next-line no-await-in-loop
         const result = await client.callTool(tool.name, args);
+        const toolErrorMessage = getMcpToolResultErrorMessage(result, target);
+        if (toolErrorMessage) {
+          errors.push(`${tool.name}: ${toolErrorMessage}`);
+          continue;
+        }
         const imported = normalizeImportedContent({ result, target, tool });
         if (imported.blocks.length) {
           return {
