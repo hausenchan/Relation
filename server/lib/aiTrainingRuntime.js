@@ -621,6 +621,7 @@ function getEnvLlmTemperature() {
 }
 
 function getLlmConfig(overrides = null) {
+  if (overrides?.disabled === true || overrides?.enabled === false) return null;
   const overrideApiKey = normalizeText(overrides?.apiKey || overrides?.api_key);
   const apiKey = overrideApiKey || process.env.AI_TRAINING_LLM_API_KEY
     || process.env.AI_API_KEY
@@ -661,8 +662,9 @@ function getLlmConfig(overrides = null) {
 
 function getLlmRuntimeStatus(overrides = null) {
   const config = getLlmConfig(overrides);
-  const targetModel = normalizeText(config?.model || getEnvLlmModel());
-  const targetBaseUrl = normalizeText(config?.baseUrl || getEnvLlmBaseUrl());
+  const explicitDisabled = overrides?.disabled === true || overrides?.enabled === false;
+  const targetModel = normalizeText(overrides?.model || overrides?.model_name || config?.model || getEnvLlmModel());
+  const targetBaseUrl = normalizeText(overrides?.baseUrl || overrides?.base_url || config?.baseUrl || getEnvLlmBaseUrl());
   if (!config) {
     const displayBaseUrl = formatLlmBaseUrlForDisplay(targetBaseUrl);
     return {
@@ -671,10 +673,14 @@ function getLlmRuntimeStatus(overrides = null) {
       model_name: targetModel,
       base_url: displayBaseUrl,
       target_model_name: targetModel,
-      config_source: 'none',
+      config_source: explicitDisabled ? (overrides?.source || 'system') : 'none',
       fallback_enabled: true,
-      status_text: `目标模型为 ${targetModel}，但当前缺少 API Key，训练台会先走规则模式。`,
-      setup_hint: '请在服务端配置 AI_TRAINING_LLM_API_KEY、AI_API_KEY、LLM_API_KEY 或 OPENAI_API_KEY。',
+      status_text: explicitDisabled
+        ? `${overrides?.disabledReason || '系统模型配置未启用'}，训练台会先走规则模式。`
+        : `目标模型为 ${targetModel}，但当前缺少 API Key，训练台会先走规则模式。`,
+      setup_hint: explicitDisabled
+        ? '请在系统管理 / 通用配置 / 模型设置中启用模型并填写 API Key。'
+        : '请在服务端配置 AI_TRAINING_LLM_API_KEY、AI_API_KEY、LLM_API_KEY 或 OPENAI_API_KEY。',
     };
   }
 
@@ -690,6 +696,8 @@ function getLlmRuntimeStatus(overrides = null) {
     fallback_enabled: true,
     status_text: config.source === 'user'
       ? `个人模型 Key 已启用：${config.model}，规则链路仅作兜底。`
+      : config.source === 'system'
+        ? `系统模型配置已启用：${config.model}，对所有账号生效。`
       : `当前默认接入系统小模型 ${config.model}，规则链路仅作兜底。`,
     setup_hint: null,
   };

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert, Button, Card, Col, Collapse, Descriptions, Empty, Form, Grid, Input, List, Modal,
-  Progress, Row, Select, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, message,
+  Progress, Row, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography, message,
 } from 'antd';
 import {
   ArrowLeftOutlined, BarChartOutlined, CheckCircleOutlined, DislikeOutlined,
@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { aiTrainingApi, authApi } from '../api';
+import { aiTrainingApi } from '../api';
 import { useAuth } from '../AuthContext';
 
 const { Title, Text, Paragraph } = Typography;
@@ -63,12 +63,6 @@ const VISIBILITY_OPTIONS = [
   { value: 'team', label: '团队可见' },
 ];
 
-const AI_MODEL_PROVIDER_OPTIONS = [
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'openai_compatible', label: 'OpenAI 兼容接口' },
-];
-
-const DEFAULT_AI_MODEL_BASE_URL = 'https://ai.midongtech.com/v1';
 const SESSION_LIST_COLLAPSED_STORAGE_KEY = 'aiTraining.sessionListCollapsed';
 
 const SESSION_CREATE_INITIAL_VALUES = {
@@ -173,6 +167,7 @@ function runtimeModeTag(mode) {
 }
 
 function runtimeSourceLabel(source) {
+  if (source === 'system') return '系统模型';
   if (source === 'user') return '个人模型';
   if (source === 'env') return '系统小模型';
   if (source === 'local_fact') return '本地事实库';
@@ -444,7 +439,7 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
 
 export default function AiTrainingWorkbench() {
   const navigate = useNavigate();
-  const { canWrite } = useAuth();
+  const { canWrite, user } = useAuth();
   const screens = useBreakpoint();
   const isMobile = !screens.lg;
   const writable = canWrite?.();
@@ -460,12 +455,6 @@ export default function AiTrainingWorkbench() {
     pending_candidates: 0,
   });
   const [runtimeStatus, setRuntimeStatus] = useState(null);
-  const [modelSetting, setModelSetting] = useState(null);
-  const [modelSettingModalOpen, setModelSettingModalOpen] = useState(false);
-  const [modelSettingLoading, setModelSettingLoading] = useState(false);
-  const [modelSettingSaving, setModelSettingSaving] = useState(false);
-  const [modelSettingTesting, setModelSettingTesting] = useState(false);
-  const [modelSettingForm] = Form.useForm();
   const [filters, setFilters] = useState({ scene_code: '', business_line: '', keyword: '' });
   const [sessions, setSessions] = useState([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
@@ -523,30 +512,6 @@ export default function AiTrainingWorkbench() {
       message.error(error.response?.data?.error || '加载 AI 运行状态失败');
     }
   }, []);
-
-  const fillModelSettingForm = useCallback((setting) => {
-    modelSettingForm.setFieldsValue({
-      provider: setting?.provider || 'openai_compatible',
-      base_url: setting?.base_url || DEFAULT_AI_MODEL_BASE_URL,
-      model: setting?.model || 'gpt-5.5',
-      api_key: '',
-      enabled: setting?.enabled !== false,
-    });
-  }, [modelSettingForm]);
-
-  const loadModelSetting = useCallback(async () => {
-    setModelSettingLoading(true);
-    try {
-      const data = await authApi.getAiModelSetting();
-      setModelSetting(data?.setting || null);
-      fillModelSettingForm(data?.setting || null);
-      if (data?.runtime_status) setRuntimeStatus(data.runtime_status);
-    } catch (error) {
-      message.error(error.response?.data?.error || '加载模型设置失败');
-    } finally {
-      setModelSettingLoading(false);
-    }
-  }, [fillModelSettingForm]);
 
   const loadSessions = useCallback(async () => {
     setSessionsLoading(true);
@@ -798,43 +763,6 @@ export default function AiTrainingWorkbench() {
       setActiveDraftByScene(values.scene_code);
     } catch (error) {
       message.error(error.response?.data?.error || '创建失败');
-    }
-  };
-
-  const openModelSettingModal = async () => {
-    setModelSettingModalOpen(true);
-    await loadModelSetting();
-  };
-
-  const saveModelSetting = async () => {
-    const values = await modelSettingForm.validateFields();
-    setModelSettingSaving(true);
-    try {
-      const result = await authApi.saveAiModelSetting(values);
-      setModelSetting(result?.setting || null);
-      fillModelSettingForm(result?.setting || null);
-      if (result?.runtime_status) setRuntimeStatus(result.runtime_status);
-      message.success('个人模型设置已保存');
-    } catch (error) {
-      message.error(error.response?.data?.error || '保存模型设置失败');
-    } finally {
-      setModelSettingSaving(false);
-    }
-  };
-
-  const testModelSetting = async () => {
-    const values = await modelSettingForm.validateFields();
-    setModelSettingTesting(true);
-    try {
-      const result = await authApi.testAiModelSetting(values);
-      setModelSetting(result?.setting || modelSetting);
-      message.success(result?.message || '模型连接成功');
-    } catch (error) {
-      const nextSetting = error.response?.data?.setting;
-      if (nextSetting) setModelSetting(nextSetting);
-      message.error(error.response?.data?.error || '模型连接失败');
-    } finally {
-      setModelSettingTesting(false);
     }
   };
 
@@ -1795,93 +1723,6 @@ export default function AiTrainingWorkbench() {
   return (
     <div>
       <Modal
-        title="AI模型设置"
-        open={modelSettingModalOpen}
-        onCancel={() => setModelSettingModalOpen(false)}
-        width={680}
-        footer={[
-          <Button key="cancel" onClick={() => setModelSettingModalOpen(false)}>关闭</Button>,
-          <Button key="test" loading={modelSettingTesting} onClick={testModelSetting}>测试连接</Button>,
-          <Button key="save" type="primary" loading={modelSettingSaving} onClick={saveModelSetting}>保存设置</Button>,
-        ]}
-      >
-        <Spin spinning={modelSettingLoading}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message="个人模型 Key 仅当前账号使用"
-              description="保存后，AI训练台会优先使用你的个人 Key；未配置或停用时，自动回退到系统模型或规则模式。"
-            />
-            <Alert
-              type="warning"
-              showIcon
-              message="测试连接由服务端发起"
-              description="请填写服务端可访问的 OpenAI 兼容接口地址；公司统一 AI 网关需要填到 /v1，例如 https://ai.midongtech.com/v1。"
-            />
-            <Form
-              form={modelSettingForm}
-              layout="vertical"
-              initialValues={{
-                provider: 'openai_compatible',
-                base_url: DEFAULT_AI_MODEL_BASE_URL,
-                model: 'gpt-5.5',
-                enabled: true,
-              }}
-            >
-              <Row gutter={12}>
-                <Col xs={24} md={12}>
-                  <Form.Item label="服务商" name="provider" rules={[{ required: true, message: '请选择服务商' }]}>
-                    <Select options={AI_MODEL_PROVIDER_OPTIONS} />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Form.Item label="模型" name="model" rules={[{ required: true, message: '请输入模型名' }]}>
-                    <Input placeholder="gpt-5.5" />
-                  </Form.Item>
-                </Col>
-              </Row>
-              <Form.Item
-                label="Base URL"
-                name="base_url"
-                extra="需要填写服务端可访问的 /v1 地址，例如公司统一模型网关。"
-                rules={[{ required: true, message: '请输入 Base URL' }]}
-              >
-                <Input placeholder={DEFAULT_AI_MODEL_BASE_URL} />
-              </Form.Item>
-              <Form.Item
-                label={modelSetting?.key_mask ? `API Key（已保存 ${modelSetting.key_mask}）` : 'API Key'}
-                name="api_key"
-              >
-                <Input.Password placeholder={modelSetting?.has_key ? '不填写则保留当前 Key' : '请输入个人 API Key'} autoComplete="new-password" />
-              </Form.Item>
-              <Form.Item label="启用个人 Key" name="enabled" valuePropName="checked">
-                <Switch checkedChildren="启用" unCheckedChildren="停用" />
-              </Form.Item>
-            </Form>
-            <Descriptions column={1} size="small" bordered>
-              <Descriptions.Item label="当前 Key">
-                {modelSetting?.has_key ? modelSetting.key_mask : '未配置'}
-              </Descriptions.Item>
-              <Descriptions.Item label="最近测试">
-                {modelSetting?.last_test_status
-                  ? (
-                    <Space size={8} wrap>
-                      <Tag color={modelSetting.last_test_status === 'success' ? 'green' : 'red'}>
-                        {modelSetting.last_test_status === 'success' ? '成功' : '失败'}
-                      </Tag>
-                      <Text type="secondary">{modelSetting.last_test_message || '-'}</Text>
-                      {modelSetting.last_tested_at ? <Text type="secondary">{formatTime(modelSetting.last_tested_at)}</Text> : null}
-                    </Space>
-                  )
-                  : '尚未测试'}
-              </Descriptions.Item>
-            </Descriptions>
-          </Space>
-        </Spin>
-      </Modal>
-
-      <Modal
         title="手动新建 Skill"
         open={manualSkillModalOpen}
         onCancel={() => {
@@ -2014,7 +1855,6 @@ export default function AiTrainingWorkbench() {
           </Text>
         </div>
         <Space wrap>
-          <Button icon={<SettingOutlined />} onClick={openModelSettingModal}>模型设置</Button>
           <Button icon={<ReloadOutlined />} onClick={refreshCore}>刷新</Button>
           <Button icon={<TeamOutlined />} onClick={() => setTab('cases')}>查看案例库</Button>
           {writable && <Button type="primary" icon={<PlusOutlined />} onClick={() => openCreateSessionModal()}>新建训练会话</Button>}
@@ -2032,6 +1872,11 @@ export default function AiTrainingWorkbench() {
               ? `${runtimeSourceLabel(runtimeStatus.config_source)}：${runtimeStatus.model_name || '已接通'}${runtimeStatus.base_url ? ` · ${runtimeStatus.base_url}` : ''}。未命中 Skill 时也会优先走模型分析。`
               : `${runtimeStatus.setup_hint || '当前未配置系统模型，训练台会先走规则模式。'} 目标模型：${runtimeStatus.target_model_name || runtimeStatus.model_name || 'gpt-5.5'}。`
           }
+          action={user?.role === 'admin' ? (
+            <Button size="small" icon={<SettingOutlined />} onClick={() => navigate('/system-settings')}>
+              去配置
+            </Button>
+          ) : null}
         />
       ) : null}
 

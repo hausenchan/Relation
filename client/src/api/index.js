@@ -258,6 +258,12 @@ export const operationLogsApi = {
   get: (id) => api.get(`/operation-logs/${id}`).then(r => r.data),
 };
 
+export const systemSettingsApi = {
+  getAiModelSetting: () => api.get('/system/settings/ai-model').then(r => r.data),
+  saveAiModelSetting: (data) => api.put('/system/settings/ai-model', data).then(r => r.data),
+  testAiModelSetting: (data) => api.post('/system/settings/ai-model/test', data).then(r => r.data),
+};
+
 export const tasksApi = {
   list: (params) => api.get('/tasks', { params }).then(r => r.data),
   count: () => api.get('/tasks/count').then(r => r.data),

@@ -66,6 +66,7 @@ const PAGE_TITLE_MAP = {
   '/users': '用户管理',
   '/teams': '小组管理',
   '/project-groups': '项目组管理',
+  '/system-settings': '通用配置',
   '/menu-perms': '菜单权限管理',
   '/cross-team-access': '跨团队权限',
   '/operation-logs': '操作日志',
@@ -343,6 +344,7 @@ import Companies from './pages/Companies';
 import Users from './pages/Users';
 import Teams from './pages/Teams';
 import ProjectGroups from './pages/ProjectGroups';
+import SystemSettings from './pages/SystemSettings';
 import Gifts from './pages/Gifts';
 import GiftPlans from './pages/GiftPlans';
 import GiftReview from './pages/GiftReview';
@@ -885,6 +887,7 @@ function AppLayout() {
     isAdmin(user) && {
       key: 'system', icon: <SettingOutlined />, label: '系统管理',
       children: [
+        { key: '/system-settings', icon: <SettingOutlined />, label: <Link to="/system-settings">通用配置</Link> },
         { key: '/users', icon: <UserOutlined />, label: <Link to="/users">用户管理</Link> },
         { key: '/teams', icon: <TeamOutlined />, label: <Link to="/teams">小组管理</Link> },
         { key: '/project-groups', icon: <ApartmentOutlined />, label: <Link to="/project-groups">项目组管理</Link> },
@@ -1188,6 +1191,7 @@ function AppLayout() {
             <Route path="/users" element={<PrivateRoute adminOnly><Users /></PrivateRoute>} />
             <Route path="/teams" element={<PrivateRoute adminOnly><Teams /></PrivateRoute>} />
             <Route path="/project-groups" element={<PrivateRoute adminOnly><ProjectGroups /></PrivateRoute>} />
+            <Route path="/system-settings" element={<PrivateRoute adminOnly><SystemSettings /></PrivateRoute>} />
             <Route path="/trips" element={<PrivateRoute><Trips /></PrivateRoute>} />
             <Route path="/trip-collaboration" element={<PrivateRoute><TripCollaboration /></PrivateRoute>} />
             <Route path="/trip-stats" element={<PrivateRoute><TripStats /></PrivateRoute>} />

@@ -181,4 +181,9 @@ module.exports = {
     fields: ['api_key'],
     indexed: [],
   },
+
+  system_ai_model_settings: {
+    fields: ['api_key'],
+    indexed: [],
+  },
 };
