@@ -275,6 +275,7 @@ const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, it
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
+const primaryDocumentSpaceDomains = ['domestic_project', 'overseas_project'];
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
 const blockTypeMap = Object.fromEntries(blockTypeOptions.map(item => [item.value, item]));
 const documentAdminRoles = new Set(['admin']);
@@ -1770,6 +1771,72 @@ function buildPresentationSections(blocks, fallbackTitle) {
   return sections;
 }
 
+function getDirectoryProjectGroupLabel(item = {}) {
+  const projectLabel = String(item.project_group_name || item.project_code || '').trim();
+  const itemDomainLabel = domainLabel[item.domain] || item.domain;
+  if (!projectLabel || projectLabel === '未关联项目组') return '';
+  if (projectLabel === itemDomainLabel || projectLabel === item.domain) return '';
+  return projectLabel;
+}
+
+function getDocumentSpaceDomainKeys(scopedFolders, activeDomain) {
+  if (activeDomain !== 'all') return activeDomain ? [activeDomain] : [];
+  const domainSet = new Set(scopedFolders.map(folder => folder.domain || 'general'));
+  const keys = [...primaryDocumentSpaceDomains];
+  domainOptions
+    .map(option => option.value)
+    .filter(value => value !== 'all' && domainSet.has(value) && !keys.includes(value))
+    .forEach(value => keys.push(value));
+  [...domainSet]
+    .filter(value => !keys.includes(value))
+    .forEach(value => keys.push(value));
+  return keys;
+}
+
+function addFolderDocumentChildren(folder, documentsByFolder) {
+  const folderDocuments = documentsByFolder.get(Number(folder.id)) || [];
+  const documentChildren = folderDocuments.map(doc => ({
+    title: doc.title || '未命名文档',
+    key: `document-${doc.id}`,
+    icon: <FileTextOutlined />,
+    isLeaf: true,
+    nodeType: 'document',
+    documentId: doc.id,
+    folderId: folder.id,
+    document: doc,
+  }));
+  return {
+    title: folder.name,
+    key: `folder-${folder.id}`,
+    icon: <FolderOutlined />,
+    nodeType: 'folder',
+    folderId: folder.id,
+    ...(documentChildren.length ? { children: documentChildren } : {}),
+  };
+}
+
+function ensureDepartmentNode(parentNode, parentKey, deptKey) {
+  if (!parentNode.deptMap.has(deptKey)) {
+    const deptNode = {
+      title: departmentLabel[deptKey] || deptKey,
+      key: `${parentKey}-dept-${deptKey}`,
+      selectable: false,
+      children: [],
+    };
+    parentNode.deptMap.set(deptKey, deptNode);
+    parentNode.children.push(deptNode);
+  }
+  return parentNode.deptMap.get(deptKey);
+}
+
+function stripFolderTreeMeta(node) {
+  const { projectMap, deptMap, ...rest } = node;
+  if (rest.children?.length) {
+    rest.children = rest.children.map(child => stripFolderTreeMeta(child));
+  }
+  return rest;
+}
+
 function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
   const scopedFolders = activeDomain === 'all'
     ? folders
@@ -1784,6 +1851,19 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
     documentsByFolder.get(folderKey).push(doc);
   });
 
+  getDocumentSpaceDomainKeys(scopedFolders, activeDomain).forEach(domainKey => {
+    if (!domainMap.has(domainKey)) {
+      domainMap.set(domainKey, {
+        title: domainLabel[domainKey] || domainKey,
+        key: `domain-${domainKey}`,
+        selectable: false,
+        children: [],
+        projectMap: new Map(),
+        deptMap: new Map(),
+      });
+    }
+  });
+
   scopedFolders.forEach(folder => {
     const domainKey = folder.domain || 'general';
     if (!domainMap.has(domainKey)) {
@@ -1793,62 +1873,37 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
         selectable: false,
         children: [],
         projectMap: new Map(),
+        deptMap: new Map(),
       });
     }
     const domainNode = domainMap.get(domainKey);
-    const projectKey = folder.project_group_id ? `project-${folder.project_group_id}` : `project-${domainKey}-none`;
-    if (!domainNode.projectMap.has(projectKey)) {
-      const projectNode = {
-        title: folder.project_group_name || '未关联项目组',
-        key: projectKey,
-        selectable: false,
-        children: [],
-        deptMap: new Map(),
-      };
-      domainNode.projectMap.set(projectKey, projectNode);
-      domainNode.children.push(projectNode);
-    }
-    const projectNode = domainNode.projectMap.get(projectKey);
     const deptKey = folder.department_key || 'ALL';
-    if (!projectNode.deptMap.has(deptKey)) {
-      const deptNode = {
-        title: departmentLabel[deptKey] || deptKey,
-        key: `${projectKey}-dept-${deptKey}`,
-        selectable: false,
-        children: [],
-      };
-      projectNode.deptMap.set(deptKey, deptNode);
-      projectNode.children.push(deptNode);
+    const projectTitle = getDirectoryProjectGroupLabel(folder);
+    let parentNode = domainNode;
+    let parentKey = domainNode.key;
+
+    if (projectTitle) {
+      const projectKey = `project-${folder.project_group_id || `${domainKey}-${projectTitle}`}`;
+      if (!domainNode.projectMap.has(projectKey)) {
+        const projectNode = {
+          title: projectTitle,
+          key: projectKey,
+          selectable: false,
+          children: [],
+          deptMap: new Map(),
+        };
+        domainNode.projectMap.set(projectKey, projectNode);
+        domainNode.children.push(projectNode);
+      }
+      parentNode = domainNode.projectMap.get(projectKey);
+      parentKey = projectKey;
     }
-    const folderDocuments = documentsByFolder.get(Number(folder.id)) || [];
-    const documentChildren = folderDocuments.map(doc => ({
-      title: doc.title || '未命名文档',
-      key: `document-${doc.id}`,
-      icon: <FileTextOutlined />,
-      isLeaf: true,
-      nodeType: 'document',
-      documentId: doc.id,
-      folderId: folder.id,
-      document: doc,
-    }));
-    projectNode.deptMap.get(deptKey).children.push({
-      title: folder.name,
-      key: `folder-${folder.id}`,
-      icon: <FolderOutlined />,
-      nodeType: 'folder',
-      folderId: folder.id,
-      ...(documentChildren.length ? { children: documentChildren } : {}),
-    });
+
+    ensureDepartmentNode(parentNode, parentKey, deptKey)
+      .children.push(addFolderDocumentChildren(folder, documentsByFolder));
   });
 
-  return Array.from(domainMap.values()).map(domainNode => {
-    const { projectMap, ...domainRest } = domainNode;
-    domainRest.children = domainRest.children.map(projectNode => {
-      const { deptMap, ...projectRest } = projectNode;
-      return projectRest;
-    });
-    return domainRest;
-  });
+  return Array.from(domainMap.values()).map(domainNode => stripFolderTreeMeta(domainNode));
 }
 
 function collectDefaultFolderExpandedKeys(nodes = []) {
@@ -1991,7 +2046,7 @@ function getFolderPathLabel(folder) {
   if (!folder) return '';
   return [
     domainLabel[folder.domain] || folder.domain,
-    folder.project_group_name || '未关联项目组',
+    getDirectoryProjectGroupLabel(folder),
     departmentLabel[folder.department_key] || folder.department_key,
     folder.name,
   ].filter(Boolean).join(' / ');
@@ -2001,7 +2056,7 @@ function getDocumentPathLabel(doc) {
   if (!doc) return '未归档';
   const parts = [
     domainLabel[doc.domain] || doc.domain,
-    doc.project_group_name || doc.project_code || '未关联项目组',
+    getDirectoryProjectGroupLabel(doc),
     departmentLabel[doc.department_key] || doc.department_key,
     doc.folder_name,
   ].filter(Boolean);
@@ -2496,7 +2551,7 @@ export default function Documents() {
   const activePresentationSection = presentationSections[activePresentationSlideIndex] || presentationSections[0];
   const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
   const selectedDocDomainTag = domainLabel[selectedDoc?.domain] || selectedDoc?.domain || '';
-  const selectedDocProjectGroupTag = selectedDoc?.project_group_name || selectedDoc?.project_code || '未关联项目组';
+  const selectedDocProjectGroupTag = getDirectoryProjectGroupLabel(selectedDoc);
   const selectedDocDepartmentTag = departmentLabel[selectedDoc?.department_key] || selectedDoc?.department_key || '';
   const selectedDocTypeTag = docTypeLabel[selectedDoc?.doc_type] || selectedDoc?.doc_type || '';
   const deepLinkedDocId = useMemo(() => {
@@ -10944,7 +10999,7 @@ export default function Documents() {
                   optionFilterProp="label"
                   options={folders.map(folder => ({
                     value: folder.id,
-                    label: `${domainLabel[folder.domain] || folder.domain} / ${folder.project_group_name || '未关联项目组'} / ${departmentLabel[folder.department_key] || folder.department_key} / ${folder.name}`,
+                    label: getFolderPathLabel(folder),
                   }))}
                 />
               </Form.Item>
@@ -11002,7 +11057,7 @@ export default function Documents() {
               optionFilterProp="label"
               options={folders.map(folder => ({
                 value: folder.id,
-                label: `${domainLabel[folder.domain] || folder.domain} / ${folder.project_group_name || '未关联项目组'} / ${departmentLabel[folder.department_key] || folder.department_key} / ${folder.name}`,
+                label: getFolderPathLabel(folder),
               }))}
             />
           </Form.Item>
