@@ -224,6 +224,15 @@ function scoreTool(tool) {
   return score;
 }
 
+function scoreChildTool(tool) {
+  const text = getToolText(tool);
+  let score = scoreTool(tool);
+  if (/child|children|children_of|descendant|sub|block|section|子级|子块|下级|块/.test(text)) score += 16;
+  if (/\blist\b|list_|_list|列出/.test(text) && /child|children|block|section|子级|子块|块/.test(text)) score += 12;
+  if (/page|document|页面|文档/.test(text) && !/child|children|block|section|子级|子块|块/.test(text)) score -= 8;
+  return score;
+}
+
 function normalizeTools(listResult) {
   const tools = Array.isArray(listResult?.tools)
     ? listResult.tools
@@ -233,6 +242,12 @@ function normalizeTools(listResult) {
   return tools
     .filter(tool => tool?.name)
     .sort((a, b) => scoreTool(b) - scoreTool(a));
+}
+
+function getChildContentTools(tools = []) {
+  return tools
+    .filter(isContentTool)
+    .sort((a, b) => scoreChildTool(b) - scoreChildTool(a));
 }
 
 function getSchemaProperties(tool) {
@@ -716,10 +731,12 @@ function filterBlocks(blocks = [], target) {
   });
   if (filtered.length >= 6) {
     const headingLike = filtered.filter(block => /^heading/.test(block?.type || '') || block?.type === 'paragraph');
+    const textLikeRatio = headingLike.length / filtered.length;
+    const listLikeRatio = filtered.filter(block => isListBlock(block)).length / filtered.length;
     const shortHeadingRatio = headingLike.length
       ? headingLike.filter(block => stripHtml(block.content).length <= 40).length / headingLike.length
       : 0;
-    if (shortHeadingRatio > 0.85 && !containsTargetReference(filtered, target)) return [];
+    if (textLikeRatio > 0.7 && listLikeRatio < 0.2 && shortHeadingRatio > 0.85 && !containsTargetReference(filtered, target)) return [];
   }
   return filtered;
 }
@@ -1014,9 +1031,12 @@ function mergeWolaiRecords(records = []) {
   return Array.from(byKey.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
 }
 
-async function expandWolaiRecordsWithChildCalls({ client, tool, target, records, maxCalls = 120 }) {
+async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, records, maxCalls = 160 }) {
   let mergedRecords = mergeWolaiRecords(records);
   if (!mergedRecords.length || mergedRecords.length > 80) return mergedRecords;
+
+  const childTools = getChildContentTools(tools).slice(0, 8);
+  if (!childTools.length) return mergedRecords;
 
   const seenCallIds = new Set([target.pageId].filter(Boolean));
   const queuedIds = new Set();
@@ -1042,38 +1062,43 @@ async function expandWolaiRecordsWithChildCalls({ client, tool, target, records,
       pageId: target.pageId || blockId,
       blockId,
     };
-    const argsVariants = buildArgumentsForTool(tool, childTarget).slice(0, 4);
-    for (const args of argsVariants) {
-      callCount += 1;
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        const result = await client.callTool(tool.name, args);
-        const toolErrorMessage = getMcpToolResultErrorMessage(result, childTarget);
-        if (toolErrorMessage) continue;
-        const parsed = parseToolContent(result);
-        const nextRecords = mergeWolaiRecords(parsed.wolaiRecords);
-        if (!nextRecords.length) continue;
-        const existingIds = new Set(mergedRecords.map(record => record.id));
-        const newRecords = nextRecords.filter(record => record.id && !existingIds.has(record.id));
-        const metadataChanged = nextRecords.some(record => {
-          const existing = mergedRecords.find(item => item.id === record.id);
-          return existing && ((!existing.parentId && record.parentId) || (!existing.type && record.type) || (!existing.parentType && record.parentType));
-        });
-        if (!newRecords.length && !metadataChanged) continue;
-        const orderBase = mergedRecords.length + 1;
-        nextRecords.forEach((record, index) => {
-          if (!record.parentId && record.id !== blockId) record.parentId = blockId;
-          record.order = orderBase + index;
-        });
-        newRecords.forEach(record => {
-          enqueue(record.id);
-        });
-        mergedRecords = mergeWolaiRecords([...mergedRecords, ...nextRecords]);
-        break;
-      } catch {
-        // Try the next argument variant; child blocks often reject leaf ids.
+    let foundChildrenForBlock = false;
+    for (const childTool of childTools) {
+      const argsVariants = buildArgumentsForTool(childTool, childTarget).slice(0, 4);
+      for (const args of argsVariants) {
+        callCount += 1;
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await client.callTool(childTool.name, args);
+          const toolErrorMessage = getMcpToolResultErrorMessage(result, childTarget);
+          if (toolErrorMessage) continue;
+          const parsed = parseToolContent(result);
+          const nextRecords = mergeWolaiRecords(parsed.wolaiRecords);
+          if (!nextRecords.length) continue;
+          const existingIds = new Set(mergedRecords.map(record => record.id));
+          const newRecords = nextRecords.filter(record => record.id && !existingIds.has(record.id));
+          const metadataChanged = nextRecords.some(record => {
+            const existing = mergedRecords.find(item => item.id === record.id);
+            return existing && ((!existing.parentId && record.parentId) || (!existing.type && record.type) || (!existing.parentType && record.parentType));
+          });
+          if (!newRecords.length && !metadataChanged) continue;
+          const orderBase = mergedRecords.length + 1;
+          nextRecords.forEach((record, index) => {
+            if (!record.parentId && record.id !== blockId) record.parentId = blockId;
+            record.order = orderBase + index;
+          });
+          newRecords.forEach(record => {
+            enqueue(record.id);
+          });
+          mergedRecords = mergeWolaiRecords([...mergedRecords, ...nextRecords]);
+          foundChildrenForBlock = true;
+          break;
+        } catch {
+          // Try the next argument variant; child blocks often reject leaf ids.
+        }
+        if (callCount >= maxCalls) break;
       }
-      if (callCount >= maxCalls) break;
+      if (foundChildrenForBlock || callCount >= maxCalls) break;
     }
   }
   return mergedRecords;
@@ -1268,6 +1293,27 @@ function cleanImportedBlocks(blocks = [], title = '') {
   return normalizeListIndents(removeLeadingDuplicateTitleBlock(blocks, title));
 }
 
+function rankImportedContent(imported) {
+  if (!imported || !Array.isArray(imported.blocks) || !imported.blocks.length) return -1;
+  const textLength = collectBlocksText(imported.blocks).length;
+  const blockScore = imported.blocks.length * 1000;
+  const matchScore = imported.target_matched ? 200 : 0;
+  return blockScore + Math.min(textLength, 999) + matchScore;
+}
+
+function chooseBetterImportedContent(current, candidate) {
+  if (!candidate?.blocks?.length) return current;
+  if (!current?.blocks?.length) return candidate;
+  return rankImportedContent(candidate) > rankImportedContent(current) ? candidate : current;
+}
+
+function isStrongImportedContent(imported) {
+  if (!imported?.blocks?.length) return false;
+  const textLength = collectBlocksText(imported.blocks).length;
+  const recursiveWarning = (imported.warnings || []).some(item => /递归读取/.test(String(item || '')));
+  return recursiveWarning && imported.blocks.length >= 8 && textLength >= 120;
+}
+
 function normalizeImportedContent({ result, target, tool }) {
   const toolName = tool?.name || '';
   if (!isContentTool(tool)) {
@@ -1357,6 +1403,7 @@ async function importWolaiMcpToBlocks(options = {}) {
   const skippedDiscoveryTools = tools.filter(isDiscoveryTool).map(tool => tool.name);
   const contentCandidates = tools.filter(isContentTool).slice(0, 10);
   const fallbackCandidates = contentCandidates.length ? contentCandidates : [];
+  let bestImported = null;
   for (const tool of fallbackCandidates) {
     const argsVariants = buildArgumentsForTool(tool, target).slice(0, 8);
     for (const args of argsVariants) {
@@ -1373,7 +1420,7 @@ async function importWolaiMcpToBlocks(options = {}) {
           // eslint-disable-next-line no-await-in-loop
           const expandedRecords = await expandWolaiRecordsWithChildCalls({
             client,
-            tool,
+            tools: contentCandidates,
             target,
             records: imported.wolai_records,
           });
@@ -1394,14 +1441,21 @@ async function importWolaiMcpToBlocks(options = {}) {
           }
         }
         if (imported.blocks.length) {
-          return {
+          const finalTitle = options.title || imported.title || 'Wolai MCP 导入文档';
+          const finalBlocks = cleanImportedBlocks(imported.blocks, finalTitle);
+          const finalImported = {
             ...imported,
-            title: options.title || imported.title || 'Wolai MCP 导入文档',
+            title: finalTitle,
+            blocks: finalBlocks,
+            content_text: collectBlocksText(finalBlocks),
             source_url: imported.source_url || target.url,
             tool_name: tool.name,
             tool_arguments: args,
             available_tools: tools.map(item => item.name),
           };
+          bestImported = chooseBetterImportedContent(bestImported, finalImported);
+          if (isStrongImportedContent(bestImported)) return bestImported;
+          break;
         }
         errors.push(`${tool.name}: 未解析出正文`);
       } catch (error) {
@@ -1410,6 +1464,7 @@ async function importWolaiMcpToBlocks(options = {}) {
     }
   }
 
+  if (bestImported?.blocks?.length) return bestImported;
   throw new Error(`未能通过 Wolai MCP 读取目标页面正文。已跳过搜索/列表类工具：${skippedDiscoveryTools.join('、') || '无'}。可用工具：${tools.map(tool => tool.name).join('、')}。尝试结果：${errors.slice(0, 6).join('；') || '没有发现可读取页面正文的工具'}`);
 }
 
