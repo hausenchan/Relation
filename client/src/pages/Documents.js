@@ -1772,6 +1772,7 @@ function buildPresentationSections(blocks, fallbackTitle) {
 }
 
 function getDirectoryProjectGroupLabel(item = {}) {
+  if (!item) return '';
   const projectLabel = String(item.project_group_name || item.project_code || '').trim();
   const itemDomainLabel = domainLabel[item.domain] || item.domain;
   if (!projectLabel || projectLabel === '未关联项目组') return '';
