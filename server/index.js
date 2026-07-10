@@ -12835,6 +12835,72 @@ function canAccessCompany(user, company) {
   return Number(company.created_by) === Number(user.id) || shared.includes(Number(user.id));
 }
 
+const COMPANY_RESEARCH_CHILD_TABLES = new Set([
+  'company_entities',
+  'company_personnel',
+  'company_products',
+  'company_dynamics',
+]);
+
+function getCompanyAccessRecord(companyId) {
+  const id = Number(companyId);
+  if (!id) return null;
+  return db.prepare('SELECT id, created_by, shared_with FROM companies WHERE id = ?').get(id) || null;
+}
+
+function getCompanyChildRecord(table, childId) {
+  if (!COMPANY_RESEARCH_CHILD_TABLES.has(table)) return null;
+  const id = Number(childId);
+  if (!id) return null;
+  return db.prepare(`SELECT id, company_id FROM ${table} WHERE id = ?`).get(id) || null;
+}
+
+function getCompanyAccessRecordByChild(table, childId) {
+  const child = getCompanyChildRecord(table, childId);
+  return child ? getCompanyAccessRecord(child.company_id) : null;
+}
+
+function requireCompanyAccess(req, res, companyId, message = '公司不存在或无权访问') {
+  const company = getCompanyAccessRecord(companyId);
+  if (!company) {
+    res.status(404).json({ error: message });
+    return null;
+  }
+  if (!canAccessCompany(req.user, company)) {
+    res.status(403).json({ error: '无权访问该公司' });
+    return null;
+  }
+  return company;
+}
+
+function requireCompanyChildAccess(req, res, table, childId, message = '记录不存在或无权访问') {
+  const company = getCompanyAccessRecordByChild(table, childId);
+  if (!company) {
+    res.status(404).json({ error: message });
+    return null;
+  }
+  if (!canAccessCompany(req.user, company)) {
+    res.status(403).json({ error: '无权访问该记录' });
+    return null;
+  }
+  return company;
+}
+
+function requireCompanyChildBelongsToCompany(res, table, childId, companyId, label) {
+  if (!childId) return true;
+  const child = getCompanyChildRecord(table, childId);
+  if (!child || Number(child.company_id) !== Number(companyId)) {
+    res.status(400).json({ error: `${label}不属于该公司` });
+    return false;
+  }
+  return true;
+}
+
+function stripCompanyAccessColumns(row) {
+  const { company_created_by, company_shared_with, ...rest } = row;
+  return rest;
+}
+
 function normalizeProjectGroupIds(projectGroupIds) {
   const raw = Array.isArray(projectGroupIds)
     ? projectGroupIds
@@ -12937,6 +13003,7 @@ app.post('/api/companies', canWrite, (req, res) => {
 
 app.put('/api/companies/:id', canWrite, (req, res) => {
   const { name, category, industry, scale, founded_year, hq_city, website, business, business_model, revenue_scale, tags, notes, shared_with, project_group_ids } = req.body;
+  if (!requireCompanyAccess(req, res, req.params.id)) return;
   const enc = encryptRow('companies', { name, website, business, business_model, revenue_scale, tags, notes });
   const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   const projectGroupCsv = normalizeProjectGroupIds(project_group_ids);
@@ -12951,6 +13018,7 @@ app.put('/api/companies/:id', canWrite, (req, res) => {
 // 公司研究摘要
 app.get('/api/companies/:id/summary', (req, res) => {
   const id = req.params.id;
+  if (!requireCompanyAccess(req, res, id)) return;
   const since30 = "date('now', '-30 days')";
 
   // 人员统计
@@ -12988,14 +13056,24 @@ app.get('/api/companies/:id/summary', (req, res) => {
 // =========== 主体 API ===========
 app.get('/api/company_entities', (req, res) => {
   const { company_id } = req.query;
-  let q = 'SELECT * FROM company_entities WHERE 1=1';
+  let q = `SELECT ce.*, c.created_by as company_created_by, c.shared_with as company_shared_with
+    FROM company_entities ce
+    LEFT JOIN companies c ON ce.company_id = c.id
+    WHERE 1=1`;
   const p = [];
-  if (company_id) { q += ' AND company_id = ?'; p.push(company_id); }
-  q += ' ORDER BY sort_order ASC, created_at ASC';
-  res.json(db.prepare(q).all(...p));
+  if (company_id) { q += ' AND ce.company_id = ?'; p.push(company_id); }
+  q += ' ORDER BY ce.sort_order ASC, ce.created_at ASC';
+  const rows = db.prepare(q).all(...p)
+    .filter(r => canAccessCompany(req.user, {
+      id: r.company_id,
+      created_by: r.company_created_by,
+      shared_with: r.company_shared_with,
+    }))
+    .map(stripCompanyAccessColumns);
+  res.json(rows);
 });
 
-app.post('/api/company_entities', (req, res) => {
+app.post('/api/company_entities', canWrite, (req, res) => {
   const {
     company_id, name, reg_name, city, address, established_date, legal_representative,
     social_security_count, software_copyright_count, contact_phone, business, notes, sort_order,
@@ -13017,7 +13095,7 @@ app.post('/api/company_entities', (req, res) => {
   res.json({ id: r.lastInsertRowid });
 });
 
-app.put('/api/company_entities/:id', (req, res) => {
+app.put('/api/company_entities/:id', canWrite, (req, res) => {
   const {
     company_id, name, reg_name, city, address, established_date, legal_representative,
     social_security_count, software_copyright_count, contact_phone, business, notes, sort_order,
@@ -13053,8 +13131,9 @@ app.put('/api/company_entities/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/company_entities/:id', (req, res) => {
+app.delete('/api/company_entities/:id', canWrite, (req, res) => {
   const id = req.params.id;
+  if (!requireCompanyChildAccess(req, res, 'company_entities', id, '主体不存在或无权访问')) return;
   // 解绑该主体下的人员和产品（保留记录，entity_id 置 null）
   db.prepare('UPDATE company_personnel SET entity_id = NULL WHERE entity_id = ?').run(id);
   db.prepare('UPDATE company_products SET entity_id = NULL WHERE entity_id = ?').run(id);
@@ -13062,7 +13141,8 @@ app.delete('/api/company_entities/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/companies/:id', (req, res) => {
+app.delete('/api/companies/:id', canWrite, (req, res) => {
+  if (!requireCompanyAccess(req, res, req.params.id)) return;
   db.prepare('DELETE FROM companies WHERE id = ?').run(req.params.id);
   db.prepare('DELETE FROM company_personnel WHERE company_id = ?').run(req.params.id);
   db.prepare('DELETE FROM company_products WHERE company_id = ?').run(req.params.id);
@@ -13074,7 +13154,11 @@ app.delete('/api/companies/:id', (req, res) => {
 app.get('/api/company_personnel', (req, res) => {
   const { company_id, entity_id } = req.query;
   const privacy = buildPersonPrivacyFilter(req.user.id, 'p');
-  let q = `SELECT cp.*, p.name as linked_person_name FROM company_personnel cp
+  let q = `SELECT cp.*, p.name as linked_person_name,
+      c.created_by as company_created_by,
+      c.shared_with as company_shared_with
+    FROM company_personnel cp
+    LEFT JOIN companies c ON cp.company_id = c.id
     LEFT JOIN persons p ON cp.person_id = p.id ${privacy.sql.replace(/^ AND /, 'AND ')}
     WHERE 1=1`;
   const params = [...privacy.params];
@@ -13082,14 +13166,25 @@ app.get('/api/company_personnel', (req, res) => {
   if (entity_id === 'null') { q += ' AND cp.entity_id IS NULL'; }
   else if (entity_id) { q += ' AND cp.entity_id = ?'; params.push(entity_id); }
   q += ' ORDER BY cp.importance DESC, cp.level DESC, cp.name ASC';
-  res.json(db.prepare(q).all(...params).map(r => ({
-    ...r,
-    linked_person_name: decrypt(r.linked_person_name),
-  })));
+  res.json(db.prepare(q).all(...params)
+    .filter(r => canAccessCompany(req.user, {
+      id: r.company_id,
+      created_by: r.company_created_by,
+      shared_with: r.company_shared_with,
+    }))
+    .map(r => ({
+      ...stripCompanyAccessColumns(r),
+      linked_person_name: decrypt(r.linked_person_name),
+    })));
 });
 
-app.post('/api/company_personnel', (req, res) => {
+app.post('/api/company_personnel', canWrite, (req, res) => {
   const { company_id, name, title, department, level, status, join_date, leave_date, background, skills, importance, person_id, notes, manager_id, entity_id } = req.body;
+  const targetCompanyId = Number(company_id);
+  if (!targetCompanyId) return res.status(400).json({ error: '所属公司必填' });
+  if (!requireCompanyAccess(req, res, targetCompanyId, '所属公司不存在或无权访问')) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_entities', entity_id, targetCompanyId, '所属主体')) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_personnel', manager_id, targetCompanyId, '直属上级')) return;
   if (person_id) {
     const person = getPersonAccessRecord(person_id);
     if (!person || !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到人脉' });
@@ -13098,12 +13193,17 @@ app.post('/api/company_personnel', (req, res) => {
   const r = db.prepare(`
     INSERT INTO company_personnel (company_id, name, title, department, level, status, join_date, leave_date, background, skills, importance, person_id, notes, manager_id, entity_id)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, name, title, department, level || 'mid', status || 'active', join_date, leave_date, background, skills, importance || 'normal', person_id || null, notes, manager_id || null, entity_id || null);
+  `).run(targetCompanyId, name, title, department, level || 'mid', status || 'active', join_date, leave_date, background, skills, importance || 'normal', person_id || null, notes, manager_id || null, entity_id || null);
   res.json({ id: r.lastInsertRowid });
 });
 
-app.put('/api/company_personnel/:id', (req, res) => {
+app.put('/api/company_personnel/:id', canWrite, (req, res) => {
   const { name, title, department, level, status, join_date, leave_date, background, skills, importance, person_id, notes, manager_id, entity_id } = req.body;
+  const current = getCompanyChildRecord('company_personnel', req.params.id);
+  if (!current) return res.status(404).json({ error: '人员不存在' });
+  if (!requireCompanyAccess(req, res, current.company_id)) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_entities', entity_id, current.company_id, '所属主体')) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_personnel', manager_id, current.company_id, '直属上级')) return;
   if (person_id) {
     const person = getPersonAccessRecord(person_id);
     if (!person || !canAccessPerson(req.user, person)) return res.status(404).json({ error: '未找到人脉' });
@@ -13117,15 +13217,17 @@ app.put('/api/company_personnel/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/company_personnel/:id', (req, res) => {
+app.delete('/api/company_personnel/:id', canWrite, (req, res) => {
+  if (!requireCompanyChildAccess(req, res, 'company_personnel', req.params.id, '人员不存在或无权访问')) return;
   db.prepare('DELETE FROM company_personnel WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
 // 将公司人员转为人脉库外部人才
-app.post('/api/company_personnel/:id/to_person', (req, res) => {
+app.post('/api/company_personnel/:id/to_person', canWrite, (req, res) => {
   const cp = db.prepare('SELECT cp.*, c.name as company_name FROM company_personnel cp LEFT JOIN companies c ON cp.company_id = c.id WHERE cp.id = ?').get(req.params.id);
   if (!cp) return res.status(404).json({ error: '未找到' });
+  if (!requireCompanyChildAccess(req, res, 'company_personnel', cp.id, '人员不存在或无权访问')) return;
   // company_name 来自 companies.name（将来加密），cp.skills/notes/background 来自未加密的 company_personnel
   const companyName = decrypt(cp.company_name);
   const enc = encryptRow('persons', {
@@ -13206,7 +13308,7 @@ app.get('/api/company_products/:id', (req, res) => {
   res.json({ ...rest, company_name: decrypt(row.company_name) });
 });
 
-app.post('/api/company_products', (req, res) => {
+app.post('/api/company_products', canWrite, (req, res) => {
   const {
     company_id,
     name,
@@ -13224,6 +13326,10 @@ app.post('/api/company_products', (req, res) => {
     notes,
     entity_id,
   } = req.body;
+  const targetCompanyId = Number(company_id);
+  if (!targetCompanyId) return res.status(400).json({ error: '所属公司必填' });
+  if (!requireCompanyAccess(req, res, targetCompanyId, '所属公司不存在或无权访问')) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_entities', entity_id, targetCompanyId, '所属主体')) return;
   const r = db.prepare(`
     INSERT INTO company_products (
       company_id, name, category, product_category, status, launch_date,
@@ -13232,7 +13338,7 @@ app.post('/api/company_products', (req, res) => {
     )
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
-    company_id,
+    targetCompanyId,
     name,
     category,
     product_category || null,
@@ -13251,7 +13357,7 @@ app.post('/api/company_products', (req, res) => {
   res.json({ id: r.lastInsertRowid });
 });
 
-app.put('/api/company_products/:id', (req, res) => {
+app.put('/api/company_products/:id', canWrite, (req, res) => {
   const {
     name,
     category,
@@ -13268,6 +13374,10 @@ app.put('/api/company_products/:id', (req, res) => {
     notes,
     entity_id,
   } = req.body;
+  const current = getCompanyChildRecord('company_products', req.params.id);
+  if (!current) return res.status(404).json({ error: '产品不存在' });
+  if (!requireCompanyAccess(req, res, current.company_id)) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_entities', entity_id, current.company_id, '所属主体')) return;
   db.prepare(`
     UPDATE company_products
     SET name=?, category=?, product_category=?, status=?, launch_date=?,
@@ -14025,14 +14135,16 @@ function saveMobileTaskCenterRecord(payload, user) {
 }
 
 app.post('/api/company_products/:id/task-center-notification', canWrite, (req, res) => {
+  if (!requireCompanyChildAccess(req, res, 'company_products', req.params.id, '产品不存在或无权访问')) return;
   const result = notifyTaskCenterProductRecord(req.params.id, req.body || {});
   if (!result) return res.status(404).json({ error: '产品不存在' });
   res.json({ success: true, notified_count: result.recipients.length });
 });
 
-app.delete('/api/company_products/:id', (req, res) => {
+app.delete('/api/company_products/:id', canWrite, (req, res) => {
   const product = db.prepare('SELECT id FROM company_products WHERE id = ?').get(req.params.id);
   if (!product) return res.status(404).json({ error: '产品不存在' });
+  if (!requireCompanyChildAccess(req, res, 'company_products', req.params.id, '产品不存在或无权访问')) return;
 
   const attachmentRows = db.prepare("SELECT filepath FROM attachments WHERE source_type = 'company_product' AND source_id = ?").all(req.params.id);
   const deleteProduct = db.transaction((id) => {
@@ -14241,28 +14353,48 @@ app.get('/api/network-capture/export.har', (req, res) => {
 // 动向
 app.get('/api/company_dynamics', (req, res) => {
   const { company_id, type } = req.query;
-  let q = 'SELECT * FROM company_dynamics WHERE 1=1';
+  let q = `SELECT cd.*, c.created_by as company_created_by, c.shared_with as company_shared_with
+    FROM company_dynamics cd
+    LEFT JOIN companies c ON cd.company_id = c.id
+    WHERE 1=1`;
   const params = [];
-  if (company_id) { q += ' AND company_id = ?'; params.push(company_id); }
-  if (type) { q += ' AND type = ?'; params.push(type); }
-  q += ' ORDER BY date DESC, created_at DESC';
-  res.json(decryptRows('company_dynamics', db.prepare(q).all(...params)));
+  if (company_id) { q += ' AND cd.company_id = ?'; params.push(company_id); }
+  if (type) { q += ' AND cd.type = ?'; params.push(type); }
+  q += ' ORDER BY cd.date DESC, cd.created_at DESC';
+  const rows = db.prepare(q).all(...params)
+    .filter(r => canAccessCompany(req.user, {
+      id: r.company_id,
+      created_by: r.company_created_by,
+      shared_with: r.company_shared_with,
+    }))
+    .map(stripCompanyAccessColumns);
+  res.json(decryptRows('company_dynamics', rows));
 });
 
-app.post('/api/company_dynamics', (req, res) => {
+app.post('/api/company_dynamics', canWrite, (req, res) => {
   const { company_id, type, title, date, importance, content, source, impact, personnel_id, product_id } = req.body;
+  const targetCompanyId = Number(company_id);
+  if (!targetCompanyId) return res.status(400).json({ error: '所属公司必填' });
+  if (!requireCompanyAccess(req, res, targetCompanyId, '所属公司不存在或无权访问')) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_personnel', personnel_id, targetCompanyId, '关联人员')) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_products', product_id, targetCompanyId, '关联产品')) return;
   const enc = encryptRow('company_dynamics', { title, content, source, impact });
   const r = db.prepare(`
     INSERT INTO company_dynamics (company_id, type, title, date, importance, content, source, impact, personnel_id, product_id)
     VALUES (?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, type || 'talent', enc.title, date, importance || 'normal', enc.content, enc.source, enc.impact, personnel_id || null, product_id || null);
+  `).run(targetCompanyId, type || 'talent', enc.title, date, importance || 'normal', enc.content, enc.source, enc.impact, personnel_id || null, product_id || null);
   // 更新公司 updated_at
-  db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
+  db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(targetCompanyId);
   res.json({ id: r.lastInsertRowid });
 });
 
-app.put('/api/company_dynamics/:id', (req, res) => {
+app.put('/api/company_dynamics/:id', canWrite, (req, res) => {
   const { type, title, date, importance, content, source, impact, personnel_id, product_id } = req.body;
+  const current = getCompanyChildRecord('company_dynamics', req.params.id);
+  if (!current) return res.status(404).json({ error: '动向不存在' });
+  if (!requireCompanyAccess(req, res, current.company_id)) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_personnel', personnel_id, current.company_id, '关联人员')) return;
+  if (!requireCompanyChildBelongsToCompany(res, 'company_products', product_id, current.company_id, '关联产品')) return;
   const enc = encryptRow('company_dynamics', { title, content, source, impact });
   db.prepare(`
     UPDATE company_dynamics SET type=?, title=?, date=?, importance=?, content=?, source=?, impact=?, personnel_id=?, product_id=?
@@ -14271,7 +14403,8 @@ app.put('/api/company_dynamics/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/company_dynamics/:id', (req, res) => {
+app.delete('/api/company_dynamics/:id', canWrite, (req, res) => {
+  if (!requireCompanyChildAccess(req, res, 'company_dynamics', req.params.id, '动向不存在或无权访问')) return;
   db.prepare('DELETE FROM company_dynamics WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
