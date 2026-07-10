@@ -386,7 +386,8 @@ function getAttachmentDisplayName(attachment = {}) {
 }
 
 function getAttachmentUrl(attachment = {}) {
-  return attachment.preview_url || attachment.url || (attachment.filepath ? `/uploads/${attachment.filepath}` : '');
+  const filepath = String(attachment.filepath || '');
+  return attachment.preview_url || attachment.url || (filepath && !filepath.startsWith('oss:') ? `/uploads/${filepath}` : '');
 }
 
 function formatFileSize(bytes) {
@@ -422,7 +423,7 @@ function attachmentToMediaMeta(attachment) {
   return {
     attachment_id: attachment.id || null,
     filename: attachment.filename || '',
-    url: attachment.filepath ? `/uploads/${attachment.filepath}` : '',
+    url: getAttachmentUrl(attachment),
     mimetype: attachment.mimetype || '',
   };
 }

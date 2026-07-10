@@ -380,7 +380,16 @@ export default function CompanySubjects() {
                 renderItem={attachment => (
                   <List.Item
                     actions={[
-                      <Button key="open" type="link" size="small" href={`/uploads/${attachment.file_path}`} target="_blank">查看</Button>,
+                      <Button
+                        key="open"
+                        type="link"
+                        size="small"
+                        href={attachment.url || (String(attachment.file_path || '').startsWith('oss:') ? undefined : `/uploads/${attachment.file_path}`)}
+                        target="_blank"
+                        disabled={!attachment.url && String(attachment.file_path || '').startsWith('oss:')}
+                      >
+                        查看
+                      </Button>,
                       <Button key="delete" type="link" size="small" danger onClick={() => deleteAttachment(attachment)}>删除</Button>,
                     ]}
                   >

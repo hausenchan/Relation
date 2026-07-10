@@ -134,7 +134,13 @@ cp server/data.db server/data.db.backup.$(date +%Y%m%d)
 ```bash
 export NODE_ENV=production
 export PORT=3001
+export ALIYUN_OSS_BUCKET=mid-relation-test
+export ALIYUN_OSS_ENDPOINT=oss-cn-shenzhen.aliyuncs.com
+export ALIYUN_OSS_ACCESS_KEY_ID=你的OSS AccessKey ID
+export ALIYUN_OSS_ACCESS_KEY_SECRET=你的OSS AccessKey Secret
 ```
+
+配置 OSS 后，新上传的图片和附件会持久化到 OSS；`server/uploads` 目录仍用于请求内临时文件和历史本地附件兼容读取。
 
 ## 访问应用
 

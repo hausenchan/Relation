@@ -16,6 +16,7 @@
     "install:all": "npm install && cd client && npm install"
   },
   "dependencies": {
+    "ali-oss": "^6.23.0",
     "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.8.0",

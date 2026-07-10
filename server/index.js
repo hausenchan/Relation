@@ -14,6 +14,15 @@ const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
 const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
 const {
+  decodeOssKey,
+  deleteOssObjectByPath,
+  getOssKey,
+  getStoredFileUrl,
+  isOssPath,
+  pipeOssObjectToResponse,
+  uploadLocalFileToOss,
+} = require('./lib/ossStorage');
+const {
   ensureAiSuggestionTables,
   getCurrentAiSuggestionFeed,
   syncBundledAiSuggestionSeeds,
@@ -44,11 +53,19 @@ function normalizeUploadedFilename(filename) {
 }
 
 function normalizeGenericAttachmentRow(row) {
-  return row ? { ...row, filename: normalizeUploadedFilename(row.filename) } : row;
+  return row ? {
+    ...row,
+    filename: normalizeUploadedFilename(row.filename),
+    url: getStoredFileUrl(row.filepath),
+  } : row;
 }
 
 function normalizeSubjectAttachmentRow(row) {
-  return row ? { ...row, file_name: normalizeUploadedFilename(row.file_name) } : row;
+  return row ? {
+    ...row,
+    file_name: normalizeUploadedFilename(row.file_name),
+    url: getStoredFileUrl(row.file_path),
+  } : row;
 }
 
 function isDepartedUser(user) {
@@ -212,9 +229,102 @@ function getCompanyNameDuplicateReason(inputName, existingName) {
   return null;
 }
 
+function getUploadedLocalPath(file) {
+  if (!file) return '';
+  if (file.localTempPath) return file.localTempPath;
+  if (file.path && !isOssPath(file.path)) return file.path;
+  if (file.localFilename) return path.join(UPLOADS_DIR, file.localFilename);
+  if (file.filename && !isOssPath(file.filename)) return path.join(UPLOADS_DIR, file.filename);
+  return '';
+}
+
+function cleanupUploadedFiles(files = []) {
+  files.forEach(file => {
+    const localPath = getUploadedLocalPath(file);
+    if (!localPath) return;
+    try { fs.unlinkSync(localPath); } catch {}
+  });
+}
+
+function deleteStoredFileBestEffort(filepath) {
+  if (!filepath) return;
+  if (isOssPath(filepath)) {
+    deleteOssObjectByPath(filepath).catch(error => {
+      console.error('删除 OSS 文件失败:', error.message || error);
+    });
+    return;
+  }
+  try { fs.unlinkSync(path.join(UPLOADS_DIR, filepath)); } catch {}
+}
+
+function cleanupStoredUploadedFiles(files = []) {
+  files.forEach(file => {
+    if (isOssPath(file?.filename)) deleteStoredFileBestEffort(file.filename);
+  });
+  cleanupUploadedFiles(files);
+}
+
+async function persistUploadedFile(file, prefix = 'attachments', options = {}) {
+  if (!file || isOssPath(file.filename)) return file;
+  const localPath = getUploadedLocalPath(file);
+  file.localTempPath = localPath;
+  const stored = await uploadLocalFileToOss({ ...file, path: localPath }, prefix);
+  if (!stored) return file;
+  file.localFilename = file.filename;
+  file.filename = stored.filepath;
+  file.oss_key = stored.key;
+  file.url = stored.url;
+  if (!options.keepLocal) cleanupUploadedFiles([file]);
+  return file;
+}
+
+async function persistUploadedFiles(files = [], prefix = 'attachments', options = {}) {
+  for (const file of files || []) {
+    await persistUploadedFile(file, prefix, options);
+  }
+  return files;
+}
+
+async function sendStoredFileResponse(res, row = {}, filepath = '', filename = '', options = {}) {
+  const disposition = options.disposition || 'attachment';
+  if (isOssPath(filepath)) {
+    await pipeOssObjectToResponse(res, getOssKey(filepath), {
+      filename,
+      disposition,
+      mimetype: row.mimetype || row.mime_type,
+      size: row.size || row.file_size,
+    });
+    return;
+  }
+
+  const filePath = path.join(UPLOADS_DIR, filepath);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ error: '文件不存在' });
+    return;
+  }
+  const stat = fs.statSync(filePath);
+  res.setHeader('Content-Type', row.mimetype || row.mime_type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.setHeader('Content-Length', row.size || row.file_size || stat.size);
+  const fileStream = fs.createReadStream(filePath);
+  fileStream.pipe(res);
+  fileStream.on('error', (err) => {
+    console.error('文件流错误:', err);
+    if (!res.headersSent) res.status(500).json({ error: '文件读取失败' });
+  });
+}
+
 function uploadAttachments(req, res, next) {
-  upload.array('files', 10)(req, res, (err) => {
-    if (!err) return next();
+  upload.array('files', 10)(req, res, async (err) => {
+    if (!err) {
+      try {
+        await persistUploadedFiles(req.files || [], 'attachments');
+        return next();
+      } catch (error) {
+        cleanupStoredUploadedFiles(req.files || []);
+        return res.status(500).json({ error: error.message || '附件上传到 OSS 失败' });
+      }
+    }
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(400).json({ error: '单个文件不能超过 50MB' });
@@ -225,13 +335,6 @@ function uploadAttachments(req, res, next) {
       return res.status(400).json({ error: err.message || '附件上传失败' });
     }
     return res.status(400).json({ error: err.message || '附件上传失败' });
-  });
-}
-
-function cleanupUploadedFiles(files = []) {
-  files.forEach(file => {
-    if (!file?.filename) return;
-    try { fs.unlinkSync(path.join(UPLOADS_DIR, file.filename)); } catch {}
   });
 }
 
@@ -375,6 +478,17 @@ async function geocodeAddress(city, address) {
 
 app.use(cors());
 app.use(express.json());
+
+app.get('/oss/:encodedKey', async (req, res) => {
+  try {
+    const key = decodeOssKey(req.params.encodedKey);
+    if (!key) return res.status(404).json({ error: '文件不存在' });
+    await pipeOssObjectToResponse(res, key, { disposition: 'inline' });
+  } catch (error) {
+    const status = error.statusCode || error.status || 404;
+    res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? '文件不存在' : '文件读取失败' });
+  }
+});
 
 // JWT 鉴权中间件
 function auth(req, res, next) {
@@ -3010,9 +3124,7 @@ app.delete('/api/gifts/:id', canWrite, (req, res) => {
     db.prepare('DELETE FROM gifts WHERE id = ?').run(id);
   });
   deleteGift(req.params.id);
-  attachmentRows.forEach(att => {
-    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.filepath)); } catch {}
-  });
+  attachmentRows.forEach(att => deleteStoredFileBestEffort(att.filepath));
   res.json({ success: true });
 });
 
@@ -4957,7 +5069,7 @@ function serializeDocumentAttachment(row = {}) {
     display_name: displayName,
     file_ext: normalized.file_ext || getFileExtFromName(displayName),
     preview_status: normalized.preview_status || getDocumentAttachmentPreviewStatus(normalized.mimetype, displayName),
-    url: normalized.filepath ? `/uploads/${normalized.filepath}` : '',
+    url: getStoredFileUrl(normalized.filepath),
   };
 }
 
@@ -5747,6 +5859,7 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
       ext: validation.ext,
       mimetype: validation.mime,
     });
+    await persistUploadedFile(req.file, 'documents');
     const defaultTitle = parsedImport.title || filename.replace(/\.[^.]+$/, '') || filename || '文件导入文档';
     const id = createDocumentRecord({
       ...req.body,
@@ -5826,7 +5939,7 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
       },
     });
   } catch (error) {
-    if (!attachmentCreated) cleanupUploadedFiles(req.file ? [req.file] : []);
+    if (!attachmentCreated) cleanupStoredUploadedFiles(req.file ? [req.file] : []);
     res.status(400).json({ error: error.message || '文件导入失败' });
   }
 });
@@ -6050,6 +6163,7 @@ app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpl
       ext: validation.ext,
       mimetype: validation.mime,
     });
+    await persistUploadedFile(req.file, 'documents');
     const attachmentBlockId = makeDocumentBlockId('b_import_file');
     const attachment = createDocumentAttachmentRecord(doc.id, req.file, req.user.id, {
       blockId: attachmentBlockId,
@@ -6134,7 +6248,7 @@ app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpl
       },
     });
   } catch (error) {
-    if (!attachmentCreated) cleanupUploadedFiles(req.file ? [req.file] : []);
+    if (!attachmentCreated) cleanupStoredUploadedFiles(req.file ? [req.file] : []);
     res.status(400).json({ error: error.message || '文件导入失败' });
   }
 });
@@ -6544,33 +6658,45 @@ function handleDocumentAttachmentUpload(req, res, next) {
   });
 }
 
-app.post('/api/documents/:id/attachments', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+app.post('/api/documents/:id/attachments', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
-  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  if (!doc) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(404).json({ error: '文档不存在或无权限访问' });
+  }
+  if (!canEditDocument(req.user, doc)) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  }
   if (!req.file) return res.status(400).json({ error: '未收到文件' });
 
-  const filename = normalizeUploadedFilename(req.file.originalname);
-  const displayName = String(req.body.display_name || filename).trim() || filename;
-  const fileExt = getFileExtFromName(filename);
-  const previewStatus = getDocumentAttachmentPreviewStatus(req.file.mimetype, filename);
-  const result = db.prepare(`
-    INSERT INTO document_attachments (
-      document_id, block_id, filename, display_name, filepath, mimetype, file_ext, size, preview_status, created_by, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `).run(
-    doc.id,
-    req.body.block_id || null,
-    filename,
-    displayName,
-    req.file.filename,
-    req.file.mimetype,
-    fileExt,
-    req.file.size,
-    previewStatus,
-    req.user.id
-  );
-  res.json(serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid)));
+  try {
+    await persistUploadedFile(req.file, 'documents');
+    const filename = normalizeUploadedFilename(req.file.originalname);
+    const displayName = String(req.body.display_name || filename).trim() || filename;
+    const fileExt = getFileExtFromName(filename);
+    const previewStatus = getDocumentAttachmentPreviewStatus(req.file.mimetype, filename);
+    const result = db.prepare(`
+      INSERT INTO document_attachments (
+        document_id, block_id, filename, display_name, filepath, mimetype, file_ext, size, preview_status, created_by, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      doc.id,
+      req.body.block_id || null,
+      filename,
+      displayName,
+      req.file.filename,
+      req.file.mimetype,
+      fileExt,
+      req.file.size,
+      previewStatus,
+      req.user.id
+    );
+    res.json(serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid)));
+  } catch (error) {
+    cleanupStoredUploadedFiles(req.file ? [req.file] : []);
+    res.status(500).json({ error: error.message || '附件上传到 OSS 失败' });
+  }
 });
 
 app.get('/api/documents/:id/attachments', (req, res) => {
@@ -6586,24 +6712,18 @@ app.get('/api/documents/:id/attachments', (req, res) => {
   res.json(rows.map(serializeDocumentAttachment));
 });
 
-app.get('/api/document-attachments/:id/download', (req, res) => {
+app.get('/api/document-attachments/:id/download', async (req, res) => {
   const row = serializeDocumentAttachment(getDocumentAttachment(req.params.id));
   if (!row) return res.status(404).json({ error: '附件不存在' });
   const doc = getVisibleDocument(row.document_id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  const filePath = path.join(UPLOADS_DIR, row.filepath);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
-
-  res.setHeader('Content-Type', row.mimetype || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.display_name || row.filename)}`);
-  res.setHeader('Content-Length', row.size || fs.statSync(filePath).size);
-
-  const fileStream = fs.createReadStream(filePath);
-  fileStream.pipe(res);
-  fileStream.on('error', (err) => {
-    console.error('文档附件文件流错误:', err);
-    if (!res.headersSent) res.status(500).json({ error: '文件读取失败' });
-  });
+  try {
+    await sendStoredFileResponse(res, row, row.filepath, row.display_name || row.filename, {
+      disposition: req.query.disposition === 'inline' ? 'inline' : 'attachment',
+    });
+  } catch (error) {
+    res.status(error.statusCode || 404).json({ error: error.statusCode === 404 ? '文件不存在' : '文件读取失败' });
+  }
 });
 
 app.get('/api/document-attachments/:id/preview', (req, res) => {
@@ -6642,37 +6762,49 @@ app.put('/api/document-attachments/:id/rename', canWrite, (req, res) => {
   res.json(serializeDocumentAttachment(getDocumentAttachment(row.id)));
 });
 
-app.post('/api/document-attachments/:id/replace', canWrite, handleDocumentAttachmentUpload, (req, res) => {
+app.post('/api/document-attachments/:id/replace', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
   const row = getDocumentAttachment(req.params.id);
-  if (!row) return res.status(404).json({ error: '附件不存在' });
+  if (!row) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(404).json({ error: '附件不存在' });
+  }
   const doc = getVisibleDocument(row.document_id, req.user);
-  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有文档编辑者可以替换附件' });
+  if (!doc) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(404).json({ error: '文档不存在或无权限访问' });
+  }
+  if (!canEditDocument(req.user, doc)) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(403).json({ error: '只有文档编辑者可以替换附件' });
+  }
   if (!req.file) return res.status(400).json({ error: '未收到文件' });
 
-  const oldFilePath = row.filepath ? path.join(UPLOADS_DIR, row.filepath) : null;
-  const filename = normalizeUploadedFilename(req.file.originalname);
-  const displayName = String(req.body.display_name || row.display_name || filename).trim() || filename;
-  const previewStatus = getDocumentAttachmentPreviewStatus(req.file.mimetype, filename);
-  db.prepare(`
-    UPDATE document_attachments SET
-      filename = ?, display_name = ?, filepath = ?, mimetype = ?, file_ext = ?, size = ?,
-      preview_status = ?, replaced_from_id = COALESCE(replaced_from_id, id), updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(
-    filename,
-    displayName,
-    req.file.filename,
-    req.file.mimetype,
-    getFileExtFromName(filename),
-    req.file.size,
-    previewStatus,
-    row.id
-  );
-  if (oldFilePath) {
-    try { fs.unlinkSync(oldFilePath); } catch {}
+  try {
+    await persistUploadedFile(req.file, 'documents');
+    const filename = normalizeUploadedFilename(req.file.originalname);
+    const displayName = String(req.body.display_name || row.display_name || filename).trim() || filename;
+    const previewStatus = getDocumentAttachmentPreviewStatus(req.file.mimetype, filename);
+    db.prepare(`
+      UPDATE document_attachments SET
+        filename = ?, display_name = ?, filepath = ?, mimetype = ?, file_ext = ?, size = ?,
+        preview_status = ?, replaced_from_id = COALESCE(replaced_from_id, id), updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      filename,
+      displayName,
+      req.file.filename,
+      req.file.mimetype,
+      getFileExtFromName(filename),
+      req.file.size,
+      previewStatus,
+      row.id
+    );
+    deleteStoredFileBestEffort(row.filepath);
+    res.json(serializeDocumentAttachment(getDocumentAttachment(row.id)));
+  } catch (error) {
+    cleanupStoredUploadedFiles(req.file ? [req.file] : []);
+    res.status(500).json({ error: error.message || '附件替换失败' });
   }
-  res.json(serializeDocumentAttachment(getDocumentAttachment(row.id)));
 });
 
 app.delete('/api/document-attachments/:id', canWrite, (req, res) => {
@@ -6681,7 +6813,7 @@ app.delete('/api/document-attachments/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(row.document_id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有文档编辑者可以删除附件' });
-  try { fs.unlinkSync(path.join(UPLOADS_DIR, row.filepath)); } catch {}
+  deleteStoredFileBestEffort(row.filepath);
   db.prepare('DELETE FROM document_block_comments WHERE attachment_id = ?').run(row.id);
   db.prepare('DELETE FROM document_attachments WHERE id = ?').run(row.id);
   res.json({ success: true });
@@ -7351,9 +7483,7 @@ app.delete('/api/persons/:id', canWrite, (req, res) => {
     db.prepare('UPDATE company_personnel SET person_id = NULL WHERE person_id = ?').run(personId);
   });
   deletePerson(req.params.id);
-  attachmentRows.forEach(att => {
-    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.filepath)); } catch {}
-  });
+  attachmentRows.forEach(att => deleteStoredFileBestEffort(att.filepath));
   res.json({ success: true });
 });
 
@@ -13670,7 +13800,7 @@ function getMobileTaskRecordAttachments(row) {
   if (!ids.length) return [];
   const placeholders = ids.map(() => '?').join(',');
   const rows = db.prepare(`
-    SELECT id, filename, mimetype, size, created_at
+    SELECT id, filename, filepath, mimetype, size, created_at
     FROM attachments
     WHERE id IN (${placeholders})
   `).all(...ids).map(normalizeGenericAttachmentRow);
@@ -14152,9 +14282,7 @@ app.delete('/api/company_products/:id', canWrite, (req, res) => {
     db.prepare('DELETE FROM company_products WHERE id = ?').run(id);
   });
   deleteProduct(req.params.id);
-  attachmentRows.forEach(att => {
-    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.filepath)); } catch {}
-  });
+  attachmentRows.forEach(att => deleteStoredFileBestEffort(att.filepath));
   res.json({ success: true });
 });
 
@@ -16162,24 +16290,27 @@ app.delete('/api/company-subjects/:id', (req, res) => {
   const linked = db.prepare('SELECT COUNT(*) as count FROM product_assets WHERE company_subject_id = ?').get(req.params.id).count;
   if (linked > 0) return res.status(400).json({ error: '该主体已关联产品资产，不能删除' });
   const attachments = db.prepare('SELECT file_path FROM company_subject_attachments WHERE subject_id = ?').all(req.params.id);
-  attachments.forEach(att => {
-    try { fs.unlinkSync(path.join(UPLOADS_DIR, att.file_path)); } catch {}
-  });
+  attachments.forEach(att => deleteStoredFileBestEffort(att.file_path));
   db.prepare('DELETE FROM company_subject_attachments WHERE subject_id = ?').run(req.params.id);
   db.prepare('DELETE FROM company_subjects WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
 
-app.post('/api/company-subjects/:id/attachments', (req, res) => {
-  upload.single('file')(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message || '附件上传失败' });
-    const subject = db.prepare('SELECT id FROM company_subjects WHERE id = ?').get(req.params.id);
-    if (!subject) return res.status(404).json({ error: '主体不存在' });
-    const { attachment_type = 'other' } = req.body;
-    if (!SUBJECT_ATTACHMENT_TYPES.has(attachment_type)) {
-      return res.status(400).json({ error: '附件类型不合法' });
-    }
-    if (!req.file) return res.status(400).json({ error: '未收到文件' });
+app.post('/api/company-subjects/:id/attachments', handleDocumentAttachmentUpload, async (req, res) => {
+  const subject = db.prepare('SELECT id FROM company_subjects WHERE id = ?').get(req.params.id);
+  if (!subject) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(404).json({ error: '主体不存在' });
+  }
+  const { attachment_type = 'other' } = req.body;
+  if (!SUBJECT_ATTACHMENT_TYPES.has(attachment_type)) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(400).json({ error: '附件类型不合法' });
+  }
+  if (!req.file) return res.status(400).json({ error: '未收到文件' });
+
+  try {
+    await persistUploadedFile(req.file, 'company-subjects');
     const result = db.prepare(`
       INSERT INTO company_subject_attachments (
         subject_id, attachment_type, file_name, file_path, file_size, mime_type, uploaded_by
@@ -16193,14 +16324,35 @@ app.post('/api/company-subjects/:id/attachments', (req, res) => {
       req.file.mimetype,
       req.user.id
     );
-    res.json({ id: result.lastInsertRowid });
-  });
+    const attachment = db.prepare(`
+      SELECT a.*, u.display_name as uploaded_by_name
+      FROM company_subject_attachments a
+      LEFT JOIN users u ON a.uploaded_by = u.id
+      WHERE a.id = ?
+    `).get(result.lastInsertRowid);
+    res.json(normalizeSubjectAttachmentRow(attachment));
+  } catch (error) {
+    cleanupStoredUploadedFiles(req.file ? [req.file] : []);
+    res.status(500).json({ error: error.message || '附件上传到 OSS 失败' });
+  }
+});
+
+app.get('/api/company-subject-attachments/:id/download', async (req, res) => {
+  const att = normalizeSubjectAttachmentRow(db.prepare('SELECT * FROM company_subject_attachments WHERE id = ?').get(req.params.id));
+  if (!att) return res.status(404).json({ error: '附件不存在' });
+  try {
+    await sendStoredFileResponse(res, att, att.file_path, att.file_name, {
+      disposition: req.query.disposition === 'inline' ? 'inline' : 'attachment',
+    });
+  } catch (error) {
+    res.status(error.statusCode || 404).json({ error: error.statusCode === 404 ? '文件不存在' : '文件读取失败' });
+  }
 });
 
 app.delete('/api/company-subject-attachments/:id', (req, res) => {
   const att = db.prepare('SELECT * FROM company_subject_attachments WHERE id = ?').get(req.params.id);
   if (!att) return res.status(404).json({ error: '附件不存在' });
-  try { fs.unlinkSync(path.join(UPLOADS_DIR, att.file_path)); } catch {}
+  deleteStoredFileBestEffort(att.file_path);
   db.prepare('DELETE FROM company_subject_attachments WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
@@ -18120,10 +18272,13 @@ app.delete('/api/executive/reports/:id', requireExecutive, (req, res) => {
 // =========== 附件 API ===========
 app.post('/api/attachments/upload', auth, uploadAttachments, (req, res) => {
   const { source_type, source_id } = req.body;
-  if (!source_type || !source_id) return res.status(400).json({ error: '缺少 source_type 或 source_id' });
+  if (!source_type || !source_id) {
+    cleanupStoredUploadedFiles(req.files || []);
+    return res.status(400).json({ error: '缺少 source_type 或 source_id' });
+  }
   if (!req.files?.length) return res.status(400).json({ error: '未收到文件' });
   if (!canModifyAttachmentSource(req.user, source_type, source_id)) {
-    cleanupUploadedFiles(req.files);
+    cleanupStoredUploadedFiles(req.files);
     return res.status(403).json({ error: '无权上传此附件' });
   }
 
@@ -18134,7 +18289,7 @@ app.post('/api/attachments/upload', auth, uploadAttachments, (req, res) => {
   const results = req.files.map(f => {
     const filename = normalizeUploadedFilename(f.originalname);
     const r = insert.run(source_type, source_id, filename, f.filename, f.mimetype, f.size, req.user.id);
-    return { id: r.lastInsertRowid, filename, filepath: f.filename, size: f.size, mimetype: f.mimetype };
+    return normalizeGenericAttachmentRow({ id: r.lastInsertRowid, filename, filepath: f.filename, size: f.size, mimetype: f.mimetype });
   });
   res.json(results);
 });
@@ -18154,25 +18309,19 @@ app.get('/api/attachments', auth, (req, res) => {
   res.json(rows.map(normalizeGenericAttachmentRow));
 });
 
-app.get('/api/attachments/:id/download', auth, (req, res) => {
+app.get('/api/attachments/:id/download', auth, async (req, res) => {
   const row = normalizeGenericAttachmentRow(db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id));
   if (!row) return res.status(404).json({ error: '附件不存在' });
   if (!canAccessAttachmentSource(req.user, row.source_type, row.source_id)) {
     return res.status(404).json({ error: '附件不存在' });
   }
-  const filePath = path.join(UPLOADS_DIR, row.filepath);
-  if (!fs.existsSync(filePath)) return res.status(404).json({ error: '文件不存在' });
-
-  res.setHeader('Content-Type', row.mimetype || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.filename)}`);
-  res.setHeader('Content-Length', row.size);
-
-  const fileStream = fs.createReadStream(filePath);
-  fileStream.pipe(res);
-  fileStream.on('error', (err) => {
-    console.error('文件流错误:', err);
-    if (!res.headersSent) res.status(500).json({ error: '文件读取失败' });
-  });
+  try {
+    await sendStoredFileResponse(res, row, row.filepath, row.filename, {
+      disposition: req.query.disposition === 'inline' ? 'inline' : 'attachment',
+    });
+  } catch (error) {
+    res.status(error.statusCode || 404).json({ error: error.statusCode === 404 ? '文件不存在' : '文件读取失败' });
+  }
 });
 
 app.delete('/api/attachments/:id', auth, (req, res) => {
@@ -18184,7 +18333,7 @@ app.delete('/api/attachments/:id', auth, (req, res) => {
   if (row.created_by !== req.user.id && !isAdmin(req.user.role)) {
     return res.status(403).json({ error: '只有创建人可以删除附件' });
   }
-  try { fs.unlinkSync(path.join(UPLOADS_DIR, row.filepath)); } catch {}
+  deleteStoredFileBestEffort(row.filepath);
   db.prepare('DELETE FROM attachments WHERE id = ?').run(req.params.id);
   res.json({ success: true });
 });
