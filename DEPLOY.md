@@ -142,6 +142,25 @@ export ALIYUN_OSS_ACCESS_KEY_SECRET=你的OSS AccessKey Secret
 
 配置 OSS 后，新上传的图片和附件会持久化到 OSS；`server/uploads` 目录仍用于请求内临时文件和历史本地附件兼容读取。
 
+### MySQL 数据库
+
+默认仍使用本地 SQLite。切换到 MySQL 时配置：
+```bash
+export DB_CLIENT=mysql
+export MYSQL_HOST=你的MySQL地址
+export MYSQL_PORT=3306
+export MYSQL_DATABASE=relation
+export MYSQL_USER=relation
+export MYSQL_PASSWORD=你的MySQL密码
+```
+
+将本地 `data.db` 导入 MySQL：
+```bash
+npm run db:migrate:mysql -- --sqlite data.db --reset
+```
+
+`--reset` 会先清空目标库已有表，请只在确认目标库可覆盖时使用。
+
 ## 访问应用
 
 部署后访问：`http://your-server-ip:3001`

@@ -1,10 +1,22 @@
 const { encrypt, decrypt, hmacIndex } = require('./crypto');
 const FIELDS = require('./encryptedFields');
 
+const loggedDecryptFailures = new Set();
+
 function getConfig(table) {
   const cfg = FIELDS[table];
   if (!cfg || cfg.skip) return null;
   return cfg;
+}
+
+function logDecryptFailure(table, field, error) {
+  const key = `${table}.${field}:${error.message}`;
+  if (loggedDecryptFailures.has(key)) return;
+  loggedDecryptFailures.add(key);
+  console.error(
+    `[crypto] decrypt failed table=${table} field=${field}: ${error.message}; ` +
+    '后续同类错误已省略，请确认 .secrets/master.key 与数据加密时使用的密钥一致'
+  );
 }
 
 // 把 row 写入 DB 之前调用：对配置中的字段就地加密
@@ -31,7 +43,7 @@ function decryptRow(table, row) {
       try {
         out[f] = decrypt(out[f]);
       } catch (e) {
-        console.error(`[crypto] decrypt failed table=${table} field=${f}:`, e.message);
+        logDecryptFailure(table, f, e);
         out[f] = null;
       }
     }

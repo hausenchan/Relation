@@ -13,6 +13,7 @@
     "wolai:chrome": "node scripts/wolai-collector/start-chrome-debug.js",
     "mobile-task:collect": "node scripts/mobile-task-center-collector.js",
     "mobile-task:validate": "node scripts/mobile-task-center-collector.js --validate-config",
+    "db:migrate:mysql": "node scripts/migrate-sqlite-to-mysql.js",
     "install:all": "npm install && cd client && npm install"
   },
   "dependencies": {
@@ -29,7 +30,9 @@
     "mailparser": "^3.9.8",
     "mammoth": "^1.11.0",
     "multer": "^2.2.0",
+    "mysql2": "^3.22.6",
     "node-cron": "^4.2.1",
-    "pdf-parse": "^1.1.1"
+    "pdf-parse": "^1.1.1",
+    "sync-rpc": "^1.3.7"
   }
 }

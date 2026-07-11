@@ -37,6 +37,14 @@ const DATE_TABS = [
   { label: '后天',   getDate: () => dayjs().add(2, 'day').format('YYYY-MM-DD') },
 ];
 
+const sameId = (a, b) => {
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) return left === right;
+  return String(a) === String(b);
+};
+
 export default function MyTasks() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -166,7 +174,7 @@ export default function MyTasks() {
       title: '指派人',
       dataIndex: 'created_by_name',
       width: 90,
-      render: (v, r) => r.created_by === user?.id
+      render: (v, r) => sameId(r.created_by, user?.id)
         ? <Text type="secondary" style={{ fontSize: 12 }}>自建</Text>
         : <Text style={{ fontSize: 12 }}>{v}</Text>,
     },
@@ -225,7 +233,7 @@ export default function MyTasks() {
           {r.status !== 'done' && (
             <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} />
           )}
-          {r.created_by === user?.id && r.status === 'pending' && (
+          {sameId(r.created_by, user?.id) && r.status === 'pending' && (
             <Popconfirm title="确认删除？" onConfirm={() => handleDelete(r.id)}>
               <Button size="small" danger icon={<DeleteOutlined />} />
             </Popconfirm>
@@ -280,7 +288,7 @@ export default function MyTasks() {
               预估工时：{(record.estimated_hours === null || record.estimated_hours === undefined || record.estimated_hours === '') ? '-' : `${record.estimated_hours}人时`}
             </Typography.Text>
             <Typography.Text type="secondary">开始日期：{record.started_at ? dayjs(record.started_at).format('YYYY-MM-DD') : '-'}</Typography.Text>
-            <Typography.Text type="secondary">指派人：{record.created_by === user?.id ? '自建' : (record.created_by_name || '-')}</Typography.Text>
+            <Typography.Text type="secondary">指派人：{sameId(record.created_by, user?.id) ? '自建' : (record.created_by_name || '-')}</Typography.Text>
           </div>
 
           {record.result && (
@@ -313,7 +321,7 @@ export default function MyTasks() {
                 编辑
               </Button>
             )}
-            {record.created_by === user?.id && record.status === 'pending' && (
+            {sameId(record.created_by, user?.id) && record.status === 'pending' && (
               <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
                 <Button size="small" danger icon={<DeleteOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => event.stopPropagation()}>
                   删除
@@ -454,7 +462,7 @@ export default function MyTasks() {
                 filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
                 options={[
                   { value: user?.id, label: `${user?.display_name || user?.username}（我自己）` },
-                  ...users.filter(u => u.id !== user?.id).map(u => ({ value: u.id, label: u.display_name || u.username })),
+                  ...users.filter(u => !sameId(u.id, user?.id)).map(u => ({ value: u.id, label: u.display_name || u.username })),
                 ]}
               />
             </Form.Item>

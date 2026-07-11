@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const Database = require('better-sqlite3');
+const Database = require('./lib/database');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const multer = require('multer');
@@ -66,6 +66,46 @@ function normalizeSubjectAttachmentRow(row) {
     file_name: normalizeUploadedFilename(row.file_name),
     url: getStoredFileUrl(row.file_path),
   } : row;
+}
+
+function normalizeIdValue(value) {
+  if (value === null || value === undefined || value === '') return value;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : value;
+}
+
+function normalizeTaskRow(row) {
+  if (!row) return row;
+  return {
+    ...row,
+    id: normalizeIdValue(row.id),
+    created_by: normalizeIdValue(row.created_by),
+    assigned_to: normalizeIdValue(row.assigned_to),
+    team_id: normalizeIdValue(row.team_id),
+    parent_id: normalizeIdValue(row.parent_id),
+    depth: normalizeIdValue(row.depth),
+    shared_to_me: normalizeIdValue(row.shared_to_me),
+    estimated_hours: normalizeIdValue(row.estimated_hours),
+  };
+}
+
+const loggedSafeDecryptFailures = new Set();
+
+function safeDecrypt(value, fallback = null) {
+  try {
+    const decrypted = decrypt(value);
+    return decrypted === undefined ? fallback : decrypted;
+  } catch (error) {
+    const key = error.message;
+    if (!loggedSafeDecryptFailures.has(key)) {
+      loggedSafeDecryptFailures.add(key);
+      console.error(
+        `[crypto] decrypt failed: ${error.message}; ` +
+        '后续同类错误已省略，请确认 .secrets/master.key 与数据加密时使用的密钥一致'
+      );
+    }
+    return fallback;
+  }
 }
 
 function isDepartedUser(user) {
@@ -1714,7 +1754,7 @@ try {
     VALUES (?, 0, 0, ?, ?, ?, ?, 1, 'pending')
   `);
   for (const m of missing) {
-    const companyName = decrypt(m.company_name) || '未知公司';
+    const companyName = safeDecrypt(m.company_name) || '未知公司';
     const title = `${companyName} - ${m.opportunity_title}`;
     const enc = encryptRow('follow_up_tasks', { title, opportunity_title: m.opportunity_title });
     insertFt.run(enc.title, m.cr_id, m.company_id, enc.opportunity_title, m.opportunity_assignee);
@@ -2814,7 +2854,7 @@ function stringifyForLog(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   try {
-    return decrypt(String(value));
+    return safeDecrypt(String(value));
   } catch {
     return String(value);
   }
@@ -3184,9 +3224,9 @@ app.get('/api/gift_requests', (req, res) => {
   q += ' ORDER BY gr.created_at DESC';
   res.json(db.prepare(q).all(...params).map(r => ({
     ...r,
-    person_name: decrypt(r.person_name),
-    company: decrypt(r.company),
-    gift_name: decrypt(r.gift_name),
+    person_name: safeDecrypt(r.person_name),
+    company: safeDecrypt(r.company),
+    gift_name: safeDecrypt(r.gift_name),
   })));
 });
 
@@ -3270,11 +3310,11 @@ app.get('/api/gift_records', (req, res) => {
   q += ' ORDER BY gr.created_at DESC';
   let rows = db.prepare(q).all(...params).map(r => ({
     ...r,
-    person_name: decrypt(r.person_name),
-    company: decrypt(r.company),
-    phone: decrypt(r.phone),
-    wechat: decrypt(r.wechat),
-    gift_name: decrypt(r.gift_name),
+    person_name: safeDecrypt(r.person_name),
+    company: safeDecrypt(r.company),
+    phone: safeDecrypt(r.phone),
+    wechat: safeDecrypt(r.wechat),
+    gift_name: safeDecrypt(r.gift_name),
   }));
   const personKeyword = String(person_name || '').trim().toLowerCase();
   const companyKeyword = String(company || '').trim().toLowerCase();
@@ -3304,7 +3344,7 @@ app.put('/api/gift_records/:id', (req, res) => {
     // 状态变为「已接收」且之前不是「已接收」时，自动生成互动记录
     if (status === 'received' && record.status !== 'received') {
       const gift = db.prepare('SELECT name FROM gifts WHERE id = ?').get(record.gift_id);
-      const giftName = decrypt(gift?.name) || '礼品';
+      const giftName = safeDecrypt(gift?.name) || '礼品';
       const interactionDate = send_date || new Date().toISOString().slice(0, 10);
       const description = `送出礼品：${giftName} × ${record.quantity}${feedback ? `\n收礼反馈：${feedback}` : ''}`;
       const enc = encryptRow('interactions', { description });
@@ -7892,9 +7932,9 @@ app.get('/api/interactions', (req, res) => {
   // interactions.* 用 interactions 解密；p.name/company/current_company 来自 persons
   const out = decryptRows('interactions', rows).map(r => ({
     ...r,
-    person_name: decrypt(r.person_name),
-    company: decrypt(r.company),
-    current_company: decrypt(r.current_company),
+    person_name: safeDecrypt(r.person_name),
+    company: safeDecrypt(r.company),
+    current_company: safeDecrypt(r.current_company),
   }));
   res.json(out);
 });
@@ -7934,7 +7974,7 @@ app.post('/api/interactions', (req, res) => {
     const candidates = db.prepare(
       'SELECT id, title FROM reminders WHERE person_id=? AND actual_date=? AND done=0'
     ).all(person_id, next_action_date);
-    const existing = candidates.find(c => decrypt(c.title) === title);
+    const existing = candidates.find(c => safeDecrypt(c.title) === title);
     if (existing) {
       db.prepare('UPDATE reminders SET remind_date=?, note=? WHERE id=?').run(remindDateStr, remEnc.note, existing.id);
     } else {
@@ -7946,7 +7986,7 @@ app.post('/api/interactions', (req, res) => {
   // 自动创建待跟进任务
   if (opportunity_title && opportunity_assignee) {
     const person = db.prepare('SELECT name FROM persons WHERE id = ?').get(person_id);
-    const personName = decrypt(person?.name) || '未知人脉';
+    const personName = safeDecrypt(person?.name) || '未知人脉';
     const taskTitle = `${personName} - ${opportunity_title}`;
     const ftEnc = encryptRow('follow_up_tasks', {
       title: taskTitle, opportunity_title, opportunity_note,
@@ -8007,7 +8047,7 @@ app.put('/api/interactions/:id', (req, res) => {
     const candidates = db.prepare(
       'SELECT id, title FROM reminders WHERE person_id=? AND actual_date=? AND done=0'
     ).all(original.person_id, next_action_date);
-    const existing = candidates.find(c => decrypt(c.title) === title);
+    const existing = candidates.find(c => safeDecrypt(c.title) === title);
     if (existing) {
       db.prepare('UPDATE reminders SET remind_date=?, note=? WHERE id=?').run(remindDateStr, remEnc.note, existing.id);
     } else {
@@ -8114,9 +8154,9 @@ app.get('/api/opportunities', auth, (req, res) => {
     const results1Raw = db.prepare(query1).all(...params1);
     const results1 = decryptRows('interactions', results1Raw).map(r => ({
       ...r,
-      person_name: decrypt(r.person_name),
-      company: decrypt(r.company),
-      current_company: decrypt(r.current_company),
+      person_name: safeDecrypt(r.person_name),
+      company: safeDecrypt(r.company),
+      current_company: safeDecrypt(r.current_company),
     }));
     let results2 = [];
 
@@ -8304,12 +8344,12 @@ app.get('/api/follow-up-tasks', (req, res) => {
   const rows = db.prepare(query).all(...params);
   res.json(decryptRows('follow_up_tasks', rows).map(r => ({
     ...r,
-    person_name: decrypt(r.person_name),
-    company: decrypt(r.company),
-    current_company: decrypt(r.current_company),
-    interaction_desc: decrypt(r.interaction_desc),
-    interaction_outcome: decrypt(r.interaction_outcome),
-    company_name: decrypt(r.company_name),
+    person_name: safeDecrypt(r.person_name),
+    company: safeDecrypt(r.company),
+    current_company: safeDecrypt(r.current_company),
+    interaction_desc: safeDecrypt(r.interaction_desc),
+    interaction_outcome: safeDecrypt(r.interaction_outcome),
+    company_name: safeDecrypt(r.company_name),
   })));
 });
 
@@ -8361,12 +8401,12 @@ app.get('/api/follow-up-tasks/watch', (req, res) => {
   const watchRows = db.prepare(query).all(...params);
   res.json(decryptRows('follow_up_tasks', watchRows).map(r => ({
     ...r,
-    person_name: decrypt(r.person_name),
-    company: decrypt(r.company),
-    current_company: decrypt(r.current_company),
-    interaction_desc: decrypt(r.interaction_desc),
-    interaction_outcome: decrypt(r.interaction_outcome),
-    company_name: decrypt(r.company_name),
+    person_name: safeDecrypt(r.person_name),
+    company: safeDecrypt(r.company),
+    current_company: safeDecrypt(r.current_company),
+    interaction_desc: safeDecrypt(r.interaction_desc),
+    interaction_outcome: safeDecrypt(r.interaction_outcome),
+    company_name: safeDecrypt(r.company_name),
   })));
 });
 
@@ -8474,9 +8514,9 @@ app.get('/api/tasks', (req, res) => {
 
   q += ' ORDER BY CASE t.priority WHEN \'high\' THEN 1 WHEN \'medium\' THEN 2 ELSE 3 END, t.created_at ASC';
   // parent_title 来自 tasks.title（加密）
-  res.json(decryptRows('tasks', db.prepare(q).all(...params)).map(r => ({
+  res.json(decryptRows('tasks', db.prepare(q).all(...params)).map(r => normalizeTaskRow({
     ...r,
-    parent_title: decrypt(r.parent_title),
+    parent_title: safeDecrypt(r.parent_title),
   })));
 });
 
@@ -8516,7 +8556,11 @@ app.get('/api/tasks/board', (req, res) => {
     FROM users u LEFT JOIN teams t ON u.team_id = t.id
     WHERE u.id IN (${visibleIds.map(() => '?').join(',')})
     ORDER BY t.name, u.display_name
-  `).all(...visibleIds);
+  `).all(...visibleIds).map(member => ({
+    ...member,
+    id: normalizeIdValue(member.id),
+    team_id: normalizeIdValue(member.team_id),
+  }));
 
   // 获取这些成员当天的任务
   const tasksRaw = db.prepare(`
@@ -8527,15 +8571,15 @@ app.get('/api/tasks/board', (req, res) => {
     WHERE t.assigned_to IN (${visibleIds.map(() => '?').join(',')}) AND t.date = ?
     ORDER BY CASE t.priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, t.created_at ASC
   `).all(...visibleIds, targetDate);
-  const tasks = decryptRows('tasks', tasksRaw).map(r => ({
+  const tasks = decryptRows('tasks', tasksRaw).map(r => normalizeTaskRow({
     ...r,
-    parent_title: decrypt(r.parent_title),
+    parent_title: safeDecrypt(r.parent_title),
   }));
 
   // 按成员组装
   const board = members.map(m => ({
     ...m,
-    tasks: tasks.filter(t => t.assigned_to === m.id),
+    tasks: tasks.filter(t => Number(t.assigned_to) === Number(m.id)),
   }));
 
   res.json(board);
@@ -8547,6 +8591,10 @@ app.post('/api/tasks', (req, res) => {
   const { id: me } = req.user;
   if (!title || !date || !estimated_completion_date || !assigned_to) {
     return res.status(400).json({ error: '标题、计划日期、预估完成日期、被指派人必填' });
+  }
+  const assignedToId = Number(assigned_to);
+  if (!Number.isFinite(assignedToId)) {
+    return res.status(400).json({ error: '被指派人不合法' });
   }
   const normalizedEstimatedHours = normalizeTaskEstimatedHours(estimated_hours);
   if (normalizedEstimatedHours.error) {
@@ -8567,7 +8615,7 @@ app.post('/api/tasks', (req, res) => {
   // 获取 team_id（若未传，从被指派人推断）
   let resolvedTeamId = team_id || null;
   if (!resolvedTeamId) {
-    const assignee = db.prepare('SELECT team_id FROM users WHERE id = ?').get(assigned_to);
+    const assignee = db.prepare('SELECT team_id FROM users WHERE id = ?').get(assignedToId);
     resolvedTeamId = assignee?.team_id || null;
   }
 
@@ -8584,7 +8632,7 @@ app.post('/api/tasks', (req, res) => {
     normalizedStatus,
     priority || 'medium',
     me,
-    assigned_to,
+    assignedToId,
     resolvedTeamId,
     parent_id || null,
     depth,
@@ -9057,8 +9105,8 @@ app.get('/api/agents/budget-opportunities', (req, res) => {
   params.push(Math.min(Number(limit) || 100, 300));
   res.json(db.prepare(q).all(...params).map(row => mapAgentBudgetOpportunity({
     ...row,
-    lead_title: decrypt(row.lead_title),
-    task_title: decrypt(row.task_title),
+    lead_title: safeDecrypt(row.lead_title),
+    task_title: safeDecrypt(row.task_title),
   })));
 });
 
@@ -9092,8 +9140,8 @@ app.get('/api/agents/budget-opportunities/:id', (req, res) => {
   }
   res.json(mapAgentBudgetOpportunity({
     ...row,
-    lead_title: decrypt(row.lead_title),
-    task_title: decrypt(row.task_title),
+    lead_title: safeDecrypt(row.lead_title),
+    task_title: safeDecrypt(row.task_title),
   }));
 });
 
@@ -12722,9 +12770,9 @@ app.get('/api/reminders', (req, res) => {
   query += ' ORDER BY r.remind_date ASC';
   const rows = decryptRows('reminders', db.prepare(query).all(...params)).map(r => ({
     ...r,
-    person_name: decrypt(r.person_name),
-    person_company: decrypt(r.person_company),
-    current_company: decrypt(r.current_company),
+    person_name: safeDecrypt(r.person_name),
+    person_company: safeDecrypt(r.person_company),
+    current_company: safeDecrypt(r.current_company),
   }));
   res.json(rows);
 });
@@ -12801,7 +12849,7 @@ app.get('/api/stats', (req, res) => {
   `).all(...personWhereParams);
   const recentInteractions = decryptRows('interactions', recentInteractionsRaw).map(r => ({
     ...r,
-    person_name: decrypt(r.person_name),
+    person_name: safeDecrypt(r.person_name),
   }));
   res.json({
     personCount,
@@ -13304,7 +13352,7 @@ app.get('/api/company_personnel', (req, res) => {
     }))
     .map(r => ({
       ...stripCompanyAccessColumns(r),
-      linked_person_name: decrypt(r.linked_person_name),
+      linked_person_name: safeDecrypt(r.linked_person_name),
     })));
 });
 
@@ -13359,7 +13407,7 @@ app.post('/api/company_personnel/:id/to_person', canWrite, (req, res) => {
   if (!cp) return res.status(404).json({ error: '未找到' });
   if (!requireCompanyChildAccess(req, res, 'company_personnel', cp.id, '人员不存在或无权访问')) return;
   // company_name 来自 companies.name（将来加密），cp.skills/notes/background 来自未加密的 company_personnel
-  const companyName = decrypt(cp.company_name);
+  const companyName = safeDecrypt(cp.company_name);
   const enc = encryptRow('persons', {
     name: cp.name, company: companyName, position: cp.title,
     skills: cp.skills, notes: cp.notes || cp.background,
@@ -13406,7 +13454,7 @@ app.get('/api/company_products', (req, res) => {
     }))
     .map(r => {
       const { company_shared_with, company_created_by, ...rest } = r;
-      return { ...rest, company_name: decrypt(r.company_name) };
+      return { ...rest, company_name: safeDecrypt(r.company_name) };
     });
   res.json(rows);
 });
@@ -13435,7 +13483,7 @@ app.get('/api/company_products/:id', (req, res) => {
     return res.status(403).json({ error: '无权访问该产品' });
   }
   const { company_shared_with, company_created_by, ...rest } = row;
-  res.json({ ...rest, company_name: decrypt(row.company_name) });
+  res.json({ ...rest, company_name: safeDecrypt(row.company_name) });
 });
 
 app.post('/api/company_products', canWrite, (req, res) => {
@@ -13678,7 +13726,7 @@ function findMatchedAssetSubject(companyEntityName) {
 
 function getCompanyDisplayName(companyId) {
   const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(companyId);
-  return company ? decrypt(company.name) : null;
+  return company ? safeDecrypt(company.name) : null;
 }
 
 function findCompanyByName(name) {
@@ -13881,7 +13929,7 @@ function createMobileTaskCenterSummary(daysInput) {
     const recordAt = getTaskCenterRecordTimeValue(row);
     return {
       ...row,
-      company_name: row.company_name ? decrypt(row.company_name) : null,
+      company_name: row.company_name ? safeDecrypt(row.company_name) : null,
       record_at: recordAt,
       record_date: getTaskCenterRecordDateKey(recordAt),
     };
@@ -14386,7 +14434,7 @@ app.get('/api/mobile-task-center/records', (req, res) => {
   params.push(Math.min(Math.max(Number(limit) || 100, 1), 500));
   const rows = db.prepare(q).all(...params).map(row => ({
     ...row,
-    company_name: decrypt(row.company_name),
+    company_name: safeDecrypt(row.company_name),
     screenshot_attachments: getMobileTaskRecordAttachments(row),
   }));
   res.json(rows);
@@ -14588,7 +14636,7 @@ app.post('/api/competitor_research', (req, res) => {
   // 自动创建待跟进任务（商机指派）
   if (opportunity_title && opportunity_assignee) {
     const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(company_id);
-    const companyName = decrypt(company?.name) || '未知公司';
+    const companyName = safeDecrypt(company?.name) || '未知公司';
     const taskTitle = `${companyName} - ${opportunity_title}`;
     const ftEnc = encryptRow('follow_up_tasks', {
       title: taskTitle, opportunity_title, opportunity_note,
@@ -14625,7 +14673,7 @@ app.put('/api/competitor_research/:id', (req, res) => {
     } else {
       const cr = db.prepare('SELECT company_id FROM competitor_research WHERE id = ?').get(req.params.id);
       const company = cr ? db.prepare('SELECT name FROM companies WHERE id = ?').get(cr.company_id) : null;
-      const companyName = decrypt(company?.name) || '未知公司';
+      const companyName = safeDecrypt(company?.name) || '未知公司';
       const taskTitle = `${companyName} - ${opportunity_title}`;
       const ftEnc = encryptRow('follow_up_tasks', {
         title: taskTitle, opportunity_title, opportunity_note,
@@ -14652,7 +14700,7 @@ app.delete('/api/competitor_research/:id', (req, res) => {
 
 // =========== 出差管理建表 ===========
 db.exec(`
-  CREATE TABLE IF NOT EXISTS groups (
+  CREATE TABLE IF NOT EXISTS \`groups\` (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     leader_id INTEGER,
@@ -15147,7 +15195,7 @@ app.delete('/api/trip-collaboration/schedules/:id', requireTripCollaborationAcce
 app.get('/api/groups', (req, res) => {
   const rows = db.prepare(`
     SELECT g.*, u.display_name as leader_name
-    FROM groups g LEFT JOIN users u ON g.leader_id = u.id
+    FROM \`groups\` g LEFT JOIN users u ON g.leader_id = u.id
     ORDER BY g.id ASC
   `).all();
   res.json(rows);
@@ -15155,19 +15203,19 @@ app.get('/api/groups', (req, res) => {
 
 app.post('/api/groups', (req, res) => {
   const { name, leader_id, notes } = req.body;
-  const r = db.prepare('INSERT INTO groups (name, leader_id, notes) VALUES (?,?,?)').run(name, leader_id || null, notes);
+  const r = db.prepare('INSERT INTO `groups` (name, leader_id, notes) VALUES (?,?,?)').run(name, leader_id || null, notes);
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/groups/:id', (req, res) => {
   const { name, leader_id, notes } = req.body;
-  db.prepare('UPDATE groups SET name=?, leader_id=?, notes=? WHERE id=?').run(name, leader_id || null, notes, req.params.id);
+  db.prepare('UPDATE `groups` SET name=?, leader_id=?, notes=? WHERE id=?').run(name, leader_id || null, notes, req.params.id);
   res.json({ success: true });
 });
 
 app.delete('/api/groups/:id', (req, res) => {
   db.prepare('UPDATE users SET group_id=NULL WHERE group_id=?').run(req.params.id);
-  db.prepare('DELETE FROM groups WHERE id=?').run(req.params.id);
+  db.prepare('DELETE FROM `groups` WHERE id=?').run(req.params.id);
   res.json({ success: true });
 });
 
@@ -15188,7 +15236,7 @@ app.get('/api/trips', (req, res) => {
            er.status as report_status, er.total_amount, er.id as report_id
     FROM business_trips t
     LEFT JOIN users u ON t.user_id = u.id
-    LEFT JOIN groups g ON t.group_id = g.id
+    LEFT JOIN \`groups\` g ON t.group_id = g.id
     LEFT JOIN users a ON t.approved_by = a.id
     LEFT JOIN expense_reports er ON er.trip_id = t.id
     WHERE 1=1
@@ -15212,7 +15260,7 @@ app.get('/api/trips/:id', (req, res) => {
     SELECT t.*, u.display_name as user_name, g.name as group_name, a.display_name as approver_name
     FROM business_trips t
     LEFT JOIN users u ON t.user_id = u.id
-    LEFT JOIN groups g ON t.group_id = g.id
+    LEFT JOIN \`groups\` g ON t.group_id = g.id
     LEFT JOIN users a ON t.approved_by = a.id
     WHERE t.id = ?
   `).get(req.params.id);
@@ -15424,7 +15472,7 @@ app.get('/api/trips/stats/summary', (req, res) => {
            COALESCE(SUM(er.total_amount),0) as total_amount
     FROM business_trips t
     LEFT JOIN users u ON t.user_id = u.id
-    LEFT JOIN groups g ON u.group_id = g.id
+    LEFT JOIN \`groups\` g ON u.group_id = g.id
     LEFT JOIN expense_reports er ON er.trip_id = t.id AND er.status='paid'
     WHERE t.status IN ('approved','completed')
     GROUP BY u.group_id ORDER BY total_amount DESC
@@ -15451,9 +15499,9 @@ app.get('/api/trips/stats/summary', (req, res) => {
   `).all(...personPrivacy.params);
   const alerts = alertsRaw.map(r => ({
     ...r,
-    name: decrypt(r.name),
-    company: decrypt(r.company),
-    current_company: decrypt(r.current_company),
+    name: safeDecrypt(r.name),
+    company: safeDecrypt(r.company),
+    current_company: safeDecrypt(r.current_company),
   }));
 
   res.json({ monthly, byType, byUser, byGroup, alerts });
@@ -15545,7 +15593,7 @@ app.get('/api/goals', (req, res) => {
   `;
   const goals = decryptRows('goals', db.prepare(q).all(...params)).map(g => ({
     ...g,
-    parent_title: decrypt(g.parent_title),
+    parent_title: safeDecrypt(g.parent_title),
   }));
 
   // 为每个目标加载子目标数量
@@ -15601,7 +15649,7 @@ app.get('/api/goals/:id', (req, res) => {
   const children = decryptRows('goals', childrenRaw);
 
   const decGoal = decryptRow('goals', goal);
-  decGoal.parent_title = decrypt(decGoal.parent_title);
+  decGoal.parent_title = safeDecrypt(decGoal.parent_title);
   res.json({
     ...decGoal,
     department: decGoal.department || decGoal.team_department || decGoal.owner_department || null,
@@ -16087,8 +16135,8 @@ function getReductionSourceInfo(reductionId) {
   if (!row) return null;
   const decrypted = {
     ...row,
-    app_name: decrypt(row.app_name),
-    company_entity: decrypt(row.company_entity),
+    app_name: safeDecrypt(row.app_name),
+    company_entity: safeDecrypt(row.company_entity),
   };
   decrypted.title = `${decrypted.app_name || '产品资产'} · ${decrypted.reduction_date || '核减记录'}`;
   return decrypted;
@@ -17041,8 +17089,8 @@ app.get('/api/product-asset-reductions/simple', (req, res) => {
     LIMIT 100
   `).all().map(r => ({
     ...r,
-    app_name: decrypt(r.app_name),
-    title: `${decrypt(r.app_name) || '产品资产'} · ${r.reduction_date || '核减记录'}`,
+    app_name: safeDecrypt(r.app_name),
+    title: `${safeDecrypt(r.app_name) || '产品资产'} · ${r.reduction_date || '核减记录'}`,
   }));
   res.json(rows);
 });
@@ -17224,7 +17272,7 @@ app.get('/api/strategies', (req, res) => {
   const rows = db.prepare(q).all(...params).map(r => ({
     ...r,
     source_title: r.source_type === 'lead'
-      ? decrypt(r.source_title)
+      ? safeDecrypt(r.source_title)
       : r.source_type === 'asset_reduction'
         ? getReductionSourceInfo(r.source_id)?.title
         : null,
@@ -17266,7 +17314,7 @@ app.get('/api/strategies/:id', (req, res) => {
     return res.status(403).json({ error: '无权访问该策略' });
   }
   strategy.source_title = strategy.source_type === 'lead'
-    ? decrypt(strategy.source_title)
+    ? safeDecrypt(strategy.source_title)
     : strategy.source_type === 'asset_reduction'
       ? getReductionSourceInfo(strategy.source_id)?.title
       : null;
@@ -17643,8 +17691,8 @@ app.get('/api/dev-tasks', (req, res) => {
   // related_lead_title / source_title 来自 leads.title（加密），单独解密
   res.json(db.prepare(q).all(...params).map(r => ({
     ...r,
-    related_lead_title: decrypt(r.related_lead_title),
-    source_title: decrypt(r.source_title),
+    related_lead_title: safeDecrypt(r.related_lead_title),
+    source_title: safeDecrypt(r.source_title),
   })));
 });
 
@@ -17692,8 +17740,8 @@ app.get('/api/dev-tasks/:id', (req, res) => {
   `).get(id);
 
   if (!task) return res.status(404).json({ error: '需求不存在' });
-  task.related_lead_title = decrypt(task.related_lead_title);
-  task.source_title = decrypt(task.source_title);
+  task.related_lead_title = safeDecrypt(task.related_lead_title);
+  task.source_title = safeDecrypt(task.source_title);
 
   const sourceStrategy = task.source_type === 'strategy' && task.source_id
     ? db.prepare(`
@@ -17843,7 +17891,7 @@ function notifyTaskCenterProductRecord(productId, options = {}) {
   if (!product) return null;
 
   const productName = options.mini_program_name || product.name || '未知小程序';
-  const companyName = options.company_name || decrypt(product.company_name) || '竞品未知公司';
+  const companyName = options.company_name || safeDecrypt(product.company_name) || '竞品未知公司';
   const entityName = options.entity_name || product.entity_name || product.entity_reg_name || '未关联主体';
   const sourceApp = options.source_app ? `来源App：${options.source_app}；` : '';
   const screenshotText = options.screenshot_count ? `截图：${options.screenshot_count}张；` : '';
@@ -17987,7 +18035,7 @@ app.get('/api/executive/competitor-dynamics', requireExecutive, (req, res) => {
   // cd.* 走 company_dynamics 字段表；company_name 来自 companies.name 需单独解密
   const decrypted = decryptRows('company_dynamics', dynamics).map(r => ({
     ...r,
-    company_name: decrypt(r.company_name),
+    company_name: safeDecrypt(r.company_name),
   }));
   res.json(decrypted);
 });
@@ -18019,7 +18067,7 @@ app.get('/api/executive/key-customers', requireExecutive, (req, res) => {
   // last_interaction_result 来自 interactions.outcome（加密），需单独解密
   res.json(decryptRows('persons', customers).map(r => ({
     ...r,
-    last_interaction_result: decrypt(r.last_interaction_result),
+    last_interaction_result: safeDecrypt(r.last_interaction_result),
   })));
 });
 
@@ -18090,7 +18138,7 @@ app.get('/api/executive/overview', requireExecutive, (req, res) => {
   `).all();
   const recentDynamics = decryptRows('company_dynamics', recentDynamicsRaw).map(r => ({
     ...r,
-    company_name: decrypt(r.company_name),
+    company_name: safeDecrypt(r.company_name),
   }));
 
   // 重点客户预警（超过30天未联系）

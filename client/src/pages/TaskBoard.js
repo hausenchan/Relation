@@ -32,6 +32,14 @@ const priorityMap = {
   low:    { label: '低', color: 'default' },
 };
 
+const sameId = (a, b) => {
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) return left === right;
+  return String(a) === String(b);
+};
+
 export default function TaskBoard() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -152,12 +160,12 @@ export default function TaskBoard() {
 
   // 统计我指派给别人的任务
   const myAssignedTasks = boardData.reduce((sum, m) => {
-    return sum + m.tasks.filter(t => t.created_by === user?.id && t.assigned_to !== user?.id).length;
+    return sum + m.tasks.filter(t => sameId(t.created_by, user?.id) && !sameId(t.assigned_to, user?.id)).length;
   }, 0);
 
   // 统计别人指派给我的任务
   const assignedToMeTasks = boardData.reduce((sum, m) => {
-    return sum + m.tasks.filter(t => t.assigned_to === user?.id && t.created_by !== user?.id).length;
+    return sum + m.tasks.filter(t => sameId(t.assigned_to, user?.id) && !sameId(t.created_by, user?.id)).length;
   }, 0);
 
   return (
@@ -395,7 +403,7 @@ function TaskItem({ task, currentUser, isMobile, onStatus, onEdit, onDelete, onA
   const s = statusMap[task.status] || { label: task.status, color: 'default', badge: 'default' };
   const isDone = task.status === 'done';
 
-  const canEdit = task.assigned_to === currentUser?.id || task.created_by === currentUser?.id
+  const canEdit = sameId(task.assigned_to, currentUser?.id) || sameId(task.created_by, currentUser?.id)
     || ['admin', 'leader', 'sales_director'].includes(currentUser?.role);
 
   return (
@@ -446,7 +454,7 @@ function TaskItem({ task, currentUser, isMobile, onStatus, onEdit, onDelete, onA
             <Button size="small" icon={<EditOutlined />} style={{ height: 22, width: 22, padding: 0 }}
               onClick={() => onEdit(task)} />
           )}
-          {task.created_by === currentUser?.id && task.status === 'pending' && (
+          {sameId(task.created_by, currentUser?.id) && task.status === 'pending' && (
             <Popconfirm title="确认删除？" onConfirm={() => onDelete(task.id)}>
               <Button size="small" danger icon={<DeleteOutlined />} style={{ height: 22, width: 22, padding: 0 }} />
             </Popconfirm>

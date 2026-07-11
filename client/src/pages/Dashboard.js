@@ -119,6 +119,14 @@ const taskSortableColumnKeys = new Set([
 
 const normalizeTaskSortText = (value) => String(value ?? '').trim().toLowerCase();
 
+const sameId = (a, b) => {
+  if (a === null || a === undefined || b === null || b === undefined) return false;
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) return left === right;
+  return String(a) === String(b);
+};
+
 const getTaskDateSortValue = (value) => {
   if (!value) return 0;
   const timestamp = dayjs(value).valueOf();
@@ -500,7 +508,7 @@ export default function Dashboard() {
 
   const buildAssignedTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
-      .filter(t => t.created_by === user?.id && t.assigned_to !== user?.id)
+      .filter(t => sameId(t.created_by, user?.id) && !sameId(t.assigned_to, user?.id))
       .map(t => ({
         ...t,
         task_source: 'normal',
@@ -516,7 +524,7 @@ export default function Dashboard() {
       }));
 
     const followUpItems = allFollowUpData
-      .filter(t => t.assigned_by === user?.id && t.assigned_to !== user?.id)
+      .filter(t => sameId(t.assigned_by, user?.id) && !sameId(t.assigned_to, user?.id))
       .map(t => ({
         ...t,
         id: `follow_up_${t.id}`,
@@ -538,7 +546,7 @@ export default function Dashboard() {
 
   const buildExecutionTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
-      .filter(t => t.assigned_to === user?.id)
+      .filter(t => sameId(t.assigned_to, user?.id))
       .map(t => ({
         ...t,
         task_source: 'normal',
@@ -554,7 +562,7 @@ export default function Dashboard() {
       }));
 
     const followUpItems = allFollowUpData
-      .filter(t => t.assigned_to === user?.id)
+      .filter(t => sameId(t.assigned_to, user?.id))
       .map(t => ({
         ...t,
         id: `follow_up_${t.id}`,
@@ -614,7 +622,7 @@ export default function Dashboard() {
 
   const buildWatchedTasks = (allTasks, watchData) => {
     const sharedNormalTasks = allTasks
-      .filter(t => Number(t.shared_to_me) === 1 && t.assigned_to !== user?.id)
+      .filter(t => Number(t.shared_to_me) === 1 && !sameId(t.assigned_to, user?.id))
       .map(t => ({
         ...t,
         task_source: 'normal',
@@ -912,7 +920,7 @@ export default function Dashboard() {
 
   const canEditTaskRecord = (record) => (
     record?.task_source === 'normal'
-    && (record.created_by === user?.id || record.assigned_to === user?.id || ['admin', 'sales_director'].includes(user?.role))
+    && (sameId(record.created_by, user?.id) || sameId(record.assigned_to, user?.id) || ['admin', 'sales_director'].includes(user?.role))
   );
 
   const handleUpdateStatus = async (id, status) => {
@@ -1322,7 +1330,7 @@ export default function Dashboard() {
       key: 'created_by_name',
       width: 100,
       render: (name, record) => (
-        record.created_by === user?.id
+        sameId(record.created_by, user?.id)
           ? <Text type="secondary">自建</Text>
           : <Text>{name || '-'}</Text>
       ),
