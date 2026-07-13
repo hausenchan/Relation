@@ -16,8 +16,11 @@ const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
 const {
   decodeOssKey,
   deleteOssObjectByPath,
+  getLegacyFilepathFromOssKey,
+  getLegacyOssKey,
   getOssKey,
   getStoredFileUrl,
+  isOssConfigured,
   isOssPath,
   pipeOssObjectToResponse,
   uploadLocalFileToOss,
@@ -337,8 +340,27 @@ async function sendStoredFileResponse(res, row = {}, filepath = '', filename = '
     return;
   }
 
+  let legacyOssError = null;
+  const legacyKey = getLegacyOssKey(filepath);
+  if (legacyKey && isOssConfigured()) {
+    try {
+      await pipeOssObjectToResponse(res, legacyKey, {
+        filename,
+        disposition,
+        mimetype: row.mimetype || row.mime_type,
+        size: row.size || row.file_size,
+      });
+      return;
+    } catch (error) {
+      legacyOssError = error;
+    }
+  }
+
   const filePath = path.join(UPLOADS_DIR, filepath);
   if (!fs.existsSync(filePath)) {
+    if (legacyOssError && legacyOssError.statusCode && legacyOssError.statusCode !== 404) {
+      throw legacyOssError;
+    }
     res.status(404).json({ error: '文件不存在' });
     return;
   }
@@ -520,11 +542,17 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/oss/:encodedKey', async (req, res) => {
+  let key = '';
   try {
-    const key = decodeOssKey(req.params.encodedKey);
+    key = decodeOssKey(req.params.encodedKey);
     if (!key) return res.status(404).json({ error: '文件不存在' });
     await pipeOssObjectToResponse(res, key, { disposition: 'inline' });
   } catch (error) {
+    const legacyFilepath = getLegacyFilepathFromOssKey(key);
+    if (legacyFilepath) {
+      const localPath = path.join(UPLOADS_DIR, legacyFilepath);
+      if (fs.existsSync(localPath)) return res.sendFile(localPath);
+    }
     const status = error.statusCode || error.status || 404;
     res.status(status === 404 ? 404 : 500).json({ error: status === 404 ? '文件不存在' : '文件读取失败' });
   }

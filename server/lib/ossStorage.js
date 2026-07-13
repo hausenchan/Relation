@@ -6,6 +6,7 @@ const OSS = require('ali-oss');
 const OSS_PATH_PREFIX = 'oss:';
 const DEFAULT_BUCKET = 'mid-relation';
 const DEFAULT_ENDPOINT = 'oss-cn-shenzhen.aliyuncs.com';
+const DEFAULT_LEGACY_UPLOADS_PREFIX = 'uploads';
 
 let cachedClient = null;
 let cachedConfigKey = '';
@@ -65,6 +66,37 @@ function normalizeObjectPrefix(prefix = 'attachments') {
     .replace(/\/{2,}/g, '/') || 'attachments';
 }
 
+function normalizeLegacyFilepath(filepath = '') {
+  if (!filepath || isOssPath(filepath)) return '';
+  return String(filepath)
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/{2,}/g, '/')
+    .split('/')
+    .filter(part => part && part !== '.' && part !== '..')
+    .join('/');
+}
+
+function getLegacyUploadsPrefix() {
+  return normalizeObjectPrefix(
+    process.env.ALIYUN_OSS_LEGACY_UPLOADS_PREFIX ||
+    process.env.OSS_LEGACY_UPLOADS_PREFIX ||
+    DEFAULT_LEGACY_UPLOADS_PREFIX
+  );
+}
+
+function getLegacyOssKey(filepath = '') {
+  const normalized = normalizeLegacyFilepath(filepath);
+  return normalized ? `${getLegacyUploadsPrefix()}/${normalized}` : '';
+}
+
+function getLegacyFilepathFromOssKey(key = '') {
+  const prefix = `${getLegacyUploadsPrefix()}/`;
+  if (!String(key || '').startsWith(prefix)) return '';
+  return normalizeLegacyFilepath(String(key).slice(prefix.length));
+}
+
 function buildObjectKey(file = {}, prefix = 'attachments') {
   const originalName = file.originalname || file.filename || '';
   const ext = path.extname(originalName).toLowerCase().replace(/[^.a-z0-9_-]/g, '');
@@ -90,6 +122,8 @@ function getStoredFileUrl(filepath) {
     const key = getOssKey(filepath);
     return key ? `/oss/${encodeOssKey(key)}` : '';
   }
+  const legacyKey = getLegacyOssKey(filepath);
+  if (legacyKey && isOssConfigured()) return `/oss/${encodeOssKey(legacyKey)}`;
   return `/uploads/${filepath}`;
 }
 
@@ -143,6 +177,8 @@ async function pipeOssObjectToResponse(res, key, options = {}) {
 module.exports = {
   decodeOssKey,
   deleteOssObjectByPath,
+  getLegacyFilepathFromOssKey,
+  getLegacyOssKey,
   getOssKey,
   getStoredFileUrl,
   isOssConfigured,

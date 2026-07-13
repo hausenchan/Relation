@@ -140,7 +140,16 @@ export ALIYUN_OSS_ACCESS_KEY_ID=你的OSS AccessKey ID
 export ALIYUN_OSS_ACCESS_KEY_SECRET=你的OSS AccessKey Secret
 ```
 
-配置 OSS 后，新上传的图片和附件会持久化到 OSS；`server/uploads` 目录仍用于请求内临时文件和历史本地附件兼容读取。
+配置 OSS 后，新上传的图片和附件会持久化到 OSS，仍按业务目录写入，例如 `attachments/yyyy/MM/dd/`、`documents/yyyy/MM/dd/`、`company-subjects/yyyy/MM/dd/`。
+
+历史 `server/uploads` 文件可整体复制到 OSS 的 `uploads/` 目录。数据库里的旧路径不需要立刻修改，系统读取旧路径时会优先访问 `oss://mid-relation/uploads/<旧文件名>`，OSS 不存在时再兜底读取本地 `server/uploads/<旧文件名>`。
+
+```bash
+cd /path/to/relation/server/uploads
+ossutil cp -r . oss://mid-relation/uploads/
+```
+
+注意复制的是 `server/uploads` 目录里的文件内容，目标应为 `uploads/<旧文件名>`，不要变成 `uploads/server/uploads/<旧文件名>`。
 
 ### MySQL 数据库
 
