@@ -267,6 +267,32 @@ pm2 restart relation
 
 如果使用宝塔/系统服务，请在对应服务配置里确保已注入第 5 节环境变量。
 
+### 7.1 网络抓包端口
+
+“网络抓包”功能会在应用进程内额外监听 TCP `8888` 作为手机 HTTP 代理。正式服如果要抓手机 App 流量，需要同时满足：
+
+```text
+应用进程已点击“开始抓包”
+服务器/容器已暴露 TCP 8888
+云安全组、防火墙、宝塔安全策略已放行 TCP 8888
+```
+
+如果正式服使用 Docker，运行容器时需要映射：
+
+```bash
+docker run ... -p 3001:3001 -p 8888:8888 ...
+```
+
+如果正式服使用宝塔或系统服务直接运行 Node，则需要在服务器防火墙/安全组放行 TCP `8888`。
+
+验收方式：在手机浏览器打开：
+
+```text
+http://relation.midongtech.com:8888/__network_capture_ping
+```
+
+能看到 `network capture proxy reachable`，并且抓包页面出现“诊断”记录，才说明手机能连到代理端口。若打不开，说明请求还没有到达应用，继续检查端口映射、安全组和防火墙。
+
 ## 8. 启动命令参考
 
 命令行启动示例：
@@ -281,6 +307,7 @@ MYSQL_PASSWORD=<生产 MySQL 密码> \
 ALIYUN_OSS_ACCESS_KEY_ID=<生产 OSS AccessKey ID> \
 ALIYUN_OSS_ACCESS_KEY_SECRET=<生产 OSS AccessKey Secret> \
 ALIYUN_OSS_LEGACY_UPLOADS_PREFIX=uploads \
+NETWORK_CAPTURE_PORT=8888 \
 NODE_ENV=production \
 npm run server
 ```

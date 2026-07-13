@@ -103,8 +103,15 @@ CMD ["node", "server/index.js"]
 构建和运行：
 ```bash
 docker build -t relation-manager .
-docker run -d -p 3001:3001 -v $(pwd)/server/data.db:/app/server/data.db --name relation-manager relation-manager
+docker run -d \
+  -p 3001:3001 \
+  -p 8888:8888 \
+  -v $(pwd)/server/data.db:/app/server/data.db \
+  --name relation-manager \
+  relation-manager
 ```
+
+如果要使用“网络抓包”，除了容器映射 `-p 8888:8888`，还需要在云服务器安全组、防火墙或宝塔面板里放行 TCP `8888`。手机浏览器能打开 `http://你的域名或服务器IP:8888/__network_capture_ping` 后，手机 Wi-Fi 代理再填同一个主机和端口。
 
 ## 方案3：云平台部署
 
@@ -134,6 +141,7 @@ cp server/data.db server/data.db.backup.$(date +%Y%m%d)
 ```bash
 export NODE_ENV=production
 export PORT=3001
+export NETWORK_CAPTURE_PORT=8888
 export ALIYUN_OSS_BUCKET=mid-relation
 export ALIYUN_OSS_ENDPOINT=oss-cn-shenzhen.aliyuncs.com
 export ALIYUN_OSS_ACCESS_KEY_ID=你的OSS AccessKey ID

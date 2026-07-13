@@ -59,7 +59,8 @@ COPY --from=builder /app/client/build ./client/build
 RUN mkdir -p /app/server/uploads
 VOLUME ["/app/server/uploads"]
 
-EXPOSE 3001
+# 3001: Web/API 服务；8888: 网络抓包 HTTP 代理端口。
+EXPOSE 3001 8888
 
 # ------------------------
 # 7.启动服务
