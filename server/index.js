@@ -4694,26 +4694,68 @@ app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
 
 // =========== 文档中心基础 API ===========
 const DOCUMENT_DOMAIN_CODES = {
-  domestic_project: 'CN',
-  overseas_project: 'OS',
+  domestic_project: 'DOMESTIC',
+  overseas_project: 'OVERSEAS',
   executive_management: 'MGT',
   general: 'GEN',
   cross_region: 'CR',
 };
 const DOCUMENT_DEPARTMENTS = [
-  { key: 'PM', name: '0_项目' },
-  { key: 'PD', name: '1_产研' },
-  { key: 'BD', name: '2_商务' },
-  { key: 'OPS', name: '3_产运' },
-  { key: 'ADS', name: '4_投放' },
+  { key: 'OPS', name: '产运' },
+  { key: 'BD', name: '商务' },
+  { key: 'RD', name: '研发' },
+  { key: 'ADS', name: '投放' },
 ];
-const DOCUMENT_TEMPLATE_FOLDERS = [
-  { name: '01_SOP流程规范', type: 'SOP', order: 10 },
-  { name: '02_规则制度', type: 'RULE', order: 20 },
-  { name: '03_项目资料', type: 'SPEC', order: 30 },
-  { name: '04_复盘案例', type: 'REVIEW', order: 40 },
-  { name: '临时文档', type: 'TMP', order: 90 },
+const DOCUMENT_SPACE_DIRECTORY_BLUEPRINT = {
+  domestic_project: [
+    { key: 'OPS', name: '产运', order: 10 },
+    { key: 'BD', name: '商务', order: 20 },
+    { key: 'RD', name: '研发', order: 30 },
+    { key: 'ADS', name: '投放', order: 40 },
+  ],
+  overseas_project: [
+    { key: 'BD', name: '商务', order: 10 },
+    { key: 'ADS', name: '投放', order: 20 },
+  ],
+};
+const DOCUMENT_STAGE_FOLDERS = [
+  { name: '规划', type: 'PLAN', order: 10 },
+  { name: '落地', type: 'IMP', order: 20 },
+  { name: '沉淀', type: 'LEGA', order: 30 },
+  { name: '团队', type: 'TEAM', order: 40 },
 ];
+const DOCUMENT_TEMPLATE_FOLDERS = DOCUMENT_STAGE_FOLDERS;
+const DOCUMENT_MANAGED_SPACE_DOMAINS = Object.keys(DOCUMENT_SPACE_DIRECTORY_BLUEPRINT);
+const LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES = ['01_SOP流程规范', '02_规则制度', '03_项目资料', '04_复盘案例', '临时文档'];
+const DOCUMENT_LEGACY_DEPARTMENT_MAP = {
+  PM: 'OPS',
+  PD: 'RD',
+  OPS: 'OPS',
+  BD: 'BD',
+  ADS: 'ADS',
+  RD: 'RD',
+  MGT: 'OPS',
+  ALL: 'OPS',
+};
+const DOCUMENT_OVERSEAS_DEPARTMENT_MAP = {
+  BD: 'BD',
+  ADS: 'ADS',
+};
+const DOCUMENT_LEGACY_DOC_TYPE_MAP = {
+  PLAN: 'PLAN',
+  IMP: 'IMP',
+  LEGA: 'LEGA',
+  TEAM: 'TEAM',
+  SPEC: 'IMP',
+  TMP: 'IMP',
+  SOP: 'LEGA',
+  RULE: 'LEGA',
+  REVIEW: 'LEGA',
+  RPT: 'LEGA',
+  MEET: 'TEAM',
+  TPL: 'TEAM',
+};
+const DOCUMENT_MAX_FOLDER_DEPTH = 5;
 
 function normalizeDocumentCode(value, fallback = 'GEN', maxLength = 16) {
   const code = String(value || fallback || 'GEN')
@@ -4743,6 +4785,248 @@ function getProjectCodeForDocument(projectGroupId, domain, explicitCode) {
     if (group?.id) return `PG${group.id}`;
   }
   return DOCUMENT_DOMAIN_CODES[normalizeDocumentDomain(domain)] || 'GEN';
+}
+
+function isManagedDocumentSpace(domain) {
+  return DOCUMENT_MANAGED_SPACE_DOMAINS.includes(normalizeDocumentDomain(domain));
+}
+
+function normalizeDocumentDirectoryDepartment(domain, value) {
+  const key = normalizeDocumentDepartment(value || 'OPS');
+  if (normalizeDocumentDomain(domain) === 'overseas_project') {
+    return DOCUMENT_OVERSEAS_DEPARTMENT_MAP[key] || 'ADS';
+  }
+  return DOCUMENT_LEGACY_DEPARTMENT_MAP[key] || key || 'OPS';
+}
+
+function normalizeDocumentDirectoryType(value) {
+  const key = normalizeDocumentType(value || 'IMP');
+  return DOCUMENT_LEGACY_DOC_TYPE_MAP[key] || (DOCUMENT_STAGE_FOLDERS.some(item => item.type === key) ? key : 'IMP');
+}
+
+function getDocumentFolderById(folderId) {
+  const id = Number(folderId);
+  if (!id) return null;
+  return db.prepare('SELECT * FROM document_folders WHERE id = ?').get(id) || null;
+}
+
+function getDocumentFolderPathRows(folderId) {
+  const rows = [];
+  const seen = new Set();
+  let current = getDocumentFolderById(folderId);
+  while (current && !seen.has(Number(current.id)) && rows.length < DOCUMENT_MAX_FOLDER_DEPTH + 5) {
+    rows.unshift(current);
+    seen.add(Number(current.id));
+    current = current.parent_id ? getDocumentFolderById(current.parent_id) : null;
+  }
+  return rows;
+}
+
+function getDocumentFolderDepth(folderId) {
+  return getDocumentFolderPathRows(folderId).length;
+}
+
+function getDocumentFolderDescendantIds(folderId) {
+  const id = Number(folderId);
+  if (!id) return [];
+  return db.prepare(`
+    WITH RECURSIVE folder_tree(id) AS (
+      SELECT id FROM document_folders WHERE id = ?
+      UNION ALL
+      SELECT f.id FROM document_folders f
+      JOIN folder_tree ft ON f.parent_id = ft.id
+    )
+    SELECT id FROM folder_tree
+  `).all(id).map(row => Number(row.id));
+}
+
+function resolveDocumentFolderContext(folderId) {
+  const pathRows = getDocumentFolderPathRows(folderId);
+  if (!pathRows.length) return null;
+  const leaf = pathRows[pathRows.length - 1];
+  const root = pathRows[0] || leaf;
+  const stage = pathRows[1] || null;
+  return {
+    folder: leaf,
+    depth: pathRows.length,
+    domain: normalizeDocumentDomain(leaf.domain || root.domain),
+    project_group_id: leaf.project_group_id ?? root.project_group_id ?? null,
+    department_key: normalizeDocumentDirectoryDepartment(leaf.domain || root.domain, root.department_key || leaf.department_key),
+    doc_type: normalizeDocumentDirectoryType(stage?.default_doc_type || leaf.default_doc_type || 'IMP'),
+  };
+}
+
+function getDocumentBusinessFieldsFromFolder(folderId, fallback = {}) {
+  const context = resolveDocumentFolderContext(folderId);
+  if (!context) {
+    return {
+      domain: normalizeDocumentDomain(fallback.domain),
+      project_group_id: fallback.project_group_id ?? null,
+      department_key: normalizeDocumentDepartment(fallback.department_key || 'ALL'),
+      doc_type: normalizeDocumentType(fallback.doc_type || 'TMP'),
+    };
+  }
+  return {
+    domain: context.domain,
+    project_group_id: context.project_group_id ?? fallback.project_group_id ?? null,
+    department_key: context.department_key,
+    doc_type: context.doc_type,
+  };
+}
+
+function isDocumentFolderManager(user) {
+  return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role) || user.role === 'leader'));
+}
+
+function serializeDocumentFolder(row, user) {
+  const depth = getDocumentFolderDepth(row.id);
+  const canManage = isDocumentFolderManager(user);
+  const isProtected = isManagedDocumentSpace(row.domain) && depth > 0 && depth <= 2;
+  const isManaged = isManagedDocumentSpace(row.domain);
+  return {
+    ...row,
+    depth,
+    is_protected: isProtected ? 1 : 0,
+    can_add_child: canManage && isManaged && depth >= 2 && depth < DOCUMENT_MAX_FOLDER_DEPTH ? 1 : 0,
+    can_edit_folder: canManage && isManaged && !isProtected && depth >= 3 ? 1 : 0,
+    can_delete_folder: canManage && isManaged && !isProtected && depth >= 3 ? 1 : 0,
+  };
+}
+
+function findDocumentFolder({ name, parentId = null, domain, departmentKey, docType }) {
+  const baseSql = parentId
+    ? 'parent_id = ?'
+    : 'parent_id IS NULL';
+  const params = parentId
+    ? [Number(parentId)]
+    : [];
+  return db.prepare(`
+    SELECT * FROM document_folders
+    WHERE ${baseSql}
+      AND name = ?
+      AND domain = ?
+      AND department_key = ?
+      AND default_doc_type = ?
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(...params, name, normalizeDocumentDomain(domain), normalizeDocumentDepartment(departmentKey), normalizeDocumentType(docType));
+}
+
+function upsertDocumentFolder({ name, parentId = null, domain, departmentKey, docType, sortOrder, userId }) {
+  const existing = findDocumentFolder({ name, parentId, domain, departmentKey, docType });
+  if (existing) {
+    db.prepare(`
+      UPDATE document_folders SET
+        project_group_id = NULL,
+        sort_order = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(Number(sortOrder) || 0, existing.id);
+    return existing.id;
+  }
+  const result = db.prepare(`
+    INSERT INTO document_folders (name, parent_id, domain, project_group_id, department_key, default_doc_type, sort_order, created_by)
+    VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+  `).run(
+    name,
+    parentId || null,
+    normalizeDocumentDomain(domain),
+    normalizeDocumentDepartment(departmentKey),
+    normalizeDocumentType(docType),
+    Number(sortOrder) || 0,
+    userId || 1
+  );
+  return result.lastInsertRowid;
+}
+
+function getDocumentDirectoryStageFolderId(targetMap, domain, departmentKey, docType) {
+  return targetMap
+    .get(normalizeDocumentDomain(domain))
+    ?.get(normalizeDocumentDepartment(departmentKey))
+    ?.get(normalizeDocumentDirectoryType(docType))
+    || null;
+}
+
+function getDocumentYear(row = {}) {
+  return String(row.created_at || row.updated_at || '').slice(0, 4) || String(new Date().getFullYear());
+}
+
+function ensureDocumentDirectoryBlueprint() {
+  const ensure = db.transaction(() => {
+    const targetMap = new Map();
+    for (const [domain, departments] of Object.entries(DOCUMENT_SPACE_DIRECTORY_BLUEPRINT)) {
+      targetMap.set(domain, new Map());
+      for (const department of departments) {
+        const rootId = upsertDocumentFolder({
+          name: department.name,
+          parentId: null,
+          domain,
+          departmentKey: department.key,
+          docType: 'PLAN',
+          sortOrder: department.order,
+          userId: 1,
+        });
+        const stageMap = new Map();
+        for (const stage of DOCUMENT_STAGE_FOLDERS) {
+          const stageId = upsertDocumentFolder({
+            name: stage.name,
+            parentId: rootId,
+            domain,
+            departmentKey: department.key,
+            docType: stage.type,
+            sortOrder: stage.order,
+            userId: 1,
+          });
+          stageMap.set(stage.type, stageId);
+        }
+        targetMap.get(domain).set(department.key, stageMap);
+      }
+    }
+
+    const docs = db.prepare(`
+      SELECT d.*, f.department_key as folder_department_key, f.default_doc_type as folder_doc_type
+      FROM documents d
+      LEFT JOIN document_folders f ON d.folder_id = f.id
+      WHERE COALESCE(d.is_deleted, 0) = 0
+        AND d.domain IN (${DOCUMENT_MANAGED_SPACE_DOMAINS.map(() => '?').join(',')})
+    `).all(...DOCUMENT_MANAGED_SPACE_DOMAINS);
+    const updateDoc = db.prepare(`
+      UPDATE documents SET
+        folder_id = ?,
+        department_key = ?,
+        doc_type = ?,
+        project_code = ?,
+        document_no = ?,
+        updated_at = updated_at
+      WHERE id = ?
+    `);
+    docs.forEach(doc => {
+      const domain = normalizeDocumentDomain(doc.domain);
+      const sourceDepartment = doc.department_key || doc.folder_department_key || 'OPS';
+      const departmentKey = normalizeDocumentDirectoryDepartment(domain, sourceDepartment);
+      const docType = normalizeDocumentDirectoryType(doc.doc_type || doc.folder_doc_type || 'IMP');
+      const targetFolderId = getDocumentDirectoryStageFolderId(targetMap, domain, departmentKey, docType)
+        || getDocumentDirectoryStageFolderId(targetMap, domain, departmentKey, 'IMP');
+      if (!targetFolderId) return;
+      const projectCode = doc.project_group_id
+        ? getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code)
+        : DOCUMENT_DOMAIN_CODES[domain];
+      const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, getDocumentYear(doc));
+      updateDoc.run(targetFolderId, departmentKey, docType, projectCode, documentNo, doc.id);
+    });
+
+    if (LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES.length) {
+      db.prepare(`
+        DELETE FROM document_folders
+        WHERE domain IN (${DOCUMENT_MANAGED_SPACE_DOMAINS.map(() => '?').join(',')})
+          AND parent_id IS NULL
+          AND name IN (${LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES.map(() => '?').join(',')})
+          AND id NOT IN (SELECT DISTINCT folder_id FROM documents WHERE folder_id IS NOT NULL AND COALESCE(is_deleted, 0) = 0)
+          AND id NOT IN (SELECT DISTINCT parent_id FROM document_folders WHERE parent_id IS NOT NULL)
+      `).run(...DOCUMENT_MANAGED_SPACE_DOMAINS, ...LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES);
+    }
+  });
+  ensure();
 }
 
 function parseMaybeJson(value, fallback) {
@@ -5507,11 +5791,15 @@ function serializeDocumentEditRecord(row, options = {}) {
 
 function createDocumentRecord(body, user) {
   const createDoc = db.transaction(() => {
-    const folder = body.folder_id ? db.prepare('SELECT * FROM document_folders WHERE id = ?').get(body.folder_id) : null;
-    const domain = normalizeDocumentDomain(body.domain || folder?.domain);
-    const projectGroupId = body.project_group_id ?? folder?.project_group_id ?? null;
-    const departmentKey = normalizeDocumentDepartment(body.department_key || folder?.department_key || 'ALL');
-    const docType = normalizeDocumentType(body.doc_type || folder?.default_doc_type || 'TMP');
+    const folderFields = body.folder_id ? getDocumentBusinessFieldsFromFolder(body.folder_id, body) : null;
+    const domain = normalizeDocumentDomain(folderFields?.domain || body.domain);
+    const projectGroupId = folderFields ? folderFields.project_group_id : (body.project_group_id ?? null);
+    const departmentKey = folderFields
+      ? folderFields.department_key
+      : normalizeDocumentDepartment(body.department_key || 'ALL');
+    const docType = folderFields
+      ? folderFields.doc_type
+      : normalizeDocumentType(body.doc_type || 'TMP');
     const projectCode = getProjectCodeForDocument(projectGroupId, domain, body.project_code);
     const globalSeq = getNextDocumentSequence();
     const year = new Date().getFullYear();
@@ -5550,6 +5838,8 @@ function createDocumentRecord(body, user) {
   return createDoc();
 }
 
+ensureDocumentDirectoryBlueprint();
+
 app.get('/api/document-folders', (req, res) => {
   const rows = db.prepare(`
     SELECT f.*, pg.name as project_group_name
@@ -5557,22 +5847,32 @@ app.get('/api/document-folders', (req, res) => {
     LEFT JOIN project_groups pg ON f.project_group_id = pg.id
     ORDER BY f.domain, COALESCE(pg.name, ''), f.department_key, f.sort_order, f.name
   `).all();
-  res.json(rows);
+  res.json(rows.map(row => serializeDocumentFolder(row, req.user)));
 });
 
 app.post('/api/document-folders', canWrite, (req, res) => {
-  const { name, parent_id, domain, project_group_id, department_key, default_doc_type, sort_order } = req.body;
+  if (!isDocumentFolderManager(req.user)) return res.status(403).json({ error: '只有小组长和 CXO 可以编辑目录' });
+  const { name, parent_id, sort_order } = req.body;
   if (!String(name || '').trim()) return res.status(400).json({ error: '目录名称必填' });
+  const parent = getDocumentFolderById(parent_id);
+  if (!parent) return res.status(400).json({ error: '请选择二级目录或其下级目录作为父目录' });
+  if (!isManagedDocumentSpace(parent.domain)) return res.status(400).json({ error: '仅国内项目和海外项目支持自定义目录' });
+  const parentDepth = getDocumentFolderDepth(parent.id);
+  if (parentDepth < 2) return res.status(400).json({ error: '只能在二级目录后新增子文件夹' });
+  if (parentDepth >= DOCUMENT_MAX_FOLDER_DEPTH) return res.status(400).json({ error: `目录最多支持 ${DOCUMENT_MAX_FOLDER_DEPTH} 级` });
+  const sibling = db.prepare('SELECT id FROM document_folders WHERE parent_id = ? AND name = ?').get(parent.id, String(name).trim());
+  if (sibling) return res.status(400).json({ error: '同级目录已存在相同名称' });
+  const context = resolveDocumentFolderContext(parent.id);
   const result = db.prepare(`
     INSERT INTO document_folders (name, parent_id, domain, project_group_id, department_key, default_doc_type, sort_order, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     String(name).trim(),
-    parent_id || null,
-    normalizeDocumentDomain(domain),
-    project_group_id || null,
-    normalizeDocumentDepartment(department_key || 'ALL'),
-    normalizeDocumentType(default_doc_type || 'TMP'),
+    parent.id,
+    context?.domain || parent.domain,
+    context?.project_group_id || null,
+    context?.department_key || parent.department_key,
+    context?.doc_type || parent.default_doc_type,
     Number(sort_order) || 0,
     req.user.id
   );
@@ -5580,22 +5880,22 @@ app.post('/api/document-folders', canWrite, (req, res) => {
 });
 
 app.put('/api/document-folders/:id', canWrite, (req, res) => {
-  const existing = db.prepare('SELECT id FROM document_folders WHERE id = ?').get(req.params.id);
+  if (!isDocumentFolderManager(req.user)) return res.status(403).json({ error: '只有小组长和 CXO 可以编辑目录' });
+  const existing = getDocumentFolderById(req.params.id);
   if (!existing) return res.status(404).json({ error: '目录不存在' });
-  const { name, parent_id, domain, project_group_id, department_key, default_doc_type, sort_order } = req.body;
+  if (!isManagedDocumentSpace(existing.domain)) return res.status(400).json({ error: '仅国内项目和海外项目支持编辑目录' });
+  const existingMeta = serializeDocumentFolder(existing, req.user);
+  if (existingMeta.is_protected || existingMeta.depth < 3) return res.status(403).json({ error: '系统默认目录不允许编辑' });
+  const { name, sort_order } = req.body;
   if (!String(name || '').trim()) return res.status(400).json({ error: '目录名称必填' });
+  const sibling = db.prepare('SELECT id FROM document_folders WHERE parent_id = ? AND name = ? AND id <> ?').get(existing.parent_id, String(name).trim(), existing.id);
+  if (sibling) return res.status(400).json({ error: '同级目录已存在相同名称' });
   db.prepare(`
     UPDATE document_folders SET
-      name = ?, parent_id = ?, domain = ?, project_group_id = ?, department_key = ?,
-      default_doc_type = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
+      name = ?, sort_order = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
     String(name).trim(),
-    parent_id || null,
-    normalizeDocumentDomain(domain),
-    project_group_id || null,
-    normalizeDocumentDepartment(department_key || 'ALL'),
-    normalizeDocumentType(default_doc_type || 'TMP'),
     Number(sort_order) || 0,
     req.params.id
   );
@@ -5603,6 +5903,14 @@ app.put('/api/document-folders/:id', canWrite, (req, res) => {
 });
 
 app.delete('/api/document-folders/:id', canWrite, (req, res) => {
+  if (!isDocumentFolderManager(req.user)) return res.status(403).json({ error: '只有小组长和 CXO 可以编辑目录' });
+  const existing = getDocumentFolderById(req.params.id);
+  if (!existing) return res.status(404).json({ error: '目录不存在' });
+  if (!isManagedDocumentSpace(existing.domain)) return res.status(400).json({ error: '仅国内项目和海外项目支持删除目录' });
+  const existingMeta = serializeDocumentFolder(existing, req.user);
+  if (existingMeta.is_protected || existingMeta.depth < 3) return res.status(403).json({ error: '系统默认目录不允许删除' });
+  const childCount = db.prepare('SELECT COUNT(*) as count FROM document_folders WHERE parent_id = ?').get(req.params.id).count;
+  if (childCount > 0) return res.status(400).json({ error: '目录下仍有子目录，不能删除' });
   const linked = db.prepare('SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND COALESCE(is_deleted, 0) = 0').get(req.params.id).count;
   if (linked > 0) return res.status(400).json({ error: '目录下仍有文档，不能删除' });
   db.prepare('DELETE FROM document_folders WHERE id = ?').run(req.params.id);
@@ -5610,28 +5918,11 @@ app.delete('/api/document-folders/:id', canWrite, (req, res) => {
 });
 
 app.post('/api/document-folders/apply-template', canWrite, (req, res) => {
-  const domain = normalizeDocumentDomain(req.body.domain);
-  const projectGroupId = req.body.project_group_id || null;
-  const departments = Array.isArray(req.body.departments) && req.body.departments.length
-    ? req.body.departments.map(item => ({ key: normalizeDocumentDepartment(item.key || item), name: item.name || item.key || item }))
-    : DOCUMENT_DEPARTMENTS;
-  const insert = db.prepare(`
-    INSERT INTO document_folders (name, domain, project_group_id, department_key, default_doc_type, sort_order, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  let created = 0;
-  for (const department of departments) {
-    for (const folder of DOCUMENT_TEMPLATE_FOLDERS) {
-      const exists = db.prepare(`
-        SELECT id FROM document_folders
-        WHERE name = ? AND domain = ? AND COALESCE(project_group_id, 0) = COALESCE(?, 0) AND department_key = ?
-      `).get(folder.name, domain, projectGroupId, department.key);
-      if (exists) continue;
-      insert.run(folder.name, domain, projectGroupId, department.key, folder.type, folder.order, req.user.id);
-      created++;
-    }
-  }
-  res.json({ success: true, created });
+  if (!isDocumentFolderManager(req.user)) return res.status(403).json({ error: '只有小组长和 CXO 可以编辑目录' });
+  const beforeCount = db.prepare('SELECT COUNT(*) as count FROM document_folders').get().count;
+  ensureDocumentDirectoryBlueprint();
+  const afterCount = db.prepare('SELECT COUNT(*) as count FROM document_folders').get().count;
+  res.json({ success: true, created: Math.max(0, afterCount - beforeCount) });
 });
 
 function isTruthyQueryValue(value) {
@@ -5720,7 +6011,16 @@ app.get('/api/documents', (req, res) => {
     });
   }
   if (domain) { q += ' AND d.domain = ?'; params.push(domain); }
-  if (folder_id) { q += ' AND d.folder_id = ?'; params.push(folder_id); }
+  if (folder_id) {
+    const folderIds = getDocumentFolderDescendantIds(folder_id);
+    if (folderIds.length) {
+      q += ` AND d.folder_id IN (${folderIds.map(() => '?').join(',')})`;
+      params.push(...folderIds);
+    } else {
+      q += ' AND d.folder_id = ?';
+      params.push(folder_id);
+    }
+  }
   if (project_group_id) { q += ' AND d.project_group_id = ?'; params.push(project_group_id); }
   if (department_key) { q += ' AND d.department_key = ?'; params.push(normalizeDocumentDepartment(department_key)); }
   if (doc_type) { q += ' AND d.doc_type = ?'; params.push(normalizeDocumentType(doc_type)); }
@@ -6399,22 +6699,27 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     return res.status(403).json({ error: '只有创建人或超级管理员可以编辑文档属性' });
   }
   const folder = canManageCurrentDocument && nextFolderId
-    ? db.prepare('SELECT * FROM document_folders WHERE id = ?').get(nextFolderId)
+    ? getDocumentFolderById(nextFolderId)
     : null;
   if (canManageCurrentDocument && nextFolderId && !folder) return res.status(400).json({ error: '目标目录不存在' });
+  const folderFields = canManageCurrentDocument && nextFolderId
+    ? getDocumentBusinessFieldsFromFolder(nextFolderId, req.body)
+    : null;
   const domain = canManageCurrentDocument
-    ? normalizeDocumentDomain(hasBodyField('domain') ? req.body.domain : (folder?.domain ?? doc.domain))
+    ? normalizeDocumentDomain(folderFields?.domain || (hasBodyField('domain') ? req.body.domain : doc.domain))
     : doc.domain;
   const projectGroupId = canManageCurrentDocument
-    ? (hasBodyField('project_group_id')
+    ? (folderFields
+      ? folderFields.project_group_id
+      : hasBodyField('project_group_id')
       ? (req.body.project_group_id || null)
-      : (folder ? (folder.project_group_id || null) : doc.project_group_id))
+      : doc.project_group_id)
     : doc.project_group_id;
   const departmentKey = canManageCurrentDocument
-    ? normalizeDocumentDepartment(hasBodyField('department_key') ? req.body.department_key : (folder?.department_key ?? doc.department_key))
+    ? (folderFields?.department_key || normalizeDocumentDepartment(hasBodyField('department_key') ? req.body.department_key : doc.department_key))
     : doc.department_key;
   const docType = canManageCurrentDocument
-    ? normalizeDocumentType(hasBodyField('doc_type') ? req.body.doc_type : (doc.doc_type ?? folder?.default_doc_type))
+    ? (folderFields?.doc_type || normalizeDocumentType(hasBodyField('doc_type') ? req.body.doc_type : doc.doc_type))
     : doc.doc_type;
   const content = Object.prototype.hasOwnProperty.call(req.body, 'content') ? req.body.content : doc.content;
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
@@ -6432,6 +6737,9 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   const tags = canManageCurrentDocument
     ? (Array.isArray(req.body.tags) ? JSON.stringify(req.body.tags) : (req.body.tags ?? doc.tags))
     : doc.tags;
+  const explicitProjectCode = canManageCurrentDocument && folderFields && !projectGroupId
+    ? DOCUMENT_DOMAIN_CODES[domain]
+    : (req.body.project_code || doc.project_code);
   db.prepare(`
     UPDATE documents SET
       title = ?, content = ?, content_text = ?, summary = ?, domain = ?, project_group_id = ?,
@@ -6445,7 +6753,7 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     buildDocumentSummary(contentText),
     domain,
     projectGroupId || null,
-    canManageCurrentDocument ? getProjectCodeForDocument(projectGroupId, domain, req.body.project_code || doc.project_code) : doc.project_code,
+    canManageCurrentDocument ? getProjectCodeForDocument(projectGroupId, domain, explicitProjectCode) : doc.project_code,
     departmentKey,
     docType,
     canManageCurrentDocument ? (req.body.current_version || doc.current_version || 'V1.0') : doc.current_version,
@@ -6565,11 +6873,17 @@ app.post('/api/documents/:id/renumber', canWrite, (req, res) => {
     return res.status(403).json({ error: '只有创建人或超级管理员可以刷新文档编号业务字段' });
   }
   if (!String(req.body.reason || '').trim()) return res.status(400).json({ error: '请填写重新编号原因' });
-  const domain = normalizeDocumentDomain(req.body.domain || doc.domain);
-  const projectGroupId = req.body.project_group_id ?? doc.project_group_id;
-  const projectCode = getProjectCodeForDocument(projectGroupId, domain, req.body.project_code || doc.project_code);
-  const departmentKey = normalizeDocumentDepartment(req.body.department_key || doc.department_key);
-  const docType = normalizeDocumentType(req.body.doc_type || doc.doc_type);
+  const folderId = req.body.folder_id || doc.folder_id;
+  const folderFields = folderId ? getDocumentBusinessFieldsFromFolder(folderId, req.body) : null;
+  const domain = normalizeDocumentDomain(folderFields?.domain || req.body.domain || doc.domain);
+  const projectGroupId = folderFields ? folderFields.project_group_id : (req.body.project_group_id ?? doc.project_group_id);
+  const projectCode = getProjectCodeForDocument(
+    projectGroupId,
+    domain,
+    folderFields && !projectGroupId ? DOCUMENT_DOMAIN_CODES[domain] : (req.body.project_code || doc.project_code)
+  );
+  const departmentKey = folderFields?.department_key || normalizeDocumentDepartment(req.body.department_key || doc.department_key);
+  const docType = folderFields?.doc_type || normalizeDocumentType(req.body.doc_type || doc.doc_type);
   const year = String(req.body.year || doc.created_at || '').slice(0, 4) || new Date().getFullYear();
   const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, year);
   db.prepare(`

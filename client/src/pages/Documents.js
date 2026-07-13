@@ -88,11 +88,10 @@ const domainOptions = [
 ];
 
 const departmentOptions = [
-  { value: 'PM', label: '0_项目' },
-  { value: 'PD', label: '1_产研' },
-  { value: 'BD', label: '2_商务' },
-  { value: 'OPS', label: '3_产运' },
-  { value: 'ADS', label: '4_投放' },
+  { value: 'OPS', label: '产运' },
+  { value: 'BD', label: '商务' },
+  { value: 'RD', label: '研发' },
+  { value: 'ADS', label: '投放' },
   { value: 'MGT', label: '经营管理' },
   { value: 'ALL', label: '通用' },
 ];
@@ -106,15 +105,10 @@ const orgDepartmentOptions = [
 ];
 
 const docTypeOptions = [
-  { value: 'SOP', label: 'SOP' },
-  { value: 'RULE', label: '规则制度' },
-  { value: 'TPL', label: '模板表单' },
-  { value: 'SPEC', label: '技术/需求说明' },
-  { value: 'PLAN', label: '计划' },
-  { value: 'RPT', label: '报告' },
-  { value: 'MEET', label: '会议纪要' },
-  { value: 'REVIEW', label: '复盘' },
-  { value: 'TMP', label: '临时文档' },
+  { value: 'PLAN', label: '规划' },
+  { value: 'IMP', label: '落地' },
+  { value: 'LEGA', label: '沉淀' },
+  { value: 'TEAM', label: '团队' },
 ];
 
 const blockIconStyle = {
@@ -1795,8 +1789,27 @@ function getDocumentSpaceDomainKeys(scopedFolders, activeDomain) {
   return keys;
 }
 
-function addFolderDocumentChildren(folder, documentsByFolder) {
+function buildFolderPathMap(folders = []) {
+  const byId = new Map(folders.map(folder => [Number(folder.id), folder]));
+  const pathMap = new Map();
+  const resolvePath = (folder, seen = new Set()) => {
+    if (!folder?.id || seen.has(Number(folder.id))) return [];
+    if (pathMap.has(Number(folder.id))) return pathMap.get(Number(folder.id));
+    seen.add(Number(folder.id));
+    const parent = folder.parent_id ? byId.get(Number(folder.parent_id)) : null;
+    const parentPath = parent ? resolvePath(parent, seen) : [];
+    const path = [...parentPath, folder.name].filter(Boolean);
+    pathMap.set(Number(folder.id), path);
+    return path;
+  };
+  folders.forEach(folder => resolvePath(folder));
+  return pathMap;
+}
+
+function buildFolderNode(folder, childrenByParent, documentsByFolder) {
   const folderDocuments = documentsByFolder.get(Number(folder.id)) || [];
+  const childFolders = (childrenByParent.get(Number(folder.id)) || [])
+    .map(child => buildFolderNode(child, childrenByParent, documentsByFolder));
   const documentChildren = folderDocuments.map(doc => ({
     title: doc.title || '未命名文档',
     key: `document-${doc.id}`,
@@ -1807,36 +1820,20 @@ function addFolderDocumentChildren(folder, documentsByFolder) {
     folderId: folder.id,
     document: doc,
   }));
+  const children = [...childFolders, ...documentChildren];
   return {
     title: folder.name,
     key: `folder-${folder.id}`,
     icon: <FolderOutlined />,
     nodeType: 'folder',
     folderId: folder.id,
-    ...(documentChildren.length ? { children: documentChildren } : {}),
+    folder,
+    depth: Number(folder.depth || 0),
+    canAddChild: Boolean(Number(folder.can_add_child || 0)),
+    canEditFolder: Boolean(Number(folder.can_edit_folder || 0)),
+    canDeleteFolder: Boolean(Number(folder.can_delete_folder || 0)),
+    ...(children.length ? { children } : {}),
   };
-}
-
-function ensureDepartmentNode(parentNode, parentKey, deptKey) {
-  if (!parentNode.deptMap.has(deptKey)) {
-    const deptNode = {
-      title: departmentLabel[deptKey] || deptKey,
-      key: `${parentKey}-dept-${deptKey}`,
-      selectable: false,
-      children: [],
-    };
-    parentNode.deptMap.set(deptKey, deptNode);
-    parentNode.children.push(deptNode);
-  }
-  return parentNode.deptMap.get(deptKey);
-}
-
-function stripFolderTreeMeta(node) {
-  const { projectMap, deptMap, ...rest } = node;
-  if (rest.children?.length) {
-    rest.children = rest.children.map(child => stripFolderTreeMeta(child));
-  }
-  return rest;
 }
 
 function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
@@ -1845,6 +1842,7 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
     : folders.filter(folder => folder.domain === activeDomain);
   const domainMap = new Map();
   const documentsByFolder = new Map();
+  const childrenByParent = new Map();
 
   visibleDocuments.forEach(doc => {
     if (!doc.folder_id) return;
@@ -1853,6 +1851,19 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
     documentsByFolder.get(folderKey).push(doc);
   });
 
+  scopedFolders
+    .slice()
+    .sort((a, b) => (
+      Number(a.sort_order || 0) - Number(b.sort_order || 0)
+      || String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN')
+      || Number(a.id || 0) - Number(b.id || 0)
+    ))
+    .forEach(folder => {
+      const parentKey = folder.parent_id ? Number(folder.parent_id) : 0;
+      if (!childrenByParent.has(parentKey)) childrenByParent.set(parentKey, []);
+      childrenByParent.get(parentKey).push(folder);
+    });
+
   getDocumentSpaceDomainKeys(scopedFolders, activeDomain).forEach(domainKey => {
     if (!domainMap.has(domainKey)) {
       domainMap.set(domainKey, {
@@ -1860,13 +1871,11 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
         key: `domain-${domainKey}`,
         selectable: false,
         children: [],
-        projectMap: new Map(),
-        deptMap: new Map(),
       });
     }
   });
 
-  scopedFolders.forEach(folder => {
+  (childrenByParent.get(0) || []).forEach(folder => {
     const domainKey = folder.domain || 'general';
     if (!domainMap.has(domainKey)) {
       domainMap.set(domainKey, {
@@ -1874,38 +1883,12 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
         key: `domain-${domainKey}`,
         selectable: false,
         children: [],
-        projectMap: new Map(),
-        deptMap: new Map(),
       });
     }
-    const domainNode = domainMap.get(domainKey);
-    const deptKey = folder.department_key || 'ALL';
-    const projectTitle = getDirectoryProjectGroupLabel(folder);
-    let parentNode = domainNode;
-    let parentKey = domainNode.key;
-
-    if (projectTitle) {
-      const projectKey = `project-${folder.project_group_id || `${domainKey}-${projectTitle}`}`;
-      if (!domainNode.projectMap.has(projectKey)) {
-        const projectNode = {
-          title: projectTitle,
-          key: projectKey,
-          selectable: false,
-          children: [],
-          deptMap: new Map(),
-        };
-        domainNode.projectMap.set(projectKey, projectNode);
-        domainNode.children.push(projectNode);
-      }
-      parentNode = domainNode.projectMap.get(projectKey);
-      parentKey = projectKey;
-    }
-
-    ensureDepartmentNode(parentNode, parentKey, deptKey)
-      .children.push(addFolderDocumentChildren(folder, documentsByFolder));
+    domainMap.get(domainKey).children.push(buildFolderNode(folder, childrenByParent, documentsByFolder));
   });
 
-  return Array.from(domainMap.values()).map(domainNode => stripFolderTreeMeta(domainNode));
+  return Array.from(domainMap.values());
 }
 
 function collectDefaultFolderExpandedKeys(nodes = []) {
@@ -2044,13 +2027,12 @@ function areEditorSnapshotContentsEqual(left, right) {
     && areSerializedValuesEqual(left.blocks, right.blocks);
 }
 
-function getFolderPathLabel(folder) {
+function getFolderPathLabel(folder, folderPathMap = null) {
   if (!folder) return '';
+  const pathParts = folderPathMap?.get?.(Number(folder.id)) || [folder.name];
   return [
     domainLabel[folder.domain] || folder.domain,
-    getDirectoryProjectGroupLabel(folder),
-    departmentLabel[folder.department_key] || folder.department_key,
-    folder.name,
+    ...pathParts,
   ].filter(Boolean).join(' / ');
 }
 
@@ -2389,7 +2371,6 @@ export default function Documents() {
   const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [globalSearchResults, setGlobalSearchResults] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState(null);
-  const [sopOnly, setSopOnly] = useState(false);
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2418,6 +2399,10 @@ export default function Documents() {
   const [mobileTocOpen, setMobileTocOpen] = useState(false);
   const [pageMenuOpen, setPageMenuOpen] = useState(false);
   const [docContextMenu, setDocContextMenu] = useState({ open: false, x: 0, y: 0, doc: null });
+  const [folderContextMenu, setFolderContextMenu] = useState({ open: false, x: 0, y: 0, folder: null });
+  const [folderCreateOpen, setFolderCreateOpen] = useState(false);
+  const [folderCreateParent, setFolderCreateParent] = useState(null);
+  const [folderCreateSaving, setFolderCreateSaving] = useState(false);
   const [moveFolderOpen, setMoveFolderOpen] = useState(false);
   const [moveFolderId, setMoveFolderId] = useState(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState(null);
@@ -2483,8 +2468,8 @@ export default function Documents() {
   const replaceAttachmentTargetRef = useRef(null);
   const [createForm] = Form.useForm();
   const [wolaiImportForm] = Form.useForm();
-  const [templateForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
+  const [folderCreateForm] = Form.useForm();
 
   useEffect(() => {
     const styleId = 'document-block-menu-style';
@@ -2520,6 +2505,7 @@ export default function Documents() {
     () => folders.find(folder => Number(folder.id) === Number(selectedFolderId)),
     [folders, selectedFolderId]
   );
+  const folderPathMap = useMemo(() => buildFolderPathMap(folders), [folders]);
 
   const folderTree = useMemo(
     () => buildFolderTree(folders, domainFilter, folderTreeDocuments),
@@ -2582,6 +2568,12 @@ export default function Documents() {
   };
 
   const canUseDocumentWriteActions = Boolean(currentUser && !['readonly', 'guest'].includes(currentUser.role));
+  const canManageDocumentFolders = Boolean(canUseDocumentWriteActions && currentUser && (
+    isDocumentAdminUser(currentUser)
+    || ['ceo', 'coo', 'cto', 'cmo'].includes(currentUser.role)
+    || ['ceo', 'coo', 'cto', 'cmo'].includes(currentUser.executive_role)
+    || currentUser.role === 'leader'
+  ));
 
   const canManageDoc = (doc) => Boolean(
     canUseDocumentWriteActions && doc && (
@@ -2819,7 +2811,6 @@ export default function Documents() {
     if (domainFilter !== 'all') params.domain = domainFilter;
     if (keyword.trim()) params.search = keyword.trim();
     if (includeFolder && selectedFolderId) params.folder_id = selectedFolderId;
-    if (sopOnly) params.sop_only = true;
     return params;
   };
 
@@ -3010,11 +3001,11 @@ export default function Documents() {
 
   useEffect(() => {
     loadDocuments();
-  }, [domainFilter, selectedFolderId, sopOnly]);
+  }, [domainFilter, selectedFolderId]);
 
   useEffect(() => {
     loadFolderTreeDocuments();
-  }, [domainFilter, sopOnly]);
+  }, [domainFilter]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -3437,6 +3428,17 @@ export default function Documents() {
   }, [docContextMenu.open]);
 
   useEffect(() => {
+    if (!folderContextMenu.open) return undefined;
+    const handleFolderContextOutsidePointerDown = (event) => {
+      const target = event.target;
+      if (target?.closest?.('.document-folder-context-menu-dropdown')) return;
+      closeFolderContextMenu();
+    };
+    document.addEventListener('pointerdown', handleFolderContextOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleFolderContextOutsidePointerDown, true);
+  }, [folderContextMenu.open]);
+
+  useEffect(() => {
     if (!selectedAreaBlockIdsRef.current.length) return;
     const validIds = normalizeBlockSelectionIds(selectedAreaBlockIdsRef.current);
     if (validIds.length !== selectedAreaBlockIdsRef.current.length) {
@@ -3449,11 +3451,11 @@ export default function Documents() {
     createForm.resetFields();
     createForm.setFieldsValue({
       title: '新页面',
-      domain: selectedFolder?.domain || (domainFilter === 'all' ? 'general' : domainFilter),
+      domain: selectedFolder?.domain || (domainFilter === 'all' ? 'domestic_project' : domainFilter),
       project_group_id: selectedFolder?.project_group_id || undefined,
-      department_key: selectedFolder?.department_key || 'ALL',
+      department_key: selectedFolder?.department_key || 'OPS',
       folder_id: selectedFolderId || undefined,
-      doc_type: selectedFolder?.default_doc_type || (sopOnly ? 'SOP' : 'TMP'),
+      doc_type: selectedFolder?.default_doc_type || 'IMP',
     });
     setCreateOpen(true);
   };
@@ -3499,11 +3501,11 @@ export default function Documents() {
       mcp_target: '',
       mcp_token: '',
       title: '',
-      domain: selectedFolder?.domain || (domainFilter === 'all' ? 'general' : domainFilter),
+      domain: selectedFolder?.domain || (domainFilter === 'all' ? 'domestic_project' : domainFilter),
       project_group_id: selectedFolder?.project_group_id || undefined,
-      department_key: selectedFolder?.department_key || 'ALL',
+      department_key: selectedFolder?.department_key || 'OPS',
       folder_id: selectedFolderId || undefined,
-      doc_type: selectedFolder?.default_doc_type || 'SPEC',
+      doc_type: selectedFolder?.default_doc_type || 'IMP',
     });
     setWolaiImportOpen(true);
   };
@@ -4451,13 +4453,12 @@ export default function Documents() {
         domain: targetFolder.domain || targetDoc.domain,
         project_group_id: targetFolder.project_group_id || 0,
         department_key: targetFolder.department_key || targetDoc.department_key,
-        doc_type: targetDoc.doc_type || targetFolder.default_doc_type || 'TMP',
+        doc_type: targetFolder.default_doc_type || targetDoc.doc_type || 'IMP',
       });
       setMoveFolderOpen(false);
       setMoveFolderDoc(null);
       setSelectedFolderId(Number(targetFolder.id));
       if (targetFolder.domain) setDomainFilter(targetFolder.domain);
-      setSopOnly(false);
       if (isActiveDoc) await loadDetail(targetDoc.id, { force: true });
       await loadDocuments();
       await loadFolderTreeDocuments();
@@ -4500,12 +4501,8 @@ export default function Documents() {
 
   const handleApplyTemplate = async () => {
     try {
-      const values = await templateForm.validateFields();
-      const data = await documentsApi.applyFolderTemplate({
-        ...values,
-        departments: values.departments?.map(key => ({ key })) || undefined,
-      });
-      message.success(`目录模板已初始化，新增 ${data.created} 个目录`);
+      const data = await documentsApi.applyFolderTemplate({});
+      message.success(data.created > 0 ? `目录结构已初始化，新增 ${data.created} 个目录` : '目录结构已是最新');
       setTemplateOpen(false);
       await loadFolders();
     } catch (err) {
@@ -6138,6 +6135,18 @@ export default function Documents() {
   };
 
   const openTreeDocContextMenu = ({ event, node }) => {
+    if (node?.nodeType === 'folder') {
+      if (!canManageDocumentFolders || !node.canAddChild) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setFolderContextMenu({
+        open: true,
+        x: event.clientX,
+        y: event.clientY,
+        folder: node.folder || folders.find(folder => Number(folder.id) === Number(node.folderId)) || null,
+      });
+      return;
+    }
     if (node?.nodeType !== 'document') return;
     const doc = node.document || getDocumentSummaryById(node.documentId) || { id: node.documentId, title: node.title };
     openDocContextMenu(event, doc);
@@ -6145,6 +6154,41 @@ export default function Documents() {
 
   const closeDocContextMenu = () => {
     setDocContextMenu(prev => ({ ...prev, open: false }));
+  };
+
+  const closeFolderContextMenu = () => {
+    setFolderContextMenu(prev => ({ ...prev, open: false }));
+  };
+
+  const openCreateChildFolder = (folder) => {
+    if (!folder || !canManageDocumentFolders || !Number(folder.can_add_child || 0)) return;
+    closeFolderContextMenu();
+    setFolderCreateParent(folder);
+    folderCreateForm.resetFields();
+    folderCreateForm.setFieldsValue({ name: '' });
+    setFolderCreateOpen(true);
+  };
+
+  const handleCreateChildFolder = async () => {
+    const parent = folderCreateParent;
+    if (!parent?.id) return;
+    try {
+      const values = await folderCreateForm.validateFields();
+      setFolderCreateSaving(true);
+      const result = await documentsApi.createFolder({
+        name: values.name,
+        parent_id: parent.id,
+      });
+      setFolderCreateOpen(false);
+      setFolderCreateParent(null);
+      await loadFolders();
+      setFolderTreeExpandedKeys(prev => Array.from(new Set([...prev, `folder-${parent.id}`, `folder-${result.id}`])));
+      message.success('子文件夹已创建');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '创建文件夹失败');
+    } finally {
+      setFolderCreateSaving(false);
+    }
   };
 
   const handleDocContextAction = ({ key }) => {
@@ -10335,7 +10379,6 @@ export default function Documents() {
                 onChange={(value) => {
                   setDomainFilter(value);
                   setSelectedFolderId(null);
-                  setSopOnly(false);
                   if (isMobile) setMobileLibraryVisible(true);
                 }}
                 style={{ width: '100%' }}
@@ -10351,21 +10394,11 @@ export default function Documents() {
                 }}
               />
 
-              <Space size={8} wrap>
-                <Button
-                  type={sopOnly ? 'primary' : 'default'}
-                  size="small"
-                  icon={<FileTextOutlined />}
-                  onClick={() => {
-                    setSopOnly(!sopOnly);
-                    setSelectedFolderId(null);
-                    if (isMobile) setMobileLibraryVisible(true);
-                  }}
-                >
-                  SOP 总库
-                </Button>
-                <Button size="small" icon={<FolderOutlined />} onClick={() => setTemplateOpen(true)}>初始化目录</Button>
-              </Space>
+              {canManageDocumentFolders && (
+                <Space size={8} wrap>
+                  <Button size="small" icon={<FolderOutlined />} onClick={() => setTemplateOpen(true)}>初始化目录</Button>
+                </Space>
+              )}
 
               <div>
                 <Text type="secondary" style={{ fontSize: 12 }}>目录</Text>
@@ -10385,7 +10418,6 @@ export default function Documents() {
                       const key = keys[0] || info?.node?.key;
                       if (typeof key === 'string' && key.startsWith('folder-')) {
                         setSelectedFolderId(Number(key.replace('folder-', '')));
-                        setSopOnly(false);
                         if (isMobile) setMobileLibraryVisible(true);
                         setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev : [...prev, key]));
                       } else if (typeof key === 'string' && key.startsWith('document-')) {
@@ -10395,7 +10427,6 @@ export default function Documents() {
                           const folderKey = `folder-${folderId}`;
                           setSelectedFolderId(Number(folderId));
                           setFolderTreeExpandedKeys(prev => (prev.includes(folderKey) ? prev : [...prev, folderKey]));
-                          setSopOnly(false);
                         }
                         openDocumentTab(getDocumentSummaryById(documentId) || documentId);
                       }
@@ -10457,6 +10488,38 @@ export default function Documents() {
                     pointerEvents: 'none',
                     left: docContextMenu.x,
                     top: docContextMenu.y,
+                    width: 1,
+                    height: 1,
+                  }} />
+                </Dropdown>
+                <Dropdown
+                  open={folderContextMenu.open}
+                  trigger={[]}
+                  overlayClassName="document-folder-context-menu-dropdown"
+                  onOpenChange={(open) => {
+                    if (!open) closeFolderContextMenu();
+                  }}
+                  menu={{
+                    onClick: ({ key }) => {
+                      const folder = folderContextMenu.folder;
+                      closeFolderContextMenu();
+                      if (key === 'create-child') openCreateChildFolder(folder);
+                    },
+                    items: [
+                      {
+                        key: 'create-child',
+                        icon: <PlusOutlined />,
+                        label: '新增子文件夹',
+                        disabled: !Number(folderContextMenu.folder?.can_add_child || 0),
+                      },
+                    ],
+                  }}
+                >
+                  <span style={{
+                    position: 'fixed',
+                    pointerEvents: 'none',
+                    left: folderContextMenu.x,
+                    top: folderContextMenu.y,
                     width: 1,
                     height: 1,
                   }} />
@@ -10849,6 +10912,42 @@ export default function Documents() {
       </Drawer>
 
       <Modal
+        title="新增子文件夹"
+        open={folderCreateOpen}
+        onCancel={() => {
+          setFolderCreateOpen(false);
+          setFolderCreateParent(null);
+        }}
+        onOk={handleCreateChildFolder}
+        okText="创建"
+        cancelText="取消"
+        confirmLoading={folderCreateSaving}
+        destroyOnClose
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
+      >
+        <Form form={folderCreateForm} layout="vertical">
+          <Form.Item label="父级目录">
+            <Input value={folderCreateParent ? getFolderPathLabel(folderCreateParent, folderPathMap) : ''} disabled />
+          </Form.Item>
+          <Form.Item
+            name="name"
+            label="文件夹名称"
+            rules={[
+              { required: true, whitespace: true, message: '请输入文件夹名称' },
+              { max: 40, message: '文件夹名称不能超过 40 个字符' },
+            ]}
+          >
+            <Input placeholder="例如 SOP" maxLength={40} />
+          </Form.Item>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            仅支持在二级目录及其下级目录新增，最多 5 级。
+          </Text>
+        </Form>
+      </Modal>
+
+      <Modal
         title="移动到"
         open={moveFolderOpen}
         onCancel={() => {
@@ -10877,7 +10976,7 @@ export default function Documents() {
             optionFilterProp="label"
             options={folders.map(folder => ({
               value: Number(folder.id),
-              label: getFolderPathLabel(folder),
+              label: getFolderPathLabel(folder, folderPathMap),
               disabled: Number(folder.id) === Number((moveFolderDoc || selectedDoc)?.folder_id),
             }))}
             style={{ width: '100%' }}
@@ -11016,7 +11115,7 @@ export default function Documents() {
                   optionFilterProp="label"
                   options={folders.map(folder => ({
                     value: folder.id,
-                    label: getFolderPathLabel(folder),
+                    label: getFolderPathLabel(folder, folderPathMap),
                   }))}
                 />
               </Form.Item>
@@ -11074,7 +11173,7 @@ export default function Documents() {
               optionFilterProp="label"
               options={folders.map(folder => ({
                 value: folder.id,
-                label: getFolderPathLabel(folder),
+                label: getFolderPathLabel(folder, folderPathMap),
               }))}
             />
           </Form.Item>
@@ -11085,7 +11184,7 @@ export default function Documents() {
       </Modal>
 
       <Modal
-        title="初始化部门目录模板"
+        title="初始化目录结构"
         open={templateOpen}
         onCancel={() => setTemplateOpen(false)}
         onOk={handleApplyTemplate}
@@ -11096,23 +11195,14 @@ export default function Documents() {
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
-        <Form form={templateForm} layout="vertical" initialValues={{ domain: domainFilter === 'all' ? 'domestic_project' : domainFilter, departments: ['PM', 'PD', 'BD', 'OPS', 'ADS'] }}>
-          <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
-            <Select options={domainOptions.filter(item => item.value !== 'all')} />
-          </Form.Item>
-          <Form.Item name="project_group_id" label="项目组">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              options={projectGroups.map(group => ({ value: group.id, label: `${group.name}${group.code ? ` (${group.code})` : ''}` }))}
-            />
-          </Form.Item>
-          <Form.Item name="departments" label="部门">
-            <Select mode="multiple" options={departmentOptions.filter(item => ['PM', 'PD', 'BD', 'OPS', 'ADS'].includes(item.value))} />
-          </Form.Item>
-          <Text type="secondary">会为所选部门创建 SOP、规则制度、项目资料、复盘案例和临时文档目录。</Text>
-        </Form>
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Text>
+            将确保国内项目下包含产运、商务、研发、投放，海外项目下包含商务、投放。
+          </Text>
+          <Text type="secondary">
+            每个一级目录会自动包含规划、落地、沉淀、团队四个二级目录；已有项目文档会按目录规则归到新的阶段目录中。
+          </Text>
+        </Space>
       </Modal>
     </div>
   );
