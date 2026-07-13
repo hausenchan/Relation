@@ -523,6 +523,26 @@ function getMediaKind(type) {
   return null;
 }
 
+function isWolaiPageCoverUrl(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw, 'https://placeholder.local');
+    const host = String(parsed.hostname || '').toLowerCase();
+    const pathname = decodeURIComponent(String(parsed.pathname || '')).toLowerCase();
+    return /(^|\.)wostatic\.cn$/.test(host) && pathname.includes('/cover/');
+  } catch {
+    return /wostatic\.cn\/cover\//i.test(raw);
+  }
+}
+
+function isWolaiPageCoverBlock(block = {}) {
+  if (block?.type !== 'image') return false;
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  if (meta.source_system !== 'wolai_mcp' && !meta.original_url) return false;
+  return [meta.original_url, meta.url, block.content].filter(Boolean).some(isWolaiPageCoverUrl);
+}
+
 function getDefaultBlockContent(type) {
   if (type === 'heading1') return '主标题';
   if (type === 'heading2') return '大标题';
@@ -1252,7 +1272,7 @@ function contentToBlocks(content) {
 
   if (typeof parsed === 'string') return plainTextToBlocks(parsed);
   if (Array.isArray(parsed?.blocks)) {
-    const blocks = parsed.blocks.map(normalizeBlock);
+    const blocks = parsed.blocks.map(normalizeBlock).filter(block => !isWolaiPageCoverBlock(block));
     return blocks.length ? blocks : [createBlock()];
   }
   return plainTextToBlocks(collectText(parsed).join('\n'));
@@ -9119,6 +9139,7 @@ export default function Documents() {
     const kind = getMediaKind(block.type);
     const url = meta.url || block.content || '';
     const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
+    if (kind === 'image' && isWolaiPageCoverBlock(block)) return null;
     const shouldEmbedImageOnly = meta.embedOnly
       || meta.source_system === 'wolai_mcp'
       || meta.remote === true
@@ -9467,6 +9488,7 @@ export default function Documents() {
     const url = meta.url || block.content || '';
     const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
     const label = block.content || meta.filename || blockTypeMap[block.type]?.label || '媒体';
+    if (kind === 'image' && isWolaiPageCoverBlock(block)) return null;
     if (kind === 'image' && url) {
       return (
         <div>

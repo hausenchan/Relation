@@ -712,6 +712,19 @@ function getMediaExtFromUrl(url = '') {
   }
 }
 
+function isWolaiPageCoverUrl(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return false;
+  try {
+    const parsed = new URL(raw, 'https://placeholder.local');
+    const host = String(parsed.hostname || '').toLowerCase();
+    const pathname = decodeURIComponent(String(parsed.pathname || '')).toLowerCase();
+    return /(^|\.)wostatic\.cn$/.test(host) && pathname.includes('/cover/');
+  } catch {
+    return /wostatic\.cn\/cover\//i.test(raw);
+  }
+}
+
 function normalizeMediaKind(node = {}, url = '', fallbackKey = '') {
   const hint = [
     fallbackKey,
@@ -1518,7 +1531,14 @@ function removeLeadingDuplicateTitleBlock(blocks = [], title = '') {
 }
 
 function cleanImportedBlocks(blocks = [], title = '') {
-  return normalizeListIndents(removeLeadingDuplicateTitleBlock(blocks, title));
+  const withoutTitle = removeLeadingDuplicateTitleBlock(blocks, title);
+  const withoutPageCover = withoutTitle.filter(block => {
+    if (block?.type !== 'image') return true;
+    const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+    const urls = [meta.original_url, meta.url, block.content].filter(Boolean);
+    return !urls.some(isWolaiPageCoverUrl);
+  });
+  return normalizeListIndents(withoutPageCover);
 }
 
 function rankImportedContent(imported) {
