@@ -2806,11 +2806,12 @@ export default function Documents() {
     setUsers(userRows);
   };
 
-  const buildDocumentQueryParams = ({ includeFolder = true } = {}) => {
+  const buildDocumentQueryParams = ({ includeFolder = true, favoriteOnly = false } = {}) => {
     const params = {};
     if (domainFilter !== 'all') params.domain = domainFilter;
     if (keyword.trim()) params.search = keyword.trim();
     if (includeFolder && selectedFolderId) params.folder_id = selectedFolderId;
+    if (favoriteOnly) params.favorite = 1;
     return params;
   };
 
@@ -2826,11 +2827,11 @@ export default function Documents() {
   const loadDocuments = async () => {
     setLoading(true);
     try {
-      const params = buildDocumentQueryParams();
+      const params = buildDocumentQueryParams({ includeFolder: false, favoriteOnly: true });
       const rows = await documentsApi.list(params);
       setDocuments(rows);
     } catch (err) {
-      message.error(err.response?.data?.error || err.message || '加载文档失败');
+      message.error(err.response?.data?.error || err.message || '加载收藏文档失败');
     } finally {
       setLoading(false);
     }
@@ -3001,7 +3002,7 @@ export default function Documents() {
 
   useEffect(() => {
     loadDocuments();
-  }, [domainFilter, selectedFolderId]);
+  }, [domainFilter]);
 
   useEffect(() => {
     loadFolderTreeDocuments();
@@ -10439,12 +10440,12 @@ export default function Documents() {
               </div>
 
               <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>文档</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>收藏文档</Text>
                 <Spin spinning={loading}>
                   <List
                     dataSource={documents}
                     renderItem={renderDocItem}
-                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无文档" /> }}
+                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无收藏文档" /> }}
                     style={{ marginTop: 8 }}
                   />
                 </Spin>
