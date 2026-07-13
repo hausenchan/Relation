@@ -4,7 +4,7 @@ const path = require('path');
 const OSS = require('ali-oss');
 
 const OSS_PATH_PREFIX = 'oss:';
-const DEFAULT_BUCKET = 'mid-relation-test';
+const DEFAULT_BUCKET = 'mid-relation';
 const DEFAULT_ENDPOINT = 'oss-cn-shenzhen.aliyuncs.com';
 
 let cachedClient = null;

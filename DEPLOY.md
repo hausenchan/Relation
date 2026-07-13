@@ -134,7 +134,7 @@ cp server/data.db server/data.db.backup.$(date +%Y%m%d)
 ```bash
 export NODE_ENV=production
 export PORT=3001
-export ALIYUN_OSS_BUCKET=mid-relation-test
+export ALIYUN_OSS_BUCKET=mid-relation
 export ALIYUN_OSS_ENDPOINT=oss-cn-shenzhen.aliyuncs.com
 export ALIYUN_OSS_ACCESS_KEY_ID=你的OSS AccessKey ID
 export ALIYUN_OSS_ACCESS_KEY_SECRET=你的OSS AccessKey Secret
@@ -147,12 +147,15 @@ export ALIYUN_OSS_ACCESS_KEY_SECRET=你的OSS AccessKey Secret
 默认仍使用本地 SQLite。切换到 MySQL 时配置：
 ```bash
 export DB_CLIENT=mysql
-export MYSQL_HOST=你的MySQL地址
+export MYSQL_HOST=midongad.rwlb.rds.aliyuncs.com
 export MYSQL_PORT=3306
 export MYSQL_DATABASE=relation
 export MYSQL_USER=relation
 export MYSQL_PASSWORD=你的MySQL密码
 ```
+
+正式服应用连接 MySQL 使用内网地址 `midongad.rwlb.rds.aliyuncs.com:3306`。
+本地导入/核对数据时使用公网地址 `120.79.151.103:33306`。
 
 将本地 `data.db` 导入 MySQL：
 ```bash
