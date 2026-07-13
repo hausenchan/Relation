@@ -780,6 +780,7 @@ function makeMediaBlock(makeBlock, media = {}) {
         mimetype: media.mimetype || '',
         source_system: 'wolai_mcp',
         remote: true,
+        embedOnly: true,
         alt: media.alt || displayName,
       },
     });

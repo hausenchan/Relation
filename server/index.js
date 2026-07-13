@@ -6569,9 +6569,18 @@ app.post('/api/documents/:id/import/wolai-url', canWrite, async (req, res) => {
       cdp: req.body?.cdp || 'http://127.0.0.1:9222',
       waitMs: Number(req.body?.wait_ms || 3000),
     });
-    const content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    let content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    let contentText = imported.content_text || extractDocumentText(content);
+    const imageLocalization = await localizeWolaiMcpImageBlocks(doc.id, content.blocks, req.user.id);
+    if (imageLocalization.localized || imageLocalization.failed) {
+      content = { blocks: imageLocalization.blocks };
+      contentText = extractDocumentText(content);
+      imported.warnings = [
+        ...(imported.warnings || []),
+        ...imageLocalization.warnings,
+      ];
+    }
     const storedContent = JSON.stringify(content);
-    const contentText = imported.content_text || extractDocumentText(content);
     const beforeSnapshot = {
       title: doc.title,
       content: doc.content,
@@ -6660,9 +6669,18 @@ app.post('/api/documents/:id/import/wolai-mcp', canWrite, async (req, res) => {
       token: req.body?.token,
       endpoint: req.body?.endpoint,
     });
-    const content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    let content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    let contentText = imported.content_text || extractDocumentText(content);
+    const imageLocalization = await localizeWolaiMcpImageBlocks(doc.id, content.blocks, req.user.id);
+    if (imageLocalization.localized || imageLocalization.failed) {
+      content = { blocks: imageLocalization.blocks };
+      contentText = extractDocumentText(content);
+      imported.warnings = [
+        ...(imported.warnings || []),
+        ...imageLocalization.warnings,
+      ];
+    }
     const storedContent = JSON.stringify(content);
-    const contentText = imported.content_text || extractDocumentText(content);
     const beforeSnapshot = {
       title: doc.title,
       content: doc.content,

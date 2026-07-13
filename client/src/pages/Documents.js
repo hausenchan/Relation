@@ -9119,7 +9119,11 @@ export default function Documents() {
     const kind = getMediaKind(block.type);
     const url = meta.url || block.content || '';
     const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
-    if (kind === 'image' && url && meta.embedOnly) {
+    const shouldEmbedImageOnly = meta.embedOnly
+      || meta.source_system === 'wolai_mcp'
+      || meta.remote === true
+      || /wostatic|wolai/i.test(url);
+    if (kind === 'image' && url && shouldEmbedImageOnly) {
       return (
         <img
           src={url}
