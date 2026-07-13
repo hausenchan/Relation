@@ -6,6 +6,7 @@ const os = require('os');
 const DEFAULT_PORT = 8888;
 const DEFAULT_MAX_RECORDS = 800;
 const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+const DIAGNOSTIC_PATH = '/__network_capture_ping';
 
 function normalizeIp(value) {
   return String(value || '')
@@ -170,6 +171,21 @@ class NetworkCaptureManager {
       const server = http.createServer((req, res) => this.handleHttpRequest(req, res));
       server.on('connect', (req, socket, head) => this.handleConnect(req, socket, head));
       server.on('clientError', (err, socket) => {
+        this.addRecord({
+          kind: 'invalid',
+          protocol: 'TCP',
+          method: 'RAW',
+          url: '(invalid proxy connection)',
+          host: '',
+          path: '',
+          client_ip: normalizeIp(socket.remoteAddress),
+          request_headers: {},
+          status: 'error',
+          status_code: 400,
+          error_message: err.message,
+          duration_ms: 0,
+          note: '客户端已连到代理端口，但发送的不是 HTTP 代理请求。请确认手机 Wi-Fi 代理类型为 HTTP 手动代理。',
+        });
         if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
       });
       server.once('error', (err) => {
@@ -273,6 +289,84 @@ class NetworkCaptureManager {
     }
   }
 
+  isDiagnosticRequest(req) {
+    try {
+      const rawUrl = String(req.url || '');
+      if (rawUrl.startsWith(DIAGNOSTIC_PATH)) return true;
+      if (/^https?:\/\//i.test(rawUrl)) {
+        return new URL(rawUrl).pathname === DIAGNOSTIC_PATH;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
+  getRequestDisplayUrl(req) {
+    const rawUrl = String(req.url || '/');
+    if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+    const host = req.headers.host || `127.0.0.1:${this.config.port}`;
+    return `http://${host}${rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`}`;
+  }
+
+  handleDiagnosticRequest(req, res, started, clientIp) {
+    const payload = {
+      ok: true,
+      message: 'network capture proxy reachable',
+      client_ip: clientIp,
+      proxy_port: this.config.port,
+      time: new Date().toISOString(),
+    };
+    const body = JSON.stringify(payload, null, 2);
+    this.addRecord({
+      kind: 'diagnostic',
+      protocol: 'HTTP',
+      method: req.method || 'GET',
+      url: this.getRequestDisplayUrl(req),
+      host: req.headers.host || '',
+      path: DIAGNOSTIC_PATH,
+      client_ip: clientIp,
+      request_headers: req.headers,
+      response_headers: { 'content-type': 'application/json; charset=utf-8' },
+      status: 'done',
+      status_code: 200,
+      duration_ms: Date.now() - started,
+      request_size: 0,
+      response_size: Buffer.byteLength(body),
+      response_body_text: body,
+      response_body_truncated: false,
+      note: '手机浏览器直连代理的连通性测试请求。',
+    });
+    res.writeHead(200, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+    });
+    res.end(body);
+  }
+
+  handleInvalidProxyRequest(req, res, started, clientIp) {
+    const body = 'Invalid proxy request URL. If you are testing connectivity, open /__network_capture_ping on this proxy.';
+    this.addRecord({
+      kind: 'invalid',
+      protocol: 'HTTP',
+      method: req.method || '',
+      url: this.getRequestDisplayUrl(req),
+      host: req.headers.host || '',
+      path: req.url || '',
+      client_ip: clientIp,
+      request_headers: req.headers,
+      status: 'error',
+      status_code: 400,
+      duration_ms: Date.now() - started,
+      request_size: 0,
+      response_size: Buffer.byteLength(body),
+      error_message: 'invalid proxy request url',
+      note: '客户端连接到了代理，但没有发送标准 HTTP 代理请求。',
+    });
+    res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end(body);
+  }
+
   handleHttpRequest(req, res) {
     const started = Date.now();
     const clientIp = normalizeIp(req.socket.remoteAddress);
@@ -297,10 +391,14 @@ class NetworkCaptureManager {
       return;
     }
 
+    if (this.isDiagnosticRequest(req)) {
+      this.handleDiagnosticRequest(req, res, started, clientIp);
+      return;
+    }
+
     const targetUrl = this.resolveRequestUrl(req);
     if (!targetUrl || !['http:', 'https:'].includes(targetUrl.protocol)) {
-      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
-      res.end('Invalid proxy request URL.');
+      this.handleInvalidProxyRequest(req, res, started, clientIp);
       return;
     }
 

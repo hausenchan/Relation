@@ -45,6 +45,7 @@ import { networkCaptureApi } from '../api';
 const { Text } = Typography;
 const { TextArea } = Input;
 const { useBreakpoint } = Grid;
+const diagnosticPath = '/__network_capture_ping';
 
 function formatTime(value) {
   return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-';
@@ -58,6 +59,7 @@ function formatBytes(value) {
 }
 
 function statusTag(record) {
+  if (record?.kind === 'diagnostic') return <Tag color="green">诊断</Tag>;
   if (record?.error_message || record?.status === 'error') return <Tag color="red">异常</Tag>;
   if (record?.status === 'pending' || record?.status === 'receiving') return <Tag color="blue">进行中</Tag>;
   if (record?.status === 'tunneling') return <Tag color="purple">隧道中</Tag>;
@@ -79,6 +81,7 @@ function methodTag(method) {
     PATCH: 'geekblue',
     DELETE: 'red',
     CONNECT: 'gold',
+    RAW: 'red',
   };
   return <Tag color={colorMap[method] || 'default'}>{method || '-'}</Tag>;
 }
@@ -103,10 +106,30 @@ function renderHeaderBlock(headers) {
   );
 }
 
-function buildProxyAddress(status) {
-  const address = status?.local_addresses?.[0] || window.location.hostname;
+function buildProxyAddresses(status) {
   const port = status?.config?.port || 8888;
-  return `${address}:${port}`;
+  const currentHost = window.location.hostname;
+  const pageHost = currentHost && !['localhost', '127.0.0.1', '::1'].includes(currentHost)
+    ? currentHost
+    : '';
+  const localAddresses = status?.local_addresses || [];
+  const addresses = [
+    pageHost,
+    ...localAddresses,
+    !pageHost && !localAddresses.length ? currentHost : '',
+  ].filter(Boolean);
+  return [...new Set(addresses)].map(address => `${address}:${port}`);
+}
+
+function buildProxyAddress(status) {
+  const addresses = buildProxyAddresses(status);
+  if (addresses.length) return addresses[0];
+  const port = status?.config?.port || 8888;
+  return `127.0.0.1:${port}`;
+}
+
+function buildDiagnosticUrl(proxyAddress) {
+  return `http://${proxyAddress}${diagnosticPath}`;
 }
 
 export default function NetworkCapture() {
@@ -122,7 +145,9 @@ export default function NetworkCapture() {
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const running = Boolean(status?.running);
+  const proxyAddresses = useMemo(() => buildProxyAddresses(status), [status]);
   const proxyAddress = buildProxyAddress(status);
+  const diagnosticUrl = buildDiagnosticUrl(proxyAddress);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -310,6 +335,11 @@ export default function NetworkCapture() {
       description: '确保 Android 手机和当前服务在同一局域网，手机能够访问上方代理地址。',
     },
     {
+      icon: <ApiOutlined />,
+      title: '先做连通性测试',
+      description: `手机浏览器打开 ${diagnosticUrl}；如果列表出现诊断记录，说明手机已经能连到代理端口。`,
+    },
+    {
       icon: <MobileOutlined />,
       title: '配置 Wi-Fi 代理',
       description: `Android Wi-Fi 高级设置中选择手动代理，主机填 ${proxyAddress.split(':')[0]}，端口填 ${proxyAddress.split(':')[1]}。`,
@@ -418,6 +448,31 @@ export default function NetworkCapture() {
                     </Tooltip>
                   </Space>
                 </Descriptions.Item>
+                <Descriptions.Item label="可选代理地址">
+                  <Space wrap>
+                    {proxyAddresses.length
+                      ? proxyAddresses.map(address => (
+                        <Tooltip title="点击复制" key={address}>
+                          <Tag
+                            color={address === proxyAddress ? 'blue' : 'default'}
+                            style={{ cursor: 'pointer', marginInlineEnd: 0 }}
+                            onClick={() => copyText(address, '代理地址已复制')}
+                          >
+                            {address}
+                          </Tag>
+                        </Tooltip>
+                      ))
+                      : <Text type="secondary">暂无可用局域网地址</Text>}
+                  </Space>
+                </Descriptions.Item>
+                <Descriptions.Item label="连通性测试">
+                  <Space align="start">
+                    <Text style={{ wordBreak: 'break-all' }}>{diagnosticUrl}</Text>
+                    <Tooltip title="复制测试地址">
+                      <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(diagnosticUrl, '测试地址已复制')} />
+                    </Tooltip>
+                  </Space>
+                </Descriptions.Item>
                 <Descriptions.Item label="本机 IP">
                   <Space wrap>
                     {(status?.local_addresses || []).length
@@ -482,6 +537,21 @@ export default function NetworkCapture() {
                 </Space>
               }
             >
+              {running && !records.length && (
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 12 }}
+                  message="还没有收到手机连接"
+                  description={
+                    <Space direction="vertical" size={4}>
+                      <span>先用手机浏览器打开连通性测试地址，确认代理端口能访问。</span>
+                      <Text code style={{ whiteSpace: 'normal', wordBreak: 'break-all' }}>{diagnosticUrl}</Text>
+                      <span>如果手机浏览器也打不开，通常是手机和电脑不在同一 Wi-Fi、端口被系统防火墙拦截，或服务运行在容器内但 8888 端口没有映射到宿主机。</span>
+                    </Space>
+                  }
+                />
+              )}
               <Table
                 rowKey="id"
                 columns={columns}
@@ -490,7 +560,7 @@ export default function NetworkCapture() {
                 size="middle"
                 scroll={{ x: 940 }}
                 pagination={{ pageSize: 12, showSizeChanger: false }}
-                locale={{ emptyText: <Empty description="暂无抓包记录，启动后在手机上访问网页或 App 即可看到流量" /> }}
+                locale={{ emptyText: <Empty description="暂无抓包记录，先用手机浏览器打开连通性测试地址排查网络是否到达代理" /> }}
               />
             </Card>
           </Space>
