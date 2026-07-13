@@ -1192,7 +1192,7 @@ function parseToolContent(result) {
 function mergeWolaiRecords(records = []) {
   const byKey = new Map();
   records.forEach((record, index) => {
-    if (!record || !record.id || !stripHtml(record.html)) return;
+    if (!record || !record.id || (!stripHtml(record.html) && !record.media?.url)) return;
     const key = record.id;
     const existing = byKey.get(key);
     if (!existing) {
@@ -1203,6 +1203,7 @@ function mergeWolaiRecords(records = []) {
       ...existing,
       ...record,
       html: stripHtml(record.html).length >= stripHtml(existing.html).length ? record.html : existing.html,
+      media: record.media?.url ? record.media : existing.media,
       parentId: record.parentId || existing.parentId,
       parentType: record.parentType || existing.parentType,
       type: record.type || existing.type,

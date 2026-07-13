@@ -5496,6 +5496,204 @@ function createDocumentAttachmentRecord(docId, file, userId, { blockId = null, d
   return serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid));
 }
 
+const WOLAI_REMOTE_IMAGE_MAX_BYTES = 50 * 1024 * 1024;
+const WOLAI_REMOTE_IMAGE_TIMEOUT_MS = Number(process.env.WOLAI_MCP_IMAGE_FETCH_TIMEOUT_MS || 20000);
+const WOLAI_REMOTE_IMAGE_LIMIT = Number(process.env.WOLAI_MCP_IMAGE_IMPORT_LIMIT || 80);
+const remoteImageMimeExtMap = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/gif': 'gif',
+  'image/webp': 'webp',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+};
+const remoteImageExts = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+
+function isHttpUrl(value = '') {
+  return /^https?:\/\//i.test(String(value || '').trim());
+}
+
+function isBlockedRemoteImageHost(url = '') {
+  try {
+    const { hostname } = new URL(url);
+    const host = hostname.toLowerCase();
+    if (host === 'localhost' || host.endsWith('.localhost')) return true;
+    if (host === '::1' || host === '[::1]') return true;
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!ipv4) return false;
+    const octets = ipv4.slice(1).map(Number);
+    if (octets.some(value => value < 0 || value > 255)) return true;
+    const [a, b] = octets;
+    return a === 10
+      || a === 127
+      || (a === 172 && b >= 16 && b <= 31)
+      || (a === 192 && b === 168)
+      || (a === 169 && b === 254)
+      || a === 0;
+  } catch {
+    return true;
+  }
+}
+
+function getRemoteImageExt(mimetype = '', url = '', filename = '') {
+  const mime = String(mimetype || '').split(';')[0].trim().toLowerCase();
+  const mimeExt = remoteImageMimeExtMap[mime];
+  if (mimeExt) return mimeExt;
+  const filenameExt = getFileExtFromName(filename);
+  if (remoteImageExts.has(filenameExt)) return filenameExt;
+  try {
+    const parsed = new URL(url);
+    const pathExt = getFileExtFromName(parsed.pathname);
+    if (remoteImageExts.has(pathExt)) return pathExt;
+  } catch {}
+  return 'png';
+}
+
+function getRemoteImageMime(mimetype = '', ext = '') {
+  const mime = String(mimetype || '').split(';')[0].trim().toLowerCase();
+  if (mime.startsWith('image/')) return mime;
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'svg') return 'image/svg+xml';
+  return `image/${ext || 'png'}`;
+}
+
+function getFilenameFromUrl(url = '') {
+  try {
+    const parsed = new URL(url);
+    return decodeURIComponent(path.basename(parsed.pathname || '') || '');
+  } catch {
+    return decodeURIComponent(String(url || '').split('?')[0].split('#')[0].split('/').pop() || '');
+  }
+}
+
+function normalizeRemoteImageFilename({ filename = '', url = '', mimetype = '', index = 0 } = {}) {
+  const rawName = normalizeUploadedFilename(filename || getFilenameFromUrl(url) || `wolai-image-${index + 1}`);
+  const ext = getRemoteImageExt(mimetype, url, rawName);
+  const base = String(rawName || `wolai-image-${index + 1}`)
+    .replace(/[\\/:\0]/g, '-')
+    .replace(/\.[^.]*$/, '')
+    .trim() || `wolai-image-${index + 1}`;
+  return `${base}.${ext}`;
+}
+
+async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0 } = {}) {
+  if (isBlockedRemoteImageHost(url)) throw new Error('图片地址不允许由服务器下载');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(WOLAI_REMOTE_IMAGE_TIMEOUT_MS, 3000));
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+        Referer: 'https://www.wolai.com/',
+        'User-Agent': 'Mozilla/5.0 RelationDocumentCenter/1.0',
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    if (contentLength > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error('图片超过 50MB');
+    const contentType = response.headers.get('content-type') || '';
+    const contentMime = contentType.split(';')[0].trim().toLowerCase();
+    if (contentMime && !contentMime.startsWith('image/') && contentMime !== 'application/octet-stream') {
+      throw new Error(`远程资源不是图片：${contentMime}`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (!buffer.length) throw new Error('图片内容为空');
+    if (buffer.length > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error('图片超过 50MB');
+    const originalname = normalizeRemoteImageFilename({ filename, url, mimetype: contentType, index });
+    const ext = getRemoteImageExt(contentType, url, originalname);
+    const mimetype = getRemoteImageMime(contentType, ext);
+    const localFilename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
+    const localPath = path.join(UPLOADS_DIR, localFilename);
+    fs.writeFileSync(localPath, buffer);
+    return {
+      originalname,
+      filename: localFilename,
+      path: localPath,
+      mimetype,
+      size: buffer.length,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isWolaiRemoteImageBlock(block = {}) {
+  if (block?.type !== 'image') return false;
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  const url = String(meta.url || block.content || '').trim();
+  if (!isHttpUrl(url)) return false;
+  return meta.source_system === 'wolai_mcp' || meta.remote === true || /wolai|wostatic/i.test(url);
+}
+
+async function localizeWolaiMcpImageBlocks(docId, blocks = [], userId) {
+  const warnings = [];
+  const imageLimit = Number.isFinite(WOLAI_REMOTE_IMAGE_LIMIT) ? Math.max(WOLAI_REMOTE_IMAGE_LIMIT, 0) : 80;
+  const remoteImageCount = (blocks || []).filter(block => isWolaiRemoteImageBlock(block)).length;
+  let localized = 0;
+  let failed = 0;
+  let visited = 0;
+
+  const nextBlocks = [];
+  for (const block of blocks || []) {
+    if (!isWolaiRemoteImageBlock(block) || visited >= imageLimit) {
+      nextBlocks.push(block);
+      continue;
+    }
+    visited += 1;
+    const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+    const remoteUrl = String(meta.url || block.content || '').trim();
+    let uploadFile = null;
+    try {
+      uploadFile = await downloadRemoteImageAsUploadFile(remoteUrl, {
+        filename: meta.filename || meta.display_name || block.content,
+        index: visited - 1,
+      });
+      await persistUploadedFile(uploadFile, 'documents');
+      const attachment = createDocumentAttachmentRecord(docId, uploadFile, userId, {
+        blockId: block.id,
+        displayName: uploadFile.originalname,
+      });
+      nextBlocks.push({
+        ...block,
+        content: attachment.filename || uploadFile.originalname,
+        meta: {
+          ...meta,
+          attachment_id: attachment.id,
+          filename: attachment.filename || uploadFile.originalname,
+          display_name: attachment.display_name || uploadFile.originalname,
+          url: attachment.url || '',
+          filepath: attachment.filepath || '',
+          mimetype: attachment.mimetype || uploadFile.mimetype || '',
+          file_ext: attachment.file_ext || getFileExtFromName(uploadFile.originalname),
+          size: Number(attachment.size || uploadFile.size || 0),
+          preview_status: attachment.preview_status || 'supported',
+          created_by_name: attachment.creator_name || attachment.created_by_name || '',
+          created_at: attachment.created_at || '',
+          updated_at: attachment.updated_at || '',
+          embedOnly: true,
+          remote: false,
+          source_system: 'wolai_mcp',
+          original_url: remoteUrl,
+        },
+      });
+      localized += 1;
+    } catch (error) {
+      if (uploadFile) cleanupStoredUploadedFiles([uploadFile]);
+      failed += 1;
+      nextBlocks.push(block);
+      warnings.push(`Wolai 图片 ${visited} 下载失败，已保留原链接：${error.message || '未知错误'}`);
+    }
+  }
+  if (remoteImageCount > imageLimit) {
+    warnings.push(`Wolai 图片数量超过 ${imageLimit} 张，后续图片保留原链接`);
+  }
+  if (localized) warnings.push(`已将 ${localized} 张 Wolai 图片保存为文档附件并写入 OSS`);
+  if (failed) warnings.push(`${failed} 张 Wolai 图片未能保存到本系统，仍保留原链接`);
+  return { blocks: nextBlocks, warnings, localized, failed };
+}
+
 function buildDocumentImportFallbackBlocks(attachment, message = '暂未解析出可展示正文，已保留原文件。') {
   const displayName = attachment.display_name || attachment.filename || '导入文件';
   return [{
@@ -6152,8 +6350,8 @@ app.post('/api/documents/import/wolai-mcp', canWrite, async (req, res) => {
       token: req.body?.token,
       endpoint: req.body?.endpoint,
     });
-    const content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
-    const contentText = imported.content_text || extractDocumentText(content);
+    let content = { blocks: Array.isArray(imported.blocks) ? imported.blocks : [] };
+    let contentText = imported.content_text || extractDocumentText(content);
     const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
     const id = createDocumentRecord({
       ...req.body,
@@ -6164,6 +6362,32 @@ app.post('/api/documents/import/wolai-mcp', canWrite, async (req, res) => {
       current_version: req.body?.current_version || 'V1.0',
       width_mode: req.body?.width_mode || 'full',
     }, req.user);
+
+    const imageLocalization = await localizeWolaiMcpImageBlocks(id, content.blocks, req.user.id);
+    if (imageLocalization.localized || imageLocalization.failed) {
+      content = { blocks: imageLocalization.blocks };
+      contentText = extractDocumentText(content);
+      imported.warnings = [
+        ...(imported.warnings || []),
+        ...imageLocalization.warnings,
+      ];
+      db.prepare(`
+        UPDATE documents SET
+          content = ?,
+          content_text = ?,
+          summary = ?,
+          updated_by = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        JSON.stringify(content),
+        contentText,
+        buildDocumentSummary(contentText),
+        req.user.id,
+        id
+      );
+    }
+
     db.prepare(`
       UPDATE documents SET
         source_system = 'wolai_mcp',
