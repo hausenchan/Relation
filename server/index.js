@@ -5016,14 +5016,23 @@ function ensureDocumentDirectoryBlueprint() {
     });
 
     if (LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES.length) {
-      db.prepare(`
-        DELETE FROM document_folders
-        WHERE domain IN (${DOCUMENT_MANAGED_SPACE_DOMAINS.map(() => '?').join(',')})
-          AND parent_id IS NULL
-          AND name IN (${LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES.map(() => '?').join(',')})
-          AND id NOT IN (SELECT DISTINCT folder_id FROM documents WHERE folder_id IS NOT NULL AND COALESCE(is_deleted, 0) = 0)
-          AND id NOT IN (SELECT DISTINCT parent_id FROM document_folders WHERE parent_id IS NOT NULL)
-      `).run(...DOCUMENT_MANAGED_SPACE_DOMAINS, ...LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES);
+      const staleFolderIds = db.prepare(`
+        SELECT f.id
+        FROM document_folders f
+        LEFT JOIN documents d
+          ON d.folder_id = f.id AND COALESCE(d.is_deleted, 0) = 0
+        LEFT JOIN document_folders child
+          ON child.parent_id = f.id
+        WHERE f.domain IN (${DOCUMENT_MANAGED_SPACE_DOMAINS.map(() => '?').join(',')})
+          AND f.parent_id IS NULL
+          AND f.name IN (${LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES.map(() => '?').join(',')})
+          AND d.id IS NULL
+          AND child.id IS NULL
+      `).all(...DOCUMENT_MANAGED_SPACE_DOMAINS, ...LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES).map(row => row.id);
+      if (staleFolderIds.length) {
+        db.prepare(`DELETE FROM document_folders WHERE id IN (${staleFolderIds.map(() => '?').join(',')})`)
+          .run(...staleFolderIds);
+      }
     }
   });
   ensure();
