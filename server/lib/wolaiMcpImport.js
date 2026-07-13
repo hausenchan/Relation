@@ -604,6 +604,7 @@ function mapNodeType(node) {
   if (/code/.test(raw)) return 'code';
   if (/divider|hr|separator/.test(raw)) return 'divider';
   if (/image|picture/.test(raw)) return 'image';
+  if (/file|attachment|asset/.test(raw)) return 'attachment';
   if (/table|database/.test(raw)) return 'table-simple';
   return 'paragraph';
 }
@@ -631,6 +632,175 @@ function normalizeTableRows(node) {
   };
 }
 
+const mediaImageExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+const mediaPreviewExtensions = new Set([
+  ...mediaImageExtensions,
+  'pdf', 'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'xml', 'yaml', 'yml',
+]);
+
+function normalizeMediaUrl(value) {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (/^(https?:|data:image\/|blob:|\/uploads\/)/i.test(text)) return text;
+    return '';
+  }
+  if (isPlainObject(value)) {
+    return normalizeMediaUrl(
+      value.url || value.href || value.src || value.download_url || value.downloadUrl
+        || value.preview_url || value.previewUrl || value.file_url || value.fileUrl
+        || value.source_url || value.sourceUrl
+    );
+  }
+  return '';
+}
+
+function getMediaUrlFromNode(node = {}, fallbackKey = '') {
+  if (!isPlainObject(node)) return '';
+  const mediaContext = /image|picture|photo|file|attachment|asset|media|resource/i.test(String(fallbackKey || ''));
+  const urlKeys = [
+    'url', 'src', 'href', 'download_url', 'downloadUrl', 'preview_url', 'previewUrl',
+    'file_url', 'fileUrl', 'image_url', 'imageUrl', 'media_url', 'mediaUrl',
+    'attachment_url', 'attachmentUrl', 'signed_url', 'signedUrl',
+    'raw_url', 'rawUrl',
+    ...(mediaContext ? ['source_url', 'sourceUrl', 'source'] : ['source']),
+  ];
+  for (const key of urlKeys) {
+    const url = normalizeMediaUrl(node[key]);
+    if (url) return url;
+  }
+  for (const key of ['file', 'image', 'picture', 'photo', 'attachment', 'asset', 'media', 'resource', 'data']) {
+    const url = normalizeMediaUrl(node[key]);
+    if (url) return url;
+  }
+  return '';
+}
+
+function getFirstMediaText(node = {}, keys = []) {
+  if (!isPlainObject(node)) return '';
+  for (const key of keys) {
+    const value = node[key];
+    if (typeof value === 'string' || typeof value === 'number') {
+      const text = stripHtml(String(value || '')).trim();
+      if (text) return text;
+    }
+    if (Array.isArray(value)) {
+      const text = stripHtml(getNodeHtml(value)).trim();
+      if (text) return text;
+    }
+    if (isPlainObject(value)) {
+      const nested = getFirstMediaText(value, keys);
+      if (nested) return nested;
+    }
+  }
+  return '';
+}
+
+function getMediaExtFromUrl(url = '') {
+  const raw = String(url || '').trim();
+  if (!raw || raw.startsWith('data:')) {
+    const mimeExt = raw.match(/^data:[^/]+\/([^;,]+)/i)?.[1] || '';
+    return mimeExt === 'jpeg' ? 'jpg' : mimeExt.toLowerCase();
+  }
+  try {
+    const parsed = new URL(raw, 'https://placeholder.local');
+    const basename = String(parsed.pathname || '').split('/').pop() || '';
+    return basename.includes('.') ? basename.split('.').pop().toLowerCase() : '';
+  } catch {
+    const basename = raw.split('?')[0].split('#')[0].split('/').pop() || '';
+    return basename.includes('.') ? basename.split('.').pop().toLowerCase() : '';
+  }
+}
+
+function normalizeMediaKind(node = {}, url = '', fallbackKey = '') {
+  const hint = [
+    fallbackKey,
+    node.type,
+    node.block_type,
+    node.blockType,
+    node.kind,
+    node.mime_type,
+    node.mimetype,
+    node.content_type,
+    node.contentType,
+  ].map(item => String(item || '').toLowerCase()).join(' ');
+  const ext = getMediaExtFromUrl(url);
+  if (/image|picture|photo|图片|图像/.test(hint)) return 'image';
+  if (String(node.mime_type || node.mimetype || node.content_type || node.contentType || '').toLowerCase().startsWith('image/')) return 'image';
+  if (mediaImageExtensions.has(ext)) return 'image';
+  if (/file|attachment|asset|resource|附件|文件/.test(hint)) return 'attachment';
+  if (ext && !/^https?:$/i.test(ext)) return 'attachment';
+  return '';
+}
+
+function getMediaPreviewStatus(media = {}) {
+  const mime = String(media.mimetype || '').toLowerCase();
+  const ext = String(media.file_ext || '').toLowerCase();
+  if (mime.startsWith('image/') || mime.startsWith('video/') || mime.startsWith('text/')) return 'supported';
+  if (mime === 'application/pdf' || mediaPreviewExtensions.has(ext)) return 'supported';
+  return 'unsupported';
+}
+
+function extractMediaFromNode(node = {}, fallbackKey = '') {
+  if (!isPlainObject(node)) return null;
+  const url = getMediaUrlFromNode(node, fallbackKey);
+  if (!url) return null;
+  const mimetype = getFirstMediaText(node, ['mimetype', 'mime_type', 'mimeType', 'content_type', 'contentType']);
+  const kind = normalizeMediaKind(node, url, fallbackKey);
+  if (!kind) return null;
+  const filename = getFirstMediaText(node, [
+    'filename', 'file_name', 'fileName', 'display_name', 'displayName',
+    'name', 'title', 'alt', 'caption',
+  ]) || decodeURIComponent(getMediaExtFromUrl(url) ? String(url).split('?')[0].split('/').pop() : '') || (kind === 'image' ? 'Wolai 图片' : 'Wolai 附件');
+  const fileExt = getFirstMediaText(node, ['file_ext', 'fileExt', 'extension', 'ext']) || getMediaExtFromUrl(filename) || getMediaExtFromUrl(url);
+  const media = {
+    kind,
+    url,
+    filename,
+    display_name: filename,
+    mimetype,
+    file_ext: fileExt,
+    size: Number(getObjectValueByKeys(node, ['size', 'file_size', 'fileSize']) || 0) || 0,
+    alt: getFirstMediaText(node, ['alt', 'caption', 'description']) || filename,
+  };
+  return {
+    ...media,
+    preview_status: getMediaPreviewStatus(media),
+  };
+}
+
+function makeMediaBlock(makeBlock, media = {}) {
+  const displayName = media.display_name || media.filename || (media.kind === 'image' ? 'Wolai 图片' : 'Wolai 附件');
+  if (media.kind === 'image') {
+    return makeBlock('image', media.url, {
+      meta: {
+        url: media.url,
+        filename: displayName,
+        attachment_id: null,
+        mimetype: media.mimetype || '',
+        source_system: 'wolai_mcp',
+        remote: true,
+        alt: media.alt || displayName,
+      },
+    });
+  }
+  return makeBlock('attachment', displayName, {
+    meta: {
+      attachment_id: null,
+      filename: media.filename || displayName,
+      display_name: displayName,
+      url: media.url || '',
+      filepath: '',
+      mimetype: media.mimetype || '',
+      file_ext: media.file_ext || getMediaExtFromUrl(displayName),
+      size: Number(media.size || 0),
+      preview_status: media.preview_status || getMediaPreviewStatus(media),
+      source_system: 'wolai_mcp',
+      remote: true,
+    },
+  });
+}
+
 function collectStructuredNodes(value, nodes = [], options = {}) {
   if (!value) return nodes;
   if (Array.isArray(value)) {
@@ -645,17 +815,18 @@ function collectStructuredNodes(value, nodes = [], options = {}) {
     || value.markdown !== undefined
     || value.value !== undefined;
   const hasTable = Boolean(value.rows || value.table);
+  const hasMedia = Boolean(extractMediaFromNode(value, options.fallbackKey || ''));
   if (
-    hasBlockType || hasBodyText || hasTable
+    hasBlockType || hasBodyText || hasTable || hasMedia
   ) {
     nodes.push(value);
   }
   ['page', 'document', 'data', 'blocks', 'children', 'content'].forEach(key => {
-    if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, options);
+    if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, { ...options, fallbackKey: key });
   });
   if (options.allowCollectionKeys) {
-    ['items', 'rows', 'cells'].forEach(key => {
-      if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, options);
+    ['items', 'rows', 'cells', 'images', 'image', 'attachments', 'attachment', 'files', 'file', 'media', 'assets'].forEach(key => {
+      if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, { ...options, fallbackKey: key });
     });
   }
   return nodes;
@@ -788,6 +959,7 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
     getObjectValueByKeys(rawRecord, ['id', 'block_id', 'blockId'])
       || (isLikelyWolaiRecordKey(fallbackId) ? fallbackId : '')
   );
+  const media = extractMediaFromNode(rawRecord, fallbackId);
   const html = getNodeHtml({
     title: rawRecord.title,
     content: rawRecord.content,
@@ -798,7 +970,7 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
     name: rawRecord.name,
   });
   const plainText = stripHtml(html);
-  if (!plainText) return null;
+  if (!plainText && !media) return null;
   return {
     id: id || `wolai_record_${order}`,
     parentId: normalizeRecordId(getObjectValueByKeys(rawRecord, ['parent_id', 'parentId', 'parent_block_id', 'parentBlockId'])),
@@ -808,6 +980,7 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
     checked: Boolean(getObjectValueByKeys(rawRecord, ['checked', 'done', 'completed'])),
     language: String(getObjectValueByKeys(rawRecord, ['language', 'lang']) || ''),
     html,
+    media,
     order,
   };
 }
@@ -901,6 +1074,7 @@ function extractWolaiRecordsFromJsonLikeText(text = '') {
 
 function inferWolaiRecordType(record = {}) {
   const hint = `${record.type || ''} ${record.parentType || ''} ${record.inferredType || ''}`.toLowerCase();
+  if (record.media?.kind) return record.media.kind;
   if (/heading|header|title/.test(hint) || record.level) return `heading${Math.min(Math.max(Number(record.level) || 2, 1), 3)}`;
   if (/todo|check/.test(hint)) return 'todo';
   if (/enum|number|ordered|ol/.test(hint)) return 'numbered';
@@ -909,15 +1083,20 @@ function inferWolaiRecordType(record = {}) {
   if (/code/.test(hint)) return 'code';
   if (/divider|hr|separator/.test(hint)) return 'divider';
   if (/image|picture/.test(hint)) return 'image';
+  if (/file|attachment|asset/.test(hint)) return 'attachment';
   if (/table|database/.test(hint)) return 'table-simple';
   return 'paragraph';
 }
 
 function recordsToBlocks(records = [], seed) {
   const normalized = records
-    .filter(record => record && stripHtml(record.html))
+    .filter(record => record && (stripHtml(record.html) || record.media?.url))
     .filter((record, index, list) => (
-      index === list.findIndex(other => other.id === record.id && stripHtml(other.html) === stripHtml(record.html))
+      index === list.findIndex(other => (
+        other.id === record.id
+        && stripHtml(other.html) === stripHtml(record.html)
+        && (other.media?.url || '') === (record.media?.url || '')
+      ))
     ))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
   if (!normalized.length) return [];
@@ -970,6 +1149,9 @@ function recordsToBlocks(records = [], seed) {
   const makeBlock = makeBlockFactory(seed);
   return ordered.map(record => {
     const type = inferWolaiRecordType(record);
+    if ((type === 'image' || type === 'attachment') && record.media?.url) {
+      return makeMediaBlock(makeBlock, { ...record.media, kind: type });
+    }
     const meta = {};
     if (type === 'numbered' || type === 'bullet') meta.indent = getDepth(record);
     if (record.language) meta.language = record.language;
@@ -1118,9 +1300,9 @@ function nodesToBlocks(nodes, seed) {
       blocks.push(makeBlock('divider'));
       return;
     }
-    if (type === 'image') {
-      const url = node.url || node.src || node.source || node.file_url || getNodeText(node);
-      if (url) blocks.push(makeBlock('image', String(url), { meta: { url: String(url), alt: node.alt || node.caption || '' } }));
+    if (type === 'image' || type === 'attachment') {
+      const media = extractMediaFromNode(node, type);
+      if (media?.url) blocks.push(makeMediaBlock(makeBlock, { ...media, kind: type }));
       return;
     }
     const html = getNodeHtml(node);
@@ -1164,6 +1346,36 @@ function parseMarkdownTable(lines, startIndex, makeBlock) {
   };
 }
 
+function parseMarkdownUrlToken(value = '') {
+  return String(value || '').trim().replace(/^<|>$/g, '').replace(/\s+["'][^"']*["']$/, '');
+}
+
+function markdownMediaToBlock(makeBlock, url = '', label = '', forceKind = '') {
+  const normalizedUrl = parseMarkdownUrlToken(url);
+  if (!normalizedUrl) return null;
+  const ext = getMediaExtFromUrl(label) || getMediaExtFromUrl(normalizedUrl);
+  if (!forceKind && !ext) {
+    return makeBlock('external-link', normalizedUrl, {
+      meta: {
+        url: normalizedUrl,
+        filename: label || normalizedUrl,
+      },
+    });
+  }
+  const media = {
+    kind: forceKind || (mediaImageExtensions.has(ext) ? 'image' : 'attachment'),
+    url: normalizedUrl,
+    filename: label || decodeURIComponent(String(normalizedUrl).split('?')[0].split('/').pop() || ''),
+    display_name: label || decodeURIComponent(String(normalizedUrl).split('?')[0].split('/').pop() || ''),
+    file_ext: ext,
+    mimetype: '',
+    size: 0,
+    alt: label || '',
+  };
+  media.preview_status = getMediaPreviewStatus(media);
+  return makeMediaBlock(makeBlock, media);
+}
+
 function parseTextToBlocks(text, seed) {
   const makeBlock = makeBlockFactory(seed);
   const blocks = [];
@@ -1193,6 +1405,20 @@ function parseTextToBlocks(text, seed) {
       continue;
     }
     if (!trimmed) continue;
+    const imageOnly = trimmed.match(/^!\[([^\]]*)]\(([^)]+)\)$/);
+    if (imageOnly) {
+      const block = markdownMediaToBlock(makeBlock, imageOnly[2], imageOnly[1], 'image');
+      if (block) blocks.push(block);
+      continue;
+    }
+    const linkOnly = trimmed.match(/^\[([^\]]+)]\(([^)]+)\)$/);
+    if (linkOnly) {
+      const block = markdownMediaToBlock(makeBlock, linkOnly[2], linkOnly[1]);
+      if (block) {
+        blocks.push(block);
+        continue;
+      }
+    }
     const table = parseMarkdownTable(lines, index, makeBlock);
     if (table) {
       blocks.push(table.block);

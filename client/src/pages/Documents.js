@@ -5075,6 +5075,11 @@ export default function Documents() {
   };
 
   const downloadDocumentAttachment = async (attachment) => {
+    const url = getAttachmentUrl(attachment);
+    if (!attachment?.id && url) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
     if (!attachment?.id) {
       message.warning('附件尚未上传完成');
       return;
@@ -5088,6 +5093,11 @@ export default function Documents() {
 
   const openAttachmentPreview = async (block, mode = 'modal') => {
     const attachment = blockMetaToAttachment(getBlockMeta(block));
+    const url = getAttachmentUrl(attachment);
+    if (!attachment?.id && url) {
+      setAttachmentPreviewState({ open: true, mode, attachment, loading: false });
+      return;
+    }
     if (!attachment?.id) {
       message.warning('附件尚未上传完成');
       return;
@@ -9167,7 +9177,7 @@ export default function Documents() {
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description="当前文件暂不支持在线预览，可下载后查看。"
         >
-          {normalized.id && (
+          {(normalized.id || url) && (
             <Button icon={<DownloadOutlined />} onClick={() => downloadDocumentAttachment(normalized)}>
               下载文件
             </Button>
@@ -9200,7 +9210,7 @@ export default function Documents() {
     }
     return (
       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前文件暂不支持在线预览，可下载后查看。">
-        {normalized.id && <Button icon={<DownloadOutlined />} onClick={() => downloadDocumentAttachment(normalized)}>下载文件</Button>}
+        {(normalized.id || url) && <Button icon={<DownloadOutlined />} onClick={() => downloadDocumentAttachment(normalized)}>下载文件</Button>}
       </Empty>
     );
   };
@@ -9208,17 +9218,20 @@ export default function Documents() {
   const renderAttachmentBlock = (block) => {
     const meta = getBlockMeta(block);
     const attachment = blockMetaToAttachment(meta);
+    const attachmentUrl = getAttachmentUrl(attachment);
     const displayName = getAttachmentDisplayName(attachment);
     const uploading = attachmentUploadingBlockIds.includes(block.id) || meta.upload_status === 'uploading';
     const uploadPercent = clampUploadPercent(meta.upload_percent, 0, 100);
     const failed = meta.upload_status === 'failed';
-    const hasAttachment = Boolean(attachment.id);
+    const hasStoredAttachment = Boolean(attachment.id);
+    const hasAttachment = Boolean(hasStoredAttachment || attachmentUrl);
     const canEditAttachment = canEditDoc(selectedDoc);
     const actionVisible = isMobile || selectedBlockId === block.id || hoveredBlockId === block.id;
     const previewKind = getAttachmentPreviewKind(attachment);
     const previewable = hasAttachment && (attachment.preview_status === 'supported' || previewKind !== 'unsupported');
     const detailParts = [
       formatFileSize(attachment.size),
+      !hasStoredAttachment && attachmentUrl ? 'Wolai 外部附件' : '',
       attachment.creator_name ? `上传人：${attachment.creator_name}` : '',
       attachment.created_at ? formatDocumentTimestamp(attachment.created_at) : '',
     ].filter(Boolean);
@@ -9231,7 +9244,7 @@ export default function Documents() {
       { key: 'comment', icon: <CommentOutlined />, label: '评论', disabled: !hasAttachment },
       { type: 'divider' },
       { key: 'rename', icon: <EditOutlined />, label: '重命名', disabled: !canEditAttachment },
-      { key: 'replace', icon: <UploadOutlined />, label: '替换文件', disabled: !canEditAttachment || !hasAttachment },
+      { key: 'replace', icon: <UploadOutlined />, label: '替换文件', disabled: !canEditAttachment || !hasStoredAttachment },
       { key: 'delete', danger: true, icon: <DeleteOutlined />, label: '删除', disabled: !canEditAttachment },
     ];
 
@@ -9269,6 +9282,7 @@ export default function Documents() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <Text strong ellipsis style={{ maxWidth: '100%' }}>{displayName}</Text>
             {previewable && <Tag color="blue" style={{ marginInlineEnd: 0 }}>可预览</Tag>}
+            {!hasStoredAttachment && attachmentUrl && <Tag color="cyan" style={{ marginInlineEnd: 0 }}>外部</Tag>}
             {uploading && <Tag color="processing" style={{ marginInlineEnd: 0 }}>{`上传中 ${uploadPercent}%`}</Tag>}
             {failed && <Tag color="red" style={{ marginInlineEnd: 0 }}>失败</Tag>}
           </div>
@@ -9329,6 +9343,7 @@ export default function Documents() {
 
   const renderPresentationAttachmentBlock = (block) => {
     const attachment = blockMetaToAttachment(getBlockMeta(block));
+    const attachmentUrl = getAttachmentUrl(attachment);
     return (
       <div style={{
         display: 'flex',
@@ -9344,7 +9359,7 @@ export default function Documents() {
           <Text strong ellipsis style={{ display: 'block', fontSize: isMobile ? 16 : 20 }}>{getAttachmentDisplayName(attachment)}</Text>
           <Text type="secondary" style={{ fontSize: isMobile ? 13 : 15 }}>{formatFileSize(attachment.size)}</Text>
         </div>
-        {attachment.id && (
+        {(attachment.id || attachmentUrl) && (
           <Button icon={<DownloadOutlined />} onClick={() => downloadDocumentAttachment(attachment)}>
             下载
           </Button>
