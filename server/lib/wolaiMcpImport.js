@@ -522,8 +522,13 @@ function isWolaiBlockLikeObject(value, fallbackKey = '') {
     || value.block_type !== undefined
     || value.blockType !== undefined
     || value.kind !== undefined;
+  const hasTableMeta = value.rows !== undefined
+    || value.table !== undefined
+    || value.tableRows !== undefined
+    || value.cells !== undefined
+    || (value.properties !== undefined && /table|database|row/i.test(getNodeTypeHint(value)));
   if (!id) return false;
-  if (hasBlockMeta) return true;
+  if (hasBlockMeta || hasTableMeta) return true;
   return hasText && !/^(page|document|meta|metadata)$/i.test(String(fallbackKey || ''));
 }
 
@@ -593,11 +598,36 @@ function getNodeText(node) {
   return stripHtml(getNodeHtml(node));
 }
 
+function getNodeTypeHint(node = {}) {
+  return [
+    node?.type,
+    node?.block_type,
+    node?.blockType,
+    node?.kind,
+    node?.format,
+  ].map(item => String(item || '').toLowerCase()).filter(Boolean).join(' ');
+}
+
+function isFoldLikeTypeHint(value = '') {
+  return /toggle|fold|collaps|expand|折叠|展开/.test(String(value || '').toLowerCase());
+}
+
+function isTableRowTypeHint(value = '') {
+  return /table[_\s-]*row|row[_\s-]*block|表格行/.test(String(value || '').toLowerCase());
+}
+
+function isTableLikeTypeHint(value = '') {
+  const hint = String(value || '').toLowerCase();
+  return /table|database|grid|sheet|表格|数据表/.test(hint) && !/table[_\s-]*of[_\s-]*contents|目录/.test(hint);
+}
+
 function mapNodeType(node) {
-  const raw = String(node?.type || node?.block_type || node?.kind || '').toLowerCase();
+  const raw = getNodeTypeHint(node);
   const level = Number(node?.level || node?.heading_level || raw.match(/heading[_-]?([1-6])/)?.[1] || 0);
   if (/heading|title|header/.test(raw) || level) return `heading${Math.min(Math.max(level || 1, 1), 3)}`;
   if (/todo|check/.test(raw)) return 'todo';
+  if (isFoldLikeTypeHint(raw)) return 'fold-list';
+  if (isTableLikeTypeHint(raw)) return 'table-simple';
   if (/enum|number|ordered|ol/.test(raw)) return 'numbered';
   if (/bullet|unordered|ul|list/.test(raw)) return 'bullet';
   if (/quote/.test(raw)) return 'quote';
@@ -605,31 +635,447 @@ function mapNodeType(node) {
   if (/divider|hr|separator/.test(raw)) return 'divider';
   if (/image|picture/.test(raw)) return 'image';
   if (/file|attachment|asset/.test(raw)) return 'attachment';
-  if (/table|database/.test(raw)) return 'table-simple';
   return 'paragraph';
 }
 
-function normalizeTableRows(node) {
-  const rows = node?.rows || node?.table?.rows || node?.data?.rows || [];
-  if (!Array.isArray(rows)) return null;
-  const matrix = rows
-    .map(row => {
-      if (Array.isArray(row)) return row.map(cell => stripHtml(getNodeText(cell)));
-      if (Array.isArray(row?.cells)) return row.cells.map(cell => stripHtml(getNodeText(cell)));
-      if (Array.isArray(row?.columns)) return row.columns.map(cell => stripHtml(getNodeText(cell)));
-      return [];
-    })
-    .filter(row => row.length);
-  if (!matrix.length) return null;
-  const columnCount = Math.max(...matrix.map(row => row.length), 1);
+const wolaiColorMap = {
+  gray: '#6b7280',
+  brown: '#92400e',
+  orange: '#ea580c',
+  yellow: '#ca8a04',
+  green: '#16a34a',
+  blue: '#2563eb',
+  purple: '#7c3aed',
+  pink: '#db2777',
+  red: '#dc2626',
+  gray_background: '#f1f5f9',
+  brown_background: '#fef3c7',
+  orange_background: '#ffedd5',
+  yellow_background: '#fef9c3',
+  green_background: '#dcfce7',
+  blue_background: '#dbeafe',
+  purple_background: '#ede9fe',
+  pink_background: '#fce7f3',
+  red_background: '#fee2e2',
+  light_gray_background: '#f3f4f6',
+  fluorescent_purple_background: '#f3e8ff',
+  apricot_background: '#ffedd5',
+  vivid_tangerine_background: '#fed7aa',
+  light_pink_background: '#fce7f3',
+};
+
+function normalizeCssColor(value = '') {
+  const color = String(value || '').trim();
+  if (!color || /^(default|transparent|inherit|initial|none)$/i.test(color)) return '';
+  const normalized = color.replace(/\s+/g, '_').toLowerCase();
+  if (wolaiColorMap[normalized]) return wolaiColorMap[normalized];
+  if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
+  if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(color)) return color;
+  if (/^[a-z]+$/i.test(color)) return color;
+  return '';
+}
+
+function parseStyleString(style = '') {
+  const result = {};
+  String(style || '').split(';').forEach(part => {
+    const index = part.indexOf(':');
+    if (index < 0) return;
+    const key = part.slice(0, index).trim().replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+    const value = part.slice(index + 1).trim();
+    if (key) result[key] = value;
+  });
+  return result;
+}
+
+function isEmptyTableStyle(style = {}) {
+  return !style.backgroundColor && !style.color;
+}
+
+function normalizeTableStyleFromSource(source = {}) {
+  if (!isPlainObject(source)) return {};
+  const styleSource = typeof source.style === 'string'
+    ? parseStyleString(source.style)
+    : (isPlainObject(source.style) ? source.style : {});
+  const colorToken = source.color || source.textColor || source.text_color || styleSource.color;
+  const backgroundToken = source.backgroundColor || source.background_color
+    || source.bgColor || source.bg_color || source.back_color || source.backColor
+    || source.background || source.fill
+    || styleSource.backgroundColor || styleSource.background || styleSource.fill;
+  const frontColorToken = source.front_color || source.frontColor;
+  const normalizedColor = normalizeCssColor(colorToken);
+  const normalizedFrontColor = normalizeCssColor(frontColorToken);
+  const normalizedBackground = normalizeCssColor(backgroundToken);
+  const token = String(source.color || '').trim().toLowerCase();
+  const tokenBackground = /background|背景/.test(token) ? normalizeCssColor(token) : '';
+  const tokenTextColor = token && !/background|背景/.test(token) ? normalizeCssColor(token) : '';
   return {
-    columns: Array.from({ length: columnCount }, (_, index) => {
-      const header = node?.columns?.[index];
-      return stripHtml(getNodeText(header)) || `字段 ${index + 1}`;
-    }),
-    rows: matrix.map(row => Array.from({ length: columnCount }, (_, index) => row[index] || '')),
-    mergedCells: [],
+    ...(normalizedBackground || tokenBackground ? { backgroundColor: normalizedBackground || tokenBackground } : {}),
+    ...(normalizedColor || normalizedFrontColor || tokenTextColor ? { color: normalizedColor || normalizedFrontColor || tokenTextColor } : {}),
   };
+}
+
+function tableCellKey(rowIndex, columnIndex) {
+  return `${Number(rowIndex)}:${Number(columnIndex)}`;
+}
+
+function getTagAttribute(tag = '', name = '') {
+  const quotedPattern = new RegExp(`${name}\\s*=\\s*(["'])([\\s\\S]*?)\\1`, 'i');
+  const quoted = String(tag || '').match(quotedPattern)?.[2];
+  if (quoted !== undefined) return quoted;
+  const plainPattern = new RegExp(`${name}\\s*=\\s*([^\\s>]+)`, 'i');
+  return String(tag || '').match(plainPattern)?.[1] || '';
+}
+
+function getInnerHtml(fragment = '') {
+  return String(fragment || '').replace(/^<[^>]+>/, '').replace(/<\/[^>]+>\s*$/, '');
+}
+
+function sanitizeImportedHtml(value = '') {
+  return String(value || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/\son\w+="[^"]*"/gi, '')
+    .replace(/\son\w+='[^']*'/gi, '')
+    .replace(/javascript:/gi, '');
+}
+
+function parseHtmlTableMeta(html = '') {
+  const source = String(html || '');
+  if (!/<table[\s>]/i.test(source)) return null;
+  const tableHtml = source.match(/<table\b[\s\S]*?<\/table>/i)?.[0] || source;
+  const rowMatches = tableHtml.match(/<tr\b[\s\S]*?<\/tr>/gi) || [];
+  if (!rowMatches.length) return null;
+
+  const matrix = [];
+  const mergedCells = [];
+  const cellStyles = {};
+  const occupied = new Set();
+  rowMatches.forEach((rowHtml, rowIndex) => {
+    matrix[rowIndex] = matrix[rowIndex] || [];
+    const rowTag = rowHtml.match(/^<tr\b[^>]*>/i)?.[0] || '';
+    const rowStyle = normalizeTableStyleFromSource({ style: getTagAttribute(rowTag, 'style') });
+    const cellMatches = rowHtml.match(/<(td|th)\b[^>]*>[\s\S]*?<\/\1>/gi) || [];
+    let columnIndex = 0;
+    cellMatches.forEach(cellHtml => {
+      while (occupied.has(tableCellKey(rowIndex, columnIndex))) columnIndex += 1;
+      const openingTag = cellHtml.match(/^<(td|th)\b[^>]*>/i)?.[0] || '';
+      const rowSpan = Math.max(1, Number(getTagAttribute(openingTag, 'rowspan')) || 1);
+      const colSpan = Math.max(1, Number(getTagAttribute(openingTag, 'colspan')) || 1);
+      const cellStyle = {
+        ...rowStyle,
+        ...normalizeTableStyleFromSource({ style: getTagAttribute(openingTag, 'style') }),
+      };
+      const inner = sanitizeImportedHtml(getInnerHtml(cellHtml)
+        .replace(/<\/(p|div|h[1-6])>\s*<(p|div|h[1-6])[^>]*>/gi, '<br/>')
+        .replace(/<\/?(p|div|h[1-6])[^>]*>/gi, ''));
+      matrix[rowIndex][columnIndex] = inner.trim();
+      if (!isEmptyTableStyle(cellStyle)) cellStyles[tableCellKey(rowIndex, columnIndex)] = cellStyle;
+      if (rowSpan > 1 || colSpan > 1) mergedCells.push({ rowIndex, columnIndex, rowSpan, colSpan });
+      for (let r = rowIndex; r < rowIndex + rowSpan; r += 1) {
+        matrix[r] = matrix[r] || [];
+        for (let c = columnIndex; c < columnIndex + colSpan; c += 1) {
+          occupied.add(tableCellKey(r, c));
+          if (r !== rowIndex || c !== columnIndex) matrix[r][c] = matrix[r][c] || '';
+        }
+      }
+      columnIndex += colSpan;
+    });
+  });
+  return buildTableMetaFromMatrix(matrix, { mergedCells, cellStyles });
+}
+
+function getRawHtmlTableCandidate(node = {}) {
+  if (!isPlainObject(node)) return '';
+  const candidates = [
+    node.html,
+    node.content_html,
+    node.contentHtml,
+    node.inner_html,
+    node.innerHtml,
+    node.markdown,
+    typeof node.content === 'string' ? node.content : '',
+    typeof node.text === 'string' ? node.text : '',
+    typeof node.value === 'string' ? node.value : '',
+  ];
+  return candidates.find(candidate => /<table[\s>]/i.test(String(candidate || ''))) || '';
+}
+
+function getTableCellHtml(cell) {
+  if (cell == null) return '';
+  if (typeof cell === 'string' || typeof cell === 'number' || typeof cell === 'boolean') return escapeHtml(cell);
+  if (Array.isArray(cell)) return extractInlineHtml(cell);
+  if (!isPlainObject(cell)) return '';
+
+  const typedValue = cell.type && cell[cell.type] !== undefined ? cell[cell.type] : undefined;
+  const relationValues = Array.isArray(cell.relation) ? cell.relation.map(item => item.title || item.name || item.id).filter(Boolean).join('、') : '';
+  const selectValue = cell.select?.name || cell.option?.name || '';
+  const multiSelectValue = Array.isArray(cell.multi_select) ? cell.multi_select.map(item => item.name || item.title).filter(Boolean).join('、') : '';
+  const dateValue = cell.date?.start || cell.date?.end || '';
+  const candidates = [
+    cell.rich_text,
+    cell.richText,
+    cell.plain_text,
+    cell.plainText,
+    cell.title,
+    cell.content,
+    cell.text,
+    cell.name,
+    cell.value,
+    typedValue,
+    selectValue,
+    multiSelectValue,
+    dateValue,
+    relationValues,
+    cell.number,
+    cell.url,
+    cell.email,
+    cell.phone_number,
+    cell.phoneNumber,
+    cell.checkbox,
+  ];
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null) continue;
+    const html = Array.isArray(candidate)
+      ? extractInlineHtml(candidate)
+      : getNodeHtml(candidate);
+    if (stripHtml(html)) return String(html).replace(/\r?\n/g, '<br/>');
+    if (typeof candidate === 'boolean') return candidate ? '是' : '否';
+    if (typeof candidate === 'number') return escapeHtml(candidate);
+  }
+  return '';
+}
+
+function getTableCellSpan(cell = {}, keys = []) {
+  if (!isPlainObject(cell)) return 1;
+  for (const key of keys) {
+    const value = key.split('.').reduce((acc, part) => (acc && acc[part] !== undefined ? acc[part] : undefined), cell);
+    const span = Number(value);
+    if (Number.isFinite(span) && span > 1) return Math.round(span);
+  }
+  return 1;
+}
+
+function normalizeTableCell(cell, inheritedStyle = {}) {
+  const ownStyle = normalizeTableStyleFromSource(cell);
+  return {
+    html: getTableCellHtml(cell),
+    rowSpan: getTableCellSpan(cell, ['rowSpan', 'row_span', 'rowspan', 'span.rows', 'span.rowSpan']),
+    colSpan: getTableCellSpan(cell, ['colSpan', 'col_span', 'colspan', 'span.cols', 'span.columns', 'span.colSpan']),
+    style: {
+      ...inheritedStyle,
+      ...ownStyle,
+    },
+  };
+}
+
+function extractTableColumnHints(node = {}) {
+  const sources = [
+    node?.columns,
+    node?.headers,
+    node?.fields,
+    node?.schema?.columns,
+    node?.table?.columns,
+    node?.data?.columns,
+    node?.properties_schema,
+    node?.propertiesSchema,
+  ].filter(Boolean);
+  for (const source of sources) {
+    if (Array.isArray(source) && source.length) {
+      const hints = source.map((item, index) => {
+        if (typeof item === 'string' || typeof item === 'number') {
+          const name = stripHtml(getNodeHtml(item));
+          return { key: String(item), name: name || `字段 ${index + 1}` };
+        }
+        const key = String(item?.id || item?.key || item?.name || item?.title || index);
+        const name = stripHtml(getNodeHtml(item?.name ?? item?.title ?? item?.label ?? item?.text)) || key || `字段 ${index + 1}`;
+        return { key, name };
+      }).filter(item => item.key || item.name);
+      if (hints.length) return hints;
+    }
+    if (isPlainObject(source) && Object.keys(source).length) {
+      return Object.entries(source).map(([key, value], index) => ({
+        key,
+        name: stripHtml(getNodeHtml(value?.name ?? value?.title ?? value?.label ?? value)) || key || `字段 ${index + 1}`,
+      }));
+    }
+  }
+  return [];
+}
+
+function getRowCellSource(row, columnHints = []) {
+  if (Array.isArray(row)) return row;
+  if (!isPlainObject(row)) return [];
+  const arraySources = [
+    row.cells,
+    row.columns,
+    row.values,
+    row.row,
+    row.table_row?.cells,
+    row.tableRow?.cells,
+    row.data?.cells,
+  ];
+  const directArray = arraySources.find(Array.isArray);
+  if (directArray) return directArray;
+  if (isPlainObject(row.properties)) {
+    const propertyKeys = columnHints
+      .map(item => item.key)
+      .filter(key => row.properties[key] !== undefined);
+    const keys = propertyKeys.length ? propertyKeys : Object.keys(row.properties);
+    return keys.map(key => row.properties[key]);
+  }
+  if (isPlainObject(row.data?.properties)) {
+    const propertyKeys = columnHints
+      .map(item => item.key)
+      .filter(key => row.data.properties[key] !== undefined);
+    const keys = propertyKeys.length ? propertyKeys : Object.keys(row.data.properties);
+    return keys.map(key => row.data.properties[key]);
+  }
+  const html = getTableCellHtml(row);
+  return stripHtml(html) ? [row] : [];
+}
+
+function normalizeTableRow(row, columnHints = []) {
+  const rowStyle = normalizeTableStyleFromSource(row);
+  const cells = getRowCellSource(row, columnHints)
+    .map(cell => normalizeTableCell(cell, rowStyle));
+  return cells.filter(cell => stripHtml(cell.html) || cell.rowSpan > 1 || cell.colSpan > 1 || !isEmptyTableStyle(cell.style));
+}
+
+function collectTableRowCandidates(node = {}, childRows = []) {
+  const hint = getNodeTypeHint(node);
+  const isTableNode = isTableLikeTypeHint(hint);
+  const sources = [
+    node?.rows,
+    node?.table?.rows,
+    node?.data?.rows,
+    node?.table_content,
+    node?.tableContent,
+    node?.tableRows,
+    node?.records,
+    node?.items,
+    ...(isTableNode ? [node?.children, node?.blocks] : []),
+    childRows,
+  ].filter(Array.isArray);
+  const rows = sources.flatMap(source => source);
+  if (isTableRowTypeHint(hint) || (Array.isArray(node?.cells) && node.cells.length)) rows.unshift(node);
+  return rows;
+}
+
+function extractTableColumnWidths(node = {}, columnCount = 0) {
+  const sources = [
+    node?.table_setting?.column_widths,
+    node?.table_setting?.columnWidths,
+    node?.tableSetting?.column_widths,
+    node?.tableSetting?.columnWidths,
+    node?.setting?.column_widths,
+    node?.settings?.column_widths,
+    node?.column_widths,
+    node?.columnWidths,
+  ].filter(Array.isArray);
+  const widths = sources[0] || [];
+  const normalized = widths
+    .slice(0, columnCount || widths.length)
+    .map(width => Math.max(80, Number(width) || 0))
+    .filter(Boolean);
+  return normalized.length ? normalized : [];
+}
+
+function buildTableMetaFromMatrix(matrix = [], options = {}) {
+  const visibleRows = matrix
+    .map(row => (Array.isArray(row) ? row : []))
+    .filter(row => row.length);
+  while (visibleRows.length && visibleRows[visibleRows.length - 1].every(cell => !stripHtml(cell))) {
+    visibleRows.pop();
+  }
+  if (!visibleRows.length) return null;
+  const columnCount = Math.max(...visibleRows.map(row => row.length), 1);
+  const rows = visibleRows.map(row => Array.from({ length: columnCount }, (_, index) => row[index] || ''));
+  const mergedCells = (options.mergedCells || []).filter(item => (
+    item.rowIndex < rows.length && item.columnIndex < columnCount
+  ));
+  const cellStyles = Object.entries(options.cellStyles || {}).reduce((acc, [key, style]) => {
+    const [rowText, columnText] = key.split(':');
+    const rowIndex = Number(rowText);
+    const columnIndex = Number(columnText);
+    if (!Number.isInteger(rowIndex) || !Number.isInteger(columnIndex)) return acc;
+    if (rowIndex < 0 || rowIndex >= rows.length || columnIndex < 0 || columnIndex >= columnCount) return acc;
+    if (!isEmptyTableStyle(style)) acc[tableCellKey(rowIndex, columnIndex)] = style;
+    return acc;
+  }, {});
+  const columnWidths = Array.isArray(options.columnWidths)
+    ? options.columnWidths.slice(0, columnCount).map(width => Math.max(80, Number(width) || 0)).filter(Boolean)
+    : [];
+  return {
+    columns: Array.from({ length: columnCount }, (_, index) => `字段 ${index + 1}`),
+    rows,
+    mergedCells,
+    cellStyles,
+    ...(columnWidths.length ? { columnWidths: Array.from({ length: columnCount }, (_, index) => columnWidths[index] || 160) } : {}),
+  };
+}
+
+function normalizeTableRows(node, childRows = []) {
+  const htmlMeta = parseHtmlTableMeta(getRawHtmlTableCandidate(node));
+  const columnHints = extractTableColumnHints(node);
+  const rowCandidates = collectTableRowCandidates(node, childRows);
+  const matrix = [];
+  const mergedCells = [];
+  const cellStyles = {};
+  const occupied = new Set();
+
+  rowCandidates.forEach(row => {
+    const normalizedCells = normalizeTableRow(row, columnHints);
+    if (!normalizedCells.length) return;
+    const rowIndex = matrix.length;
+    matrix[rowIndex] = matrix[rowIndex] || [];
+    let columnIndex = 0;
+    normalizedCells.forEach(cell => {
+      while (occupied.has(tableCellKey(rowIndex, columnIndex))) columnIndex += 1;
+      matrix[rowIndex][columnIndex] = cell.html || '';
+      if (!isEmptyTableStyle(cell.style)) cellStyles[tableCellKey(rowIndex, columnIndex)] = cell.style;
+      if (cell.rowSpan > 1 || cell.colSpan > 1) {
+        mergedCells.push({
+          rowIndex,
+          columnIndex,
+          rowSpan: cell.rowSpan,
+          colSpan: cell.colSpan,
+        });
+      }
+      for (let r = rowIndex; r < rowIndex + cell.rowSpan; r += 1) {
+        matrix[r] = matrix[r] || [];
+        for (let c = columnIndex; c < columnIndex + cell.colSpan; c += 1) {
+          occupied.add(tableCellKey(r, c));
+          if (r !== rowIndex || c !== columnIndex) matrix[r][c] = matrix[r][c] || '';
+        }
+      }
+      columnIndex += cell.colSpan;
+    });
+  });
+
+  const hasVisibleColumnHints = columnHints.some(item => stripHtml(item.name));
+  const firstRowText = (matrix[0] || []).map(cell => normalizePlainText(cell)).join('|');
+  const columnHintText = columnHints.map(item => normalizePlainText(item.name)).filter(Boolean).join('|');
+  if (matrix.length && hasVisibleColumnHints && columnHintText && firstRowText !== columnHintText) {
+    matrix.unshift(columnHints.map(item => escapeHtml(item.name || '')));
+    Object.keys(cellStyles).forEach(key => {
+      const [rowText, columnText] = key.split(':');
+      const nextKey = tableCellKey(Number(rowText) + 1, Number(columnText));
+      cellStyles[nextKey] = cellStyles[key];
+      delete cellStyles[key];
+    });
+    mergedCells.forEach(item => { item.rowIndex += 1; });
+  }
+
+  const structuredMeta = buildTableMetaFromMatrix(matrix, {
+    mergedCells,
+    cellStyles,
+    columnWidths: extractTableColumnWidths(node, Math.max(...matrix.map(row => row.length), 0)),
+  });
+  if (!structuredMeta) return htmlMeta;
+  if (!htmlMeta) return structuredMeta;
+  const structuredSize = structuredMeta.rows.length * structuredMeta.columns.length;
+  const htmlSize = htmlMeta.rows.length * htmlMeta.columns.length;
+  return htmlSize > structuredSize ? htmlMeta : structuredMeta;
 }
 
 const mediaImageExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
@@ -822,13 +1268,18 @@ function collectStructuredNodes(value, nodes = [], options = {}) {
     return nodes;
   }
   if (typeof value !== 'object') return nodes;
-  const hasBlockType = Boolean(value.type || value.block_type || value.kind);
+  const hasBlockType = Boolean(value.type || value.block_type || value.blockType || value.kind);
   const hasBodyText = value.text !== undefined
     || value.content !== undefined
     || value.plain_text !== undefined
     || value.markdown !== undefined
     || value.value !== undefined;
-  const hasTable = Boolean(value.rows || value.table);
+  const hasTable = Boolean(
+    value.rows || value.table || value.tableRows || value.cells
+    || isTableLikeTypeHint(getNodeTypeHint(value))
+    || isTableRowTypeHint(getNodeTypeHint(value))
+    || (isPlainObject(value.properties) && /table|database|row/i.test(getNodeTypeHint(value)))
+  );
   const hasMedia = Boolean(extractMediaFromNode(value, options.fallbackKey || ''));
   if (
     hasBlockType || hasBodyText || hasTable || hasMedia
@@ -839,7 +1290,7 @@ function collectStructuredNodes(value, nodes = [], options = {}) {
     if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, { ...options, fallbackKey: key });
   });
   if (options.allowCollectionKeys) {
-    ['items', 'rows', 'cells', 'images', 'image', 'attachments', 'attachment', 'files', 'file', 'media', 'assets'].forEach(key => {
+    ['items', 'rows', 'cells', 'columns', 'records', 'images', 'image', 'attachments', 'attachment', 'files', 'file', 'media', 'assets'].forEach(key => {
       if (value[key] && value[key] !== value) collectStructuredNodes(value[key], nodes, { ...options, fallbackKey: key });
     });
   }
@@ -984,7 +1435,10 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
     name: rawRecord.name,
   });
   const plainText = stripHtml(html);
-  if (!plainText && !media) return null;
+  const typeHint = getNodeTypeHint(rawRecord);
+  const tableMeta = normalizeTableRows(rawRecord);
+  const isTableRecord = isTableLikeTypeHint(typeHint) || isTableRowTypeHint(typeHint) || Boolean(tableMeta);
+  if (!plainText && !media && !isTableRecord) return null;
   return {
     id: id || `wolai_record_${order}`,
     parentId: normalizeRecordId(getObjectValueByKeys(rawRecord, ['parent_id', 'parentId', 'parent_block_id', 'parentBlockId'])),
@@ -995,6 +1449,8 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
     language: String(getObjectValueByKeys(rawRecord, ['language', 'lang']) || ''),
     html,
     media,
+    tableMeta,
+    raw: rawRecord,
     order,
   };
 }
@@ -1087,29 +1543,52 @@ function extractWolaiRecordsFromJsonLikeText(text = '') {
 }
 
 function inferWolaiRecordType(record = {}) {
-  const hint = `${record.type || ''} ${record.parentType || ''} ${record.inferredType || ''}`.toLowerCase();
+  const hasOwnTypeHint = Boolean(record.type || record.inferredType);
+  const hint = `${record.type || ''} ${record.inferredType || ''} ${hasOwnTypeHint ? '' : (record.parentType || '')}`.toLowerCase();
   if (record.media?.kind) return record.media.kind;
   if (/heading|header|title/.test(hint) || record.level) return `heading${Math.min(Math.max(Number(record.level) || 2, 1), 3)}`;
   if (/todo|check/.test(hint)) return 'todo';
-  if (/enum|number|ordered|ol/.test(hint)) return 'numbered';
-  if (/bullet|unordered|ul/.test(hint)) return 'bullet';
+  if (isTableRowTypeHint(hint)) return 'table-row';
+  if (isTableLikeTypeHint(hint) || record.tableMeta) return 'table-simple';
   if (/quote/.test(hint)) return 'quote';
   if (/code/.test(hint)) return 'code';
   if (/divider|hr|separator/.test(hint)) return 'divider';
   if (/image|picture/.test(hint)) return 'image';
   if (/file|attachment|asset/.test(hint)) return 'attachment';
-  if (/table|database/.test(hint)) return 'table-simple';
+  if (isFoldLikeTypeHint(hint)) return 'fold-list';
+  if (/enum|number|ordered|ol/.test(hint)) return 'numbered';
+  if (/bullet|unordered|ul/.test(hint)) return 'bullet';
   return 'paragraph';
+}
+
+function isWolaiTableRowRecord(record = {}) {
+  return inferWolaiRecordType(record) === 'table-row'
+    || (Array.isArray(record.raw?.cells) && record.raw.cells.length);
+}
+
+function isWolaiTableRecord(record = {}) {
+  return inferWolaiRecordType(record) === 'table-simple';
+}
+
+function hasRenderableWolaiRecord(record = {}) {
+  return Boolean(
+    stripHtml(record.html)
+    || record.media?.url
+    || record.tableMeta
+    || isWolaiTableRecord(record)
+    || isWolaiTableRowRecord(record)
+  );
 }
 
 function recordsToBlocks(records = [], seed) {
   const normalized = records
-    .filter(record => record && (stripHtml(record.html) || record.media?.url))
+    .filter(record => record && hasRenderableWolaiRecord(record))
     .filter((record, index, list) => (
       index === list.findIndex(other => (
         other.id === record.id
         && stripHtml(other.html) === stripHtml(record.html)
         && (other.media?.url || '') === (record.media?.url || '')
+        && JSON.stringify(other.tableMeta || null) === JSON.stringify(record.tableMeta || null)
       ))
     ))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -1161,19 +1640,56 @@ function recordsToBlocks(records = [], seed) {
   normalized.forEach(appendTree);
 
   const makeBlock = makeBlockFactory(seed);
-  return ordered.map(record => {
+  const consumedRecordIds = new Set();
+  const tableRows = ordered.filter(isWolaiTableRowRecord);
+  const tableRowsByParentId = new Map();
+  tableRows.forEach(row => {
+    const parentId = row.parentId || '';
+    if (!parentId) return;
+    if (!tableRowsByParentId.has(parentId)) tableRowsByParentId.set(parentId, []);
+    tableRowsByParentId.get(parentId).push(row);
+  });
+
+  const makeTableBlock = (record, rows = []) => {
+    const meta = normalizeTableRows(record.raw || {}, rows.map(row => row.raw || row)) || record.tableMeta;
+    if (!meta) return null;
+    rows.forEach(row => consumedRecordIds.add(row.id));
+    return makeBlock('table-simple', '', { meta });
+  };
+
+  const blocks = [];
+  ordered.forEach(record => {
+    if (consumedRecordIds.has(record.id)) return;
     const type = inferWolaiRecordType(record);
     if ((type === 'image' || type === 'attachment') && record.media?.url) {
-      return makeMediaBlock(makeBlock, { ...record.media, kind: type });
+      blocks.push(makeMediaBlock(makeBlock, { ...record.media, kind: type }));
+      return;
+    }
+    if (type === 'table-simple') {
+      const tableBlock = makeTableBlock(record, tableRowsByParentId.get(record.id) || []);
+      if (tableBlock) blocks.push(tableBlock);
+      return;
+    }
+    if (type === 'table-row') {
+      const siblingRows = tableRows.filter(row => (row.parentId || '') === (record.parentId || ''));
+      const isFirstSibling = siblingRows[0]?.id === record.id;
+      if (isFirstSibling) {
+        const tableBlock = makeTableBlock({ ...record, raw: {} }, siblingRows);
+        if (tableBlock) blocks.push(tableBlock);
+      }
+      consumedRecordIds.add(record.id);
+      return;
     }
     const meta = {};
-    if (type === 'numbered' || type === 'bullet') meta.indent = getDepth(record);
+    if (type === 'numbered' || type === 'bullet' || type === 'fold-list') meta.indent = getDepth(record);
+    if (type === 'fold-list') meta.collapsed = false;
     if (record.language) meta.language = record.language;
-    return makeBlock(type, type === 'divider' ? '' : record.html, {
+    blocks.push(makeBlock(type, type === 'divider' ? '' : record.html, {
       checked: record.checked,
       meta,
-    });
+    }));
   });
+  return blocks.filter(Boolean);
 }
 
 function looksLikeJsonDumpText(text = '') {
@@ -1206,7 +1722,7 @@ function parseToolContent(result) {
 function mergeWolaiRecords(records = []) {
   const byKey = new Map();
   records.forEach((record, index) => {
-    if (!record || !record.id || (!stripHtml(record.html) && !record.media?.url)) return;
+    if (!record || !record.id || !hasRenderableWolaiRecord(record)) return;
     const key = record.id;
     const existing = byKey.get(key);
     if (!existing) {
@@ -1218,6 +1734,8 @@ function mergeWolaiRecords(records = []) {
       ...record,
       html: stripHtml(record.html).length >= stripHtml(existing.html).length ? record.html : existing.html,
       media: record.media?.url ? record.media : existing.media,
+      tableMeta: record.tableMeta || existing.tableMeta,
+      raw: record.raw || existing.raw,
       parentId: record.parentId || existing.parentId,
       parentType: record.parentType || existing.parentType,
       type: record.type || existing.type,
@@ -1326,7 +1844,10 @@ function nodesToBlocks(nodes, seed) {
     blocks.push(makeBlock(type, html, {
       checked: Boolean(node.checked || node.done || node.completed),
       meta: {
-        ...(node.indent !== undefined ? { indent: Number(node.indent) || 0 } : {}),
+        ...((type === 'bullet' || type === 'numbered' || type === 'fold-list')
+          ? { indent: Number(node.indent ?? node.depth ?? node.level ?? 0) || 0 }
+          : {}),
+        ...(type === 'fold-list' ? { collapsed: Boolean(node.collapsed) } : {}),
         ...(node.language ? { language: node.language } : {}),
       },
     }));
@@ -1445,19 +1966,27 @@ function parseTextToBlocks(text, seed) {
       blocks.push(makeBlock(`heading${Math.min(heading[1].length, 3)}`, escapeHtml(heading[2])));
       continue;
     }
+    const leadingSpaces = line.match(/^\s*/)?.[0]?.replace(/\t/g, '    ').length || 0;
+    const indent = Math.min(Math.floor(leadingSpaces / 2), 8);
     const todo = trimmed.match(/^[-*]\s+\[([ xX])]\s+(.+)$/);
     if (todo) {
       blocks.push(makeBlock('todo', escapeHtml(todo[2]), { checked: todo[1].toLowerCase() === 'x' }));
       continue;
     }
+    const foldBullet = trimmed.match(/^[-*]\s+(?:▶|▸|▾|▿|▼|\[toggle\]|\[fold\])\s*(.+)$/i)
+      || trimmed.match(/^(?:▶|▸|▾|▿|▼)\s*(.+)$/);
+    if (foldBullet) {
+      blocks.push(makeBlock('fold-list', escapeHtml(foldBullet[1]), { meta: { indent, collapsed: false } }));
+      continue;
+    }
     const bullet = trimmed.match(/^[-*]\s+(.+)$/);
     if (bullet) {
-      blocks.push(makeBlock('bullet', escapeHtml(bullet[1]), { meta: { indent: 0 } }));
+      blocks.push(makeBlock('bullet', escapeHtml(bullet[1]), { meta: { indent } }));
       continue;
     }
     const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
     if (numbered) {
-      blocks.push(makeBlock('numbered', escapeHtml(numbered[1]), { meta: { indent: 0 } }));
+      blocks.push(makeBlock('numbered', escapeHtml(numbered[1]), { meta: { indent } }));
       continue;
     }
     if (/^---+$/.test(trimmed)) {
