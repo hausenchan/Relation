@@ -1310,6 +1310,13 @@ function buildDocumentWritePayload(title, blocks, baseUpdatedAt) {
   return payload;
 }
 
+function getDocumentSaveErrorMessage(err, fallback = '保存失败') {
+  if (err?.response?.status === 413) {
+    return '文档内容过大，保存失败。请联系运维确认服务端 RELATION_JSON_BODY_LIMIT 和反向代理 client_max_body_size 已配置为足够大小。';
+  }
+  return err?.response?.data?.error || err?.message || fallback;
+}
+
 function cloneBlocksForSync(blocks = []) {
   return contentToBlocks(blocksToContent(Array.isArray(blocks) ? blocks : []));
 }
@@ -3799,7 +3806,7 @@ export default function Documents() {
         return null;
       }
       if (!silent) {
-        message.error(err.response?.data?.error || err.message || '保存失败');
+        message.error(getDocumentSaveErrorMessage(err, '保存失败'));
       }
       throw err;
     } finally {
@@ -4120,7 +4127,7 @@ export default function Documents() {
       await loadFolderTreeDocuments();
       message.success(options.successMessage || '已保存并关闭标签页');
     } catch (err) {
-      message.error(err.response?.data?.error || err.message || '关闭前自动保存失败');
+      message.error(getDocumentSaveErrorMessage(err, '关闭前自动保存失败'));
     } finally {
       setClosingTabIds(prev => prev.filter(id => !targetSet.has(id)));
     }

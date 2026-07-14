@@ -43,6 +43,7 @@ const {
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const JSON_BODY_LIMIT = process.env.RELATION_JSON_BODY_LIMIT || process.env.RELATION_BODY_LIMIT || '50mb';
 
 function normalizeUploadedFilename(filename) {
   if (typeof filename !== 'string' || !filename) return filename;
@@ -539,7 +540,18 @@ async function geocodeAddress(city, address) {
 }
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
+app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    return res.status(413).json({
+      error: `请求内容过大，当前服务端 JSON 请求体上限为 ${JSON_BODY_LIMIT}。如仍需保存更大的文档，请同步调整 RELATION_JSON_BODY_LIMIT 和反向代理 client_max_body_size。`,
+      code: 'REQUEST_BODY_TOO_LARGE',
+      limit: JSON_BODY_LIMIT,
+    });
+  }
+  return next(err);
+});
 
 app.get('/oss/:encodedKey', async (req, res) => {
   let key = '';
