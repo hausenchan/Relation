@@ -18,6 +18,11 @@ import './App.css';
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (user) => ADMIN_ROLES.has(user?.role || user) || ADMIN_ROLES.has(user?.executive_role);
+const getUserDepartments = (user = {}) => [...new Set([
+  user?.department,
+  ...(Array.isArray(user?.departments) ? user.departments : []),
+].filter(Boolean))];
+const hasUserDepartment = (user, department) => getUserDepartments(user).includes(department);
 
 // ── Design system constants ──────────────────────────
 const DS = {
@@ -799,7 +804,7 @@ function AppLayout() {
 
   // ── 团队管理 ────────────────────────────────────────────────
   const canViewTaskBoard = ['leader', 'sales_director', 'admin'].includes(user?.role) || (user?.managed_team_ids?.length > 0);
-  const canViewTripCollaboration = isAdmin(user) || user?.department === 'commercial' || user?.role === 'sales_director';
+  const canViewTripCollaboration = isAdmin(user) || hasUserDepartment(user, 'commercial') || user?.role === 'sales_director';
   const teamChildren = [
     canAccessMenu('/task-board') && canViewTaskBoard && {
       key: '/task-board', icon: <ApartmentOutlined />, label: <Link to="/task-board">任务看板</Link>,

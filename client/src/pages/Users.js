@@ -44,6 +44,25 @@ const departmentOptions = [
   { value: 'general', label: '综合' },
   { value: 'ad_delivery', label: '投放' },
 ];
+const departmentLabelMap = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
+
+const normalizeDepartments = (record = {}, teamList = []) => {
+  const fromTeams = (record.team_ids || (record.team_id ? [record.team_id] : []))
+    .map(teamId => teamList.find(team => Number(team.id) === Number(teamId))?.department)
+    .filter(Boolean);
+  return [...new Set([
+    ...(Array.isArray(record.departments) ? record.departments : []),
+    record.department,
+    ...fromTeams,
+  ].filter(Boolean))];
+};
+
+const renderDepartmentTags = (departments = []) => {
+  const values = [...new Set((departments || []).filter(Boolean))];
+  return values.length
+    ? values.map(department => <Tag key={department}>{departmentLabelMap[department] || department}</Tag>)
+    : <Text type="secondary" style={{ fontSize: 12 }}>-</Text>;
+};
 
 const MODULE_LIST = [
   { key: 'companies',    label: '公司研究' },
@@ -66,7 +85,7 @@ export default function UsersPage() {
   const [form] = Form.useForm();
   const [resetPwdForm] = Form.useForm();
   const role = Form.useWatch('role', form);
-  const department = Form.useWatch('department', form);
+  const departments = Form.useWatch('departments', form) || [];
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,20 +111,12 @@ export default function UsersPage() {
   const openEdit = (r) => {
     setEditing(r);
 
-    // 如果用户有 team_id / team_ids，自动设置 department 为主小组的 department
-    let userDepartment = r.department;
-    const primaryTeamId = r.team_id || r.team_ids?.[0];
-    if (primaryTeamId && !userDepartment) {
-      const userTeam = teams.find(t => t.id === primaryTeamId);
-      if (userTeam) {
-        userDepartment = userTeam.department;
-      }
-    }
+    const userDepartments = normalizeDepartments(r, teams);
 
     form.setFieldsValue({
       display_name: r.display_name,
       role: r.role,
-      department: userDepartment,
+      departments: userDepartments.length ? userDepartments : undefined,
       team_ids: r.team_ids?.length ? r.team_ids : (r.team_id ? [r.team_id] : undefined),
       project_group_ids: r.project_group_ids || undefined,
       leader_id: r.leader_id || undefined,
@@ -132,7 +143,8 @@ export default function UsersPage() {
       team_ids: values.team_ids || [],
       project_group_ids: values.project_group_ids || [],
       leader_id: values.leader_id || null,
-      department: values.department || null,
+      departments: values.departments || [],
+      department: values.departments?.[0] || null,
     };
     try {
       if (editing) {
@@ -187,8 +199,20 @@ export default function UsersPage() {
     }
   };
 
-  // 根据部门过滤小组
-  const filteredTeams = department ? teams.filter(t => t.department === department) : teams;
+  const selectedDepartments = Array.isArray(departments) ? departments : [];
+  const filteredTeams = selectedDepartments.length
+    ? teams.filter(t => selectedDepartments.includes(t.department))
+    : [];
+  const keepValidTeamsForDepartments = (nextDepartments = []) => {
+    const currentTeamIds = form.getFieldValue('team_ids') || [];
+    const validTeamIds = teams
+      .filter(team => nextDepartments.includes(team.department))
+      .map(team => Number(team.id));
+    form.setFieldValue(
+      'team_ids',
+      currentTeamIds.filter(teamId => validTeamIds.includes(Number(teamId)))
+    );
+  };
 
   const columns = [
     { title: '用户名', dataIndex: 'username', render: v => <Text strong>{v}</Text> },
@@ -204,11 +228,8 @@ export default function UsersPage() {
     },
     {
       title: '部门',
-      dataIndex: 'department',
-      render: v => {
-        const opt = departmentOptions.find(o => o.value === v);
-        return opt ? <Tag>{opt.label}</Tag> : <Text type="secondary">-</Text>;
-      },
+      dataIndex: 'departments',
+      render: (_, record) => renderDepartmentTags(normalizeDepartments(record, teams)),
     },
     {
       title: '所属小组',
@@ -279,7 +300,10 @@ export default function UsersPage() {
               </Space>
             </div>
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              <Text type="secondary">部门：{departmentOptions.find(o => o.value === record.department)?.label || '-'}</Text>
+              <Space size={[4, 4]} wrap>
+                <Text type="secondary">部门：</Text>
+                {renderDepartmentTags(normalizeDepartments(record, teams))}
+              </Space>
               <Text type="secondary">最近登录：{record.last_login?.slice(0, 16) || '从未登录'}</Text>
             </div>
             <div>
@@ -371,12 +395,15 @@ export default function UsersPage() {
             </Select>
           </Form.Item>
 
-          <Form.Item label="所属部门" name="department">
+          <Form.Item label="所属部门" name="departments">
             <Select
+              mode="multiple"
               allowClear
+              showSearch
+              optionFilterProp="label"
               placeholder="请选择部门"
               options={departmentOptions}
-              onChange={() => form.setFieldValue('team_ids', undefined)}
+              onChange={value => keepValidTeamsForDepartments(value || [])}
             />
           </Form.Item>
 
@@ -384,10 +411,13 @@ export default function UsersPage() {
             <Select
               mode="multiple"
               showSearch
-              placeholder={department ? '请选择小组' : '请先选择部门'}
-              disabled={!department}
+              placeholder={selectedDepartments.length ? '请选择小组' : '请先选择部门'}
+              disabled={!selectedDepartments.length}
               optionFilterProp="label"
-              options={filteredTeams.map(t => ({ value: t.id, label: t.name }))}
+              options={filteredTeams.map(t => ({
+                value: t.id,
+                label: `${t.name}${departmentLabelMap[t.department] ? ` / ${departmentLabelMap[t.department]}` : ''}`,
+              }))}
             />
           </Form.Item>
 

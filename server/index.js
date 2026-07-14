@@ -659,11 +659,18 @@ function getAuthenticatedUser(decoded = {}) {
   const userId = Number(decoded.id);
   if (!userId) return null;
   const passwordVersion = Number(decoded.pwv || 0);
-  return getRuntimeCached(`auth:user:${userId}:${passwordVersion}`, AUTH_USER_CACHE_TTL_MS, () => db.prepare(`
-    SELECT id, username, display_name, role, department, team_id, executive_role, password_version, account_status
-    FROM users
-    WHERE id = ?
-  `).get(userId) || null);
+  return getRuntimeCached(`auth:user:${userId}:${passwordVersion}`, AUTH_USER_CACHE_TTL_MS, () => {
+    const user = db.prepare(`
+      SELECT id, username, display_name, role, department, team_id, executive_role, password_version, account_status
+      FROM users
+      WHERE id = ?
+    `).get(userId);
+    if (!user) return null;
+    return {
+      ...user,
+      departments: getUserDepartmentKeys(userId),
+    };
+  });
 }
 
 function getUserModulePerms(userId) {
@@ -694,6 +701,7 @@ function getAuthMePayload(userId, passwordVersion = '') {
     if (!user) return null;
     return {
       ...user,
+      departments: getUserDepartmentKeys(id),
       team_ids: getUserTeamIds(id),
       managed_team_ids: getManagedTeamIds(id, user.role) || [],
       project_group_ids: getUserProjectGroupIds(id),
@@ -1023,6 +1031,13 @@ db.exec(`
     user_id INTEGER NOT NULL,
     team_id INTEGER NOT NULL,
     UNIQUE(user_id, team_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_departments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    department_key TEXT NOT NULL,
+    UNIQUE(user_id, department_key)
   );
 
   CREATE TABLE IF NOT EXISTS project_groups (
@@ -2675,6 +2690,12 @@ if (userCols.length > 0) {
   }
   db.prepare('UPDATE users SET need_weekly_report = 0 WHERE need_weekly_report IS NULL').run();
   db.prepare("UPDATE users SET account_status = 'active' WHERE account_status IS NULL OR account_status = ''").run();
+  db.prepare(`
+    INSERT OR IGNORE INTO user_departments (user_id, department_key)
+    SELECT id, department
+    FROM users
+    WHERE department IS NOT NULL AND department != ''
+  `).run();
 }
 
 createIndexesIfColumnsExist('users', [
@@ -2686,6 +2707,10 @@ createIndexesIfColumnsExist('users', [
 ]);
 createIndexesIfColumnsExist('user_teams', [
   { name: 'idx_user_teams_team_id', columnsSql: 'team_id', columns: ['team_id'] },
+]);
+createIndexesIfColumnsExist('user_departments', [
+  { name: 'idx_user_departments_department', columnsSql: 'department_key', columns: ['department_key'] },
+  { name: 'idx_user_departments_user_department', columnsSql: 'user_id, department_key', columns: ['user_id', 'department_key'] },
 ]);
 createIndexesIfColumnsExist('director_teams', [
   { name: 'idx_director_teams_team_id', columnsSql: 'team_id', columns: ['team_id'] },
@@ -3737,6 +3762,68 @@ function getUserProjectGroupIds(userId) {
   ));
 }
 
+function normalizeDepartmentKeys(values = []) {
+  const list = Array.isArray(values) ? values : [values];
+  return [...new Set(list
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+  )];
+}
+
+function getUserDepartmentKeys(userId) {
+  const id = Number(userId);
+  if (!id) return [];
+  return getRuntimeCached(`user-department-keys:${id}`, RUNTIME_CACHE_TTL_MS, () => {
+    const primaryRows = db.prepare('SELECT department FROM users WHERE id = ? AND department IS NOT NULL AND department != ?').all(id, '').map(row => row.department);
+    const relationRows = db.prepare('SELECT department_key FROM user_departments WHERE user_id = ?').all(id).map(row => row.department_key);
+    return normalizeDepartmentKeys([...primaryRows, ...relationRows]);
+  });
+}
+
+function getDepartmentKeysForUser(user = {}) {
+  return normalizeDepartmentKeys([
+    user?.department,
+    ...(Array.isArray(user?.departments) ? user.departments : []),
+    ...(user?.id ? getUserDepartmentKeys(user.id) : []),
+  ]);
+}
+
+function userHasDepartment(user, departmentKey) {
+  const expected = String(departmentKey || '').trim().toLowerCase();
+  if (!expected) return false;
+  return getDepartmentKeysForUser(user).some(item => item.toLowerCase() === expected);
+}
+
+function getUserIdsByDepartmentKey(departmentKey, options = {}) {
+  const key = String(departmentKey || '').trim();
+  if (!key) return [];
+  const activeOnly = Boolean(options.activeOnly);
+  return db.prepare(`
+    SELECT DISTINCT u.id
+    FROM users u
+    LEFT JOIN user_departments ud ON ud.user_id = u.id
+    WHERE (u.department = ? OR ud.department_key = ?)
+      ${activeOnly ? "AND COALESCE(u.account_status, 'active') = 'active'" : ''}
+  `).all(key, key).map(row => row.id);
+}
+
+function getTeamDepartmentsByIds(teamIds = []) {
+  const ids = normalizeCacheIdList(teamIds);
+  if (!ids.length) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  return db.prepare(`SELECT DISTINCT department FROM teams WHERE id IN (${placeholders}) AND department IS NOT NULL AND department != ''`)
+    .all(...ids)
+    .map(row => row.department);
+}
+
+function normalizeUserDepartmentInput({ departments, department, teamIds = [] } = {}) {
+  return normalizeDepartmentKeys([
+    ...(Array.isArray(departments) ? departments : []),
+    department,
+    ...getTeamDepartmentsByIds(teamIds),
+  ]);
+}
+
 function getUsersByTeamIds(teamIds) {
   const ids = normalizeCacheIdList(teamIds);
   if (!ids.length) return [];
@@ -3763,8 +3850,8 @@ function isAdministrativeTeam(team) {
 function canViewAllGiftRecords(user) {
   if (!user) return false;
   if (isAdmin(user.role)) return true;
-  const department = String(user.department || '').toLowerCase();
-  if (['admin', 'administration', 'administrative'].includes(department)) return true;
+  const departments = getDepartmentKeysForUser(user).map(item => item.toLowerCase());
+  if (departments.some(department => ['admin', 'administration', 'administrative'].includes(department))) return true;
 
   const teamIds = getUserTeamIds(user.id);
   if (!teamIds.length) return false;
@@ -3808,6 +3895,18 @@ function syncUserTeams(userId, teamIds = []) {
   db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(uniqueTeamIds[0] || null, userId);
   clearRuntimeCache();
   return uniqueTeamIds;
+}
+
+function syncUserDepartments(userId, departments = []) {
+  const uniqueDepartments = normalizeDepartmentKeys(departments);
+  db.prepare('DELETE FROM user_departments WHERE user_id = ?').run(userId);
+  if (uniqueDepartments.length > 0) {
+    const insert = db.prepare('INSERT OR IGNORE INTO user_departments (user_id, department_key) VALUES (?, ?)');
+    uniqueDepartments.forEach(departmentKey => insert.run(userId, departmentKey));
+  }
+  db.prepare('UPDATE users SET department = ? WHERE id = ?').run(uniqueDepartments[0] || null, userId);
+  clearRuntimeCache();
+  return uniqueDepartments;
 }
 
 function syncUserProjectGroups(userId, projectGroupIds = []) {
@@ -3994,7 +4093,7 @@ function getVisibleGoalOwnerIds(userId, role) {
 }
 
 function canViewOperationTeamGoals(user) {
-  return user?.role === 'leader' && String(user?.department || '').toLowerCase() === 'commercial';
+  return user?.role === 'leader' && userHasDepartment(user, 'commercial');
 }
 
 function isOperationTeamGoal(goal) {
@@ -4506,7 +4605,10 @@ app.post('/api/auth/login', (req, res) => {
       role: user.role,
       account_status: user.account_status || 'active',
       department: user.department || null,
+      departments: getUserDepartmentKeys(user.id),
       team_id: user.team_id || null,
+      team_ids: getUserTeamIds(user.id),
+      project_group_ids: getUserProjectGroupIds(user.id),
       executive_role: user.executive_role,
       modulePerms: [],
       menuPerms: [],
@@ -4707,8 +4809,14 @@ app.get('/api/users/simple', auth, (req, res) => {
       params.push('readonly');
     }
     if (department) {
-      where.push('department = ?');
-      params.push(department);
+      where.push(`(
+        department = ?
+        OR EXISTS (
+          SELECT 1 FROM user_departments ud
+          WHERE ud.user_id = users.id AND ud.department_key = ?
+        )
+      )`);
+      params.push(department, department);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -4719,11 +4827,17 @@ app.get('/api/users/simple', auth, (req, res) => {
       ORDER BY COALESCE(account_status, 'active') ASC, display_name ASC
     `).all(...params);
     const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
+    const userDepartments = db.prepare('SELECT user_id, department_key FROM user_departments').all();
     const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
     const teamsByUser = new Map();
     userTeams.forEach(row => {
       if (!teamsByUser.has(row.user_id)) teamsByUser.set(row.user_id, []);
       teamsByUser.get(row.user_id).push(row.team_id);
+    });
+    const departmentsByUser = new Map();
+    userDepartments.forEach(row => {
+      if (!departmentsByUser.has(row.user_id)) departmentsByUser.set(row.user_id, []);
+      departmentsByUser.get(row.user_id).push(row.department_key);
     });
     const projectGroupsByUser = new Map();
     userProjectGroups.forEach(row => {
@@ -4733,6 +4847,10 @@ app.get('/api/users/simple', auth, (req, res) => {
     return users.map(u => ({
       ...u,
       account_status: u.account_status || 'active',
+      departments: normalizeDepartmentKeys([
+        u.department,
+        ...(departmentsByUser.get(u.id) || []),
+      ]),
       team_ids: [...new Set([
         ...(u.team_id ? [u.team_id] : []),
         ...(teamsByUser.get(u.id) || []),
@@ -4749,6 +4867,7 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
   const perms = db.prepare('SELECT * FROM user_module_perms').all();
   const teams = db.prepare('SELECT * FROM teams').all();
   const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
+  const userDepartments = db.prepare('SELECT user_id, department_key FROM user_departments').all();
   const projectGroups = db.prepare('SELECT * FROM project_groups ORDER BY name ASC').all();
   const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
   const permsByUser = new Map();
@@ -4762,6 +4881,11 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
     if (!teamIdsByUser.has(row.user_id)) teamIdsByUser.set(row.user_id, []);
     teamIdsByUser.get(row.user_id).push(row.team_id);
   });
+  const departmentsByUser = new Map();
+  userDepartments.forEach(row => {
+    if (!departmentsByUser.has(row.user_id)) departmentsByUser.set(row.user_id, []);
+    departmentsByUser.get(row.user_id).push(row.department_key);
+  });
   const projectGroupsById = new Map(projectGroups.map(group => [Number(group.id), group]));
   const projectGroupIdsByUser = new Map();
   userProjectGroups.forEach(row => {
@@ -4771,6 +4895,10 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
   res.json(users.map(u => ({
     ...u,
     modulePerms: permsByUser.get(u.id) || [],
+    departments: normalizeDepartmentKeys([
+      u.department,
+      ...(departmentsByUser.get(u.id) || []),
+    ]),
     team_ids: [...new Set([
       ...(u.team_id ? [u.team_id] : []),
       ...(teamIdsByUser.get(u.id) || []),
@@ -4794,13 +4922,15 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
 });
 
 app.post('/api/users', auth, adminOnly, (req, res) => {
-  const { username, password, display_name, role, modulePerms, leader_id, department, team_id, team_ids, project_group_ids } = req.body;
+  const { username, password, display_name, role, modulePerms, leader_id, department, departments, team_id, team_ids, project_group_ids } = req.body;
   if (!username || !password) return res.status(400).json({ error: '用户名和密码必填' });
   const hash = bcrypt.hashSync(password, 10);
   try {
     const normalizedTeamIds = [...new Set((team_ids?.length ? team_ids : (team_id ? [team_id] : [])).map(id => Number(id)).filter(Boolean))];
+    const normalizedDepartments = normalizeUserDepartmentInput({ departments, department, teamIds: normalizedTeamIds });
     const primaryTeamId = normalizedTeamIds[0] || null;
-    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, account_status, leader_id, department, team_id) VALUES (?,?,?,?,?,?,?,?)").run(username, hash, display_name, role || 'member', 'active', leader_id || null, department || null, primaryTeamId);
+    const r = db.prepare("INSERT INTO users (username, password_hash, display_name, role, account_status, leader_id, department, team_id) VALUES (?,?,?,?,?,?,?,?)").run(username, hash, display_name, role || 'member', 'active', leader_id || null, normalizedDepartments[0] || null, primaryTeamId);
+    syncUserDepartments(r.lastInsertRowid, normalizedDepartments);
     syncUserTeams(r.lastInsertRowid, normalizedTeamIds);
     syncUserProjectGroups(r.lastInsertRowid, project_group_ids || []);
     if (role === 'guest' && modulePerms?.length) {
@@ -4820,14 +4950,16 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
 });
 
 app.put('/api/users/:id', auth, adminOnly, (req, res) => {
-  const { display_name, role, password, modulePerms, leader_id, department, team_id, team_ids, project_group_ids } = req.body;
+  const { display_name, role, password, modulePerms, leader_id, department, departments, team_id, team_ids, project_group_ids } = req.body;
   const normalizedTeamIds = [...new Set((team_ids?.length ? team_ids : (team_id ? [team_id] : [])).map(id => Number(id)).filter(Boolean))];
+  const normalizedDepartments = normalizeUserDepartmentInput({ departments, department, teamIds: normalizedTeamIds });
   const primaryTeamId = normalizedTeamIds[0] || null;
   if (password) {
-    db.prepare('UPDATE users SET display_name=?, role=?, password_hash=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, bcrypt.hashSync(password, 10), leader_id || null, department || null, primaryTeamId, req.params.id);
+    db.prepare('UPDATE users SET display_name=?, role=?, password_hash=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, bcrypt.hashSync(password, 10), leader_id || null, normalizedDepartments[0] || null, primaryTeamId, req.params.id);
   } else {
-    db.prepare('UPDATE users SET display_name=?, role=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, leader_id || null, department || null, primaryTeamId, req.params.id);
+    db.prepare('UPDATE users SET display_name=?, role=?, leader_id=?, department=?, team_id=? WHERE id=?').run(display_name, role, leader_id || null, normalizedDepartments[0] || null, primaryTeamId, req.params.id);
   }
+  syncUserDepartments(req.params.id, normalizedDepartments);
   syncUserTeams(req.params.id, normalizedTeamIds);
   syncUserProjectGroups(req.params.id, project_group_ids || []);
   if (role === 'guest') {
@@ -4854,6 +4986,7 @@ app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_module_perms WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_menu_perms WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_teams WHERE user_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM user_departments WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_project_groups WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   clearRuntimeCache();
@@ -5655,9 +5788,10 @@ function isDocumentSharedWithUser(user, document) {
   const clauses = [`target_type = 'user' AND target_id = ?`];
   const params = [user.id];
 
-  if (user.department) {
-    clauses.push(`target_type = 'department' AND target_key = ?`);
-    params.push(user.department);
+  const departmentKeys = getDepartmentKeysForUser(user);
+  if (departmentKeys.length) {
+    clauses.push(`target_type = 'department' AND target_key IN (${departmentKeys.map(() => '?').join(',')})`);
+    params.push(...departmentKeys);
   }
 
   const teamIds = getUserTeamIds(user.id);
@@ -6130,9 +6264,10 @@ function buildDocumentVisibilityFilter(user, alias = 'd') {
   clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_user WHERE ds_user.document_id = ${alias}.id AND ds_user.target_type = 'user' AND ds_user.target_id = ?)`);
   params.push(user.id);
 
-  if (user.department) {
-    clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_dept WHERE ds_dept.document_id = ${alias}.id AND ds_dept.target_type = 'department' AND ds_dept.target_key = ?)`);
-    params.push(user.department);
+  const departmentKeys = getDepartmentKeysForUser(user);
+  if (departmentKeys.length) {
+    clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_dept WHERE ds_dept.document_id = ${alias}.id AND ds_dept.target_type = 'department' AND ds_dept.target_key IN (${departmentKeys.map(() => '?').join(',')}))`);
+    params.push(...departmentKeys);
   }
 
   const teamIds = getUserTeamIds(user.id);
@@ -6246,8 +6381,8 @@ function getDocumentAccessMap(document) {
     if (share.target_type === 'user' && share.target_id) {
       addDocumentAccessUser(accessMap, share.target_id, 'user');
     } else if (share.target_type === 'department' && share.target_key) {
-      db.prepare('SELECT id FROM users WHERE department = ?').all(share.target_key)
-        .forEach(row => addDocumentAccessUser(accessMap, row.id, 'department'));
+      getUserIdsByDepartmentKey(share.target_key)
+        .forEach(id => addDocumentAccessUser(accessMap, id, 'department'));
     } else if (share.target_type === 'team' && share.target_id) {
       getUsersByTeamIds([Number(share.target_id)]).forEach(id => addDocumentAccessUser(accessMap, id, 'team'));
     } else if (share.target_type === 'project_group' && share.target_id) {
@@ -6288,6 +6423,7 @@ function getDocumentAccessUsers(document) {
         role: row.role,
         executive_role: row.executive_role,
         department: row.department,
+        departments: getUserDepartmentKeys(id),
         team_id: row.team_id,
         source_types: sourceTypes,
         is_creator: sourceTypes.includes('creator') ? 1 : 0,
@@ -9713,7 +9849,14 @@ function getDefaultAgentAssigneeId() {
   const preferred = db.prepare(`
     SELECT id FROM users
     WHERE account_status = 'active'
-      AND (department = 'commercial' OR role IN ('sales_director', 'cmo', 'admin'))
+      AND (
+        department = 'commercial'
+        OR EXISTS (
+          SELECT 1 FROM user_departments ud
+          WHERE ud.user_id = users.id AND ud.department_key = 'commercial'
+        )
+        OR role IN ('sales_director', 'cmo', 'admin')
+      )
     ORDER BY
       CASE role
         WHEN 'sales_director' THEN 1
@@ -9740,9 +9883,8 @@ function getAgentNotificationUserIds(eventType, fallbackUserIds = []) {
       getUsersByTeamIds([rule.team_id]).forEach(id => ids.add(Number(id)));
     }
     if (rule.department_scope) {
-      db.prepare('SELECT id FROM users WHERE account_status = ? AND department = ?')
-        .all('active', rule.department_scope)
-        .forEach(row => ids.add(Number(row.id)));
+      getUserIdsByDepartmentKey(rule.department_scope, { activeOnly: true })
+        .forEach(id => ids.add(Number(id)));
     }
     if (rule.role_scope) {
       db.prepare(`
@@ -9757,7 +9899,15 @@ function getAgentNotificationUserIds(eventType, fallbackUserIds = []) {
     db.prepare(`
       SELECT id FROM users
       WHERE account_status = 'active'
-        AND (department = 'commercial' OR role IN ('sales_director', 'cmo', 'admin') OR executive_role = 'cmo')
+        AND (
+          department = 'commercial'
+          OR EXISTS (
+            SELECT 1 FROM user_departments ud
+            WHERE ud.user_id = users.id AND ud.department_key = 'commercial'
+          )
+          OR role IN ('sales_director', 'cmo', 'admin')
+          OR executive_role = 'cmo'
+        )
     `).all().forEach(row => ids.add(Number(row.id)));
   }
 
@@ -13772,8 +13922,8 @@ app.delete('/api/reminders/:id', (req, res) => {
 // =========== 统计 API ===========
 app.get('/api/stats', (req, res) => {
   const { id: me, role } = req.user;
-  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(me);
-  const showRelationshipPanels = !['operation', 'rd'].includes(currentUser?.department);
+  const currentDepartmentKeys = getDepartmentKeysForUser(req.user);
+  const showRelationshipPanels = !currentDepartmentKeys.some(department => ['operation', 'rd'].includes(String(department).toLowerCase()));
   const privacy = buildPersonPrivacyFilter(me, 'p');
   const filter = buildUserFilter(me, role, 'p');
   const personWhereSql = `${privacy.sql}${filter.sql}`;
@@ -15810,7 +15960,7 @@ function hasTripCollaborationAccess(user) {
   return isAdmin(role)
     || EXECUTIVE_ROLES.has(executiveRole)
     || role === 'sales_director'
-    || user.department === 'commercial';
+    || userHasDepartment(user, 'commercial');
 }
 
 function requireTripCollaborationAccess(req, res, next) {
@@ -16528,8 +16678,18 @@ app.get('/api/goals', (req, res) => {
   params.push(...visibility.params);
 
   if (department) {
-    q += ' AND COALESCE(g.department, tm.department, u.department) = ?';
-    params.push(department);
+    q += ` AND (
+      COALESCE(g.department, tm.department, u.department) = ?
+      OR (
+        g.department IS NULL
+        AND tm.department IS NULL
+        AND EXISTS (
+          SELECT 1 FROM user_departments ud
+          WHERE ud.user_id = u.id AND ud.department_key = ?
+        )
+      )
+    )`;
+    params.push(department, department);
   }
   if (status) {
     q += ' AND g.status = ?';
@@ -16811,7 +16971,16 @@ app.get('/api/weekly-reports', (req, res) => {
   // admin 看全部，不加过滤
 
   if (week_start) { q += ' AND wr.week_start = ?'; params.push(week_start); }
-  if (department) { q += ' AND u.department = ?'; params.push(department); }
+  if (department) {
+    q += ` AND (
+      u.department = ?
+      OR EXISTS (
+        SELECT 1 FROM user_departments ud
+        WHERE ud.user_id = u.id AND ud.department_key = ?
+      )
+    )`;
+    params.push(department, department);
+  }
 
   q += ' ORDER BY wr.week_start DESC, u.display_name ASC';
   res.json(decryptRows('weekly_reports', db.prepare(q).all(...params)));
@@ -18103,9 +18272,8 @@ function canAccessStrategy(user, strategy) {
   if (getStrategySharedUserIds(strategy).includes(Number(user.id))) return true;
 
   const ownerId = Number(strategy.owner_id || 0);
-  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(user.id);
 
-  if (user.role === 'member' && currentUser?.department === 'operation') {
+  if (user.role === 'member' && userHasDepartment(user, 'operation')) {
     const teamIds = getUserTeamIds(user.id);
     if (teamIds.length > 0) {
       return getUsersByTeamIds(teamIds).map(Number).includes(ownerId);
@@ -18148,7 +18316,6 @@ function canAccessStrategy(user, strategy) {
 app.get('/api/strategies', (req, res) => {
   const { id, dimension, role_type, budget_group_type, status, media, access_method } = req.query;
   const { id: userId, role } = req.user;
-  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(userId);
   const sharedFilterSql = "(',' || IFNULL(s.shared_with,'') || ',') LIKE ?";
   const sharedFilterParam = `%,${userId},%`;
 
@@ -18183,7 +18350,7 @@ app.get('/api/strategies', (req, res) => {
   const params = [];
 
   // 角色过滤
-  if (role === 'member' && currentUser?.department === 'operation') {
+  if (role === 'member' && userHasDepartment(req.user, 'operation')) {
     const teamIds = getUserTeamIds(userId);
     if (teamIds.length > 0) {
       const members = getUsersByTeamIds(teamIds);
@@ -18581,7 +18748,6 @@ app.delete('/api/strategies/:id', (req, res) => {
 app.get('/api/dev-tasks', (req, res) => {
   const { id, status, assignee_id, priority, source_type } = req.query;
   const { id: userId, role } = req.user;
-  const currentUser = db.prepare('SELECT department FROM users WHERE id = ?').get(userId);
 
   let q = `
     SELECT dt.*,
@@ -18625,7 +18791,7 @@ app.get('/api/dev-tasks', (req, res) => {
   const params = [];
 
   // 角色过滤
-  if (role === 'member' && currentUser?.department === 'operation') {
+  if (role === 'member' && userHasDepartment(req.user, 'operation')) {
     const teamIds = getUserTeamIds(userId);
     if (teamIds.length > 0) {
       const members = getUsersByTeamIds(teamIds);
@@ -18856,10 +19022,10 @@ function getTaskCenterNotificationUserIds() {
   const executiveRoles = ['ceo', 'cto', 'coo', 'cmo'];
   db.prepare(`
     SELECT id FROM users
-    WHERE department = 'operation'
-      OR LOWER(IFNULL(role, '')) IN (${executiveRoles.map(() => '?').join(',')})
+    WHERE LOWER(IFNULL(role, '')) IN (${executiveRoles.map(() => '?').join(',')})
       OR LOWER(IFNULL(executive_role, '')) IN (${executiveRoles.map(() => '?').join(',')})
   `).all(...executiveRoles, ...executiveRoles).forEach(row => ids.add(row.id));
+  getUserIdsByDepartmentKey('operation').forEach(id => ids.add(id));
 
   const operationTeamIds = db.prepare("SELECT id FROM teams WHERE department = 'operation'").all().map(row => row.id);
   getUsersByTeamIds(operationTeamIds).forEach(id => ids.add(id));

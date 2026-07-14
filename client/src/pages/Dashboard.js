@@ -56,6 +56,10 @@ const TASK_STAT_FILTERS = {
   today: 'today',
   todayDone: 'todayDone',
 };
+const getUserDepartments = (user = {}) => [...new Set([
+  user?.department,
+  ...(Array.isArray(user?.departments) ? user.departments : []),
+].filter(Boolean))];
 
 const aiSuggestionStatusMap = {
   pending_review: { label: '待确认', color: 'gold', badge: 'warning' },
@@ -410,7 +414,8 @@ export default function Dashboard() {
   const canManageTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || isExecutive();
   const canViewTeamScope = canManageTeamTasks || (user?.team_ids?.length > 0) || (user?.managed_team_ids?.length > 0);
   const canViewTeamTasks = canViewTeamScope || teamTasks.length > 0;
-  const hideRelationshipPanels = stats?.showRelationshipPanels === false || ['operation', 'rd'].includes(user?.department);
+  const hideRelationshipPanels = stats?.showRelationshipPanels === false
+    || getUserDepartments(user).some(department => ['operation', 'rd'].includes(department));
   const userOptions = users.map(u => ({ value: u.id, label: u.display_name || u.username }));
   const taskUserOptions = user?.id && !userOptions.some(option => Number(option.value) === Number(user.id))
     ? [{ value: user.id, label: user.display_name || user.username || '我' }, ...userOptions]

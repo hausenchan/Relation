@@ -40,10 +40,14 @@ const { useBreakpoint } = Grid;
 
 const periods = ['上午', '中午', '下午', '晚上'];
 const listCollapsedStorageKey = 'relation.tripCollaborationListCollapsed.v1';
+const getUserDepartments = (user = {}) => [...new Set([
+  user?.department,
+  ...(Array.isArray(user?.departments) ? user.departments : []),
+].filter(Boolean))];
 
 const roleCanViewTripCollaboration = (user) => {
   const executiveRoles = new Set(['ceo', 'coo', 'cto', 'cmo']);
-  return user?.department === 'commercial'
+  return getUserDepartments(user).includes('commercial')
     || user?.role === 'sales_director'
     || user?.role === 'admin'
     || executiveRoles.has(user?.role)
