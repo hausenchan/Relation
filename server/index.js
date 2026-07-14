@@ -5223,6 +5223,28 @@ function getDocumentFolderById(folderId) {
   return db.prepare('SELECT * FROM document_folders WHERE id = ?').get(id) || null;
 }
 
+function createDocumentRequestError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function resolveRequestedDocumentFolder(body = {}) {
+  const value = body?.folder_id;
+  if (value === undefined || value === null || value === '') {
+    return { folderId: null, folder: null };
+  }
+  const folderId = Number(value);
+  if (!Number.isInteger(folderId) || folderId <= 0) {
+    throw createDocumentRequestError(400, '目标目录不合法');
+  }
+  const folder = getDocumentFolderById(folderId);
+  if (!folder) {
+    throw createDocumentRequestError(400, '目标目录不存在');
+  }
+  return { folderId, folder };
+}
+
 function getDocumentFolderPathRows(folderId) {
   const rows = [];
   const seen = new Set();
@@ -5386,6 +5408,7 @@ function getDocumentYear(row = {}) {
 function ensureDocumentDirectoryBlueprint() {
   const ensure = db.transaction(() => {
     const targetMap = new Map();
+    const standardStageFolderIds = new Set();
     for (const [domain, departments] of Object.entries(DOCUMENT_SPACE_DIRECTORY_BLUEPRINT)) {
       targetMap.set(domain, new Map());
       for (const department of departments) {
@@ -5410,6 +5433,7 @@ function ensureDocumentDirectoryBlueprint() {
             userId: 1,
           });
           stageMap.set(stage.type, stageId);
+          standardStageFolderIds.add(Number(stageId));
         }
         targetMap.get(domain).set(department.key, stageMap);
       }
@@ -5433,6 +5457,24 @@ function ensureDocumentDirectoryBlueprint() {
       WHERE id = ?
     `);
     docs.forEach(doc => {
+      const currentFolderId = Number(doc.folder_id || 0);
+      const currentFolderContext = currentFolderId ? resolveDocumentFolderContext(currentFolderId) : null;
+      if (
+        currentFolderContext
+        && currentFolderContext.depth >= 3
+        && isManagedDocumentSpace(currentFolderContext.domain)
+        && !standardStageFolderIds.has(currentFolderId)
+      ) {
+        const domain = normalizeDocumentDomain(currentFolderContext.domain);
+        const departmentKey = currentFolderContext.department_key;
+        const docType = currentFolderContext.doc_type;
+        const projectCode = doc.project_group_id
+          ? getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code)
+          : DOCUMENT_DOMAIN_CODES[domain];
+        const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, getDocumentYear(doc));
+        updateDoc.run(currentFolderId, departmentKey, docType, projectCode, documentNo, doc.id);
+        return;
+      }
       const domain = normalizeDocumentDomain(doc.domain);
       const sourceDepartment = doc.department_key || doc.folder_department_key || 'OPS';
       const departmentKey = normalizeDocumentDirectoryDepartment(domain, sourceDepartment);
@@ -6503,7 +6545,8 @@ function serializeDocumentEditRecord(row, options = {}) {
 
 function createDocumentRecord(body, user) {
   const createDoc = db.transaction(() => {
-    const folderFields = body.folder_id ? getDocumentBusinessFieldsFromFolder(body.folder_id, body) : null;
+    const { folderId } = resolveRequestedDocumentFolder(body);
+    const folderFields = folderId ? getDocumentBusinessFieldsFromFolder(folderId, body) : null;
     const domain = normalizeDocumentDomain(folderFields?.domain || body.domain);
     const projectGroupId = folderFields ? folderFields.project_group_id : (body.project_group_id ?? null);
     const departmentKey = folderFields
@@ -6538,7 +6581,7 @@ function createDocumentRecord(body, user) {
       departmentKey,
       docType,
       body.current_version || 'V1.0',
-      body.folder_id || null,
+      folderId,
       tags,
       body.width_mode || 'full',
       user.id,
@@ -6759,9 +6802,13 @@ app.get('/api/documents', (req, res) => {
 });
 
 app.post('/api/documents', canWrite, (req, res) => {
-  const id = createDocumentRecord(req.body || {}, req.user);
-  const row = getVisibleDocument(id, req.user);
-  res.json(serializeDocument(row, { withAccessSummary: true, user: req.user }));
+  try {
+    const id = createDocumentRecord(req.body || {}, req.user);
+    const row = getVisibleDocument(id, req.user);
+    res.json(serializeDocument(row, { withAccessSummary: true, user: req.user }));
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ error: error.statusCode ? error.message : '创建文档失败' });
+  }
 });
 
 app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
@@ -6775,6 +6822,11 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
   }
   if (!['http:', 'https:'].includes(url.protocol)) {
     return res.status(400).json({ error: '仅支持 http/https URL' });
+  }
+  try {
+    resolveRequestedDocumentFolder(req.body || {});
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message || '目标目录不合法' });
   }
 
   try {
@@ -6838,9 +6890,12 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(400).json({
+    const status = error.statusCode || 400;
+    res.status(status).json({
       error: error.message || 'URL 导入失败',
-      hint: '系统会自动启动 Chrome 渲染页面并采集正文；如果仍失败，请确认服务器安装了 Chrome/Chromium，且该 URL 对当前登录态或公开访问可见。',
+      ...(error.statusCode ? {} : {
+        hint: '系统会自动启动 Chrome 渲染页面并采集正文；如果仍失败，请确认服务器安装了 Chrome/Chromium，且该 URL 对当前登录态或公开访问可见。',
+      }),
     });
   }
 });
@@ -6848,6 +6903,11 @@ app.post('/api/documents/import/wolai-url', canWrite, async (req, res) => {
 app.post('/api/documents/import/wolai-mcp', canWrite, async (req, res) => {
   const target = String(req.body?.target || req.body?.url || req.body?.page_id || '').trim();
   if (!target) return res.status(400).json({ error: '请填写 Wolai 页面 URL 或页面 ID' });
+  try {
+    resolveRequestedDocumentFolder(req.body || {});
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message || '目标目录不合法' });
+  }
 
   try {
     const imported = await importWolaiMcpToBlocks({
@@ -6942,9 +7002,11 @@ app.post('/api/documents/import/wolai-mcp', canWrite, async (req, res) => {
       },
     });
   } catch (error) {
-    res.status(400).json({
+    res.status(error.statusCode || 400).json({
       error: error.message || 'Wolai MCP 导入失败',
-      hint: '请确认 Wolai MCP Token 有空间访问权限；如果服务器已配置 WOLAI_MCP_TOKEN，前端 Token 可留空。',
+      ...(error.statusCode ? {} : {
+        hint: '请确认 Wolai MCP Token 有空间访问权限；如果服务器已配置 WOLAI_MCP_TOKEN，前端 Token 可留空。',
+      }),
     });
   }
 });
@@ -6954,6 +7016,12 @@ app.post('/api/documents/import/file', canWrite, handleDocumentAttachmentUpload,
   if (validation.error) {
     cleanupUploadedFiles(req.file ? [req.file] : []);
     return res.status(400).json({ error: validation.error });
+  }
+  try {
+    resolveRequestedDocumentFolder(req.body || {});
+  } catch (error) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(error.statusCode || 400).json({ error: error.message || '目标目录不合法' });
   }
 
   let attachmentCreated = false;

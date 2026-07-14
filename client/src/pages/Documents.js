@@ -1866,6 +1866,11 @@ function buildFolderPathMap(folders = []) {
   return pathMap;
 }
 
+function normalizeDocumentFolderSelectValue(value) {
+  const id = Number(value);
+  return Number.isInteger(id) && id > 0 ? id : undefined;
+}
+
 function renderDocumentTreeTitle(title) {
   const text = String(title || '未命名文档');
   return (
@@ -2613,11 +2618,14 @@ export default function Documents() {
     );
   }, [folderSidebarWidth]);
 
-  const selectedFolder = useMemo(
-    () => folders.find(folder => Number(folder.id) === Number(selectedFolderId)),
-    [folders, selectedFolderId]
-  );
   const folderPathMap = useMemo(() => buildFolderPathMap(folders), [folders]);
+  const documentFolderOptions = useMemo(
+    () => folders.map(folder => ({
+      value: Number(folder.id),
+      label: getFolderPathLabel(folder, folderPathMap),
+    })),
+    [folders, folderPathMap]
+  );
 
   const folderTree = useMemo(
     () => buildFolderTree(folders, domainFilter, folderTreeDocuments),
@@ -3559,16 +3567,27 @@ export default function Documents() {
     }
   }, [editorBlocks]);
 
+  const getDocumentFolderFormDefaults = (folderId = selectedFolderId) => {
+    const normalizedFolderId = normalizeDocumentFolderSelectValue(folderId);
+    const folder = normalizedFolderId
+      ? folders.find(item => Number(item.id) === normalizedFolderId)
+      : null;
+    return {
+      domain: folder?.domain || (domainFilter === 'all' ? 'domestic_project' : domainFilter),
+      project_group_id: folder?.project_group_id || undefined,
+      department_key: folder?.department_key || 'OPS',
+      folder_id: folder ? Number(folder.id) : undefined,
+      doc_type: folder?.default_doc_type || 'IMP',
+    };
+  };
+
   const openCreate = () => {
+    const folderDefaults = getDocumentFolderFormDefaults();
     setEditingPropertyDoc(null);
     createForm.resetFields();
     createForm.setFieldsValue({
       title: '新页面',
-      domain: selectedFolder?.domain || (domainFilter === 'all' ? 'domestic_project' : domainFilter),
-      project_group_id: selectedFolder?.project_group_id || undefined,
-      department_key: selectedFolder?.department_key || 'OPS',
-      folder_id: selectedFolderId || undefined,
-      doc_type: selectedFolder?.default_doc_type || 'IMP',
+      ...folderDefaults,
     });
     setCreateOpen(true);
   };
@@ -3598,13 +3617,18 @@ export default function Documents() {
   const buildDocumentImportFileFormData = (values, file) => {
     const formData = new FormData();
     formData.append('file', file.originFileObj || file);
+    const normalizedValues = {
+      ...values,
+      folder_id: normalizeDocumentFolderSelectValue(values.folder_id),
+    };
     ['title', 'domain', 'project_group_id', 'department_key', 'folder_id', 'doc_type'].forEach(key => {
-      appendDocumentImportFormValue(formData, key, values[key]);
+      appendDocumentImportFormValue(formData, key, normalizedValues[key]);
     });
     return formData;
   };
 
   const openWolaiImport = () => {
+    const folderDefaults = getDocumentFolderFormDefaults();
     setWolaiImportTargetDoc(null);
     setDocumentImportFileList([]);
     wolaiImportForm.resetFields();
@@ -3614,11 +3638,7 @@ export default function Documents() {
       mcp_target: '',
       mcp_token: '',
       title: '',
-      domain: selectedFolder?.domain || (domainFilter === 'all' ? 'domestic_project' : domainFilter),
-      project_group_id: selectedFolder?.project_group_id || undefined,
-      department_key: selectedFolder?.department_key || 'OPS',
-      folder_id: selectedFolderId || undefined,
-      doc_type: selectedFolder?.default_doc_type || 'IMP',
+      ...folderDefaults,
     });
     setWolaiImportOpen(true);
   };
@@ -3706,6 +3726,7 @@ export default function Documents() {
         return;
       }
       let doc;
+      const folderId = normalizeDocumentFolderSelectValue(values.folder_id) || null;
       if (importMode === 'file') {
         doc = await documentsApi.importFile(buildDocumentImportFileFormData(values, documentImportFileList[0]));
       } else if (importMode === 'wolai_mcp') {
@@ -3715,14 +3736,14 @@ export default function Documents() {
           token: values.mcp_token,
           title: values.title || undefined,
           project_group_id: values.project_group_id || null,
-          folder_id: values.folder_id || null,
+          folder_id: folderId,
         });
       } else {
         doc = await documentsApi.importWolaiUrl({
           ...values,
           title: values.title || undefined,
           project_group_id: values.project_group_id || null,
-          folder_id: values.folder_id || null,
+          folder_id: folderId,
           prefer_chrome: true,
         });
       }
@@ -3768,7 +3789,7 @@ export default function Documents() {
         domain: doc.domain || 'general',
         project_group_id: doc.project_group_id || undefined,
         department_key: doc.department_key || 'ALL',
-        folder_id: doc.folder_id || undefined,
+        folder_id: normalizeDocumentFolderSelectValue(doc.folder_id),
         doc_type: doc.doc_type || 'TMP',
       });
       setEditingPropertyDoc(doc);
@@ -3781,6 +3802,7 @@ export default function Documents() {
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
+      const folderId = normalizeDocumentFolderSelectValue(values.folder_id) || null;
       if (editingPropertyDoc?.id) {
         setPropertySaving(true);
         const isActiveDoc = getDocTabId(selectedDoc?.id) === getDocTabId(editingPropertyDoc.id);
@@ -3791,7 +3813,7 @@ export default function Documents() {
           ...values,
           title,
           project_group_id: values.project_group_id || null,
-          folder_id: values.folder_id || null,
+          folder_id: folderId,
           current_version: editingPropertyDoc.current_version || 'V1.0',
         };
         const updated = await documentsApi.update(editingPropertyDoc.id, payload);
@@ -3819,6 +3841,8 @@ export default function Documents() {
       }
       const doc = await documentsApi.create({
         ...values,
+        project_group_id: values.project_group_id || null,
+        folder_id: folderId,
         content: { blocks: [] },
         content_text: '',
       });
@@ -6250,6 +6274,8 @@ export default function Documents() {
   const openTreeDocContextMenu = ({ event, node }) => {
     if (node?.nodeType === 'folder') {
       if (!canManageDocumentFolders || !node.canAddChild) return;
+      const folderId = normalizeDocumentFolderSelectValue(node.folderId);
+      if (folderId) setSelectedFolderId(folderId);
       event.preventDefault();
       event.stopPropagation();
       setFolderContextMenu({
@@ -10715,15 +10741,16 @@ export default function Documents() {
                     onSelect={(keys, info) => {
                       const key = keys[0] || info?.node?.key;
                       if (typeof key === 'string' && key.startsWith('folder-')) {
-                        setSelectedFolderId(Number(key.replace('folder-', '')));
+                        const folderId = normalizeDocumentFolderSelectValue(key.replace('folder-', ''));
+                        if (folderId) setSelectedFolderId(folderId);
                         if (isMobile) setMobileLibraryVisible(true);
                         setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev : [...prev, key]));
                       } else if (typeof key === 'string' && key.startsWith('document-')) {
                         const documentId = Number(key.replace('document-', ''));
-                        const folderId = info?.node?.folderId;
+                        const folderId = normalizeDocumentFolderSelectValue(info?.node?.folderId);
                         if (folderId) {
                           const folderKey = `folder-${folderId}`;
-                          setSelectedFolderId(Number(folderId));
+                          setSelectedFolderId(folderId);
                           setFolderTreeExpandedKeys(prev => (prev.includes(folderKey) ? prev : [...prev, folderKey]));
                         }
                         openDocumentTab(getDocumentSummaryById(documentId) || documentId);
@@ -11444,10 +11471,7 @@ export default function Documents() {
                   allowClear
                   showSearch
                   optionFilterProp="label"
-                  options={folders.map(folder => ({
-                    value: folder.id,
-                    label: getFolderPathLabel(folder, folderPathMap),
-                  }))}
+                  options={documentFolderOptions}
                 />
               </Form.Item>
               <Form.Item name="doc_type" label="文档类型">
@@ -11502,10 +11526,7 @@ export default function Documents() {
               allowClear
               showSearch
               optionFilterProp="label"
-              options={folders.map(folder => ({
-                value: folder.id,
-                label: getFolderPathLabel(folder, folderPathMap),
-              }))}
+              options={documentFolderOptions}
             />
           </Form.Item>
           <Form.Item name="doc_type" label="文档类型">
