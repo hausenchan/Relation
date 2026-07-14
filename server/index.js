@@ -560,17 +560,14 @@ app.get('/oss/:encodedKey', async (req, res) => {
 
 // JWT 鉴权中间件
 function auth(req, res, next) {
+  if (req.user) return next();
   const header = req.headers['authorization'];
   if (!header) return res.status(401).json({ error: '未登录' });
   const token = header.replace('Bearer ', '');
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     // 验证 password_version，改密码后旧 token 失效
-    const user = db.prepare(`
-      SELECT id, username, display_name, role, department, team_id, executive_role, password_version, account_status
-      FROM users
-      WHERE id = ?
-    `).get(decoded.id);
+    const user = getAuthenticatedUser(decoded);
     if (!user || (user.password_version || 0) !== (decoded.pwv || 0)) {
       return res.status(401).json({ error: '登录已失效，请重新登录' });
     }
@@ -608,6 +605,96 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 const DB_PATH = process.env.RELATION_DB_PATH || path.join(__dirname, 'data.db');
 const db = new Database(DB_PATH);
 const AI_SUGGESTION_DEFAULT_BUSINESS_LINE = 'zhixiao';
+const RUNTIME_CACHE_TTL_MS = Number(process.env.RELATION_RUNTIME_CACHE_TTL_MS || 5000);
+const AUTH_USER_CACHE_TTL_MS = Number(process.env.RELATION_AUTH_USER_CACHE_TTL_MS || 5000);
+const runtimeCache = new Map();
+
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && !Buffer.isBuffer(value) && !(value instanceof Date);
+}
+
+function cloneCachedValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => cloneCachedValue(item));
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneCachedValue(item)]));
+  }
+  return value;
+}
+
+function getRuntimeCached(key, ttlMs, loader) {
+  const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : RUNTIME_CACHE_TTL_MS;
+  const now = Date.now();
+  const cached = runtimeCache.get(key);
+  if (cached && cached.expiresAt > now) return cloneCachedValue(cached.value);
+  const value = loader();
+  runtimeCache.set(key, { value, expiresAt: now + ttl });
+  return cloneCachedValue(value);
+}
+
+function clearRuntimeCache(prefix = '') {
+  if (!prefix) {
+    runtimeCache.clear();
+    return;
+  }
+  for (const key of runtimeCache.keys()) {
+    if (key.startsWith(prefix)) runtimeCache.delete(key);
+  }
+}
+
+function getAuthenticatedUser(decoded = {}) {
+  const userId = Number(decoded.id);
+  if (!userId) return null;
+  const passwordVersion = Number(decoded.pwv || 0);
+  return getRuntimeCached(`auth:user:${userId}:${passwordVersion}`, AUTH_USER_CACHE_TTL_MS, () => db.prepare(`
+    SELECT id, username, display_name, role, department, team_id, executive_role, password_version, account_status
+    FROM users
+    WHERE id = ?
+  `).get(userId) || null);
+}
+
+function getUserModulePerms(userId) {
+  const id = Number(userId);
+  if (!id) return [];
+  return getRuntimeCached(`user-module-perms:${id}`, RUNTIME_CACHE_TTL_MS, () => (
+    db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(id)
+  ));
+}
+
+function getUserMenuPerms(userId) {
+  const id = Number(userId);
+  if (!id) return [];
+  return getRuntimeCached(`user-menu-perms:${id}`, RUNTIME_CACHE_TTL_MS, () => (
+    db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(id).map(row => row.menu_key)
+  ));
+}
+
+function getAuthMePayload(userId, passwordVersion = '') {
+  const id = Number(userId);
+  if (!id) return null;
+  return getRuntimeCached(`auth:me:${id}:${passwordVersion}`, AUTH_USER_CACHE_TTL_MS, () => {
+    const user = db.prepare(`
+      SELECT id, username, display_name, role, account_status, department, team_id, executive_role, last_login, password_version
+      FROM users
+      WHERE id = ?
+    `).get(id);
+    if (!user) return null;
+    return {
+      ...user,
+      team_ids: getUserTeamIds(id),
+      managed_team_ids: getManagedTeamIds(id, user.role) || [],
+      project_group_ids: getUserProjectGroupIds(id),
+      modulePerms: getUserModulePerms(id),
+      menuPerms: getUserMenuPerms(id),
+    };
+  });
+}
+
+function normalizeCacheIdList(values = []) {
+  return [...new Set((values || []).map(value => Number(value)).filter(Boolean))]
+    .sort((a, b) => a - b);
+}
 
 function addColumnIfMissing(table, column, definition) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
@@ -621,6 +708,20 @@ function createIndexIfColumnExists(table, column, indexName, columnsSql) {
   if (cols.length > 0 && cols.includes(column)) {
     db.exec(`CREATE INDEX IF NOT EXISTS ${indexName} ON ${table}(${columnsSql})`);
   }
+}
+
+function createIndexesIfColumnsExist(table, definitions = []) {
+  const cols = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name));
+  if (!cols.size) return;
+  definitions.forEach(({ name, columnsSql, columns }) => {
+    const requiredColumns = columns || String(columnsSql || '')
+      .split(',')
+      .map(part => part.trim().replace(/[`"]/g, '').split(/\s+/)[0])
+      .filter(Boolean);
+    if (requiredColumns.every(column => cols.has(column))) {
+      db.exec(`CREATE INDEX IF NOT EXISTS ${name} ON ${table}(${columnsSql})`);
+    }
+  });
 }
 
 function bootstrapAiSuggestionSnapshots() {
@@ -1018,6 +1119,30 @@ if (leadCols.length > 0) {
   if (!leadCols.includes('follow_result')) db.exec("ALTER TABLE leads ADD COLUMN follow_result TEXT DEFAULT NULL");
 }
 
+createIndexesIfColumnsExist('persons', [
+  { name: 'idx_persons_created_by', columnsSql: 'created_by', columns: ['created_by'] },
+  { name: 'idx_persons_assigned_to', columnsSql: 'assigned_to', columns: ['assigned_to'] },
+  { name: 'idx_persons_visibility_owner', columnsSql: 'visibility_scope, private_owner_id', columns: ['visibility_scope', 'private_owner_id'] },
+  { name: 'idx_persons_category', columnsSql: 'person_category', columns: ['person_category'] },
+  { name: 'idx_persons_updated_at', columnsSql: 'updated_at', columns: ['updated_at'] },
+]);
+createIndexesIfColumnsExist('person_shared_users', [
+  { name: 'idx_person_shared_user_person', columnsSql: 'user_id, person_id', columns: ['user_id', 'person_id'] },
+]);
+createIndexesIfColumnsExist('interactions', [
+  { name: 'idx_interactions_person_date', columnsSql: 'person_id, date', columns: ['person_id', 'date'] },
+  { name: 'idx_interactions_created_by', columnsSql: 'created_by', columns: ['created_by'] },
+  { name: 'idx_interactions_opportunity_assignee', columnsSql: 'opportunity_assignee', columns: ['opportunity_assignee'] },
+  { name: 'idx_interactions_opportunity_status', columnsSql: 'opportunity_status', columns: ['opportunity_status'] },
+  { name: 'idx_interactions_visibility_owner', columnsSql: 'visibility_scope, private_owner_id', columns: ['visibility_scope', 'private_owner_id'] },
+]);
+createIndexesIfColumnsExist('competitor_research', [
+  { name: 'idx_competitor_research_company_date', columnsSql: 'company_id, date', columns: ['company_id', 'date'] },
+  { name: 'idx_competitor_research_created_by', columnsSql: 'created_by', columns: ['created_by'] },
+  { name: 'idx_competitor_research_opportunity_assignee', columnsSql: 'opportunity_assignee', columns: ['opportunity_assignee'] },
+  { name: 'idx_competitor_research_opportunity_status', columnsSql: 'opportunity_status', columns: ['opportunity_status'] },
+]);
+
 // 回填历史数据 created_by
 try {
   // interactions: 通过 person_id 关联 persons.created_by 回填
@@ -1064,6 +1189,10 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+createIndexesIfColumnsExist('attachments', [
+  { name: 'idx_attachments_source', columnsSql: 'source_type, source_id', columns: ['source_type', 'source_id'] },
+  { name: 'idx_attachments_created_by', columnsSql: 'created_by', columns: ['created_by'] },
+]);
 
 // =========== 通知表 ===========
 db.exec(`
@@ -1766,6 +1895,15 @@ if (futCols.length > 0) {
   if (!futCols.includes('company_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN company_id INTEGER DEFAULT NULL");
   if (!futCols.includes('started_at')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN started_at DATETIME DEFAULT NULL");
 }
+createIndexesIfColumnsExist('follow_up_tasks', [
+  { name: 'idx_follow_up_tasks_assigned_to_status', columnsSql: 'assigned_to, status', columns: ['assigned_to', 'status'] },
+  { name: 'idx_follow_up_tasks_assigned_by_status', columnsSql: 'assigned_by, status', columns: ['assigned_by', 'status'] },
+  { name: 'idx_follow_up_tasks_interaction', columnsSql: 'interaction_id', columns: ['interaction_id'] },
+  { name: 'idx_follow_up_tasks_competitor', columnsSql: 'competitor_research_id', columns: ['competitor_research_id'] },
+  { name: 'idx_follow_up_tasks_person', columnsSql: 'person_id', columns: ['person_id'] },
+  { name: 'idx_follow_up_tasks_company', columnsSql: 'company_id', columns: ['company_id'] },
+  { name: 'idx_follow_up_tasks_created_at', columnsSql: 'created_at', columns: ['created_at'] },
+]);
 
 // 补创建竞品研究商机对应的 follow_up_tasks（修复历史数据）
 try {
@@ -1846,6 +1984,14 @@ if (taskCols.length > 0 && !taskCols.includes('estimated_hours')) {
 if (taskCols.length > 0) {
   db.exec("UPDATE tasks SET estimated_completion_date = date WHERE estimated_completion_date IS NULL OR estimated_completion_date = ''");
 }
+createIndexesIfColumnsExist('tasks', [
+  { name: 'idx_tasks_assigned_date_status', columnsSql: 'assigned_to, date, status', columns: ['assigned_to', 'date', 'status'] },
+  { name: 'idx_tasks_created_by', columnsSql: 'created_by', columns: ['created_by'] },
+  { name: 'idx_tasks_team_id', columnsSql: 'team_id', columns: ['team_id'] },
+  { name: 'idx_tasks_parent_id', columnsSql: 'parent_id', columns: ['parent_id'] },
+  { name: 'idx_tasks_status', columnsSql: 'status', columns: ['status'] },
+  { name: 'idx_tasks_date', columnsSql: 'date', columns: ['date'] },
+]);
 
 // =========== 线索池表 ===========
 db.exec(`
@@ -1881,6 +2027,10 @@ db.exec(`
     UNIQUE(source_type, source_id, user_id)
   );
 `);
+createIndexesIfColumnsExist('lead_watchers', [
+  { name: 'idx_lead_watchers_user', columnsSql: 'user_id', columns: ['user_id'] },
+  { name: 'idx_lead_watchers_source_user', columnsSql: 'source_type, source_id, user_id', columns: ['source_type', 'source_id', 'user_id'] },
+]);
 
 // =========== 策略表 ===========
 db.exec(`
@@ -2194,6 +2344,21 @@ addColumnIfMissing('documents', 'import_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'quality_status', 'TEXT DEFAULT NULL');
 createIndexIfColumnExists('documents', 'pinned_at', 'idx_documents_pinned_at', 'pinned_at');
 createIndexIfColumnExists('documents', 'source_record_key', 'idx_documents_source_record', 'source_system, source_record_key');
+createIndexesIfColumnsExist('documents', [
+  { name: 'idx_documents_deleted_updated', columnsSql: 'is_deleted, updated_at', columns: ['is_deleted', 'updated_at'] },
+  { name: 'idx_documents_deleted_pinned_updated', columnsSql: 'is_deleted, pinned_at, updated_at', columns: ['is_deleted', 'pinned_at', 'updated_at'] },
+  { name: 'idx_documents_deleted_folder_updated', columnsSql: 'is_deleted, folder_id, updated_at', columns: ['is_deleted', 'folder_id', 'updated_at'] },
+  { name: 'idx_documents_deleted_domain_updated', columnsSql: 'is_deleted, domain, updated_at', columns: ['is_deleted', 'domain', 'updated_at'] },
+]);
+createIndexesIfColumnsExist('document_favorites', [
+  { name: 'idx_document_favorites_document', columnsSql: 'document_id, user_id', columns: ['document_id', 'user_id'] },
+]);
+createIndexesIfColumnsExist('document_change_logs', [
+  { name: 'idx_document_change_logs_doc_changed', columnsSql: 'document_id, changed_at', columns: ['document_id', 'changed_at'] },
+]);
+createIndexesIfColumnsExist('document_edit_records', [
+  { name: 'idx_document_edit_records_doc_edited', columnsSql: 'document_id, edited_at', columns: ['document_id', 'edited_at'] },
+]);
 addColumnIfMissing('document_attachments', 'block_id', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'display_name', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_attachments', 'file_ext', 'TEXT DEFAULT NULL');
@@ -2261,6 +2426,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_person_shared_person ON person_shared_users(person_id);
   CREATE INDEX IF NOT EXISTS idx_person_shared_user ON person_shared_users(user_id);
 `);
+createIndexesIfColumnsExist('person_shared_users', [
+  { name: 'idx_person_shared_user_person', columnsSql: 'user_id, person_id', columns: ['user_id', 'person_id'] },
+]);
 
 // =========== 策略执行记录表 ===========
 db.exec(`
@@ -2496,6 +2664,29 @@ if (userCols.length > 0) {
   db.prepare('UPDATE users SET need_weekly_report = 0 WHERE need_weekly_report IS NULL').run();
   db.prepare("UPDATE users SET account_status = 'active' WHERE account_status IS NULL OR account_status = ''").run();
 }
+
+createIndexesIfColumnsExist('users', [
+  { name: 'idx_users_team_id', columnsSql: 'team_id', columns: ['team_id'] },
+  { name: 'idx_users_leader_id', columnsSql: 'leader_id', columns: ['leader_id'] },
+  { name: 'idx_users_department', columnsSql: 'department', columns: ['department'] },
+  { name: 'idx_users_account_status', columnsSql: 'account_status', columns: ['account_status'] },
+  { name: 'idx_users_role', columnsSql: 'role', columns: ['role'] },
+]);
+createIndexesIfColumnsExist('user_teams', [
+  { name: 'idx_user_teams_team_id', columnsSql: 'team_id', columns: ['team_id'] },
+]);
+createIndexesIfColumnsExist('director_teams', [
+  { name: 'idx_director_teams_team_id', columnsSql: 'team_id', columns: ['team_id'] },
+]);
+createIndexesIfColumnsExist('user_project_groups', [
+  { name: 'idx_user_project_groups_group_id', columnsSql: 'project_group_id', columns: ['project_group_id'] },
+]);
+createIndexesIfColumnsExist('user_module_perms', [
+  { name: 'idx_user_module_perms_module', columnsSql: 'module', columns: ['module'] },
+]);
+createIndexesIfColumnsExist('user_menu_perms', [
+  { name: 'idx_user_menu_perms_menu_key', columnsSql: 'menu_key', columns: ['menu_key'] },
+]);
 
 // 公司经营模块：经营周会 / 战略月会报表表
 db.exec(`
@@ -2870,12 +3061,16 @@ function isSafeIdentifier(value) {
 
 function tableExists(table) {
   if (!isSafeIdentifier(table)) return false;
-  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
+  return getRuntimeCached(`schema:table-exists:${table}`, 60 * 1000, () => (
+    !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table)
+  ));
 }
 
 function getTableColumns(table) {
   if (!tableExists(table)) return [];
-  return db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  return getRuntimeCached(`schema:table-columns:${table}`, 60 * 1000, () => (
+    db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name)
+  ));
 }
 
 function stringifyForLog(value) {
@@ -3513,21 +3708,33 @@ app.get('/api/operation-logs/:id', auth, systemAdminOnly, (req, res) => {
 });
 
 function getUserTeamIds(userId) {
-  const primaryRows = db.prepare('SELECT team_id FROM users WHERE id = ? AND team_id IS NOT NULL').all(userId).map(r => r.team_id);
-  const relationRows = db.prepare('SELECT team_id FROM user_teams WHERE user_id = ?').all(userId).map(r => r.team_id);
-  return [...new Set([...primaryRows, ...relationRows])];
+  const id = Number(userId);
+  if (!id) return [];
+  return getRuntimeCached(`user-team-ids:${id}`, RUNTIME_CACHE_TTL_MS, () => {
+    const primaryRows = db.prepare('SELECT team_id FROM users WHERE id = ? AND team_id IS NOT NULL').all(id).map(r => r.team_id);
+    const relationRows = db.prepare('SELECT team_id FROM user_teams WHERE user_id = ?').all(id).map(r => r.team_id);
+    return [...new Set([...primaryRows, ...relationRows])];
+  });
 }
 
 function getUserProjectGroupIds(userId) {
-  return db.prepare('SELECT project_group_id FROM user_project_groups WHERE user_id = ?').all(userId).map(r => r.project_group_id);
+  const id = Number(userId);
+  if (!id) return [];
+  return getRuntimeCached(`user-project-group-ids:${id}`, RUNTIME_CACHE_TTL_MS, () => (
+    db.prepare('SELECT project_group_id FROM user_project_groups WHERE user_id = ?').all(id).map(r => r.project_group_id)
+  ));
 }
 
 function getUsersByTeamIds(teamIds) {
-  if (!teamIds?.length) return [];
-  const placeholders = teamIds.map(() => '?').join(',');
-  const fromUsers = db.prepare(`SELECT id FROM users WHERE team_id IN (${placeholders})`).all(...teamIds).map(u => u.id);
-  const fromRelations = db.prepare(`SELECT user_id as id FROM user_teams WHERE team_id IN (${placeholders})`).all(...teamIds).map(u => u.id);
-  return [...new Set([...fromUsers, ...fromRelations])];
+  const ids = normalizeCacheIdList(teamIds);
+  if (!ids.length) return [];
+  const cacheKey = `users-by-team-ids:${ids.join(',')}`;
+  return getRuntimeCached(cacheKey, RUNTIME_CACHE_TTL_MS, () => {
+    const placeholders = ids.map(() => '?').join(',');
+    const fromUsers = db.prepare(`SELECT id FROM users WHERE team_id IN (${placeholders})`).all(...ids).map(u => u.id);
+    const fromRelations = db.prepare(`SELECT user_id as id FROM user_teams WHERE team_id IN (${placeholders})`).all(...ids).map(u => u.id);
+    return [...new Set([...fromUsers, ...fromRelations])];
+  });
 }
 
 function isAdministrativeTeam(team) {
@@ -3556,20 +3763,27 @@ function canViewAllGiftRecords(user) {
 
 function getManagedTeamIds(userId, role) {
   if (isAdmin(role)) return null;
+  const id = Number(userId);
+  if (!id) return [];
+  const cacheKey = `managed-team-ids:${id}:${role || ''}`;
 
   if (role === 'sales_director') {
-    const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(userId).map(r => r.team_id);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    return [...new Set([...myTeams, ...ledTeams])];
+    return getRuntimeCached(cacheKey, RUNTIME_CACHE_TTL_MS, () => {
+      const myTeams = db.prepare('SELECT team_id FROM director_teams WHERE director_id = ?').all(id).map(r => r.team_id);
+      const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(id).map(r => r.id);
+      return [...new Set([...myTeams, ...ledTeams])];
+    });
   }
 
   if (role === 'leader') {
-    const memberTeams = getUserTeamIds(userId);
-    const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(userId).map(r => r.id);
-    return [...new Set([...memberTeams, ...ledTeams])];
+    return getRuntimeCached(cacheKey, RUNTIME_CACHE_TTL_MS, () => {
+      const memberTeams = getUserTeamIds(id);
+      const ledTeams = db.prepare('SELECT id FROM teams WHERE leader_id = ?').all(id).map(r => r.id);
+      return [...new Set([...memberTeams, ...ledTeams])];
+    });
   }
 
-  return getUserTeamIds(userId);
+  return getUserTeamIds(id);
 }
 
 function syncUserTeams(userId, teamIds = []) {
@@ -3580,6 +3794,7 @@ function syncUserTeams(userId, teamIds = []) {
     uniqueTeamIds.forEach(teamId => insert.run(userId, teamId));
   }
   db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(uniqueTeamIds[0] || null, userId);
+  clearRuntimeCache();
   return uniqueTeamIds;
 }
 
@@ -3590,6 +3805,7 @@ function syncUserProjectGroups(userId, projectGroupIds = []) {
     const insert = db.prepare('INSERT OR IGNORE INTO user_project_groups (user_id, project_group_id) VALUES (?, ?)');
     uniqueIds.forEach(projectGroupId => insert.run(userId, projectGroupId));
   }
+  clearRuntimeCache();
   return uniqueIds;
 }
 
@@ -3699,18 +3915,23 @@ function validateGoalScopeFields({ scope_type, project_group_id, department, tea
 // 获取当前用户可见的所有用户ID列表（用于数据过滤）
 function getVisibleUserIds(userId, role) {
   if (isAdmin(role)) return null; // null 表示不限制，看全部
+  const id = Number(userId);
+  if (!id) return [];
+  const cacheKey = `visible-user-ids:${id}:${role || ''}`;
 
   if (role === 'sales_director' || role === 'leader') {
-    const visibleTeamIds = getManagedTeamIds(userId, role);
-    const members = visibleTeamIds?.length ? getUsersByTeamIds(visibleTeamIds) : [];
-    const directReports = role === 'leader'
-      ? db.prepare('SELECT id FROM users WHERE leader_id = ?').all(userId).map(u => u.id)
-      : [];
-    return [...new Set([userId, ...members, ...directReports])];
+    return getRuntimeCached(cacheKey, RUNTIME_CACHE_TTL_MS, () => {
+      const visibleTeamIds = getManagedTeamIds(id, role);
+      const members = visibleTeamIds?.length ? getUsersByTeamIds(visibleTeamIds) : [];
+      const directReports = role === 'leader'
+        ? db.prepare('SELECT id FROM users WHERE leader_id = ?').all(id).map(u => u.id)
+        : [];
+      return [...new Set([id, ...members, ...directReports])];
+    });
   }
 
   // member / readonly / guest
-  return [userId];
+  return [id];
 }
 
 function getVisibleGoalOwnerIds(userId, role) {
@@ -4248,12 +4469,8 @@ app.post('/api/auth/login', (req, res) => {
     JWT_SECRET,
     { expiresIn: '8h' }
   );
-  // 查模块权限
-  const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(user.id);
-  const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(user.id).map(r => r.menu_key);
-  const teamIds = getUserTeamIds(user.id);
-  const managedTeamIds = getManagedTeamIds(user.id, user.role) || [];
-  const projectGroupIds = getUserProjectGroupIds(user.id);
+  clearRuntimeCache();
+  const currentUser = getAuthMePayload(user.id, user.password_version || 0);
   writeOperationLog({
     req,
     operator: user,
@@ -4270,7 +4487,7 @@ app.post('/api/auth/login', (req, res) => {
   });
   res.json({
     token,
-    user: {
+    user: currentUser || {
       id: user.id,
       username: user.username,
       display_name: user.display_name,
@@ -4278,28 +4495,17 @@ app.post('/api/auth/login', (req, res) => {
       account_status: user.account_status || 'active',
       department: user.department || null,
       team_id: user.team_id || null,
-      team_ids: teamIds,
-      managed_team_ids: managedTeamIds,
-      project_group_ids: projectGroupIds,
       executive_role: user.executive_role,
-      modulePerms,
-      menuPerms,
-    }
+      modulePerms: [],
+      menuPerms: [],
+    },
   });
 });
 
 app.get('/api/auth/me', auth, (req, res) => {
-  const user = db.prepare('SELECT id, username, display_name, role, account_status, department, team_id, executive_role, last_login FROM users WHERE id = ?').get(req.user.id);
-  const modulePerms = db.prepare('SELECT * FROM user_module_perms WHERE user_id = ?').all(req.user.id);
-  const menuPerms = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(req.user.id).map(r => r.menu_key);
-  res.json({
-    ...user,
-    team_ids: getUserTeamIds(req.user.id),
-    managed_team_ids: getManagedTeamIds(req.user.id, user.role) || [],
-    project_group_ids: getUserProjectGroupIds(req.user.id),
-    modulePerms,
-    menuPerms,
-  });
+  const user = getAuthMePayload(req.user.id, req.user.pwv || req.user.password_version || 0);
+  if (!user) return res.status(401).json({ error: '登录已失效，请重新登录' });
+  res.json(user);
 });
 
 app.post('/api/auth/logout', auth, (req, res) => {
@@ -4313,6 +4519,7 @@ app.put('/api/auth/password', auth, (req, res) => {
     return res.status(400).json({ error: '旧密码错误' });
   }
   db.prepare('UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.user.id);
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
@@ -4421,6 +4628,7 @@ app.put('/api/users/:id/reset-password', auth, adminOnly, (req, res) => {
   const { new_password } = req.body;
   if (!new_password) return res.status(400).json({ error: '新密码必填' });
   db.prepare('UPDATE users SET password_hash = ?, password_version = COALESCE(password_version, 0) + 1 WHERE id = ?').run(bcrypt.hashSync(new_password, 10), req.params.id);
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
@@ -4461,48 +4669,66 @@ app.put('/api/users/:id/account-status', auth, adminOnly, (req, res) => {
     `).run(targetId);
   }
 
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
 // 所有登录用户可访问（用于指派选人下拉）
 app.get('/api/users/simple', auth, (req, res) => {
   const { department, include_readonly, include_departed } = req.query;
-  const where = [];
-  const params = [];
+  const cacheKey = [
+    'users-simple',
+    String(department || ''),
+    ['1', 'true'].includes(String(include_readonly)) ? 'with-readonly' : 'active-writers',
+    ['1', 'true'].includes(String(include_departed)) ? 'with-departed' : 'active-only',
+  ].join(':');
+  const result = getRuntimeCached(cacheKey, RUNTIME_CACHE_TTL_MS, () => {
+    const where = [];
+    const params = [];
 
-  if (!['1', 'true'].includes(String(include_departed))) {
-    where.push("COALESCE(account_status, 'active') = ?");
-    params.push('active');
-  }
-  if (!['1', 'true'].includes(String(include_readonly))) {
-    where.push('role != ?');
-    params.push('readonly');
-  }
-  if (department) {
-    where.push('department = ?');
-    params.push(department);
-  }
+    if (!['1', 'true'].includes(String(include_departed))) {
+      where.push("COALESCE(account_status, 'active') = ?");
+      params.push('active');
+    }
+    if (!['1', 'true'].includes(String(include_readonly))) {
+      where.push('role != ?');
+      params.push('readonly');
+    }
+    if (department) {
+      where.push('department = ?');
+      params.push(department);
+    }
 
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
-  const users = db.prepare(`
-    SELECT id, username, display_name, role, account_status, team_id, leader_id, department
-    FROM users
-    ${whereSql}
-    ORDER BY COALESCE(account_status, 'active') ASC, display_name ASC
-  `).all(...params);
-  const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
-  const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
-  res.json(users.map(u => ({
-    ...u,
-    account_status: u.account_status || 'active',
-    team_ids: [...new Set([
-      ...(u.team_id ? [u.team_id] : []),
-      ...userTeams.filter(row => row.user_id === u.id).map(row => row.team_id),
-    ])],
-    project_group_ids: [...new Set(
-      userProjectGroups.filter(row => row.user_id === u.id).map(row => row.project_group_id)
-    )],
-  })));
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const users = db.prepare(`
+      SELECT id, username, display_name, role, account_status, team_id, leader_id, department
+      FROM users
+      ${whereSql}
+      ORDER BY COALESCE(account_status, 'active') ASC, display_name ASC
+    `).all(...params);
+    const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
+    const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
+    const teamsByUser = new Map();
+    userTeams.forEach(row => {
+      if (!teamsByUser.has(row.user_id)) teamsByUser.set(row.user_id, []);
+      teamsByUser.get(row.user_id).push(row.team_id);
+    });
+    const projectGroupsByUser = new Map();
+    userProjectGroups.forEach(row => {
+      if (!projectGroupsByUser.has(row.user_id)) projectGroupsByUser.set(row.user_id, []);
+      projectGroupsByUser.get(row.user_id).push(row.project_group_id);
+    });
+    return users.map(u => ({
+      ...u,
+      account_status: u.account_status || 'active',
+      team_ids: [...new Set([
+        ...(u.team_id ? [u.team_id] : []),
+        ...(teamsByUser.get(u.id) || []),
+      ])],
+      project_group_ids: [...new Set(projectGroupsByUser.get(u.id) || [])],
+    }));
+  });
+  res.json(result);
 });
 
 // =========== 用户管理 API（admin only）===========
@@ -4513,28 +4739,43 @@ app.get('/api/users', auth, adminOnly, (req, res) => {
   const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
   const projectGroups = db.prepare('SELECT * FROM project_groups ORDER BY name ASC').all();
   const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
+  const permsByUser = new Map();
+  perms.forEach(row => {
+    if (!permsByUser.has(row.user_id)) permsByUser.set(row.user_id, []);
+    permsByUser.get(row.user_id).push(row);
+  });
+  const teamsById = new Map(teams.map(team => [Number(team.id), team]));
+  const teamIdsByUser = new Map();
+  userTeams.forEach(row => {
+    if (!teamIdsByUser.has(row.user_id)) teamIdsByUser.set(row.user_id, []);
+    teamIdsByUser.get(row.user_id).push(row.team_id);
+  });
+  const projectGroupsById = new Map(projectGroups.map(group => [Number(group.id), group]));
+  const projectGroupIdsByUser = new Map();
+  userProjectGroups.forEach(row => {
+    if (!projectGroupIdsByUser.has(row.user_id)) projectGroupIdsByUser.set(row.user_id, []);
+    projectGroupIdsByUser.get(row.user_id).push(row.project_group_id);
+  });
   res.json(users.map(u => ({
     ...u,
-    modulePerms: perms.filter(p => p.user_id === u.id),
+    modulePerms: permsByUser.get(u.id) || [],
     team_ids: [...new Set([
       ...(u.team_id ? [u.team_id] : []),
-      ...userTeams.filter(row => row.user_id === u.id).map(row => row.team_id),
+      ...(teamIdsByUser.get(u.id) || []),
     ])],
-    team_name: teams.find(t => t.id === u.team_id)?.name || null,
+    team_name: teamsById.get(Number(u.team_id))?.name || null,
     team_names: [...new Set([
-      ...(u.team_id ? [teams.find(t => t.id === u.team_id)?.name].filter(Boolean) : []),
-      ...userTeams
-        .filter(row => row.user_id === u.id)
-        .map(row => teams.find(t => t.id === row.team_id)?.name)
+      ...(u.team_id ? [teamsById.get(Number(u.team_id))?.name].filter(Boolean) : []),
+      ...(teamIdsByUser.get(u.id) || [])
+        .map(teamId => teamsById.get(Number(teamId))?.name)
         .filter(Boolean),
     ])],
     project_group_ids: [...new Set(
-      userProjectGroups.filter(row => row.user_id === u.id).map(row => row.project_group_id)
+      projectGroupIdsByUser.get(u.id) || []
     )],
     project_group_names: [...new Set(
-      userProjectGroups
-        .filter(row => row.user_id === u.id)
-        .map(row => projectGroups.find(g => g.id === row.project_group_id)?.name)
+      (projectGroupIdsByUser.get(u.id) || [])
+        .map(groupId => projectGroupsById.get(Number(groupId))?.name)
         .filter(Boolean)
     )],
   })));
@@ -4559,6 +4800,7 @@ app.post('/api/users', auth, adminOnly, (req, res) => {
       const ins = db.prepare("INSERT OR IGNORE INTO director_teams (director_id, team_id) VALUES (?,?)");
       req.body.director_teams.forEach(tid => ins.run(r.lastInsertRowid, tid));
     }
+    clearRuntimeCache();
     res.json({ id: r.lastInsertRowid });
   } catch {
     res.status(400).json({ error: '用户名已存在' });
@@ -4591,6 +4833,7 @@ app.put('/api/users/:id', auth, adminOnly, (req, res) => {
       req.body.director_teams.forEach(tid => ins.run(req.params.id, tid));
     }
   }
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
@@ -4601,29 +4844,35 @@ app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_teams WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_project_groups WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
 // =========== Teams API（商务小组） ===========
 app.get('/api/teams', auth, (req, res) => {
   const { department } = req.query;
-  let q = `SELECT t.*, u.display_name as leader_name FROM teams t LEFT JOIN users u ON t.leader_id = u.id WHERE 1=1`;
-  const p = [];
-  if (department) { q += ' AND t.department = ?'; p.push(department); }
-  q += ' ORDER BY t.department, t.name';
-  res.json(db.prepare(q).all(...p));
+  const result = getRuntimeCached(`teams:${String(department || '')}`, RUNTIME_CACHE_TTL_MS, () => {
+    let q = `SELECT t.*, u.display_name as leader_name FROM teams t LEFT JOIN users u ON t.leader_id = u.id WHERE 1=1`;
+    const p = [];
+    if (department) { q += ' AND t.department = ?'; p.push(department); }
+    q += ' ORDER BY t.department, t.name';
+    return db.prepare(q).all(...p);
+  });
+  res.json(result);
 });
 
 app.post('/api/teams', auth, adminOnly, (req, res) => {
   const { name, department, leader_id } = req.body;
   if (!name) return res.status(400).json({ error: '小组名称必填' });
   const r = db.prepare('INSERT INTO teams (name, department, leader_id) VALUES (?,?,?)').run(name, department || 'commercial', leader_id || null);
+  clearRuntimeCache();
   res.json({ id: r.lastInsertRowid });
 });
 
 app.put('/api/teams/:id', auth, adminOnly, (req, res) => {
   const { name, department, leader_id } = req.body;
   db.prepare('UPDATE teams SET name=?, department=?, leader_id=? WHERE id=?').run(name, department || 'commercial', leader_id || null, req.params.id);
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
@@ -4638,17 +4887,18 @@ app.delete('/api/teams/:id', auth, adminOnly, (req, res) => {
   });
   db.prepare('DELETE FROM director_teams WHERE team_id = ?').run(req.params.id);
   db.prepare('DELETE FROM teams WHERE id = ?').run(req.params.id);
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
 // =========== 项目组管理 API ===========
 app.get('/api/project-groups', auth, (req, res) => {
-  const rows = db.prepare(`
-    SELECT pg.*, u.display_name as owner_name
-    FROM project_groups pg
-    LEFT JOIN users u ON pg.owner_id = u.id
-    ORDER BY pg.status ASC, pg.name ASC
-  `).all();
+  const rows = getRuntimeCached('project-groups:list', RUNTIME_CACHE_TTL_MS, () => db.prepare(`
+      SELECT pg.*, u.display_name as owner_name
+      FROM project_groups pg
+      LEFT JOIN users u ON pg.owner_id = u.id
+      ORDER BY pg.status ASC, pg.name ASC
+    `).all());
   res.json(rows);
 });
 
@@ -4660,6 +4910,7 @@ app.post('/api/project-groups', auth, adminOnly, (req, res) => {
       INSERT INTO project_groups (name, code, description, owner_id, status)
       VALUES (?, ?, ?, ?, ?)
     `).run(name, code || null, description || null, owner_id || null, status || 'active');
+    clearRuntimeCache();
     res.json({ id: result.lastInsertRowid });
   } catch (e) {
     res.status(400).json({ error: '项目组名称已存在' });
@@ -4679,6 +4930,7 @@ app.put('/api/project-groups/:id', auth, adminOnly, (req, res) => {
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(name, code || null, description || null, owner_id || null, status || 'active', req.params.id);
+    clearRuntimeCache();
     res.json({ success: true });
   } catch (e) {
     res.status(400).json({ error: '更新失败，项目组名称可能重复' });
@@ -4689,6 +4941,7 @@ app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_project_groups WHERE project_group_id = ?').run(req.params.id);
   db.prepare('UPDATE goals SET project_group_id = NULL WHERE project_group_id = ?').run(req.params.id);
   db.prepare('DELETE FROM project_groups WHERE id = ?').run(req.params.id);
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
@@ -4826,6 +5079,25 @@ function getDocumentFolderDepth(folderId) {
   return getDocumentFolderPathRows(folderId).length;
 }
 
+function buildDocumentFolderDepthMap(rows = []) {
+  const byId = new Map(rows.map(row => [Number(row.id), row]));
+  const memo = new Map();
+  const getDepth = (folderId, seen = new Set()) => {
+    const id = Number(folderId);
+    if (!id || seen.has(id)) return 0;
+    if (memo.has(id)) return memo.get(id);
+    const row = byId.get(id);
+    if (!row) return 0;
+    seen.add(id);
+    const depth = row.parent_id ? getDepth(row.parent_id, seen) + 1 : 1;
+    seen.delete(id);
+    memo.set(id, depth);
+    return depth;
+  };
+  rows.forEach(row => getDepth(row.id));
+  return memo;
+}
+
 function getDocumentFolderDescendantIds(folderId) {
   const id = Number(folderId);
   if (!id) return [];
@@ -4878,8 +5150,8 @@ function isDocumentFolderManager(user) {
   return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role) || user.role === 'leader'));
 }
 
-function serializeDocumentFolder(row, user) {
-  const depth = getDocumentFolderDepth(row.id);
+function serializeDocumentFolder(row, user, options = {}) {
+  const depth = options.depthById?.get(Number(row.id)) || getDocumentFolderDepth(row.id);
   const canManage = isDocumentFolderManager(user);
   const isProtected = isManagedDocumentSpace(row.domain) && depth > 0 && depth <= 2;
   const isManaged = isManagedDocumentSpace(row.domain);
@@ -5973,9 +6245,15 @@ function serializeDocument(row, options = {}) {
   };
   if (options.withAccessSummary) result.access_summary = getDocumentAccessSummary(row);
   if (options.user) {
+    const canUseWrite = canUseDocumentWriteActions(options.user);
     result.can_manage = canUseDocumentWriteActions(options.user) && canManageDocument(options.user, row) ? 1 : 0;
-    result.can_edit = canEditDocument(options.user, row) ? 1 : 0;
-    result.can_pin = canPinDocument(options.user, row) ? 1 : 0;
+    if (options.assumeVisible) {
+      result.can_edit = canUseWrite ? 1 : 0;
+      result.can_pin = canUseWrite ? 1 : 0;
+    } else {
+      result.can_edit = canEditDocument(options.user, row) ? 1 : 0;
+      result.can_pin = canPinDocument(options.user, row) ? 1 : 0;
+    }
   }
   return result;
 }
@@ -6054,7 +6332,8 @@ app.get('/api/document-folders', (req, res) => {
     LEFT JOIN project_groups pg ON f.project_group_id = pg.id
     ORDER BY f.domain, COALESCE(pg.name, ''), f.department_key, f.sort_order, f.name
   `).all();
-  res.json(rows.map(row => serializeDocumentFolder(row, req.user)));
+  const depthById = buildDocumentFolderDepthMap(rows);
+  res.json(rows.map(row => serializeDocumentFolder(row, req.user, { depthById })));
 });
 
 app.post('/api/document-folders', canWrite, (req, res) => {
@@ -6241,7 +6520,7 @@ app.get('/api/documents', (req, res) => {
   }
   res.json(db.prepare(q).all(...params).map(row => {
     const { search_content_text: searchContentText, ...documentRow } = row;
-    const document = serializeDocument(documentRow, { user: req.user });
+    const document = serializeDocument(documentRow, { user: req.user, assumeVisible: true });
     if (searchText) {
       Object.assign(document, getDocumentSearchMatch({
         ...documentRow,
@@ -7504,8 +7783,8 @@ app.get('/api/users/:id/director-teams', auth, (req, res) => {
 // =========== 菜单权限 API（admin only）===========
 // 获取某用户的菜单权限
 app.get('/api/admin/menu-perms/:userId', auth, adminOnly, (req, res) => {
-  const keys = db.prepare('SELECT menu_key FROM user_menu_perms WHERE user_id = ?').all(req.params.userId).map(r => r.menu_key);
-  res.json({ userId: parseInt(req.params.userId), menuKeys: keys });
+  const userId = parseInt(req.params.userId);
+  res.json({ userId, menuKeys: getUserMenuPerms(userId) });
 });
 
 // 保存某用户的菜单权限（全量替换）
@@ -7522,6 +7801,7 @@ app.put('/api/admin/menu-perms/:userId', auth, adminOnly, (req, res) => {
     }
   });
   replace();
+  clearRuntimeCache();
   res.json({ success: true });
 });
 
@@ -8589,6 +8869,7 @@ app.post('/api/interactions', (req, res) => {
       VALUES (?,?,?,?,?,?,?)
     `).run(ftEnc.title, interactionId, person_id, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
       opportunity_assignee, createdBy || 0);
+    clearRuntimeCache('follow-up-tasks:');
   }
 
   if (watcher_ids?.length) {
@@ -8886,6 +9167,7 @@ app.put('/api/opportunities/:id', (req, res) => {
         UPDATE follow_up_tasks SET assigned_to=?, updated_at=CURRENT_TIMESTAMP
         WHERE interaction_id=? AND status != 'done'
       `).run(opportunity_assignee, req.params.id);
+      clearRuntimeCache('follow-up-tasks:');
     }
   }
 
@@ -8948,14 +9230,16 @@ app.get('/api/follow-up-tasks', (req, res) => {
 
 app.get('/api/follow-up-tasks/count', (req, res) => {
   const { id: me } = req.user;
-  const privacy = buildPersonPrivacyFilter(me, 'p');
-  const cnt = db.prepare(`
-    SELECT COUNT(*) as cnt
-    FROM follow_up_tasks f
-    LEFT JOIN persons p ON f.person_id = p.id
-    WHERE f.assigned_to = ? AND f.status != 'done'
-    ${privacy.sql}
-  `).get(me, ...privacy.params).cnt;
+  const cnt = getRuntimeCached(`follow-up-tasks:count:${me}`, RUNTIME_CACHE_TTL_MS, () => {
+    const privacy = buildPersonPrivacyFilter(me, 'p');
+    return db.prepare(`
+      SELECT COUNT(*) as cnt
+      FROM follow_up_tasks f
+      LEFT JOIN persons p ON f.person_id = p.id
+      WHERE f.assigned_to = ? AND f.status != 'done'
+      ${privacy.sql}
+    `).get(me, ...privacy.params).cnt;
+  });
   res.json({ count: cnt });
 });
 
@@ -9005,18 +9289,20 @@ app.get('/api/follow-up-tasks/watch', (req, res) => {
 
 app.get('/api/follow-up-tasks/watch/count', (req, res) => {
   const { id: me } = req.user;
-  const privacy = buildPersonPrivacyFilter(me, 'p');
-  const cnt = db.prepare(`
-    SELECT COUNT(DISTINCT f.id) as cnt
-    FROM follow_up_tasks f
-    LEFT JOIN persons p ON f.person_id = p.id
-    LEFT JOIN lead_watchers lw ON (
-      (lw.source_type = 'interaction' AND lw.source_id = f.interaction_id)
-      OR (lw.source_type = 'competitor_research' AND lw.source_id = f.competitor_research_id)
-    )
-    WHERE lw.user_id = ? AND f.assigned_to != ? AND f.status != 'done'
-    ${privacy.sql}
-  `).get(me, me, ...privacy.params).cnt;
+  const cnt = getRuntimeCached(`follow-up-tasks:watch-count:${me}`, RUNTIME_CACHE_TTL_MS, () => {
+    const privacy = buildPersonPrivacyFilter(me, 'p');
+    return db.prepare(`
+      SELECT COUNT(DISTINCT f.id) as cnt
+      FROM follow_up_tasks f
+      LEFT JOIN persons p ON f.person_id = p.id
+      LEFT JOIN lead_watchers lw ON (
+        (lw.source_type = 'interaction' AND lw.source_id = f.interaction_id)
+        OR (lw.source_type = 'competitor_research' AND lw.source_id = f.competitor_research_id)
+      )
+      WHERE lw.user_id = ? AND f.assigned_to != ? AND f.status != 'done'
+      ${privacy.sql}
+    `).get(me, me, ...privacy.params).cnt;
+  });
   res.json({ count: cnt });
 });
 
@@ -9042,6 +9328,7 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
   db.prepare(`
     UPDATE follow_up_tasks SET status=?, done_note=?, due_date=?, started_at=?, done_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(status ?? task.status, enc.done_note, due_date ?? task.due_date, startedAt, doneAt, req.params.id);
+  clearRuntimeCache('follow-up-tasks:');
   res.json({ success: true });
 });
 
@@ -9117,10 +9404,12 @@ app.get('/api/tasks', (req, res) => {
 app.get('/api/tasks/count', (req, res) => {
   const { id: me } = req.user;
   const today = new Date().toISOString().slice(0, 10);
-  const cnt = db.prepare(`
-    SELECT COUNT(*) as cnt FROM tasks
-    WHERE assigned_to = ? AND date = ? AND status IN ('pending', 'in_progress')
-  `).get(me, today).cnt;
+  const cnt = getRuntimeCached(`tasks:count:${me}:${today}`, RUNTIME_CACHE_TTL_MS, () => (
+    db.prepare(`
+      SELECT COUNT(*) as cnt FROM tasks
+      WHERE assigned_to = ? AND date = ? AND status IN ('pending', 'in_progress')
+    `).get(me, today).cnt
+  ));
   res.json({ count: cnt });
 });
 
@@ -9236,6 +9525,7 @@ app.post('/api/tasks', (req, res) => {
     syncTaskSharedUsers(r.lastInsertRowid, shared_to);
   }
 
+  clearRuntimeCache('tasks:');
   res.json({ id: r.lastInsertRowid });
 });
 
@@ -9290,6 +9580,7 @@ app.put('/api/tasks/:id', (req, res) => {
   if (Array.isArray(shared_to) && (task.created_by === me || isAdmin(role) || role === 'sales_director')) {
     syncTaskSharedUsers(req.params.id, shared_to);
   }
+  clearRuntimeCache('tasks:');
   res.json({ success: true });
 });
 
@@ -9305,6 +9596,7 @@ app.delete('/api/tasks/:id', (req, res) => {
   db.prepare('DELETE FROM tasks WHERE parent_id = ?').run(req.params.id);
   db.prepare('DELETE FROM task_shared_users WHERE task_id = ?').run(req.params.id);
   db.prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
+  clearRuntimeCache('tasks:');
   res.json({ success: true });
 });
 
@@ -13596,6 +13888,29 @@ addColumnIfMissing('company_products', 'product_link', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_products', 'contact_phone', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_products', 'domain', 'TEXT DEFAULT NULL');
 addColumnIfMissing('company_products', 'discovery_source', 'TEXT DEFAULT NULL');
+createIndexesIfColumnsExist('companies', [
+  { name: 'idx_companies_created_by', columnsSql: 'created_by', columns: ['created_by'] },
+  { name: 'idx_companies_category', columnsSql: 'category', columns: ['category'] },
+  { name: 'idx_companies_updated_at', columnsSql: 'updated_at', columns: ['updated_at'] },
+]);
+createIndexesIfColumnsExist('company_entities', [
+  { name: 'idx_company_entities_company', columnsSql: 'company_id', columns: ['company_id'] },
+]);
+createIndexesIfColumnsExist('company_personnel', [
+  { name: 'idx_company_personnel_company', columnsSql: 'company_id', columns: ['company_id'] },
+  { name: 'idx_company_personnel_entity', columnsSql: 'entity_id', columns: ['entity_id'] },
+  { name: 'idx_company_personnel_person', columnsSql: 'person_id', columns: ['person_id'] },
+]);
+createIndexesIfColumnsExist('company_products', [
+  { name: 'idx_company_products_company_updated', columnsSql: 'company_id, updated_at', columns: ['company_id', 'updated_at'] },
+  { name: 'idx_company_products_entity', columnsSql: 'entity_id', columns: ['entity_id'] },
+  { name: 'idx_company_products_status', columnsSql: 'status', columns: ['status'] },
+]);
+createIndexesIfColumnsExist('company_dynamics', [
+  { name: 'idx_company_dynamics_company_date', columnsSql: 'company_id, date', columns: ['company_id', 'date'] },
+  { name: 'idx_company_dynamics_personnel', columnsSql: 'personnel_id', columns: ['personnel_id'] },
+  { name: 'idx_company_dynamics_product', columnsSql: 'product_id', columns: ['product_id'] },
+]);
 
 // =========== 公司研究 API ===========
 
@@ -15201,6 +15516,12 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+createIndexesIfColumnsExist('competitor_research', [
+  { name: 'idx_competitor_research_company_date', columnsSql: 'company_id, date', columns: ['company_id', 'date'] },
+  { name: 'idx_competitor_research_created_by', columnsSql: 'created_by', columns: ['created_by'] },
+  { name: 'idx_competitor_research_opportunity_assignee', columnsSql: 'opportunity_assignee', columns: ['opportunity_assignee'] },
+  { name: 'idx_competitor_research_opportunity_status', columnsSql: 'opportunity_status', columns: ['opportunity_status'] },
+]);
 
 app.get('/api/competitor_research', (req, res) => {
   const { company_id } = req.query;
@@ -15239,6 +15560,7 @@ app.post('/api/competitor_research', (req, res) => {
       VALUES (?,0,0,?,?,?,?,?,?)
     `).run(ftEnc.title, r.lastInsertRowid, company_id, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
       opportunity_assignee, req.user.id);
+    clearRuntimeCache('follow-up-tasks:');
   }
 
   if (watcher_ids?.length) {
@@ -15277,6 +15599,7 @@ app.put('/api/competitor_research/:id', (req, res) => {
       `).run(ftEnc.title, req.params.id, cr?.company_id || 0, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
         opportunity_assignee, req.user.id);
     }
+    clearRuntimeCache('follow-up-tasks:');
   }
 
   if (watcher_ids !== undefined) {
@@ -18449,6 +18772,7 @@ function createNotification(userId, type, title, content, link) {
     INSERT INTO notifications (user_id, type, title, content, link)
     VALUES (?, ?, ?, ?, ?)
   `).run(userId, type, title, content, link);
+  clearRuntimeCache(`notifications:${Number(userId)}:`);
 }
 
 function getTaskCenterNotificationUserIds() {
@@ -18509,6 +18833,7 @@ function notifyTaskCenterProductRecord(productId, options = {}) {
 app.get('/api/notifications', (req, res) => {
   const { id: userId } = req.user;
   const { is_read, limit = 50 } = req.query;
+  const normalizedLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 100);
 
   let q = 'SELECT * FROM notifications WHERE user_id = ?';
   const params = [userId];
@@ -18519,15 +18844,24 @@ app.get('/api/notifications', (req, res) => {
   }
 
   q += ' ORDER BY created_at DESC LIMIT ?';
-  params.push(parseInt(limit));
+  params.push(normalizedLimit);
 
-  res.json(db.prepare(q).all(...params));
+  const rows = getRuntimeCached(
+    `notifications:${userId}:list:${String(is_read ?? 'all')}:${normalizedLimit}`,
+    RUNTIME_CACHE_TTL_MS,
+    () => db.prepare(q).all(...params)
+  );
+  res.json(rows);
 });
 
 // 获取未读通知数量
 app.get('/api/notifications/unread-count', (req, res) => {
   const { id: userId } = req.user;
-  const result = db.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').get(userId);
+  const result = getRuntimeCached(
+    `notifications:${userId}:unread-count`,
+    RUNTIME_CACHE_TTL_MS,
+    () => db.prepare('SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0').get(userId)
+  );
   res.json({ count: result.count });
 });
 
@@ -18537,6 +18871,7 @@ app.put('/api/notifications/:id/read', (req, res) => {
   const { id: userId } = req.user;
 
   db.prepare('UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?').run(id, userId);
+  clearRuntimeCache(`notifications:${userId}:`);
   res.json({ success: true });
 });
 
@@ -18544,6 +18879,7 @@ app.put('/api/notifications/:id/read', (req, res) => {
 app.put('/api/notifications/read-all', (req, res) => {
   const { id: userId } = req.user;
   db.prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0').run(userId);
+  clearRuntimeCache(`notifications:${userId}:`);
   res.json({ success: true });
 });
 
@@ -18553,6 +18889,7 @@ app.delete('/api/notifications/:id', (req, res) => {
   const { id: userId } = req.user;
 
   db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?').run(id, userId);
+  clearRuntimeCache(`notifications:${userId}:`);
   res.json({ success: true });
 });
 

@@ -33,6 +33,14 @@ function escapeIdentifier(identifier) {
   return `\`${String(identifier || '').replace(/`/g, '``')}\``;
 }
 
+function isTruthyEnv(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
+function compactSqlForLog(sql) {
+  return String(sql || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+}
+
 function splitSqlStatements(sql) {
   const statements = [];
   let current = '';
@@ -398,15 +406,36 @@ class MysqlCompatDatabase {
       timezone: process.env.MYSQL_TIMEZONE || '+08:00',
       multipleStatements: false,
     });
+    this.profileQueries = isTruthyEnv(process.env.RELATION_DB_PROFILE);
+    this.slowQueryMs = Number(process.env.RELATION_DB_SLOW_QUERY_MS || 0);
+    this.profiledConnection = {
+      query: (sql, params = []) => this.execute(sql, params),
+    };
   }
 
   prepare(sql) {
-    return new MysqlStatement(this.connection, sql);
+    return new MysqlStatement(this.profiledConnection, sql);
   }
 
   query(sql, params = []) {
     const query = translateGeneralSql(sql, params);
-    return this.connection.query(query.sql, query.params.map(normalizeValue));
+    return this.execute(query.sql, query.params.map(normalizeValue));
+  }
+
+  execute(sql, params = []) {
+    const startedAt = process.hrtime.bigint();
+    try {
+      return this.connection.query(sql, params);
+    } finally {
+      this.logQuery(sql, params, Number(process.hrtime.bigint() - startedAt) / 1e6);
+    }
+  }
+
+  logQuery(sql, params, elapsedMs) {
+    const threshold = Number.isFinite(this.slowQueryMs) ? this.slowQueryMs : 0;
+    if (!this.profileQueries && (!threshold || elapsedMs < threshold)) return;
+    const label = threshold && elapsedMs >= threshold ? 'slow' : 'query';
+    console.warn(`[mysql:${label}] ${elapsedMs.toFixed(1)}ms params=${params.length} sql=${compactSqlForLog(sql)}`);
   }
 
   exec(sql) {
@@ -417,12 +446,12 @@ class MysqlCompatDatabase {
         this.createIndexIfMissing(translated.index);
         continue;
       }
-      this.connection.query(translated.sql, (translated.params || []).map(normalizeValue));
+      this.execute(translated.sql, (translated.params || []).map(normalizeValue));
     }
   }
 
   createIndexIfMissing(index) {
-    const exists = this.connection.query(`
+    const exists = this.execute(`
       SELECT 1 AS ok
       FROM INFORMATION_SCHEMA.STATISTICS
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME = ?
@@ -431,11 +460,11 @@ class MysqlCompatDatabase {
     if (exists) return;
     const columnsSql = this.normalizeIndexColumnsSql(index.table, index.columnsSql);
     const sql = `CREATE ${index.unique ? 'UNIQUE ' : ''}INDEX ${escapeIdentifier(index.name)} ON ${escapeIdentifier(index.table)} (${columnsSql})`;
-    this.connection.query(sql);
+    this.execute(sql);
   }
 
   normalizeIndexColumnsSql(table, columnsSql) {
-    const columns = this.connection.query(`
+    const columns = this.execute(`
       SELECT COLUMN_NAME AS name, DATA_TYPE AS data_type
       FROM INFORMATION_SCHEMA.COLUMNS
       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
@@ -453,13 +482,13 @@ class MysqlCompatDatabase {
 
   transaction(fn) {
     return (...args) => {
-      this.connection.query('START TRANSACTION');
+      this.execute('START TRANSACTION');
       try {
         const result = fn(...args);
-        this.connection.query('COMMIT');
+        this.execute('COMMIT');
         return result;
       } catch (error) {
-        this.connection.query('ROLLBACK');
+        this.execute('ROLLBACK');
         throw error;
       }
     };
