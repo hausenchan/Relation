@@ -613,12 +613,18 @@ function isFoldLikeTypeHint(value = '') {
 }
 
 function isTableRowTypeHint(value = '') {
-  return /table[_\s-]*row|row[_\s-]*block|表格行/.test(String(value || '').toLowerCase());
+  return /(^|\s)row($|\s)|table[_\s-]*row|database[_\s-]*row|collection[_\s-]*row|row[_\s-]*block|表格行|记录行/.test(String(value || '').toLowerCase());
 }
 
 function isTableLikeTypeHint(value = '') {
   const hint = String(value || '').toLowerCase();
   return /table|database|grid|sheet|表格|数据表/.test(hint) && !/table[_\s-]*of[_\s-]*contents|目录/.test(hint);
+}
+
+function isDatabaseLikeTypeHint(value = '') {
+  const hint = String(value || '').toLowerCase();
+  return /database|collection|grid|sheet|data[_\s-]*table|table[_\s-]*view|表格视图|数据表/.test(hint)
+    && !/table[_\s-]*row|row[_\s-]*block|table[_\s-]*of[_\s-]*contents|目录/.test(hint);
 }
 
 function mapNodeType(node) {
@@ -627,6 +633,7 @@ function mapNodeType(node) {
   if (/heading|title|header/.test(raw) || level) return `heading${Math.min(Math.max(level || 1, 1), 3)}`;
   if (/todo|check/.test(raw)) return 'todo';
   if (isFoldLikeTypeHint(raw)) return 'fold-list';
+  if (isDatabaseLikeNode(node)) return 'database-embed';
   if (isTableLikeTypeHint(raw)) return 'table-simple';
   if (/enum|number|ordered|ol/.test(raw)) return 'numbered';
   if (/bullet|unordered|ul|list/.test(raw)) return 'bullet';
@@ -712,6 +719,270 @@ function normalizeTableStyleFromSource(source = {}) {
   return {
     ...(normalizedBackground || tokenBackground ? { backgroundColor: normalizedBackground || tokenBackground } : {}),
     ...(normalizedColor || normalizedFrontColor || tokenTextColor ? { color: normalizedColor || normalizedFrontColor || tokenTextColor } : {}),
+  };
+}
+
+const databaseOptionColorPalette = ['#f3f4f6', '#fee2e2', '#ffedd5', '#fef3c7', '#dcfce7', '#dbeafe', '#ede9fe', '#fce7f3'];
+
+function normalizeDatabaseFieldType(value = '', columnIndex = 0, columnName = '') {
+  const raw = String(value || '').trim().toLowerCase();
+  const compact = raw.replace(/[\s-]+/g, '_');
+  if (compact === 'single_select' || compact === 'select' || compact === 'status' || compact === 'enum' || compact === 'option') return 'select';
+  if (compact === 'multi_select' || compact === 'multiple_select' || compact === 'multi') return 'multi_select';
+  if (compact === 'title' || compact === 'name') return 'title';
+  if (compact === 'rich_text' || compact === 'plain_text' || compact === 'text') return 'text';
+  if (compact === 'date' || compact === 'datetime' || compact === 'created_time' || compact === 'updated_time') return 'date';
+  if (compact === 'person' || compact === 'people' || compact === 'user' || compact === 'users') return 'person';
+  if (compact === 'number' || compact === 'integer' || compact === 'float' || compact === 'decimal') return 'number';
+  if (compact === 'url' || compact === 'link') return 'url';
+  if (compact === 'checkbox' || compact === 'boolean' || compact === 'bool') return 'checkbox';
+  const label = stripHtml(getNodeHtml(columnName || '')).trim().toLowerCase();
+  const source = `${raw} ${label}`;
+  if (/multi[_\s-]*select|multiple|多选/.test(source)) return 'multi_select';
+  if (/select|single|option|status|tag|enum|choice|标签|状态|优先级|类型|单选/.test(source)) return 'select';
+  if (/title|name|名称|标题|任务/.test(source)) return 'title';
+  if (/date|time|deadline|due|日期|时间|完成时间/.test(source)) return 'date';
+  if (/person|people|user|owner|member|assignee|负责人|人员|成员/.test(source)) return 'person';
+  if (/number|amount|price|count|score|数字|数量|金额|预算/.test(source)) return 'number';
+  if (/url|link|链接|地址/.test(source)) return 'url';
+  if (/check|bool|done|完成|勾选/.test(source)) return 'checkbox';
+  return columnIndex === 0 ? 'title' : 'text';
+}
+
+function normalizeDatabaseOption(option, index = 0) {
+  const rawName = typeof option === 'string' || typeof option === 'number'
+    ? option
+    : (option?.name ?? option?.label ?? option?.title ?? option?.value ?? option?.text ?? '');
+  const name = stripHtml(getNodeHtml(rawName || '')).trim();
+  if (!name) return null;
+  const rawColor = isPlainObject(option)
+    ? (option.color || option.backgroundColor || option.background_color || option.bgColor || option.bg_color || option.fill)
+    : '';
+  return {
+    name,
+    color: normalizeCssColor(rawColor) || databaseOptionColorPalette[index % databaseOptionColorPalette.length],
+  };
+}
+
+function extractDatabaseOptionsFromField(field = {}) {
+  if (!isPlainObject(field)) return [];
+  const candidates = [
+    field.options,
+    field.select?.options,
+    field.single_select?.options,
+    field.singleSelect?.options,
+    field.multi_select?.options,
+    field.multiSelect?.options,
+    field.config?.options,
+    field.property?.options,
+    field.settings?.options,
+    field.type_options?.options,
+    field.typeOptions?.options,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      const options = candidate.map((item, index) => normalizeDatabaseOption(item, index)).filter(Boolean);
+      if (options.length) return options;
+    }
+    if (isPlainObject(candidate)) {
+      const options = Object.entries(candidate)
+        .map(([key, item], index) => normalizeDatabaseOption(isPlainObject(item) ? { name: key, ...item } : { name: item || key }, index))
+        .filter(Boolean);
+      if (options.length) return options;
+    }
+  }
+  return [];
+}
+
+function normalizeDatabaseFieldSchema(source, index = 0) {
+  if (typeof source === 'string' || typeof source === 'number') {
+    const name = stripHtml(getNodeHtml(source)).trim() || `字段 ${index + 1}`;
+    return { key: String(source), name, type: normalizeDatabaseFieldType('', index, name), options: [] };
+  }
+  if (!isPlainObject(source)) return null;
+  const key = String(source.id || source.key || source.property_id || source.propertyId || source.name || source.title || index);
+  const name = stripHtml(getNodeHtml(source.name ?? source.title ?? source.label ?? source.text ?? key)).trim() || key || `字段 ${index + 1}`;
+  const typeObject = isPlainObject(source.type) ? source.type : null;
+  const rawType = typeObject?.name || typeObject?.id || typeObject?.value
+    || source.type || source.property_type || source.propertyType || source.value_type || source.valueType || source.kind || source.format;
+  return {
+    key,
+    name,
+    type: normalizeDatabaseFieldType(rawType, index, name),
+    options: extractDatabaseOptionsFromField(source),
+  };
+}
+
+function collectDatabaseSchemaSources(node = {}) {
+  if (!isPlainObject(node)) return [];
+  return [
+    node.properties_schema,
+    node.propertiesSchema,
+    node.property_schema,
+    node.propertySchema,
+    node.schema?.properties,
+    node.schema?.columns,
+    node.schema?.fields,
+    node.columns,
+    node.fields,
+    node.table?.columns,
+    node.table?.fields,
+    node.table?.schema,
+    node.database?.properties,
+    node.database?.schema,
+    node.collection?.properties,
+    node.collection?.schema,
+    node.data?.properties_schema,
+    node.data?.propertiesSchema,
+    node.data?.schema?.properties,
+    node.data?.schema?.columns,
+    node.data?.columns,
+    node.data?.fields,
+  ].filter(Boolean);
+}
+
+function extractDatabaseSchema(node = {}) {
+  for (const source of collectDatabaseSchemaSources(node)) {
+    let fields = [];
+    if (Array.isArray(source)) {
+      fields = source.map(normalizeDatabaseFieldSchema).filter(Boolean);
+    } else if (isPlainObject(source)) {
+      fields = Object.entries(source)
+        .map(([key, value], index) => normalizeDatabaseFieldSchema(isPlainObject(value) ? { key, ...value } : { key, name: value || key }, index))
+        .filter(Boolean);
+    }
+    if (fields.length) {
+      return {
+        columns: fields.map(field => field.name),
+        fieldTypes: fields.map(field => field.type),
+        tagOptions: fields.reduce((acc, field, index) => {
+          if (field.options?.length) acc[index] = field.options;
+          return acc;
+        }, {}),
+      };
+    }
+  }
+  return { columns: [], fieldTypes: [], tagOptions: {} };
+}
+
+function hasDatabaseSchema(node = {}) {
+  const schema = extractDatabaseSchema(node);
+  const hasSemanticField = schema.fieldTypes.some((type, index) => {
+    const fallback = index === 0 ? 'title' : 'text';
+    return type && type !== fallback;
+  });
+  return Boolean(
+    Object.keys(schema.tagOptions || {}).length
+    || hasSemanticField
+    || node?.database
+    || node?.collection
+    || node?.views
+    || node?.view
+  );
+}
+
+function isDatabaseLikeNode(node = {}) {
+  if (!isPlainObject(node)) return false;
+  const hint = getNodeTypeHint(node);
+  if (isDatabaseLikeTypeHint(hint)) return true;
+  return hasDatabaseSchema(node) && isTableLikeTypeHint(hint);
+}
+
+function splitDatabaseTagValue(value = '') {
+  return stripHtml(value)
+    .split(/\s*(?:[、,，;；|]|\n)\s*/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function inferDatabaseTagOptions(rows = [], fieldTypes = []) {
+  return fieldTypes.reduce((acc, type, columnIndex) => {
+    if (!['select', 'multi_select', 'person'].includes(type)) return acc;
+    const options = [];
+    rows.forEach(row => {
+      splitDatabaseTagValue(row?.[columnIndex] || '').forEach(name => {
+        if (!options.some(item => item.name === name)) options.push(normalizeDatabaseOption(name, options.length));
+      });
+    });
+    if (options.length) acc[columnIndex] = options;
+    return acc;
+  }, {});
+}
+
+function getDatabaseTableName(node = {}, fallback = '') {
+  const candidates = [
+    node.table_name,
+    node.tableName,
+    node.database_name,
+    node.databaseName,
+    node.collection_name,
+    node.collectionName,
+    node.name,
+    node.title,
+    node.database?.name,
+    node.database?.title,
+    node.collection?.name,
+    node.collection?.title,
+    node.view?.name,
+    fallback,
+  ];
+  for (const candidate of candidates) {
+    const text = stripHtml(getNodeHtml(candidate || '')).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function looksLikeGenericColumns(columns = []) {
+  return columns.every((column, index) => {
+    const text = stripHtml(column).trim();
+    return !text || new RegExp(`^字段\\s*${index + 1}$`).test(text);
+  });
+}
+
+function buildDatabaseTableMeta(node = {}, tableMeta = null, fallbackTitle = '') {
+  const schema = extractDatabaseSchema(node);
+  const rawRows = Array.isArray(tableMeta?.rows) ? tableMeta.rows : [];
+  let rows = rawRows.map(row => (Array.isArray(row) ? row : []));
+  let columns = schema.columns.length
+    ? schema.columns
+    : (Array.isArray(tableMeta?.columns) && tableMeta.columns.length ? tableMeta.columns : []);
+  if (schema.columns.length && rows.length) {
+    const firstRowText = rows[0].map(cell => stripHtml(cell).trim()).join('|');
+    const schemaText = schema.columns.map(cell => stripHtml(cell).trim()).join('|');
+    if (firstRowText && firstRowText === schemaText) rows = rows.slice(1);
+  }
+  if (!schema.columns.length && rows.length && (!columns.length || looksLikeGenericColumns(columns))) {
+    columns = rows[0].map((cell, index) => stripHtml(cell).trim() || `字段 ${index + 1}`);
+    rows = rows.slice(1);
+  }
+  const columnCount = Math.max(
+    columns.length,
+    ...rows.map(row => row.length),
+    1
+  );
+  const normalizedColumns = Array.from({ length: columnCount }, (_, index) => {
+    const name = stripHtml(columns[index] || '').trim();
+    return name || (index === 0 ? '标题' : `字段 ${index + 1}`);
+  });
+  const normalizedRows = rows.map(row => Array.from({ length: columnCount }, (_, index) => row[index] || ''));
+  const fieldTypes = Array.from({ length: columnCount }, (_, index) => (
+    normalizeDatabaseFieldType(schema.fieldTypes[index], index, normalizedColumns[index])
+  ));
+  const inferredTagOptions = inferDatabaseTagOptions(normalizedRows, fieldTypes);
+  const tagOptions = {
+    ...inferredTagOptions,
+    ...(schema.tagOptions || {}),
+  };
+  return {
+    ...(tableMeta || {}),
+    tableName: getDatabaseTableName(node, fallbackTitle),
+    columns: normalizedColumns,
+    rows: normalizedRows.length ? normalizedRows : [normalizedColumns.map(() => '')],
+    view: 'table',
+    fieldTypes,
+    tagOptions,
+    source_system: 'wolai_mcp',
   };
 }
 
@@ -1479,7 +1750,7 @@ function filterBlocks(blocks = [], target) {
   const filtered = [];
   blocks.forEach(block => {
     const text = stripHtml(block?.content || block?.meta?.url || '').trim();
-    if (!text && block?.type !== 'divider' && block?.type !== 'table-simple') return;
+    if (!text && block?.type !== 'divider' && block?.type !== 'table-simple' && block?.type !== 'database-embed') return;
     const key = `${block?.type || ''}:${text}:${JSON.stringify(block?.meta || {})}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -1669,6 +1940,7 @@ function inferWolaiRecordType(record = {}) {
   if (/heading|header|title/.test(hint) || record.level) return `heading${Math.min(Math.max(Number(record.level) || 2, 1), 3)}`;
   if (/todo|check/.test(hint)) return 'todo';
   if (isTableRowTypeHint(hint)) return 'table-row';
+  if (isDatabaseLikeRecord(record)) return 'database-embed';
   if (isTableLikeTypeHint(hint) || record.tableMeta) return 'table-simple';
   if (/quote/.test(hint)) return 'quote';
   if (/code/.test(hint)) return 'code';
@@ -1686,6 +1958,13 @@ function isWolaiTableRowRecord(record = {}) {
     || (Array.isArray(record.raw?.cells) && record.raw.cells.length);
 }
 
+function isDatabaseLikeRecord(record = {}) {
+  const hasOwnTypeHint = Boolean(record.type || record.inferredType);
+  const hint = `${record.type || ''} ${record.inferredType || ''} ${hasOwnTypeHint ? '' : (record.parentType || '')}`.toLowerCase();
+  if (isDatabaseLikeTypeHint(hint)) return true;
+  return isDatabaseLikeNode(record.raw || {});
+}
+
 function isWolaiTableRecord(record = {}) {
   return inferWolaiRecordType(record) === 'table-simple';
 }
@@ -1695,6 +1974,7 @@ function hasRenderableWolaiRecord(record = {}) {
     stripHtml(record.html)
     || record.media?.url
     || record.tableMeta
+    || isDatabaseLikeRecord(record)
     || isWolaiTableRecord(record)
     || isWolaiTableRowRecord(record)
   );
@@ -1774,9 +2054,16 @@ function recordsToBlocks(records = [], seed) {
   });
 
   const makeTableBlock = (record, rows = []) => {
+    const databaseRecord = isDatabaseLikeRecord(record);
     const meta = normalizeTableRows(record.raw || {}, rows.map(row => row.raw || row)) || record.tableMeta;
-    if (!meta) return null;
+    if (databaseRecord && !meta && !stripHtml(record.html) && !getDatabaseTableName(record.raw || {}, '')) return null;
+    if (!meta && !databaseRecord) return null;
     rows.forEach(row => consumedRecordIds.add(row.id));
+    if (databaseRecord) {
+      return makeBlock('database-embed', '', {
+        meta: buildDatabaseTableMeta(record.raw || {}, meta, record.html),
+      });
+    }
     return makeBlock('table-simple', '', { meta });
   };
 
@@ -1788,7 +2075,7 @@ function recordsToBlocks(records = [], seed) {
       blocks.push(makeMediaBlock(makeBlock, { ...record.media, ...getRecordMediaMeta(record), kind: type }));
       return;
     }
-    if (type === 'table-simple') {
+    if (type === 'database-embed' || type === 'table-simple') {
       const tableBlock = makeTableBlock(record, tableRowsByParentId.get(record.id) || []);
       if (tableBlock) blocks.push(tableBlock);
       return;
@@ -1950,6 +2237,13 @@ function nodesToBlocks(nodes, seed) {
   const blocks = [];
   nodes.forEach(node => {
     const type = mapNodeType(node);
+    if (type === 'database-embed') {
+      const meta = normalizeTableRows(node);
+      blocks.push(makeBlock('database-embed', '', {
+        meta: buildDatabaseTableMeta(node, meta, getNodeHtml(node)),
+      }));
+      return;
+    }
     if (type === 'table-simple') {
       const meta = normalizeTableRows(node);
       if (meta) blocks.push(makeBlock('table-simple', '', { meta }));
@@ -2130,10 +2424,11 @@ function parseTextToBlocks(text, seed) {
 function collectBlocksText(blocks = []) {
   return blocks.map(block => {
     if (block?.type === 'divider') return '';
-    if (block?.type === 'table-simple') {
+    if (block?.type === 'table-simple' || block?.type === 'database-embed') {
+      const tableName = block.meta?.tableName || '';
       const columns = Array.isArray(block.meta?.columns) ? block.meta.columns.join('\t') : '';
       const rows = Array.isArray(block.meta?.rows) ? block.meta.rows.map(row => row.join('\t')).join('\n') : '';
-      return [columns, rows].filter(Boolean).join('\n');
+      return [tableName, columns, rows].filter(Boolean).join('\n');
     }
     return stripHtml(block?.content || block?.meta?.url || '');
   }).filter(Boolean).join('\n');

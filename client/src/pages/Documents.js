@@ -326,6 +326,19 @@ const documentFolderSidebarMinWidth = 300;
 const documentFolderSidebarMaxWidth = 560;
 const tableFillColorOptions = ['#ffffff', '#f8fafc', '#fee2e2', '#ffedd5', '#fef3c7', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
 const tableTextColorOptions = ['#111827', '#475569', '#b91c1c', '#c2410c', '#a16207', '#15803d', '#1d4ed8', '#4338ca', '#7e22ce'];
+const databaseFieldTypeOptions = [
+  { value: 'title', label: '标题', icon: '▭' },
+  { value: 'select', label: '单选', icon: '◉' },
+  { value: 'multi_select', label: '多选', icon: '◎' },
+  { value: 'text', label: '文本', icon: '☰' },
+  { value: 'number', label: '数字', icon: '#' },
+  { value: 'date', label: '日期', icon: '▣' },
+  { value: 'person', label: '人员', icon: '♙' },
+  { value: 'url', label: '链接', icon: '↗' },
+  { value: 'checkbox', label: '勾选', icon: '☑' },
+];
+const databaseFieldTypeMap = Object.fromEntries(databaseFieldTypeOptions.map(item => [item.value, item]));
+const databaseTagColorOptions = ['#f3f4f6', '#fee2e2', '#ffedd5', '#fef3c7', '#dcfce7', '#dbeafe', '#ede9fe', '#fce7f3'];
 const pasteHtmlBlockSelector = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'p', 'li', 'table', 'div',
@@ -634,6 +647,30 @@ function getDefaultBlockMeta(type) {
   const columnCount = getColumnCount(type);
   if (columnCount) return { cells: Array.from({ length: columnCount }, (_, index) => `分栏 ${index + 1}`) };
   if (type === 'table-simple') return { columns: ['名称', '说明'], rows: [['', '']], mergedCells: [] };
+  if (type === 'database-embed') {
+    return {
+      tableName: '',
+      columns: ['标题', '标签', '字段名'],
+      rows: [
+        ['', '', ''],
+        ['', '', ''],
+        ['', '', ''],
+        ['', '', ''],
+      ],
+      view: 'table',
+      fieldTypes: ['title', 'select', 'text'],
+      tagOptions: {
+        1: [
+          { name: '待完成', color: '#f3f4f6' },
+          { name: '进行中', color: '#dbeafe' },
+          { name: '已完成', color: '#dcfce7' },
+        ],
+      },
+      columnWidths: [220, 220, 220],
+      columnColors: {},
+      titleColorColumns: {},
+    };
+  }
   if (type?.startsWith('database-')) return { columns: ['字段', '内容'], rows: [['', '']], view: type.replace('database-', '') };
   if (type === 'progress') return { value: 30 };
   if (type === 'button') return { url: '' };
@@ -1553,6 +1590,7 @@ function blockMetaToText(meta = {}) {
   if (meta.url) parts.push(meta.url);
   if (meta.display_name) parts.push(meta.display_name);
   if (meta.filename) parts.push(meta.filename);
+  if (meta.tableName) parts.push(meta.tableName);
   if (meta.body) parts.push(meta.body);
   if (meta.value !== undefined && meta.value !== null && meta.value !== '') parts.push(`${meta.value}`);
   if (Array.isArray(meta.cells)) parts.push(...meta.cells);
@@ -1622,6 +1660,145 @@ function normalizeTableBlockData(block) {
     rows: normalizedRows,
     mergedCells: normalizeTableMergedCells(meta.mergedCells, normalizedRows.length, columnCount),
     cellStyles: normalizeTableCellStyles(meta.cellStyles, normalizedRows.length, columnCount),
+  };
+}
+
+function normalizeDatabaseFieldType(value, columnIndex = 0, columnName = '') {
+  const raw = String(value || '').trim().toLowerCase();
+  const compact = raw.replace(/[\s-]+/g, '_');
+  if (databaseFieldTypeMap[compact]) return compact;
+  if (compact === 'single_select') return 'select';
+  if (compact === 'multi_select' || compact === 'multiple_select') return 'multi_select';
+  if (compact === 'rich_text' || compact === 'plain_text') return 'text';
+  if (compact === 'created_time' || compact === 'updated_time') return 'date';
+  const label = inlineHtmlToPlain(columnName || '').trim().toLowerCase();
+  const source = `${raw} ${label}`;
+  if (/multi[_\s-]*select|multiple|checkboxes|多选/.test(source)) return 'multi_select';
+  if (/select|single|option|status|tag|enum|choice|标签|状态|优先级|类型|单选/.test(source)) return 'select';
+  if (/title|name|名称|标题|任务/.test(source)) return 'title';
+  if (/date|time|deadline|due|日期|时间|完成时间/.test(source)) return 'date';
+  if (/person|people|user|owner|member|assignee|负责人|人员|成员/.test(source)) return 'person';
+  if (/number|amount|price|count|score|数字|数量|金额|预算/.test(source)) return 'number';
+  if (/url|link|链接|地址/.test(source)) return 'url';
+  if (/check|bool|done|完成|勾选/.test(source)) return 'checkbox';
+  return columnIndex === 0 ? 'title' : 'text';
+}
+
+function splitDatabaseTagValue(value = '') {
+  const text = inlineHtmlToPlain(String(value || '')).trim();
+  if (!text) return [];
+  return text
+    .split(/\s*(?:[、,，;；|]|\n)\s*/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeDatabaseTagOption(option, index = 0) {
+  const rawName = typeof option === 'string' || typeof option === 'number'
+    ? option
+    : (option?.name ?? option?.label ?? option?.title ?? option?.value ?? option?.text ?? '');
+  const name = inlineHtmlToPlain(String(rawName || '')).trim();
+  if (!name) return null;
+  const rawColor = typeof option === 'object'
+    ? (option.color || option.backgroundColor || option.background_color || option.bgColor || option.bg_color || option.fill)
+    : '';
+  return {
+    name,
+    color: normalizeCssColor(rawColor) || databaseTagColorOptions[index % databaseTagColorOptions.length],
+  };
+}
+
+function normalizeDatabaseTagOptions(rawOptions, columnCount, fieldTypes = [], rows = []) {
+  const source = rawOptions && typeof rawOptions === 'object' ? rawOptions : {};
+  const normalized = {};
+  Object.entries(source).forEach(([key, value]) => {
+    const columnIndex = Number(key);
+    if (!Number.isInteger(columnIndex) || columnIndex < 0 || columnIndex >= columnCount) return;
+    const options = Array.isArray(value)
+      ? value
+      : (value && typeof value === 'object' ? Object.values(value) : []);
+    const mapped = options
+      .map((item, index) => normalizeDatabaseTagOption(item, index))
+      .filter(Boolean);
+    if (mapped.length) normalized[columnIndex] = mapped;
+  });
+
+  fieldTypes.forEach((type, columnIndex) => {
+    if (!['select', 'multi_select', 'person'].includes(type) || normalized[columnIndex]?.length) return;
+    const inferred = [];
+    rows.forEach(row => {
+      splitDatabaseTagValue(row?.[columnIndex]).forEach(name => {
+        if (!inferred.some(item => item.name === name)) {
+          inferred.push(normalizeDatabaseTagOption(name, inferred.length));
+        }
+      });
+    });
+    if (inferred.length) normalized[columnIndex] = inferred;
+  });
+  return normalized;
+}
+
+function normalizeDatabaseIndexedMap(rawMap, columnCount, normalizer = value => value) {
+  if (!rawMap || typeof rawMap !== 'object') return {};
+  return Object.entries(rawMap).reduce((acc, [key, value]) => {
+    const columnIndex = Number(key);
+    if (!Number.isInteger(columnIndex) || columnIndex < 0 || columnIndex >= columnCount) return acc;
+    const normalized = normalizer(value);
+    if (normalized !== undefined && normalized !== null && normalized !== '') acc[columnIndex] = normalized;
+    return acc;
+  }, {});
+}
+
+function normalizeDatabaseBlockMeta(block) {
+  const meta = { ...getDefaultBlockMeta('database-embed'), ...cloneMeta(block?.meta) };
+  let storedColumns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['标题', '标签', '字段名'];
+  let storedRows = Array.isArray(meta.rows) ? meta.rows : [['', '', '']];
+  const shouldPromoteHeaderRow = Boolean(meta.headerRow || meta.hasHeaderRow);
+  if (shouldPromoteHeaderRow && storedRows.length) {
+    const firstRow = storedRows[0] || [];
+    storedColumns = firstRow.map((cell, index) => inlineHtmlToPlain(cell).trim() || storedColumns[index] || `字段 ${index + 1}`);
+    storedRows = storedRows.slice(1);
+  }
+  const columnCount = Math.max(
+    storedColumns.length,
+    ...storedRows.map(row => (Array.isArray(row) ? row.length : 0)),
+    1
+  );
+  const columns = Array.from({ length: columnCount }, (_, index) => {
+    const name = inlineHtmlToPlain(storedColumns[index] || '').trim();
+    return name || (index === 0 ? '标题' : `字段名 ${index}`);
+  });
+  const rows = (storedRows.length ? storedRows : [columns.map(() => '')]).map(row => (
+    Array.from({ length: columnCount }, (_, index) => row?.[index] || '')
+  ));
+  const rawFieldTypes = Array.isArray(meta.fieldTypes) ? meta.fieldTypes : [];
+  const fieldTypes = Array.from({ length: columnCount }, (_, index) => (
+    normalizeDatabaseFieldType(rawFieldTypes[index], index, columns[index])
+  ));
+  const tagOptions = normalizeDatabaseTagOptions(meta.tagOptions || meta.selectOptions || meta.options, columnCount, fieldTypes, rows);
+  const columnWidths = Array.from({ length: columnCount }, (_, index) => (
+    Math.max(120, Number(meta.columnWidths?.[index]) || (index === 0 ? 220 : 200))
+  ));
+  return {
+    ...meta,
+    tableName: String(meta.tableName || '').trim(),
+    columns,
+    rows,
+    fieldTypes,
+    tagOptions,
+    columnWidths,
+    columnColors: normalizeDatabaseIndexedMap(meta.columnColors, columnCount, normalizeCssColor),
+    titleColorColumns: normalizeDatabaseIndexedMap(meta.titleColorColumns, columnCount, value => Boolean(value)),
+    filter: meta.filter && typeof meta.filter === 'object' ? meta.filter : null,
+  };
+}
+
+function getDatabaseTagStyle(option = {}) {
+  const background = normalizeCssColor(option.color) || '#f3f4f6';
+  return {
+    background,
+    borderColor: background,
+    color: '#1f2937',
   };
 }
 
@@ -8402,6 +8579,663 @@ export default function Documents() {
     );
   };
 
+  const renderDatabaseTableBlock = (block) => {
+    const meta = normalizeDatabaseBlockMeta(block);
+    const {
+      columns,
+      rows,
+      fieldTypes,
+      tagOptions,
+      columnWidths,
+      columnColors,
+      titleColorColumns,
+    } = meta;
+    const defaultName = getDefaultBlockContent('database-embed');
+    const tableName = meta.tableName || (block.content && block.content !== defaultName ? inlineHtmlToPlain(block.content) : '');
+    const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 520 : 720);
+    const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
+    const filterColumnIndex = Number(meta.filter?.columnIndex);
+    const filterValue = String(meta.filter?.value || '').trim();
+    const hasActiveFilter = Number.isInteger(filterColumnIndex) && filterColumnIndex >= 0 && filterColumnIndex < columns.length && filterValue;
+    const visibleRows = rows
+      .map((row, rowIndex) => ({ row, rowIndex }))
+      .filter(item => {
+        if (!hasActiveFilter) return true;
+        return inlineHtmlToPlain(item.row?.[filterColumnIndex] || '').toLowerCase().includes(filterValue.toLowerCase());
+      });
+
+    const persistDatabaseMeta = (patch = {}) => {
+      updateBlockMeta(block.id, {
+        ...meta,
+        ...patch,
+      });
+    };
+    const updateTableName = (value) => {
+      persistDatabaseMeta({ tableName: value });
+    };
+    const updateColumn = (columnIndex, value) => {
+      persistDatabaseMeta({
+        columns: columns.map((item, index) => (index === columnIndex ? value : item)),
+      });
+    };
+    const updateFieldType = (columnIndex, value) => {
+      const nextType = normalizeDatabaseFieldType(value, columnIndex, columns[columnIndex]);
+      const nextFieldTypes = fieldTypes.map((item, index) => (index === columnIndex ? nextType : item));
+      const nextTagOptions = { ...tagOptions };
+      if (['select', 'multi_select', 'person'].includes(nextType) && !nextTagOptions[columnIndex]?.length) {
+        nextTagOptions[columnIndex] = rows.reduce((acc, row) => {
+          splitDatabaseTagValue(row?.[columnIndex]).forEach(name => {
+            if (!acc.some(item => item.name === name)) acc.push(normalizeDatabaseTagOption(name, acc.length));
+          });
+          return acc;
+        }, []).filter(Boolean);
+      }
+      persistDatabaseMeta({ fieldTypes: nextFieldTypes, tagOptions: nextTagOptions });
+    };
+    const shiftIndexedMapForInsert = (map, insertIndex, insertedValue) => {
+      const next = {};
+      Object.entries(map || {}).forEach(([key, value]) => {
+        const columnIndex = Number(key);
+        if (!Number.isInteger(columnIndex)) return;
+        next[columnIndex >= insertIndex ? columnIndex + 1 : columnIndex] = value;
+      });
+      if (insertedValue !== undefined) next[insertIndex] = insertedValue;
+      return next;
+    };
+    const shiftIndexedMapForDelete = (map, deleteIndex) => {
+      const next = {};
+      Object.entries(map || {}).forEach(([key, value]) => {
+        const columnIndex = Number(key);
+        if (!Number.isInteger(columnIndex) || columnIndex === deleteIndex) return;
+        next[columnIndex > deleteIndex ? columnIndex - 1 : columnIndex] = value;
+      });
+      return next;
+    };
+    const insertColumn = (targetIndex = columns.length - 1, position = 'after') => {
+      const safeTargetIndex = Math.max(0, Math.min(columns.length - 1, Number(targetIndex) || 0));
+      const insertIndex = position === 'before' ? safeTargetIndex : safeTargetIndex + 1;
+      const nextColumns = [...columns];
+      nextColumns.splice(insertIndex, 0, `字段名 ${columns.length}`);
+      const nextRows = rows.map(row => {
+        const nextRow = [...row];
+        nextRow.splice(insertIndex, 0, '');
+        return nextRow;
+      });
+      const nextFieldTypes = [...fieldTypes];
+      nextFieldTypes.splice(insertIndex, 0, 'text');
+      const nextWidths = [...columnWidths];
+      nextWidths.splice(insertIndex, 0, 200);
+      persistDatabaseMeta({
+        columns: nextColumns,
+        rows: nextRows,
+        fieldTypes: nextFieldTypes,
+        columnWidths: nextWidths,
+        tagOptions: shiftIndexedMapForInsert(tagOptions, insertIndex),
+        columnColors: shiftIndexedMapForInsert(columnColors, insertIndex),
+        titleColorColumns: shiftIndexedMapForInsert(titleColorColumns, insertIndex, false),
+      });
+      setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex: 0, columnIndex: insertIndex });
+    };
+    const deleteColumn = (columnIndex) => {
+      if (columns.length <= 1) return;
+      const safeIndex = Math.max(0, Math.min(columns.length - 1, Number(columnIndex) || 0));
+      persistDatabaseMeta({
+        columns: columns.filter((_, index) => index !== safeIndex),
+        rows: rows.map(row => row.filter((_, index) => index !== safeIndex)),
+        fieldTypes: fieldTypes.filter((_, index) => index !== safeIndex),
+        columnWidths: columnWidths.filter((_, index) => index !== safeIndex),
+        tagOptions: shiftIndexedMapForDelete(tagOptions, safeIndex),
+        columnColors: shiftIndexedMapForDelete(columnColors, safeIndex),
+        titleColorColumns: shiftIndexedMapForDelete(titleColorColumns, safeIndex),
+        filter: meta.filter?.columnIndex === safeIndex ? null : meta.filter,
+      });
+    };
+    const addRow = () => {
+      const nextRows = [...rows, columns.map(() => '')];
+      persistDatabaseMeta({ rows: nextRows });
+      setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex: nextRows.length - 1, columnIndex: 0 });
+    };
+    const updateCell = (rowIndex, columnIndex, value, extraPatch = {}) => {
+      const nextRows = rows.map((row, currentRowIndex) => (
+        currentRowIndex === rowIndex
+          ? row.map((cell, currentColumnIndex) => (currentColumnIndex === columnIndex ? value : cell))
+          : row
+      ));
+      persistDatabaseMeta({ rows: nextRows, ...extraPatch });
+    };
+    const updateSelectCell = (rowIndex, columnIndex, values = []) => {
+      const fieldType = fieldTypes[columnIndex];
+      const normalizedValues = (fieldType === 'select' ? values.slice(-1) : values)
+        .map(item => String(item || '').trim())
+        .filter(Boolean);
+      const nextOptions = [...(tagOptions[columnIndex] || [])];
+      normalizedValues.forEach(name => {
+        if (!nextOptions.some(item => item.name === name)) {
+          nextOptions.push(normalizeDatabaseTagOption(name, nextOptions.length));
+        }
+      });
+      updateCell(rowIndex, columnIndex, normalizedValues.join('、'), {
+        tagOptions: {
+          ...tagOptions,
+          [columnIndex]: nextOptions,
+        },
+      });
+    };
+    const updateTagOption = (columnIndex, optionIndex, patch) => {
+      const nextOptions = [...(tagOptions[columnIndex] || [])];
+      const current = nextOptions[optionIndex];
+      if (!current) return;
+      nextOptions[optionIndex] = {
+        ...current,
+        ...patch,
+        name: String((patch.name ?? current.name) || '').trim(),
+      };
+      persistDatabaseMeta({
+        tagOptions: {
+          ...tagOptions,
+          [columnIndex]: nextOptions.filter(item => item.name),
+        },
+      });
+    };
+    const addTagOption = (columnIndex) => {
+      const nextOptions = [...(tagOptions[columnIndex] || [])];
+      nextOptions.push(normalizeDatabaseTagOption(`选项 ${nextOptions.length + 1}`, nextOptions.length));
+      persistDatabaseMeta({
+        tagOptions: {
+          ...tagOptions,
+          [columnIndex]: nextOptions,
+        },
+      });
+    };
+    const removeTagOption = (columnIndex, optionIndex) => {
+      const nextOptions = (tagOptions[columnIndex] || []).filter((_, index) => index !== optionIndex);
+      persistDatabaseMeta({
+        tagOptions: {
+          ...tagOptions,
+          [columnIndex]: nextOptions,
+        },
+      });
+    };
+    const sortRowsByColumn = (columnIndex, direction = 'asc') => {
+      const nextRows = [...rows].sort((left, right) => {
+        const leftText = inlineHtmlToPlain(left?.[columnIndex] || '');
+        const rightText = inlineHtmlToPlain(right?.[columnIndex] || '');
+        const result = leftText.localeCompare(rightText, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+        return direction === 'desc' ? -result : result;
+      });
+      persistDatabaseMeta({ rows: nextRows });
+    };
+    const applyFilterByColumn = (columnIndex) => {
+      const currentValue = meta.filter?.columnIndex === columnIndex ? String(meta.filter?.value || '') : '';
+      const value = window.prompt('筛选内容', currentValue);
+      if (value === null) return;
+      const nextValue = value.trim();
+      persistDatabaseMeta({
+        filter: nextValue ? { columnIndex, value: nextValue } : null,
+      });
+    };
+    const beginColumnResize = (event, columnIndex) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const startX = event.clientX;
+      const startWidth = columnWidths[columnIndex] || 200;
+      pushEditorUndoSnapshot();
+      const handleMouseMove = moveEvent => {
+        const nextWidth = Math.max(120, Math.round(startWidth + moveEvent.clientX - startX));
+        setEditorBlocks(prev => prev.map(item => {
+          if (item.id !== block.id) return item;
+          const currentMeta = normalizeDatabaseBlockMeta(item);
+          const nextWidths = currentMeta.columnWidths.map((width, index) => (index === columnIndex ? nextWidth : width));
+          return {
+            ...item,
+            meta: {
+              ...currentMeta,
+              columnWidths: nextWidths,
+            },
+          };
+        }));
+      };
+      const handleMouseUp = () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        tableResizeRef.current = null;
+      };
+      if (tableResizeRef.current?.cleanup) tableResizeRef.current.cleanup();
+      tableResizeRef.current = {
+        cleanup: () => {
+          window.removeEventListener('mousemove', handleMouseMove);
+          window.removeEventListener('mouseup', handleMouseUp);
+        },
+      };
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    };
+    const handleDatabaseShellKeyDown = (event) => {
+      if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.target?.closest?.('[contenteditable="true"], input, textarea, .ant-select')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSelectedTableCell(null);
+      setSelectedTableRange(null);
+      clearAreaBlockSelection();
+      addBlockAfter(block.id, 'paragraph', { content: '' });
+    };
+    const handleDatabaseCellKeyDown = (event, rowIndex, columnIndex) => {
+      if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const target = event.currentTarget;
+      try {
+        document.execCommand('insertLineBreak');
+      } catch {
+        document.execCommand('insertHTML', false, '<br>');
+      }
+      window.setTimeout(() => {
+        updateCell(rowIndex, columnIndex, sanitizeInlineHtml(target.innerHTML));
+      }, 0);
+    };
+    const renderFieldTypeIcon = (type) => (
+      <span style={{ width: 18, minWidth: 18, color: '#6b7280', display: 'inline-flex', justifyContent: 'center' }}>
+        {databaseFieldTypeMap[type]?.icon || '☰'}
+      </span>
+    );
+    const renderDatabaseMenuButton = ({ icon, label, onClick, danger = false, disabled = false }) => (
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={event => {
+          event.stopPropagation();
+          if (!disabled) onClick?.();
+        }}
+        style={{
+          width: '100%',
+          border: 0,
+          background: 'transparent',
+          color: disabled ? '#cbd5e1' : (danger ? '#b91c1c' : '#1f2937'),
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          minHeight: 34,
+          padding: '6px 8px',
+          textAlign: 'left',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          fontSize: 14,
+        }}
+      >
+        <span style={{ width: 20, textAlign: 'center', color: disabled ? '#cbd5e1' : '#64748b' }}>{icon}</span>
+        <span style={{ flex: 1 }}>{label}</span>
+      </button>
+    );
+    const renderColumnColorSwatches = (columnIndex) => (
+      <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 8 }}>
+        {databaseTagColorOptions.map(color => (
+          <button
+            key={`${columnIndex}-${color}`}
+            type="button"
+            title={color}
+            onClick={event => {
+              event.stopPropagation();
+              persistDatabaseMeta({
+                columnColors: {
+                  ...columnColors,
+                  [columnIndex]: color,
+                },
+              });
+            }}
+            style={{
+              width: 22,
+              height: 22,
+              borderRadius: 6,
+              border: (columnColors[columnIndex] || '') === color ? '2px solid #111827' : '1px solid #d1d5db',
+              background: color,
+              cursor: 'pointer',
+            }}
+          />
+        ))}
+      </div>
+    );
+    const renderDatabaseColumnMenu = (columnIndex) => {
+      const fieldType = fieldTypes[columnIndex];
+      const isOptionType = ['select', 'multi_select', 'person'].includes(fieldType);
+      const options = tagOptions[columnIndex] || [];
+      return (
+        <div
+          onMouseDown={event => {
+            event.stopPropagation();
+            if (!event.target?.closest?.('input, textarea, [contenteditable="true"], .ant-select')) event.preventDefault();
+          }}
+          style={{
+            width: 320,
+            maxHeight: 'min(680px, calc(100vh - 120px))',
+            overflowY: 'auto',
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: 8,
+            boxShadow: '0 18px 44px rgba(15, 23, 42, 0.18)',
+            padding: 12,
+          }}
+        >
+          <Input
+            value={columns[columnIndex]}
+            onChange={event => updateColumn(columnIndex, event.target.value)}
+            style={{ marginBottom: 12, fontWeight: 600 }}
+          />
+          <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>字段类型</Text>
+          <Select
+            value={fieldType}
+            onChange={value => updateFieldType(columnIndex, value)}
+            options={databaseFieldTypeOptions.map(item => ({ value: item.value, label: `${item.icon} ${item.label}` }))}
+            style={{ width: '100%', marginBottom: 12 }}
+          />
+          <Text type="secondary" style={{ display: 'block' }}>列颜色</Text>
+          {renderColumnColorSwatches(columnIndex)}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '12px 0 8px' }}>
+            <Text>同时设置标题颜色</Text>
+            <Switch
+              size="small"
+              checked={Boolean(titleColorColumns[columnIndex])}
+              onChange={checked => persistDatabaseMeta({
+                titleColorColumns: {
+                  ...titleColorColumns,
+                  [columnIndex]: checked,
+                },
+              })}
+            />
+          </div>
+          {isOptionType && (
+            <>
+              <Divider style={{ margin: '8px 0' }} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text type="secondary">选项</Text>
+                <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => addTagOption(columnIndex)} />
+              </div>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                {options.map((option, optionIndex) => {
+                  const tagStyle = getDatabaseTagStyle(option);
+                  return (
+                    <div key={`${option.name}-${optionIndex}`} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <span style={{ width: 10, height: 10, borderRadius: '50%', background: tagStyle.background, border: `1px solid ${tagStyle.borderColor}` }} />
+                      <Input
+                        value={option.name}
+                        onChange={event => updateTagOption(columnIndex, optionIndex, { name: event.target.value })}
+                        style={{ flex: 1 }}
+                      />
+                      <Dropdown
+                        trigger={['click']}
+                        dropdownRender={() => (
+                          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', width: 154, padding: 8, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+                            {databaseTagColorOptions.map(color => (
+                              <button
+                                key={color}
+                                type="button"
+                                title={color}
+                                onClick={event => {
+                                  event.stopPropagation();
+                                  updateTagOption(columnIndex, optionIndex, { color });
+                                }}
+                                style={{ width: 22, height: 22, borderRadius: 6, border: '1px solid #d1d5db', background: color, cursor: 'pointer' }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      >
+                        <Button type="text" size="small" style={{ background: tagStyle.background, borderColor: tagStyle.borderColor }} />
+                      </Dropdown>
+                      <Button type="text" size="small" danger icon={<CloseOutlined />} onClick={() => removeTagOption(columnIndex, optionIndex)} />
+                    </div>
+                  );
+                })}
+              </Space>
+            </>
+          )}
+          <Divider style={{ margin: '10px 0' }} />
+          {renderDatabaseMenuButton({ icon: '↑', label: '按 A → Z 排序', onClick: () => sortRowsByColumn(columnIndex, 'asc') })}
+          {renderDatabaseMenuButton({ icon: '↓', label: '按 Z → A 排序', onClick: () => sortRowsByColumn(columnIndex, 'desc') })}
+          {renderDatabaseMenuButton({ icon: '⌕', label: '按该字段筛选', onClick: () => applyFilterByColumn(columnIndex) })}
+          <Divider style={{ margin: '10px 0' }} />
+          {renderDatabaseMenuButton({ icon: '←', label: '在左侧添加字段', onClick: () => insertColumn(columnIndex, 'before') })}
+          {renderDatabaseMenuButton({ icon: '→', label: '在右侧添加字段', onClick: () => insertColumn(columnIndex, 'after') })}
+          {renderDatabaseMenuButton({ icon: '×', label: '删除该字段', danger: true, disabled: columns.length <= 1, onClick: () => deleteColumn(columnIndex) })}
+        </div>
+      );
+    };
+    const renderSelectCell = (row, rowIndex, columnIndex) => {
+      const options = tagOptions[columnIndex] || [];
+      const values = splitDatabaseTagValue(row[columnIndex]);
+      return (
+        <Select
+          mode="tags"
+          bordered={false}
+          value={values}
+          placeholder=""
+          onFocus={() => {
+            setSelectedBlockId(block.id);
+            clearAreaBlockSelection();
+            setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
+          }}
+          onChange={nextValues => updateSelectCell(rowIndex, columnIndex, nextValues)}
+          options={options.map(option => ({ value: option.name, label: option.name }))}
+          tagRender={({ value, closable, onClose }) => {
+            const option = options.find(item => item.name === value) || normalizeDatabaseTagOption(value, 0);
+            const tagStyle = getDatabaseTagStyle(option);
+            return (
+              <Tag
+                closable={closable}
+                onClose={onClose}
+                style={{ ...tagStyle, marginInlineEnd: 4, borderRadius: 4, lineHeight: '22px' }}
+              >
+                {value}
+              </Tag>
+            );
+          }}
+          style={{ width: '100%' }}
+        />
+      );
+    };
+    const renderDatabaseCell = (row, rowIndex, columnIndex) => {
+      const fieldType = fieldTypes[columnIndex];
+      const activeCell = selectedCell?.type === 'database' && selectedCell.rowIndex === rowIndex && selectedCell.columnIndex === columnIndex;
+      if (['select', 'multi_select', 'person'].includes(fieldType)) {
+        return renderSelectCell(row, rowIndex, columnIndex);
+      }
+      if (fieldType === 'checkbox') {
+        return (
+          <Checkbox
+            checked={String(row[columnIndex]).toLowerCase() === 'true' || inlineHtmlToPlain(row[columnIndex]) === '是'}
+            onChange={event => updateCell(rowIndex, columnIndex, event.target.checked ? 'true' : '')}
+          />
+        );
+      }
+      return (
+        <InlineRichTextEditor
+          id={`doc-table-cell-input-${block.id}-database-${rowIndex}-${columnIndex}`}
+          value={row[columnIndex]}
+          placeholder=""
+          onFocus={() => {
+            setSelectedBlockId(block.id);
+            clearAreaBlockSelection();
+            setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
+          }}
+          onChange={value => updateCell(rowIndex, columnIndex, value)}
+          onMouseUp={event => handleTableCellTextSelection(block, { type: 'database', rowIndex, columnIndex }, event)}
+          onKeyUp={event => handleTableCellTextSelection(block, { type: 'database', rowIndex, columnIndex }, event)}
+          onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
+          onBlur={() => {
+            inlineToolbarHideTimerRef.current = window.setTimeout(() => {
+              const activeElement = document.activeElement;
+              if (activeElement?.closest?.('[data-inline-text-toolbar="true"]')) return;
+              setInlineToolbar(null);
+            }, 180);
+          }}
+          style={{
+            minHeight: 38,
+            padding: '6px 8px',
+            lineHeight: 1.55,
+            fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
+            background: 'transparent',
+            color: fieldType === 'title' ? '#111827' : '#374151',
+            fontWeight: fieldType === 'title' ? 500 : 400,
+            boxShadow: activeCell ? 'inset 0 0 0 1px #6366f1' : 'none',
+          }}
+        />
+      );
+    };
+    return (
+      <div
+        id={`doc-database-shell-${block.id}`}
+        tabIndex={0}
+        onKeyDown={handleDatabaseShellKeyDown}
+        style={{ width: '100%', outline: 'none', padding: '4px 0 8px' }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, borderBottom: '1px solid #e5e7eb', padding: '6px 0 10px', minWidth: 0 }}>
+          <Space size={8} style={{ minWidth: 0 }}>
+            <MenuOutlined style={{ color: '#1f2937' }} />
+            <Text strong style={{ fontSize: 16 }}>表格视图</Text>
+            <Button type="text" size="small" icon={<PlusOutlined />} aria-label="新增视图" />
+          </Space>
+          <Space size={4} style={{ marginLeft: 'auto' }}>
+            <Button type="text" size="small">视图配置</Button>
+            <Button type="text" size="small" onClick={() => sortRowsByColumn(0, 'asc')}>排序</Button>
+            <Button type="text" size="small" onClick={() => applyFilterByColumn(hasActiveFilter ? filterColumnIndex : 0)}>
+              筛选
+            </Button>
+            {hasActiveFilter && (
+              <Button type="text" size="small" onClick={() => persistDatabaseMeta({ filter: null })}>清除筛选</Button>
+            )}
+            <Tooltip title="搜索">
+              <Button type="text" size="small" icon={<SearchOutlined />} aria-label="搜索" onClick={() => applyFilterByColumn(0)} />
+            </Tooltip>
+            <Tooltip title="更多">
+              <Button type="text" size="small" icon={<MoreOutlined />} aria-label="更多" />
+            </Tooltip>
+            <Button type="primary" danger size="small" onClick={addRow}>新增</Button>
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: [
+                  { key: 'row', label: '新增记录' },
+                  { key: 'field', label: '新增字段' },
+                ],
+                onClick: ({ key }) => {
+                  if (key === 'row') addRow();
+                  if (key === 'field') insertColumn(columns.length - 1, 'after');
+                },
+              }}
+            >
+              <Button type="primary" danger size="small" icon={<DownOutlined />} aria-label="新增菜单" />
+            </Dropdown>
+          </Space>
+        </div>
+        <Input
+          value={tableName}
+          placeholder="表格名称"
+          bordered={false}
+          onChange={event => updateTableName(event.target.value)}
+          style={{ fontSize: 18, fontWeight: 700, color: tableName ? '#111827' : '#9ca3af', margin: '14px 0 10px', paddingLeft: 0 }}
+        />
+        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+          <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 520 : 720 }}>
+            <colgroup>
+              {columnWidths.map((width, index) => <col key={`database-col-${index}`} style={{ width }} />)}
+              <col style={{ width: 74 }} />
+            </colgroup>
+            <thead>
+              <tr>
+                {columns.map((column, columnIndex) => {
+                  const fieldType = fieldTypes[columnIndex];
+                  const headerBackground = titleColorColumns[columnIndex] ? (columnColors[columnIndex] || '#fff') : '#fff';
+                  return (
+                    <th
+                      key={`database-header-${columnIndex}`}
+                      style={{
+                        position: 'relative',
+                        border: '1px solid #e5e7eb',
+                        borderLeft: columnIndex === 0 ? '1px solid #e5e7eb' : undefined,
+                        background: headerBackground,
+                        textAlign: 'left',
+                        padding: 0,
+                        height: 44,
+                        verticalAlign: 'middle',
+                      }}
+                    >
+                      <Dropdown trigger={['click']} dropdownRender={() => renderDatabaseColumnMenu(columnIndex)}>
+                        <button
+                          type="button"
+                          onClick={event => event.stopPropagation()}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            border: 0,
+                            background: 'transparent',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            padding: '8px 12px',
+                            color: '#4b5563',
+                            fontWeight: 700,
+                            fontSize: 15,
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                          }}
+                        >
+                          {renderFieldTypeIcon(fieldType)}
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{column}</span>
+                        </button>
+                      </Dropdown>
+                      <span
+                        role="presentation"
+                        onMouseDown={event => beginColumnResize(event, columnIndex)}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          right: -4,
+                          width: 8,
+                          height: '100%',
+                          cursor: 'col-resize',
+                          zIndex: 3,
+                        }}
+                      />
+                    </th>
+                  );
+                })}
+                <th style={{ border: '1px solid #e5e7eb', background: '#fff', padding: 0, height: 44 }}>
+                  <Button type="text" icon={<PlusOutlined />} aria-label="新增字段" onClick={() => insertColumn(columns.length - 1, 'after')} />
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {(visibleRows.length ? visibleRows : [{ row: columns.map(() => ''), rowIndex: 0, empty: true }]).map(({ row, rowIndex, empty }) => (
+                <tr key={`database-row-${rowIndex}-${empty ? 'empty' : 'data'}`}>
+                  {columns.map((_, columnIndex) => {
+                    const cellBackground = columnColors[columnIndex] || '#fff';
+                    return (
+                      <td
+                        key={`database-cell-${rowIndex}-${columnIndex}`}
+                        style={{
+                          border: '1px solid #e5e7eb',
+                          background: cellBackground,
+                          minHeight: 44,
+                          padding: 0,
+                          verticalAlign: 'top',
+                        }}
+                      >
+                        {empty ? null : renderDatabaseCell(row, rowIndex, columnIndex)}
+                      </td>
+                    );
+                  })}
+                  <td style={{ border: '1px solid #e5e7eb', background: '#fff' }} />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <Button type="text" icon={<PlusOutlined />} onClick={addRow} style={{ marginTop: 8, color: '#6b7280' }}>
+          新增
+        </Button>
+      </div>
+    );
+  };
+
   const renderTableBlock = (block) => {
     const meta = getBlockMeta(block);
     const storedColumns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['名称', '说明'];
@@ -10145,6 +10979,7 @@ export default function Documents() {
 
     if (block.type === 'toc') return renderTocBlock();
     if (block.type === 'button') return renderButtonBlock(block, commonProps);
+    if (block.type === 'database-embed') return renderDatabaseTableBlock(block);
     if (block.type === 'table-simple') return renderTableBlock(block);
     if (block.type?.startsWith('database-')) return renderTableBlock(block);
     if (block.type === 'progress') return renderProgressBlock(block);
