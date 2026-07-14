@@ -2360,6 +2360,7 @@ addColumnIfMissing('document_edit_records', 'content_before', 'TEXT DEFAULT NULL
 addColumnIfMissing('document_edit_records', 'content_after', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_before', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_after', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'content_text', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'pinned_at', 'DATETIME DEFAULT NULL');
 addColumnIfMissing('documents', 'source_system', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'source_record_key', 'TEXT DEFAULT NULL');
@@ -2369,6 +2370,20 @@ addColumnIfMissing('documents', 'source_payload_hash', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'import_batch_no', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'import_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'quality_status', 'TEXT DEFAULT NULL');
+const documentsMissingContentText = db.prepare(`
+  SELECT id, content
+  FROM documents
+  WHERE (content_text IS NULL OR content_text = '')
+    AND content IS NOT NULL
+    AND content != ''
+`).all();
+if (documentsMissingContentText.length) {
+  const updateDocumentContentText = db.prepare('UPDATE documents SET content_text = ? WHERE id = ?');
+  const fillDocumentContentText = db.transaction((rows) => {
+    rows.forEach(row => updateDocumentContentText.run(extractDocumentText(row.content), row.id));
+  });
+  fillDocumentContentText(documentsMissingContentText);
+}
 createIndexIfColumnExists('documents', 'pinned_at', 'idx_documents_pinned_at', 'pinned_at');
 createIndexIfColumnExists('documents', 'source_record_key', 'idx_documents_source_record', 'source_system, source_record_key');
 createIndexesIfColumnsExist('documents', [
@@ -6634,7 +6649,7 @@ function getDocumentSearchTerms(search, exact) {
 }
 
 function escapeSqlLikeTerm(value) {
-  return String(value || '').replace(/[\\%_]/g, match => `\\${match}`);
+  return String(value || '').replace(/[!%_]/g, match => `!${match}`);
 }
 
 function buildDocumentSearchExcerpt(value, term) {
@@ -6704,7 +6719,7 @@ app.get('/api/documents', (req, res) => {
   if (searchText) {
     const columns = titleOnlySearch ? ['d.title'] : ['d.title', 'd.document_no', 'd.content_text', 'd.tags'];
     getDocumentSearchTerms(searchText, exactSearch).forEach(term => {
-      q += ` AND (${columns.map(column => `${column} LIKE ? ESCAPE '\\'`).join(' OR ')})`;
+      q += ` AND (${columns.map(column => `${column} LIKE ? ESCAPE '!'`).join(' OR ')})`;
       columns.forEach(() => params.push(`%${escapeSqlLikeTerm(term)}%`));
     });
   }
