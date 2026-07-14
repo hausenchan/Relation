@@ -459,6 +459,29 @@ function blockMetaToAttachment(meta = {}) {
   };
 }
 
+function getMediaMetaUrl(meta = {}) {
+  return getAttachmentUrl(meta);
+}
+
+function getImageBlockItems(block = {}) {
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  const rawItems = Array.isArray(meta.items) && meta.items.length
+    ? meta.items
+    : [{ ...meta, url: meta.url || block.content || '', filename: meta.filename || block.content || '' }];
+  return rawItems
+    .map((item, index) => {
+      const itemMeta = item && typeof item === 'object' ? item : {};
+      const url = getMediaMetaUrl(itemMeta) || itemMeta.url || itemMeta.original_url || (index === 0 ? block.content : '');
+      return {
+        ...itemMeta,
+        url,
+        filename: itemMeta.filename || itemMeta.display_name || meta.filename || '',
+        alt: itemMeta.alt || itemMeta.display_name || itemMeta.filename || meta.alt || meta.filename || '图片',
+      };
+    })
+    .filter(item => item.url);
+}
+
 function getAttachmentPreviewKind(attachment = {}) {
   const mime = String(attachment.mimetype || '').toLowerCase();
   const ext = String(attachment.file_ext || getFileExt(getAttachmentDisplayName(attachment))).toLowerCase();
@@ -9151,11 +9174,42 @@ export default function Documents() {
       || meta.source_system === 'wolai_mcp'
       || meta.remote === true
       || /wostatic|wolai/i.test(url);
-    if (kind === 'image' && url && shouldEmbedImageOnly) {
+    const imageItems = kind === 'image' ? getImageBlockItems(block) : [];
+    if (kind === 'image' && imageItems.length && shouldEmbedImageOnly) {
+      if (imageItems.length > 1 || meta.layout === 'grid') {
+        const columns = Math.max(2, Math.min(Number(meta.columns) || imageItems.length, 5));
+        return (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`,
+              gap: isMobile ? 12 : 24,
+              alignItems: 'start',
+              width: '100%',
+            }}
+          >
+            {imageItems.map((item, itemIndex) => (
+              <img
+                key={`${item.url}-${itemIndex}`}
+                src={item.url}
+                alt={item.alt || item.filename || '图片'}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  maxHeight: isMobile ? 520 : 680,
+                  borderRadius: 6,
+                  objectFit: 'contain',
+                }}
+              />
+            ))}
+          </div>
+        );
+      }
+      const image = imageItems[0];
       return (
         <img
-          src={url}
-          alt={meta.filename || block.content || '图片'}
+          src={image.url}
+          alt={image.alt || image.filename || block.content || '图片'}
           style={{
             display: 'block',
             maxWidth: '100%',
@@ -9164,6 +9218,34 @@ export default function Documents() {
             objectFit: 'contain',
           }}
         />
+      );
+    }
+    const shouldEmbedVideoOnly = kind === 'video' && url && !isExternalMedia && (
+      meta.embedOnly || meta.source_system === 'wolai_mcp' || meta.remote === true
+    );
+    if (shouldEmbedVideoOnly) {
+      return (
+        <Space direction="vertical" size={8} style={{ width: '100%', alignItems: 'center' }}>
+          <video
+            src={url}
+            controls
+            preload="metadata"
+            poster={meta.poster_url || meta.cover_url || undefined}
+            style={{
+              display: 'block',
+              width: 'min(100%, 520px)',
+              maxHeight: isMobile ? 520 : 680,
+              borderRadius: 6,
+              background: '#111827',
+            }}
+          />
+          <Space size={8} wrap style={{ width: 'min(100%, 520px)', justifyContent: 'space-between' }}>
+            {meta.filename && <Text type="secondary" ellipsis style={{ maxWidth: isMobile ? 220 : 360 }}>{meta.filename}</Text>}
+            <Button size="small" href={meta.download_url || url} target="_blank" icon={<DownloadOutlined />}>
+              下载视频
+            </Button>
+          </Space>
+        </Space>
       );
     }
     return (
@@ -9312,6 +9394,9 @@ export default function Documents() {
       attachment.creator_name ? `上传人：${attachment.creator_name}` : '',
       attachment.created_at ? formatDocumentTimestamp(attachment.created_at) : '',
     ].filter(Boolean);
+    const shouldInlineAttachmentVideo = hasAttachment && previewKind === 'video' && (
+      meta.source_system === 'wolai_mcp' || meta.embedOnly || meta.remote === true
+    );
 
     const menuItems = [
       { key: 'download', icon: <DownloadOutlined />, label: '下载', disabled: !hasAttachment },
@@ -9342,7 +9427,7 @@ export default function Documents() {
       );
     }
 
-    return (
+    const attachmentCard = (
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -9416,12 +9501,39 @@ export default function Documents() {
         </Space>
       </div>
     );
+
+    if (shouldInlineAttachmentVideo) {
+      return (
+        <Space direction="vertical" size={8} style={{ width: '100%', alignItems: 'center' }}>
+          <video
+            src={attachmentUrl}
+            controls
+            preload="metadata"
+            poster={meta.poster_url || meta.cover_url || undefined}
+            style={{
+              display: 'block',
+              width: 'min(100%, 520px)',
+              maxHeight: isMobile ? 520 : 680,
+              borderRadius: 6,
+              background: '#111827',
+            }}
+          />
+          <div style={{ width: '100%' }}>
+            {attachmentCard}
+          </div>
+        </Space>
+      );
+    }
+
+    return attachmentCard;
   };
 
   const renderPresentationAttachmentBlock = (block) => {
-    const attachment = blockMetaToAttachment(getBlockMeta(block));
+    const meta = getBlockMeta(block);
+    const attachment = blockMetaToAttachment(meta);
     const attachmentUrl = getAttachmentUrl(attachment);
-    return (
+    const previewKind = getAttachmentPreviewKind(attachment);
+    const attachmentCard = (
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -9443,6 +9555,21 @@ export default function Documents() {
         )}
       </div>
     );
+    if (attachmentUrl && previewKind === 'video' && (meta.source_system === 'wolai_mcp' || meta.embedOnly || meta.remote === true)) {
+      return (
+        <Space direction="vertical" size={10} style={{ width: '100%', alignItems: 'center' }}>
+          <video
+            src={attachmentUrl}
+            controls
+            preload="metadata"
+            poster={meta.poster_url || meta.cover_url || undefined}
+            style={{ display: 'block', width: 'min(100%, 560px)', maxHeight: isMobile ? 320 : 620, borderRadius: 8, background: '#111827' }}
+          />
+          {attachmentCard}
+        </Space>
+      );
+    }
+    return attachmentCard;
   };
 
   const renderPresentationTableBlock = (block) => {
@@ -9496,16 +9623,54 @@ export default function Documents() {
     const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
     const label = block.content || meta.filename || blockTypeMap[block.type]?.label || '媒体';
     if (kind === 'image' && isWolaiPageCoverBlock(block)) return null;
-    if (kind === 'image' && url) {
+    const imageItems = kind === 'image' ? getImageBlockItems(block) : [];
+    if (kind === 'image' && imageItems.length) {
+      if (imageItems.length > 1 || meta.layout === 'grid') {
+        const columns = Math.max(2, Math.min(Number(meta.columns) || imageItems.length, 5));
+        return (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: isMobile ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`,
+              gap: isMobile ? 12 : 26,
+              alignItems: 'start',
+              width: '100%',
+            }}
+          >
+            {imageItems.map((item, itemIndex) => (
+              <img
+                key={`${item.url}-${itemIndex}`}
+                src={item.url}
+                alt={item.alt || item.filename || label}
+                style={{ display: 'block', width: '100%', maxHeight: isMobile ? 320 : 620, objectFit: 'contain', borderRadius: 8 }}
+              />
+            ))}
+          </div>
+        );
+      }
+      const image = imageItems[0];
       return (
         <div>
-          <img src={url} alt={label} style={{ display: 'block', maxWidth: '100%', maxHeight: isMobile ? 320 : 520, objectFit: 'contain', borderRadius: 8 }} />
+          <img src={image.url} alt={image.alt || label} style={{ display: 'block', maxWidth: '100%', maxHeight: isMobile ? 320 : 520, objectFit: 'contain', borderRadius: 8 }} />
           {meta.filename && <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>{meta.filename}</Text>}
         </div>
       );
     }
     if (kind === 'video' && url && !isExternalMedia) {
-      return <video src={url} controls style={{ display: 'block', width: '100%', maxHeight: isMobile ? 320 : 520, borderRadius: 8, background: '#111827' }} />;
+      return (
+        <Space direction="vertical" size={8} style={{ width: '100%', alignItems: 'center' }}>
+          <video
+            src={url}
+            controls
+            preload="metadata"
+            poster={meta.poster_url || meta.cover_url || undefined}
+            style={{ display: 'block', width: 'min(100%, 560px)', maxHeight: isMobile ? 320 : 620, borderRadius: 8, background: '#111827' }}
+          />
+          {(meta.embedOnly || meta.source_system === 'wolai_mcp') && (
+            <Button size="small" href={meta.download_url || url} target="_blank" icon={<DownloadOutlined />}>下载视频</Button>
+          )}
+        </Space>
+      );
     }
     if (kind === 'audio' && url && !isExternalMedia) {
       return (

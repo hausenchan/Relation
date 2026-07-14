@@ -634,6 +634,7 @@ function mapNodeType(node) {
   if (/code/.test(raw)) return 'code';
   if (/divider|hr|separator/.test(raw)) return 'divider';
   if (/image|picture/.test(raw)) return 'image';
+  if (/video|movie|mp4|录屏|视频/.test(raw)) return 'video';
   if (/file|attachment|asset/.test(raw)) return 'attachment';
   return 'paragraph';
 }
@@ -1079,8 +1080,10 @@ function normalizeTableRows(node, childRows = []) {
 }
 
 const mediaImageExtensions = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+const mediaVideoExtensions = new Set(['mp4', 'mov', 'm4v', 'webm', 'ogg', 'ogv', 'avi', 'mkv']);
 const mediaPreviewExtensions = new Set([
   ...mediaImageExtensions,
+  ...mediaVideoExtensions,
   'pdf', 'txt', 'md', 'markdown', 'csv', 'tsv', 'json', 'log', 'xml', 'yaml', 'yml',
 ]);
 
@@ -1187,6 +1190,9 @@ function normalizeMediaKind(node = {}, url = '', fallbackKey = '') {
   if (/image|picture|photo|图片|图像/.test(hint)) return 'image';
   if (String(node.mime_type || node.mimetype || node.content_type || node.contentType || '').toLowerCase().startsWith('image/')) return 'image';
   if (mediaImageExtensions.has(ext)) return 'image';
+  if (/video|movie|mp4|录屏|视频/.test(hint)) return 'video';
+  if (String(node.mime_type || node.mimetype || node.content_type || node.contentType || '').toLowerCase().startsWith('video/')) return 'video';
+  if (mediaVideoExtensions.has(ext)) return 'video';
   if (/file|attachment|asset|resource|附件|文件/.test(hint)) return 'attachment';
   if (ext && !/^https?:$/i.test(ext)) return 'attachment';
   return '';
@@ -1212,12 +1218,13 @@ function extractMediaFromNode(node = {}, fallbackKey = '') {
     'name', 'title', 'alt', 'caption',
   ]) || decodeURIComponent(getMediaExtFromUrl(url) ? String(url).split('?')[0].split('/').pop() : '') || (kind === 'image' ? 'Wolai 图片' : 'Wolai 附件');
   const fileExt = getFirstMediaText(node, ['file_ext', 'fileExt', 'extension', 'ext']) || getMediaExtFromUrl(filename) || getMediaExtFromUrl(url);
+  const normalizedMime = mimetype || (kind === 'video' && fileExt === 'mp4' ? 'video/mp4' : '');
   const media = {
     kind,
     url,
     filename,
     display_name: filename,
-    mimetype,
+    mimetype: normalizedMime,
     file_ext: fileExt,
     size: Number(getObjectValueByKeys(node, ['size', 'file_size', 'fileSize']) || 0) || 0,
     alt: getFirstMediaText(node, ['alt', 'caption', 'description']) || filename,
@@ -1228,37 +1235,150 @@ function extractMediaFromNode(node = {}, fallbackKey = '') {
   };
 }
 
+function getRecordMediaMeta(record = {}) {
+  const dimensions = isPlainObject(record.raw?.dimensions) ? record.raw.dimensions : null;
+  return {
+    wolai_record_id: record.id || '',
+    wolai_parent_id: record.parentId || '',
+    wolai_parent_type: record.parentType || '',
+    wolai_order: Number(record.order || 0),
+    ...(dimensions ? { dimensions } : {}),
+  };
+}
+
+function getMediaCommonMeta(media = {}) {
+  return {
+    url: media.url || '',
+    filename: media.filename || media.display_name || '',
+    display_name: media.display_name || media.filename || '',
+    attachment_id: media.attachment_id || null,
+    filepath: media.filepath || '',
+    mimetype: media.mimetype || '',
+    file_ext: media.file_ext || getMediaExtFromUrl(media.filename || media.url || ''),
+    size: Number(media.size || 0),
+    preview_status: media.preview_status || getMediaPreviewStatus(media),
+    source_system: 'wolai_mcp',
+    remote: media.remote !== false,
+    original_url: media.original_url || media.url || '',
+    alt: media.alt || media.display_name || media.filename || '',
+    ...(media.wolai_record_id ? { wolai_record_id: media.wolai_record_id } : {}),
+    ...(media.wolai_parent_id ? { wolai_parent_id: media.wolai_parent_id } : {}),
+    ...(media.wolai_parent_type ? { wolai_parent_type: media.wolai_parent_type } : {}),
+    ...(Number.isFinite(Number(media.wolai_order)) ? { wolai_order: Number(media.wolai_order) } : {}),
+    ...(media.dimensions ? { dimensions: media.dimensions } : {}),
+  };
+}
+
 function makeMediaBlock(makeBlock, media = {}) {
   const displayName = media.display_name || media.filename || (media.kind === 'image' ? 'Wolai 图片' : 'Wolai 附件');
+  const commonMeta = getMediaCommonMeta({
+    ...media,
+    filename: media.filename || displayName,
+    display_name: displayName,
+  });
   if (media.kind === 'image') {
     return makeBlock('image', media.url, {
       meta: {
-        url: media.url,
-        filename: displayName,
-        attachment_id: null,
-        mimetype: media.mimetype || '',
-        source_system: 'wolai_mcp',
-        remote: true,
+        ...commonMeta,
         embedOnly: true,
-        alt: media.alt || displayName,
+      },
+    });
+  }
+  if (media.kind === 'video') {
+    return makeBlock('video', media.url, {
+      meta: {
+        ...commonMeta,
+        filename: media.filename || displayName,
+        display_name: displayName,
+        download_url: media.url || '',
+        embedOnly: true,
       },
     });
   }
   return makeBlock('attachment', displayName, {
     meta: {
-      attachment_id: null,
+      ...commonMeta,
       filename: media.filename || displayName,
       display_name: displayName,
-      url: media.url || '',
-      filepath: '',
-      mimetype: media.mimetype || '',
-      file_ext: media.file_ext || getMediaExtFromUrl(displayName),
-      size: Number(media.size || 0),
-      preview_status: media.preview_status || getMediaPreviewStatus(media),
-      source_system: 'wolai_mcp',
-      remote: true,
     },
   });
+}
+
+function imageGridItemFromBlock(block = {}) {
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  const url = meta.url || block.content || '';
+  return {
+    url,
+    filename: meta.filename || meta.display_name || '',
+    display_name: meta.display_name || meta.filename || '',
+    attachment_id: meta.attachment_id || null,
+    filepath: meta.filepath || '',
+    mimetype: meta.mimetype || '',
+    file_ext: meta.file_ext || getMediaExtFromUrl(meta.filename || url),
+    size: Number(meta.size || 0),
+    preview_status: meta.preview_status || 'supported',
+    source_system: 'wolai_mcp',
+    remote: meta.remote !== false,
+    embedOnly: true,
+    original_url: meta.original_url || url,
+    alt: meta.alt || meta.filename || 'Wolai 图片',
+    ...(meta.wolai_record_id ? { wolai_record_id: meta.wolai_record_id } : {}),
+    ...(meta.wolai_parent_id ? { wolai_parent_id: meta.wolai_parent_id } : {}),
+    ...(meta.wolai_parent_type ? { wolai_parent_type: meta.wolai_parent_type } : {}),
+    ...(Number.isFinite(Number(meta.wolai_order)) ? { wolai_order: Number(meta.wolai_order) } : {}),
+    ...(meta.dimensions ? { dimensions: meta.dimensions } : {}),
+  };
+}
+
+function shouldGroupWolaiColumnImage(block = {}) {
+  if (block?.type !== 'image') return false;
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  if (meta.layout === 'grid' || Array.isArray(meta.items)) return false;
+  if (meta.source_system !== 'wolai_mcp') return false;
+  return String(meta.wolai_parent_type || '').toLowerCase() === 'column';
+}
+
+function makeWolaiImageGridBlock(group = []) {
+  if (group.length < 2) return group[0] || null;
+  const first = group[0];
+  const firstMeta = first.meta && typeof first.meta === 'object' ? first.meta : {};
+  const items = group.map(imageGridItemFromBlock);
+  return {
+    ...first,
+    content: items[0]?.url || first.content || '',
+    meta: {
+      ...firstMeta,
+      url: items[0]?.url || firstMeta.url || first.content || '',
+      filename: items[0]?.filename || firstMeta.filename || '',
+      display_name: items[0]?.display_name || firstMeta.display_name || '',
+      layout: 'grid',
+      columns: Math.min(Math.max(items.length, 2), 5),
+      items,
+      embedOnly: true,
+      source_system: 'wolai_mcp',
+    },
+  };
+}
+
+function groupConsecutiveWolaiColumnImages(blocks = []) {
+  const result = [];
+  let group = [];
+  const flush = () => {
+    if (!group.length) return;
+    if (group.length === 1) result.push(group[0]);
+    else result.push(makeWolaiImageGridBlock(group));
+    group = [];
+  };
+  blocks.forEach(block => {
+    if (shouldGroupWolaiColumnImage(block)) {
+      group.push(block);
+      return;
+    }
+    flush();
+    result.push(block);
+  });
+  flush();
+  return result;
 }
 
 function collectStructuredNodes(value, nodes = [], options = {}) {
@@ -1580,6 +1700,11 @@ function hasRenderableWolaiRecord(record = {}) {
   );
 }
 
+function isPageContainerRecord(record = {}) {
+  const hint = String(record.type || record.inferredType || '').toLowerCase();
+  return /^(page|document)$/.test(hint);
+}
+
 function recordsToBlocks(records = [], seed) {
   const normalized = records
     .filter(record => record && hasRenderableWolaiRecord(record))
@@ -1632,11 +1757,9 @@ function recordsToBlocks(records = [], seed) {
     if (!record || emitted.has(record.id)) return;
     emitted.add(record.id);
     ordered.push(record);
+    if (isPageContainerRecord(record)) return;
     (childrenByParentId.get(record.id) || []).forEach(appendTree);
   };
-  normalized
-    .filter(record => !record.parentId || !byId.has(record.parentId))
-    .forEach(appendTree);
   normalized.forEach(appendTree);
 
   const makeBlock = makeBlockFactory(seed);
@@ -1661,8 +1784,8 @@ function recordsToBlocks(records = [], seed) {
   ordered.forEach(record => {
     if (consumedRecordIds.has(record.id)) return;
     const type = inferWolaiRecordType(record);
-    if ((type === 'image' || type === 'attachment') && record.media?.url) {
-      blocks.push(makeMediaBlock(makeBlock, { ...record.media, kind: type }));
+    if ((type === 'image' || type === 'attachment' || type === 'video') && record.media?.url) {
+      blocks.push(makeMediaBlock(makeBlock, { ...record.media, ...getRecordMediaMeta(record), kind: type }));
       return;
     }
     if (type === 'table-simple') {
@@ -1689,7 +1812,7 @@ function recordsToBlocks(records = [], seed) {
       meta,
     }));
   });
-  return blocks.filter(Boolean);
+  return groupConsecutiveWolaiColumnImages(blocks.filter(Boolean));
 }
 
 function looksLikeJsonDumpText(text = '') {
@@ -1740,7 +1863,7 @@ function mergeWolaiRecords(records = []) {
       parentType: record.parentType || existing.parentType,
       type: record.type || existing.type,
       inferredType: record.inferredType || existing.inferredType,
-      order: Math.min(Number(existing.order) || 0, Number(record.order) || index),
+      order: Number.isFinite(Number(existing.order)) ? Number(existing.order) : (Number(record.order) || index),
     });
   });
   return Array.from(byKey.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
@@ -1797,10 +1920,13 @@ async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, re
             return existing && ((!existing.parentId && record.parentId) || (!existing.type && record.type) || (!existing.parentType && record.parentType));
           });
           if (!newRecords.length && !metadataChanged) continue;
-          const orderBase = mergedRecords.length + 1;
+          const parentRecord = mergedRecords.find(item => item.id === blockId);
+          const parentOrder = Number(parentRecord?.order);
+          const orderBase = Number.isFinite(parentOrder) ? parentOrder : mergedRecords.length + 1;
           nextRecords.forEach((record, index) => {
             if (!record.parentId && record.id !== blockId) record.parentId = blockId;
-            record.order = orderBase + index;
+            const existingRecord = mergedRecords.find(item => item.id === record.id);
+            if (!existingRecord) record.order = orderBase + ((index + 1) / 1000);
           });
           newRecords.forEach(record => {
             enqueue(record.id);
@@ -1833,7 +1959,7 @@ function nodesToBlocks(nodes, seed) {
       blocks.push(makeBlock('divider'));
       return;
     }
-    if (type === 'image' || type === 'attachment') {
+    if (type === 'image' || type === 'attachment' || type === 'video') {
       const media = extractMediaFromNode(node, type);
       if (media?.url) blocks.push(makeMediaBlock(makeBlock, { ...media, kind: type }));
       return;

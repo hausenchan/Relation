@@ -5906,69 +5906,133 @@ async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0 }
 function isWolaiRemoteImageBlock(block = {}) {
   if (block?.type !== 'image') return false;
   const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  return getWolaiRemoteImageEntries(block).length > 0;
+}
+
+function isWolaiRemoteImageEntry(meta = {}, url = '') {
+  const normalizedUrl = String(url || '').trim();
+  if (!isHttpUrl(normalizedUrl)) return false;
+  return meta.source_system === 'wolai_mcp' || meta.remote === true || /wolai|wostatic/i.test(normalizedUrl);
+}
+
+function getWolaiRemoteImageEntries(block = {}) {
+  if (block?.type !== 'image') return [];
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  if (Array.isArray(meta.items) && meta.items.length) {
+    return meta.items
+      .map((item, itemIndex) => {
+        const itemMeta = item && typeof item === 'object' ? item : {};
+        const url = String(itemMeta.url || itemMeta.original_url || '').trim();
+        return {
+          itemIndex,
+          url,
+          filename: itemMeta.filename || itemMeta.display_name || meta.filename || meta.display_name || block.content,
+          meta: {
+            ...meta,
+            ...itemMeta,
+            source_system: itemMeta.source_system || meta.source_system,
+            remote: itemMeta.remote ?? meta.remote,
+          },
+        };
+      })
+      .filter(entry => isWolaiRemoteImageEntry(entry.meta, entry.url));
+  }
   const url = String(meta.url || block.content || '').trim();
-  if (!isHttpUrl(url)) return false;
-  return meta.source_system === 'wolai_mcp' || meta.remote === true || /wolai|wostatic/i.test(url);
+  if (!isWolaiRemoteImageEntry(meta, url)) return [];
+  return [{
+    itemIndex: -1,
+    url,
+    filename: meta.filename || meta.display_name || block.content,
+    meta,
+  }];
+}
+
+function buildLocalizedWolaiImageMeta(meta = {}, attachment = {}, uploadFile = {}, remoteUrl = '') {
+  return {
+    ...meta,
+    attachment_id: attachment.id,
+    filename: attachment.filename || uploadFile.originalname,
+    display_name: attachment.display_name || uploadFile.originalname,
+    url: attachment.url || '',
+    filepath: attachment.filepath || '',
+    mimetype: attachment.mimetype || uploadFile.mimetype || '',
+    file_ext: attachment.file_ext || getFileExtFromName(uploadFile.originalname),
+    size: Number(attachment.size || uploadFile.size || 0),
+    preview_status: attachment.preview_status || 'supported',
+    created_by_name: attachment.creator_name || attachment.created_by_name || '',
+    created_at: attachment.created_at || '',
+    updated_at: attachment.updated_at || '',
+    embedOnly: true,
+    remote: false,
+    source_system: 'wolai_mcp',
+    original_url: remoteUrl,
+  };
 }
 
 async function localizeWolaiMcpImageBlocks(docId, blocks = [], userId) {
   const warnings = [];
   const imageLimit = Number.isFinite(WOLAI_REMOTE_IMAGE_LIMIT) ? Math.max(WOLAI_REMOTE_IMAGE_LIMIT, 0) : 80;
-  const remoteImageCount = (blocks || []).filter(block => isWolaiRemoteImageBlock(block)).length;
+  const remoteImageCount = (blocks || []).reduce((sum, block) => sum + getWolaiRemoteImageEntries(block).length, 0);
   let localized = 0;
   let failed = 0;
   let visited = 0;
 
   const nextBlocks = [];
   for (const block of blocks || []) {
-    if (!isWolaiRemoteImageBlock(block) || visited >= imageLimit) {
+    const entries = getWolaiRemoteImageEntries(block);
+    if (!entries.length || visited >= imageLimit) {
       nextBlocks.push(block);
       continue;
     }
-    visited += 1;
     const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
-    const remoteUrl = String(meta.url || block.content || '').trim();
-    let uploadFile = null;
-    try {
-      uploadFile = await downloadRemoteImageAsUploadFile(remoteUrl, {
-        filename: meta.filename || meta.display_name || block.content,
-        index: visited - 1,
-      });
-      await persistUploadedFile(uploadFile, 'documents');
-      const attachment = createDocumentAttachmentRecord(docId, uploadFile, userId, {
-        blockId: block.id,
-        displayName: uploadFile.originalname,
-      });
-      nextBlocks.push({
-        ...block,
-        content: attachment.filename || uploadFile.originalname,
-        meta: {
-          ...meta,
-          attachment_id: attachment.id,
-          filename: attachment.filename || uploadFile.originalname,
-          display_name: attachment.display_name || uploadFile.originalname,
-          url: attachment.url || '',
-          filepath: attachment.filepath || '',
-          mimetype: attachment.mimetype || uploadFile.mimetype || '',
-          file_ext: attachment.file_ext || getFileExtFromName(uploadFile.originalname),
-          size: Number(attachment.size || uploadFile.size || 0),
-          preview_status: attachment.preview_status || 'supported',
-          created_by_name: attachment.creator_name || attachment.created_by_name || '',
-          created_at: attachment.created_at || '',
-          updated_at: attachment.updated_at || '',
-          embedOnly: true,
-          remote: false,
-          source_system: 'wolai_mcp',
-          original_url: remoteUrl,
-        },
-      });
-      localized += 1;
-    } catch (error) {
-      if (uploadFile) cleanupStoredUploadedFiles([uploadFile]);
-      failed += 1;
-      nextBlocks.push(block);
-      warnings.push(`Wolai 图片 ${visited} 下载失败，已保留原链接：${error.message || '未知错误'}`);
+    const hasItems = Array.isArray(meta.items) && meta.items.length;
+    const nextMeta = { ...meta };
+    const nextItems = hasItems ? meta.items.map(item => ({ ...(item || {}) })) : null;
+
+    for (const entry of entries) {
+      if (visited >= imageLimit) break;
+      visited += 1;
+      let uploadFile = null;
+      try {
+        uploadFile = await downloadRemoteImageAsUploadFile(entry.url, {
+          filename: entry.filename,
+          index: visited - 1,
+        });
+        await persistUploadedFile(uploadFile, 'documents');
+        const attachment = createDocumentAttachmentRecord(docId, uploadFile, userId, {
+          blockId: block.id,
+          displayName: uploadFile.originalname,
+        });
+        const localizedMeta = buildLocalizedWolaiImageMeta(entry.meta, attachment, uploadFile, entry.url);
+        if (nextItems && entry.itemIndex >= 0) {
+          nextItems[entry.itemIndex] = {
+            ...(nextItems[entry.itemIndex] || {}),
+            ...localizedMeta,
+          };
+        } else {
+          Object.assign(nextMeta, localizedMeta);
+        }
+        localized += 1;
+      } catch (error) {
+        if (uploadFile) cleanupStoredUploadedFiles([uploadFile]);
+        failed += 1;
+        warnings.push(`Wolai 图片 ${visited} 下载失败，已保留原链接：${error.message || '未知错误'}`);
+      }
     }
+
+    if (nextItems) {
+      nextMeta.items = nextItems;
+      const firstItem = nextItems[0] || {};
+      nextMeta.url = firstItem.url || nextMeta.url || block.content || '';
+      nextMeta.filename = firstItem.filename || nextMeta.filename || '';
+      nextMeta.display_name = firstItem.display_name || nextMeta.display_name || nextMeta.filename || '';
+    }
+
+    nextBlocks.push({
+      ...block,
+      content: nextMeta.url || block.content || '',
+      meta: nextMeta,
+    });
   }
   if (remoteImageCount > imageLimit) {
     warnings.push(`Wolai 图片数量超过 ${imageLimit} 张，后续图片保留原链接`);
