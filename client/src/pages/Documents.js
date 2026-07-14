@@ -320,6 +320,10 @@ const documentAutoSaveInterval = 30000;
 const documentLiveSyncInterval = 5000;
 const documentClipboardBlocksMime = 'application/x-relation-document-blocks';
 const documentFolderSidebarCollapsedStorageKey = 'documents.folderSidebarCollapsed';
+const documentFolderSidebarWidthStorageKey = 'documents.folderSidebarWidth';
+const documentFolderSidebarDefaultWidth = 340;
+const documentFolderSidebarMinWidth = 300;
+const documentFolderSidebarMaxWidth = 560;
 const tableFillColorOptions = ['#ffffff', '#f8fafc', '#fee2e2', '#ffedd5', '#fef3c7', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
 const tableTextColorOptions = ['#111827', '#475569', '#b91c1c', '#c2410c', '#a16207', '#15803d', '#1d4ed8', '#4338ca', '#7e22ce'];
 const pasteHtmlBlockSelector = [
@@ -397,6 +401,12 @@ function clampUploadPercent(value, fallback = 0, max = 100) {
   const percent = Number(value);
   if (!Number.isFinite(percent)) return fallback;
   return Math.max(0, Math.min(max, Math.round(percent)));
+}
+
+function clampDocumentFolderSidebarWidth(value) {
+  const width = Number(value);
+  if (!Number.isFinite(width)) return documentFolderSidebarDefaultWidth;
+  return Math.max(documentFolderSidebarMinWidth, Math.min(documentFolderSidebarMaxWidth, Math.round(width)));
 }
 
 function normalizeUploadProgressPercent(progressEvent) {
@@ -1856,12 +1866,31 @@ function buildFolderPathMap(folders = []) {
   return pathMap;
 }
 
+function renderDocumentTreeTitle(title) {
+  const text = String(title || '未命名文档');
+  return (
+    <span
+      title={text}
+      style={{
+        display: 'inline-block',
+        maxWidth: '100%',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        verticalAlign: 'bottom',
+      }}
+    >
+      {text}
+    </span>
+  );
+}
+
 function buildFolderNode(folder, childrenByParent, documentsByFolder) {
   const folderDocuments = documentsByFolder.get(Number(folder.id)) || [];
   const childFolders = (childrenByParent.get(Number(folder.id)) || [])
     .map(child => buildFolderNode(child, childrenByParent, documentsByFolder));
   const documentChildren = folderDocuments.map(doc => ({
-    title: doc.title || '未命名文档',
+    title: renderDocumentTreeTitle(doc.title || '未命名文档'),
     key: `document-${doc.id}`,
     icon: <FileTextOutlined />,
     isLeaf: true,
@@ -1872,7 +1901,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
   }));
   const children = [...childFolders, ...documentChildren];
   return {
-    title: folder.name,
+    title: renderDocumentTreeTitle(folder.name),
     key: `folder-${folder.id}`,
     icon: <FolderOutlined />,
     nodeType: 'folder',
@@ -2462,6 +2491,11 @@ export default function Documents() {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(documentFolderSidebarCollapsedStorageKey) === '1';
   });
+  const [folderSidebarWidth, setFolderSidebarWidth] = useState(() => {
+    if (typeof window === 'undefined') return documentFolderSidebarDefaultWidth;
+    const stored = window.localStorage.getItem(documentFolderSidebarWidthStorageKey);
+    return clampDocumentFolderSidebarWidth(stored || documentFolderSidebarDefaultWidth);
+  });
   const [folderTreeExpandedKeys, setFolderTreeExpandedKeys] = useState([]);
   const [presentationOpen, setPresentationOpen] = useState(false);
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
@@ -2538,6 +2572,26 @@ export default function Documents() {
       .document-block-menu-dropdown .ant-dropdown-menu-item {
         color: #1f2937 !important;
       }
+      .document-folder-tree .ant-tree-treenode {
+        max-width: 100%;
+      }
+      .document-folder-tree .ant-tree-node-content-wrapper {
+        min-width: 0;
+        max-width: calc(100% - 24px);
+      }
+      .document-folder-tree .ant-tree-title {
+        display: inline-block;
+        min-width: 0;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        vertical-align: bottom;
+      }
+      .document-sidebar-resize-handle:hover .document-sidebar-resize-line,
+      .document-sidebar-resize-handle:active .document-sidebar-resize-line {
+        background: #6366f1 !important;
+      }
     `;
     document.head.appendChild(style);
     return () => {};
@@ -2550,6 +2604,14 @@ export default function Documents() {
       folderSidebarCollapsed ? '1' : '0'
     );
   }, [folderSidebarCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(
+      documentFolderSidebarWidthStorageKey,
+      String(clampDocumentFolderSidebarWidth(folderSidebarWidth))
+    );
+  }, [folderSidebarWidth]);
 
   const selectedFolder = useMemo(
     () => folders.find(folder => Number(folder.id) === Number(selectedFolderId)),
@@ -6450,8 +6512,17 @@ export default function Documents() {
     >
       <List.Item.Meta
         title={
-          <Space size={6} wrap style={{ rowGap: 2, lineHeight: 1.25 }}>
-            <Text strong ellipsis style={{ maxWidth: isMobile ? 'calc(100vw - 164px)' : 170, lineHeight: '20px' }}>{item.title}</Text>
+          <Space size={6} style={{ maxWidth: '100%', overflow: 'hidden', lineHeight: 1.25, whiteSpace: 'nowrap' }}>
+            <Text
+              strong
+              ellipsis={{ tooltip: item.title }}
+              style={{
+                maxWidth: isMobile ? 'calc(100vw - 164px)' : Math.max(150, folderSidebarWidth - 188),
+                lineHeight: '20px',
+              }}
+            >
+              {item.title}
+            </Text>
             {item.pinned_at && <Tag color="gold" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>置顶</Tag>}
             <Tag color="blue" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
           </Space>
@@ -10498,6 +10569,31 @@ export default function Documents() {
     );
   };
 
+  const startFolderSidebarResize = (event) => {
+    if (isMobile || isFolderSidebarCollapsed) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startWidth = folderSidebarWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const handleMouseMove = (moveEvent) => {
+      const nextWidth = clampDocumentFolderSidebarWidth(startWidth + moveEvent.clientX - startX);
+      setFolderSidebarWidth(nextWidth);
+    };
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+    };
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
   return (
     <div style={{
       display: 'flex',
@@ -10509,14 +10605,16 @@ export default function Documents() {
     }}>
       {showDocumentLibrary && (
       <aside style={{
-        width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : 340),
-        minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : 320),
+        position: 'relative',
+        width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : folderSidebarWidth),
+        minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : folderSidebarWidth),
+        maxWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : folderSidebarWidth),
         borderRight: isMobile ? 'none' : '1px solid #f0f0f0',
         paddingRight: isMobile ? 0 : (isFolderSidebarCollapsed ? 0 : 16),
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        transition: 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease',
+        transition: isFolderSidebarCollapsed ? 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease' : 'padding 0.2s ease',
       }}>
         <div
           style={{
@@ -10603,6 +10701,7 @@ export default function Documents() {
                 <Text type="secondary" style={{ fontSize: 12 }}>目录</Text>
                 {folderTree.length ? (
                   <Tree
+                    className="document-folder-tree"
                     showIcon
                     expandedKeys={folderTreeExpandedKeys}
                     selectedKeys={selectedTreeKeys}
@@ -10725,6 +10824,39 @@ export default function Documents() {
                 </Dropdown>
               </div>
             </Space>
+            </div>
+          )}
+          {!isMobile && !isFolderSidebarCollapsed && (
+            <div
+              className="document-sidebar-resize-handle"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="调整文档列表宽度"
+              title="拖动调整文档列表宽度"
+              onMouseDown={startFolderSidebarResize}
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: -5,
+                width: 10,
+                height: '100%',
+                cursor: 'col-resize',
+                zIndex: 5,
+                display: 'flex',
+                justifyContent: 'center',
+              }}
+            >
+              <span
+                className="document-sidebar-resize-line"
+                aria-hidden="true"
+                style={{
+                  display: 'block',
+                  width: 2,
+                  height: '100%',
+                  background: '#f1f5f9',
+                  transition: 'background 0.15s ease',
+                }}
+              />
             </div>
           )}
       </aside>
