@@ -5405,6 +5405,54 @@ function getDocumentYear(row = {}) {
   return String(row.created_at || row.updated_at || '').slice(0, 4) || String(new Date().getFullYear());
 }
 
+function buildDocumentFolderContextResolver(rows = []) {
+  const byId = new Map(rows.map(row => [Number(row.id), row]));
+  const memo = new Map();
+  return (folderId) => {
+    const id = Number(folderId);
+    if (!id) return null;
+    if (memo.has(id)) return memo.get(id);
+    const pathRows = [];
+    const seen = new Set();
+    let current = byId.get(id) || null;
+    while (current && !seen.has(Number(current.id)) && pathRows.length < DOCUMENT_MAX_FOLDER_DEPTH + 5) {
+      pathRows.unshift(current);
+      seen.add(Number(current.id));
+      current = current.parent_id ? byId.get(Number(current.parent_id)) : null;
+    }
+    if (!pathRows.length) {
+      memo.set(id, null);
+      return null;
+    }
+    const leaf = pathRows[pathRows.length - 1];
+    const root = pathRows[0] || leaf;
+    const stage = pathRows[1] || null;
+    const context = {
+      folder: leaf,
+      depth: pathRows.length,
+      domain: normalizeDocumentDomain(leaf.domain || root.domain),
+      project_group_id: leaf.project_group_id ?? root.project_group_id ?? null,
+      department_key: normalizeDocumentDirectoryDepartment(leaf.domain || root.domain, root.department_key || leaf.department_key),
+      doc_type: normalizeDocumentDirectoryType(stage?.default_doc_type || leaf.default_doc_type || 'IMP'),
+    };
+    memo.set(id, context);
+    return context;
+  };
+}
+
+function runDocumentDirectoryUpdateIfChanged(updateDoc, doc, folderId, departmentKey, docType, projectCode, documentNo) {
+  if (
+    Number(doc.folder_id || 0) === Number(folderId || 0)
+    && String(doc.department_key || '') === String(departmentKey || '')
+    && String(doc.doc_type || '') === String(docType || '')
+    && String(doc.project_code || '') === String(projectCode || '')
+    && String(doc.document_no || '') === String(documentNo || '')
+  ) {
+    return;
+  }
+  updateDoc.run(folderId, departmentKey, docType, projectCode, documentNo, doc.id);
+}
+
 function ensureDocumentDirectoryBlueprint() {
   const ensure = db.transaction(() => {
     const targetMap = new Map();
@@ -5438,6 +5486,9 @@ function ensureDocumentDirectoryBlueprint() {
         targetMap.get(domain).set(department.key, stageMap);
       }
     }
+    const folderContextResolver = buildDocumentFolderContextResolver(
+      db.prepare('SELECT * FROM document_folders').all()
+    );
 
     const docs = db.prepare(`
       SELECT d.*, f.department_key as folder_department_key, f.default_doc_type as folder_doc_type
@@ -5458,7 +5509,7 @@ function ensureDocumentDirectoryBlueprint() {
     `);
     docs.forEach(doc => {
       const currentFolderId = Number(doc.folder_id || 0);
-      const currentFolderContext = currentFolderId ? resolveDocumentFolderContext(currentFolderId) : null;
+      const currentFolderContext = currentFolderId ? folderContextResolver(currentFolderId) : null;
       if (
         currentFolderContext
         && currentFolderContext.depth >= 3
@@ -5472,7 +5523,7 @@ function ensureDocumentDirectoryBlueprint() {
           ? getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code)
           : DOCUMENT_DOMAIN_CODES[domain];
         const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, getDocumentYear(doc));
-        updateDoc.run(currentFolderId, departmentKey, docType, projectCode, documentNo, doc.id);
+        runDocumentDirectoryUpdateIfChanged(updateDoc, doc, currentFolderId, departmentKey, docType, projectCode, documentNo);
         return;
       }
       const domain = normalizeDocumentDomain(doc.domain);
@@ -5486,7 +5537,7 @@ function ensureDocumentDirectoryBlueprint() {
         ? getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code)
         : DOCUMENT_DOMAIN_CODES[domain];
       const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, getDocumentYear(doc));
-      updateDoc.run(targetFolderId, departmentKey, docType, projectCode, documentNo, doc.id);
+      runDocumentDirectoryUpdateIfChanged(updateDoc, doc, targetFolderId, departmentKey, docType, projectCode, documentNo);
     });
 
     if (LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES.length) {
