@@ -8526,24 +8526,33 @@ export default function Documents() {
           {block.type === 'fold-advanced-todo' && <Tag color="gold" style={{ marginTop: 2 }}>高级</Tag>}
         </div>
         {!collapsed && (
-          <TextArea
-            value={meta.body || ''}
-            bordered={false}
-            autoSize={{ minRows: 2 }}
-            placeholder="折叠内容"
-            onFocus={() => setSelectedBlockId(block.id)}
-            onChange={event => updateBlockMeta(block.id, { body: event.target.value })}
+          <div
             style={{
               marginLeft: isTodo ? 68 : 32,
               width: `calc(100% - ${isTodo ? 68 : 32}px)`,
-              resize: 'none',
               lineHeight: 1.7,
               fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
               background: '#f8fafc',
               borderRadius: 6,
               padding: '6px 8px',
             }}
-          />
+          >
+            <InlineRichTextEditor
+              id={`doc-fold-body-input-${block.id}`}
+              value={meta.body || ''}
+              placeholder="折叠内容"
+              onFocus={() => setSelectedBlockId(block.id)}
+              onChange={value => updateBlockMeta(block.id, { body: value })}
+              style={{
+                minHeight: 42,
+                padding: 0,
+                resize: 'none',
+                lineHeight: 1.7,
+                fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
+                background: 'transparent',
+              }}
+            />
+          </div>
         )}
       </Space>
     );
@@ -10757,7 +10766,7 @@ export default function Documents() {
       return (
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <InlineHtmlView as="div" value={block.content} style={{ ...blockStyle, fontWeight: 700 }} />
-          {meta.body && <div style={{ ...blockStyle, color: '#475569' }}>{meta.body}</div>}
+          {meta.body && <InlineHtmlView as="div" value={meta.body} style={{ ...blockStyle, color: '#475569' }} />}
         </Space>
       );
     }

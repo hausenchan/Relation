@@ -424,6 +424,8 @@ function pickInlineColor(marks, keys) {
   const keyPattern = new RegExp(`^(${keys.join('|')})$`, 'i');
   const validColor = value => {
     const color = String(value || '').trim();
+    const normalized = normalizeCssColor(color);
+    if (normalized) return normalized;
     if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
     if (/^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}(?:\s*,\s*(?:0|1|0?\.\d+))?\s*\)$/i.test(color)) return color;
     if (/^[a-z]+$/i.test(color)) return color;
@@ -454,9 +456,43 @@ function pickInlineColor(marks, keys) {
   return '';
 }
 
+function pickInlineLink(value = {}, marks = {}) {
+  const pickString = (...items) => items.map(item => String(item || '').trim()).find(Boolean) || '';
+  const direct = pickString(
+    value.href,
+    value.url,
+    value.link,
+    value.page_url,
+    value.pageUrl,
+    value.source_url,
+    value.sourceUrl,
+    value.reference_url,
+    value.referenceUrl,
+    value.text?.link,
+    value.text?.href,
+    value.text?.url,
+    marks?.href,
+    marks?.url,
+    marks?.link
+  );
+  if (direct) return direct;
+  const pageId = pickString(
+    value.page_id,
+    value.pageId,
+    value.page?.id,
+    value.page?.page_id,
+    value.mention?.page?.id,
+    marks?.page_id,
+    marks?.pageId
+  );
+  if (pageId) return `https://www.wolai.com/${encodeURIComponent(pageId)}`;
+  return '';
+}
+
 function applyInlineMarks(html, marks) {
   let output = String(html || '');
   if (!stripHtml(output)) return output;
+  const link = pickInlineLink({}, marks);
   if (hasInlineMark(marks, /bold|strong|加粗/i)) output = `<strong>${output}</strong>`;
   if (hasInlineMark(marks, /italic|em|斜体/i)) output = `<em>${output}</em>`;
   if (hasInlineMark(marks, /underline|下划线/i)) output = `<u>${output}</u>`;
@@ -469,6 +505,9 @@ function applyInlineMarks(html, marks) {
     backgroundColor ? `background-color: ${backgroundColor}` : '',
   ].filter(Boolean).join('; ');
   if (style) output = `<span style="${escapeHtml(style)}">${output}</span>`;
+  if (link) {
+    output = `<a href="${escapeHtml(link)}" target="_blank" rel="noreferrer">${output}</a>`;
+  }
   return output;
 }
 
@@ -539,6 +578,58 @@ function isRichTextTuple(value) {
     && (Array.isArray(value[1]) || isPlainObject(value[1]) || value[1] == null);
 }
 
+function getInlineReferenceTitle(value = {}) {
+  if (!isPlainObject(value)) return '';
+  return stripHtml(getNodeHtml(
+    value.title
+    || value.name
+    || value.text
+    || value.plain_text
+    || value.plainText
+    || value.page?.title
+    || value.page?.name
+    || value.mention?.page?.title
+    || value.mention?.page?.name
+  )).trim();
+}
+
+function buildInlineReferenceUrl(value = {}) {
+  if (!isPlainObject(value)) return '';
+  const direct = [
+    value.href,
+    value.url,
+    value.link,
+    value.page_url,
+    value.pageUrl,
+    value.source_url,
+    value.sourceUrl,
+    value.reference_url,
+    value.referenceUrl,
+    value.page?.url,
+    value.page?.href,
+    value.page?.link,
+    value.mention?.page?.url,
+  ].map(item => String(item || '').trim()).find(Boolean);
+  if (direct) return direct;
+  const pageId = [
+    value.page_id,
+    value.pageId,
+    value.page?.id,
+    value.page?.page_id,
+    value.page?.pageId,
+    value.mention?.page?.id,
+  ].map(item => String(item || '').trim()).find(Boolean);
+  return pageId ? `https://www.wolai.com/${encodeURIComponent(pageId)}` : '';
+}
+
+function isInlineReferenceObject(value = {}) {
+  if (!isPlainObject(value)) return false;
+  const hint = getNodeTypeHint(value);
+  if (/bookmark|link|mention|reference|引用|链接/.test(hint)) return true;
+  if (/^(page|document)$/.test(hint) && !value.parent_id && !value.parentId && !value.parent_block_id && !value.parentBlockId) return true;
+  return Boolean(buildInlineReferenceUrl(value) && getInlineReferenceTitle(value));
+}
+
 function extractInlineHtml(value) {
   if (value == null) return '';
   if (typeof value === 'string' || typeof value === 'number') {
@@ -550,6 +641,12 @@ function extractInlineHtml(value) {
     return value.map(item => extractInlineHtml(item)).join('');
   }
   if (!isPlainObject(value)) return '';
+  if (isInlineReferenceObject(value)) {
+    const title = getInlineReferenceTitle(value) || buildInlineReferenceUrl(value) || '链接';
+    const url = buildInlineReferenceUrl(value);
+    const safeTitle = escapeHtml(title);
+    return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${safeTitle}</a>` : safeTitle;
+  }
   if (value.blocks || value.children || value.items || value.rows || value.table) return '';
 
   const annotations = value.annotations || value.annotation || value.marks || value.mark || value.styles || value.style || value.decorations;
@@ -568,7 +665,14 @@ function extractInlineHtml(value) {
   ];
   for (const candidate of candidates) {
     const html = extractInlineHtml(candidate);
-    if (stripHtml(html)) return applyInlineMarks(html, pickInlineMarkSource(value, annotations));
+    if (stripHtml(html)) {
+      const marks = pickInlineMarkSource(value, annotations);
+      const link = pickInlineLink(value, marks);
+      const withMarks = applyInlineMarks(html, marks);
+      return link && !/<a\b/i.test(withMarks)
+        ? `<a href="${escapeHtml(link)}" target="_blank" rel="noreferrer">${withMarks}</a>`
+        : withMarks;
+    }
   }
   return '';
 }
@@ -612,6 +716,65 @@ function isFoldLikeTypeHint(value = '') {
   return /toggle|fold|collaps|expand|折叠|展开/.test(String(value || '').toLowerCase());
 }
 
+function hasFoldFlag(node = {}) {
+  if (!isPlainObject(node)) return false;
+  return Boolean(
+    node.toggle
+    || node.is_toggle
+    || node.isToggle
+    || node.collapsible
+    || node.foldable
+    || node.children_toggle
+    || node.childrenToggle
+  );
+}
+
+function getWolaiCollapsedState(source = {}, fallback = false) {
+  const readBoolean = (value) => {
+    if (value === true || value === false) return value;
+    if (typeof value === 'string') {
+      if (/^(true|1|yes|collapsed|folded|closed)$/i.test(value.trim())) return true;
+      if (/^(false|0|no|expanded|open)$/i.test(value.trim())) return false;
+    }
+    return undefined;
+  };
+  const candidates = [
+    source.collapsed,
+    source.is_collapsed,
+    source.isCollapsed,
+    source.folded,
+    source.is_folded,
+    source.isFolded,
+    source.closed,
+    source.toggle?.collapsed,
+    source.toggle?.is_collapsed,
+    source.toggle?.isCollapsed,
+    source.toggle?.folded,
+  ];
+  for (const candidate of candidates) {
+    const value = readBoolean(candidate);
+    if (value !== undefined) return value;
+  }
+  const expandedCandidates = [
+    source.expanded,
+    source.is_expanded,
+    source.isExpanded,
+    source.open,
+    source.is_open,
+    source.isOpen,
+    source.toggle?.expanded,
+    source.toggle?.is_expanded,
+    source.toggle?.isExpanded,
+    source.toggle?.open,
+  ];
+  for (const candidate of expandedCandidates) {
+    const value = readBoolean(candidate);
+    if (value !== undefined) return !value;
+  }
+  if (hasFoldFlag(source) || isFoldLikeTypeHint(getNodeTypeHint(source))) return true;
+  return fallback;
+}
+
 function isTableRowTypeHint(value = '') {
   return /(^|\s)row($|\s)|table[_\s-]*row|database[_\s-]*row|collection[_\s-]*row|row[_\s-]*block|表格行|记录行/.test(String(value || '').toLowerCase());
 }
@@ -630,9 +793,13 @@ function isDatabaseLikeTypeHint(value = '') {
 function mapNodeType(node) {
   const raw = getNodeTypeHint(node);
   const level = Number(node?.level || node?.heading_level || raw.match(/heading[_-]?([1-6])/)?.[1] || 0);
-  if (/heading|title|header/.test(raw) || level) return `heading${Math.min(Math.max(level || 1, 1), 3)}`;
+  const headingLevel = Math.min(Math.max(level || 1, 1), 4);
+  const isFold = isFoldLikeTypeHint(raw) || hasFoldFlag(node);
+  if (/^(page|document)$/.test(raw) && buildInlineReferenceUrl(node)) return 'external-link';
+  if ((/heading|title|header/.test(raw) || level) && isFold) return `fold-heading${Math.min(Math.max(headingLevel, 2), 4)}`;
+  if (/heading|title|header/.test(raw) || level) return `heading${Math.min(Math.max(headingLevel, 1), 3)}`;
   if (/todo|check/.test(raw)) return 'todo';
-  if (isFoldLikeTypeHint(raw)) return 'fold-list';
+  if (isFold) return 'fold-list';
   if (isDatabaseLikeNode(node)) return 'database-embed';
   if (isTableLikeTypeHint(raw)) return 'table-simple';
   if (/enum|number|ordered|ol/.test(raw)) return 'numbered';
@@ -1936,7 +2103,9 @@ function extractWolaiRecordsFromJsonLikeText(text = '') {
 function inferWolaiRecordType(record = {}) {
   const hasOwnTypeHint = Boolean(record.type || record.inferredType);
   const hint = `${record.type || ''} ${record.inferredType || ''} ${hasOwnTypeHint ? '' : (record.parentType || '')}`.toLowerCase();
+  const isFold = isFoldLikeTypeHint(hint) || hasFoldFlag(record.raw || {});
   if (record.media?.kind) return record.media.kind;
+  if ((/heading|header|title/.test(hint) || record.level) && isFold) return `fold-heading${Math.min(Math.max(Number(record.level) || 2, 2), 4)}`;
   if (/heading|header|title/.test(hint) || record.level) return `heading${Math.min(Math.max(Number(record.level) || 2, 1), 3)}`;
   if (/todo|check/.test(hint)) return 'todo';
   if (isTableRowTypeHint(hint)) return 'table-row';
@@ -1947,7 +2116,7 @@ function inferWolaiRecordType(record = {}) {
   if (/divider|hr|separator/.test(hint)) return 'divider';
   if (/image|picture/.test(hint)) return 'image';
   if (/file|attachment|asset/.test(hint)) return 'attachment';
-  if (isFoldLikeTypeHint(hint)) return 'fold-list';
+  if (isFold) return 'fold-list';
   if (/enum|number|ordered|ol/.test(hint)) return 'numbered';
   if (/bullet|unordered|ul/.test(hint)) return 'bullet';
   return 'paragraph';
@@ -1983,6 +2152,52 @@ function hasRenderableWolaiRecord(record = {}) {
 function isPageContainerRecord(record = {}) {
   const hint = String(record.type || record.inferredType || '').toLowerCase();
   return /^(page|document)$/.test(hint);
+}
+
+function getWolaiRecordUrl(record = {}) {
+  const raw = record.raw || {};
+  const url = [
+    raw.url,
+    raw.href,
+    raw.link,
+    raw.page_url,
+    raw.pageUrl,
+    raw.source_url,
+    raw.sourceUrl,
+    raw.share_url,
+    raw.shareUrl,
+    raw.web_url,
+    raw.webUrl,
+  ].map(item => String(item || '').trim()).find(Boolean);
+  if (url) return url;
+  const id = normalizeRecordId(record.id || raw.page_id || raw.pageId || raw.id);
+  return id ? `https://www.wolai.com/${encodeURIComponent(id)}` : '';
+}
+
+function isLinkedPageRecord(record = {}, rootPageId = '') {
+  if (!isPageContainerRecord(record)) return false;
+  if (!record.id || record.id === rootPageId) return false;
+  return Boolean(stripHtml(record.html) || getWolaiRecordUrl(record));
+}
+
+function buildFoldBodyHtml(records = [], getDepth = () => 0, rootDepth = 0) {
+  const lines = [];
+  records.forEach((record, index) => {
+    const type = inferWolaiRecordType(record);
+    if (type === 'table-row') return;
+    const depth = Math.max(0, getDepth(record) - rootDepth - 1);
+    const indent = '&nbsp;'.repeat(depth * 4);
+    const text = record.media?.url
+      ? `<a href="${escapeHtml(record.media.url)}" target="_blank" rel="noreferrer">${escapeHtml(record.media.filename || record.media.name || record.media.url)}</a>`
+      : (record.html || '');
+    if (!stripHtml(text)) return;
+    let prefix = '';
+    if (type === 'bullet' || type === 'fold-list') prefix = '• ';
+    if (type === 'numbered') prefix = `${index + 1}. `;
+    const line = `${indent}${escapeHtml(prefix)}${text}`;
+    lines.push(/^heading/.test(type) || /^fold-heading/.test(type) ? `<strong>${line}</strong>` : line);
+  });
+  return lines.join('<br/>');
 }
 
 function recordsToBlocks(records = [], seed) {
@@ -2044,6 +2259,19 @@ function recordsToBlocks(records = [], seed) {
 
   const makeBlock = makeBlockFactory(seed);
   const consumedRecordIds = new Set();
+  const rootPageId = extractWolaiPageId(seed);
+  const collectDescendantIds = (record, output = new Set()) => {
+    (childrenByParentId.get(record.id) || []).forEach(child => {
+      if (output.has(child.id)) return;
+      output.add(child.id);
+      collectDescendantIds(child, output);
+    });
+    return output;
+  };
+  const getDescendantRecords = (record) => {
+    const ids = collectDescendantIds(record);
+    return ordered.filter(item => ids.has(item.id));
+  };
   const tableRows = ordered.filter(isWolaiTableRowRecord);
   const tableRowsByParentId = new Map();
   tableRows.forEach(row => {
@@ -2071,6 +2299,17 @@ function recordsToBlocks(records = [], seed) {
   ordered.forEach(record => {
     if (consumedRecordIds.has(record.id)) return;
     const type = inferWolaiRecordType(record);
+    if (isLinkedPageRecord(record, rootPageId)) {
+      collectDescendantIds(record).forEach(id => consumedRecordIds.add(id));
+      blocks.push(makeBlock('external-link', record.html || getWolaiRecordUrl(record), {
+        meta: {
+          url: getWolaiRecordUrl(record),
+          title: stripHtml(record.html) || 'Wolai 文档链接',
+          source_system: 'wolai_mcp',
+        },
+      }));
+      return;
+    }
     if ((type === 'image' || type === 'attachment' || type === 'video') && record.media?.url) {
       blocks.push(makeMediaBlock(makeBlock, { ...record.media, ...getRecordMediaMeta(record), kind: type }));
       return;
@@ -2092,7 +2331,13 @@ function recordsToBlocks(records = [], seed) {
     }
     const meta = {};
     if (type === 'numbered' || type === 'bullet' || type === 'fold-list') meta.indent = getDepth(record);
-    if (type === 'fold-list') meta.collapsed = false;
+    if (type === 'fold-list') meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+    if (type?.startsWith('fold-heading')) {
+      const descendants = getDescendantRecords(record);
+      descendants.forEach(item => consumedRecordIds.add(item.id));
+      meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+      meta.body = buildFoldBodyHtml(descendants, getDepth, getDepth(record));
+    }
     if (record.language) meta.language = record.language;
     blocks.push(makeBlock(type, type === 'divider' ? '' : record.html, {
       checked: record.checked,
@@ -2258,6 +2503,20 @@ function nodesToBlocks(nodes, seed) {
       if (media?.url) blocks.push(makeMediaBlock(makeBlock, { ...media, kind: type }));
       return;
     }
+    if (type === 'external-link') {
+      const url = buildInlineReferenceUrl(node);
+      const html = getNodeHtml(node) || escapeHtml(url);
+      if (url) {
+        blocks.push(makeBlock('external-link', html, {
+          meta: {
+            url,
+            title: stripHtml(html) || 'Wolai 文档链接',
+            source_system: 'wolai_mcp',
+          },
+        }));
+      }
+      return;
+    }
     const html = getNodeHtml(node);
     const text = stripHtml(html);
     if (!text && !['todo'].includes(type)) return;
@@ -2267,7 +2526,8 @@ function nodesToBlocks(nodes, seed) {
         ...((type === 'bullet' || type === 'numbered' || type === 'fold-list')
           ? { indent: Number(node.indent ?? node.depth ?? node.level ?? 0) || 0 }
           : {}),
-        ...(type === 'fold-list' ? { collapsed: Boolean(node.collapsed) } : {}),
+        ...(type === 'fold-list' ? { collapsed: getWolaiCollapsedState(node, true) } : {}),
+        ...(type?.startsWith('fold-heading') ? { collapsed: getWolaiCollapsedState(node, true), body: '' } : {}),
         ...(node.language ? { language: node.language } : {}),
       },
     }));
@@ -2396,7 +2656,8 @@ function parseTextToBlocks(text, seed) {
     const foldBullet = trimmed.match(/^[-*]\s+(?:▶|▸|▾|▿|▼|\[toggle\]|\[fold\])\s*(.+)$/i)
       || trimmed.match(/^(?:▶|▸|▾|▿|▼)\s*(.+)$/);
     if (foldBullet) {
-      blocks.push(makeBlock('fold-list', escapeHtml(foldBullet[1]), { meta: { indent, collapsed: false } }));
+      const collapsed = /▶|▸|\[toggle\]|\[fold\]/i.test(foldBullet[0]);
+      blocks.push(makeBlock('fold-list', escapeHtml(foldBullet[1]), { meta: { indent, collapsed } }));
       continue;
     }
     const bullet = trimmed.match(/^[-*]\s+(.+)$/);
