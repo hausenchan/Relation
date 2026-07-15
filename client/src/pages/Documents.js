@@ -1867,7 +1867,10 @@ function normalizeDatabaseBlockMeta(block) {
     const name = inlineHtmlToPlain(storedColumns[index] || '').trim();
     return name || (index === 0 ? '标题' : `字段名 ${index}`);
   });
-  const rows = (storedRows.length ? storedRows : [columns.map(() => '')]).map(row => (
+  const rowsSource = storedRows.length
+    ? storedRows
+    : (meta.rowDataUnavailable ? [] : [columns.map(() => '')]);
+  const rows = rowsSource.map(row => (
     Array.from({ length: columnCount }, (_, index) => row?.[index] || '')
   ));
   const rawFieldTypes = Array.isArray(meta.fieldTypes) ? meta.fieldTypes : [];
@@ -8873,7 +8876,13 @@ export default function Documents() {
     const shouldRenderWolaiLiveEmbed = Boolean(
       meta.source_system === 'wolai_mcp'
       && meta.rowDataUnavailable
+      && meta.wolaiPublicEmbedAvailable === true
       && (meta.liveEmbed || meta.externalEmbed || wolaiLiveEmbedUrl)
+    );
+    const shouldShowWolaiImportNotice = Boolean(
+      meta.source_system === 'wolai_mcp'
+      && meta.rowDataUnavailable
+      && meta.wolaiRowsCount
     );
 
     if (shouldRenderWolaiLiveEmbed) {
@@ -10180,6 +10189,38 @@ export default function Documents() {
           onKeyDown={stopDatabaseEditorKeyDown}
           style={{ fontSize: 18, fontWeight: 700, color: tableName ? '#111827' : '#9ca3af', margin: '14px 0 10px', paddingLeft: 0 }}
         />
+        {shouldShowWolaiImportNotice && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              margin: '0 0 12px',
+              padding: '10px 12px',
+              border: '1px solid #fde68a',
+              borderRadius: 8,
+              background: '#fffbeb',
+              color: '#92400e',
+              fontSize: 13,
+            }}
+          >
+            <Text style={{ color: '#92400e' }}>
+              Wolai 未返回表格行数据，已导入字段、选项、排序和分组。
+            </Text>
+            {wolaiLiveEmbedUrl && (
+              <Button
+                size="small"
+                icon={<LinkOutlined />}
+                href={wolaiLiveEmbedUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                打开原表
+              </Button>
+            )}
+          </div>
+        )}
         <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
           <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 520 : 720 }}>
             <colgroup>

@@ -1917,8 +1917,8 @@ function buildWolaiDatabaseMetaFromTablePayload(payload = {}, options = {}) {
       ...viewMeta,
       source_url: buildWolaiPageUrl(options.blockId, options.sourceUrl),
       embedUrl: buildWolaiPageUrl(options.blockId, options.sourceUrl),
-      liveEmbed: true,
-      externalEmbed: true,
+      liveEmbed: false,
+      externalEmbed: false,
       rowDataUnavailable: true,
     },
     properties,
@@ -1981,15 +1981,15 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
           ...(block.meta || {}),
           source_url: sourceUrl,
           embedUrl: sourceUrl,
-          liveEmbed: true,
-          externalEmbed: true,
+          liveEmbed: false,
+          externalEmbed: false,
           rowDataUnavailable: true,
         },
       };
     });
     return {
       blocks: nextBlocks,
-      warnings: [`Wolai 数据表格视图元数据读取失败：${error.message || '未知错误'}，已保留原表链接`],
+      warnings: [`Wolai 数据表格视图元数据读取失败：${error.message || '未知错误'}，已显示为本地表格结构`],
     };
   }
 
@@ -2014,10 +2014,10 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
       ...(block.meta || {}),
       source_url: sourceUrl,
       embedUrl: sourceUrl,
-      liveEmbed: true,
-      externalEmbed: true,
-      rowDataUnavailable: true,
       ...viewMeta,
+      liveEmbed: false,
+      externalEmbed: false,
+      rowDataUnavailable: true,
     };
     const tableId = String(nextMeta.wolaiTableId || block.meta?.wolaiTableId || '').trim();
     if (tableId) {
@@ -2064,8 +2064,8 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
             rowDataUnavailableCount += 1;
             nextMeta = {
               ...nextMeta,
-              liveEmbed: true,
-              externalEmbed: true,
+              liveEmbed: false,
+              externalEmbed: false,
               rowDataUnavailable: true,
             };
           }
@@ -2082,12 +2082,12 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
   const warnings = [];
   if (importedRowCount > 0) warnings.push(`Wolai 数据表格已导入 ${importedRowCount} 行记录`);
   if (tableMetaCount > 0 && rowDataUnavailableCount > 0) {
-    warnings.push('Wolai 数据表格行数据接口未授权或未返回完整记录，已导入字段/选项/视图并保留原 Wolai 表格嵌入');
+    warnings.push('Wolai 数据表格行数据接口未授权或未返回完整记录，已导入字段/选项/视图并显示为本地表格结构');
   }
   warnings.push(...detailWarnings);
   if (!warnings.length) {
     warnings.push(enrichedCount
-      ? 'Wolai 数据表格行数据未通过 MCP 返回，已保留原 Wolai 表格嵌入视图'
+      ? 'Wolai 数据表格行数据未通过 MCP 返回，已显示为本地表格结构'
       : 'Wolai 数据表格行数据未通过 MCP 返回，已保留原表链接');
   }
   return {
