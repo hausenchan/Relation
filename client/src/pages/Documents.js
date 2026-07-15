@@ -344,6 +344,7 @@ const databaseTagColorOptions = ['#f3f4f6', '#fee2e2', '#ffedd5', '#fef3c7', '#d
 const pasteHtmlBlockSelector = [
   'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
   'p', 'li', 'table', 'div',
+  'img',
 ].join(',');
 
 function getDocumentIdFromSearch(searchParams) {
@@ -1092,14 +1093,111 @@ function removeNestedBlocksFromClone(element, selector) {
 }
 
 function getPastedBlockInlineHtml(element) {
-  const clone = removeNestedBlocksFromClone(element, 'table, ul, ol');
+  const clone = removeNestedBlocksFromClone(element, 'table, ul, ol, img');
   return normalizePastedInlineHtml(clone.innerHTML || clone.textContent || '');
+}
+
+function getClipboardHtmlSourceUrl(html) {
+  const raw = String(html || '');
+  const sourceMatch = raw.match(/(?:^|\n)SourceURL:(.+?)(?:\r?\n|$)/i);
+  if (sourceMatch?.[1]) return sourceMatch[1].trim();
+  if (typeof document === 'undefined') return '';
+  const container = document.createElement('div');
+  container.innerHTML = DOMPurify.sanitize(raw, {
+    ALLOWED_TAGS: ['base'],
+    ALLOWED_ATTR: ['href'],
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed'],
+    FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus'],
+  });
+  return container.querySelector('base[href]')?.getAttribute('href') || '';
+}
+
+function getPastedImageSource(element, sourceUrl = '') {
+  if (!element) return '';
+  const srcset = element.getAttribute?.('srcset') || element.getAttribute?.('data-srcset') || '';
+  const srcsetSource = srcset.split(',').map(item => item.trim().split(/\s+/)[0]).find(Boolean);
+  const raw = [
+    element.getAttribute?.('src'),
+    element.getAttribute?.('data-src'),
+    element.getAttribute?.('data-original'),
+    element.getAttribute?.('data-original-src'),
+    element.getAttribute?.('original_src'),
+    element.getAttribute?.('href'),
+    srcsetSource,
+  ].find(Boolean);
+  const value = String(raw || '').trim();
+  if (!value || /^(javascript|vbscript):/i.test(value)) return '';
+  if (/^data:image\//i.test(value)) {
+    return /^data:image\/(?:png|jpe?g|gif|webp)[;,]/i.test(value) ? value : '';
+  }
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^\/\//.test(value)) return `${window.location.protocol}${value}`;
+  if (/^(blob:|file:)/i.test(value)) return '';
+  try {
+    return new URL(value, sourceUrl || document.baseURI).toString();
+  } catch {
+    return '';
+  }
+}
+
+function getPastedImageFilename(src, element) {
+  const alt = String(element?.getAttribute?.('alt') || element?.getAttribute?.('title') || '').trim();
+  const dataExt = src.match(/^data:image\/([a-z0-9.+-]+)[;,]/i)?.[1]?.replace('jpeg', 'jpg') || '';
+  const sourceExt = getFileExt(src.split('?')[0]);
+  const fallbackExt = imageExts.includes(dataExt) ? dataExt : (imageExts.includes(sourceExt) ? sourceExt : 'png');
+  try {
+    const parsed = new URL(src, document.baseURI);
+    const name = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '');
+    if (name) return name.slice(0, 120);
+  } catch {
+    // Data URLs and malformed remote URLs fall through to readable fallbacks.
+  }
+  if (alt && !/[\\/:*?"<>|]/.test(alt)) return `${alt.slice(0, 80)}.${fallbackExt}`;
+  return `pasted-image-${Date.now()}.${fallbackExt}`;
+}
+
+function getPastedImageMimeType(src) {
+  const dataMatch = String(src || '').match(/^data:(image\/[a-z0-9.+-]+)[;,]/i);
+  if (dataMatch?.[1]) return dataMatch[1].toLowerCase();
+  const ext = getFileExt(src.split('?')[0]);
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'svg') return 'image/svg+xml';
+  return 'image/png';
+}
+
+function createPastedImageBlock(element, sourceUrl = '') {
+  const src = getPastedImageSource(element, sourceUrl);
+  if (!src) return null;
+  const filename = getPastedImageFilename(src, element);
+  const alt = String(element?.getAttribute?.('alt') || element?.getAttribute?.('title') || filename || '图片').trim();
+  const filenameExt = getFileExt(filename);
+  const sourceExt = getFileExt(src.split('?')[0]);
+  const ext = imageExts.includes(filenameExt) ? filenameExt : (imageExts.includes(sourceExt) ? sourceExt : 'png');
+  return {
+    type: 'image',
+    content: filename,
+    meta: {
+      ...getDefaultBlockMeta('image'),
+      url: src,
+      filename,
+      display_name: filename,
+      mimetype: getPastedImageMimeType(src),
+      file_ext: ext,
+      embedOnly: true,
+      remote: !/^data:image\//i.test(src),
+      source_system: 'clipboard_html',
+      source_url: sourceUrl || '',
+      alt,
+    },
+  };
 }
 
 function inferPastedBlockType(element) {
   const tag = String(element?.tagName || '').toLowerCase();
   if (/^h[1-6]$/.test(tag)) return `heading${Math.min(4, Math.max(1, Number(tag.slice(1))))}`;
-  if (tag === 'li') return element.closest('ol') ? 'numbered' : 'bullet';
+  if (tag === 'li') return element.parentElement?.tagName?.toLowerCase() === 'ol' ? 'numbered' : 'bullet';
 
   const className = String(element?.getAttribute?.('class') || '');
   const classHeadingMatch = className.match(/(?:heading|msoheading|标题)\s*([1-4])/i);
@@ -1120,6 +1218,17 @@ function inferPastedBlockType(element) {
     if (fontSizePx >= 17) return 'heading3';
   }
   return 'paragraph';
+}
+
+function getPastedListIndent(element) {
+  if (String(element?.tagName || '').toLowerCase() !== 'li') return 0;
+  let indent = 0;
+  let parent = element.parentElement;
+  while (parent) {
+    if (parent.tagName?.toLowerCase() === 'li') indent += 1;
+    parent = parent.parentElement;
+  }
+  return clampListIndent(indent);
 }
 
 function parsePastedTableElement(table) {
@@ -1181,26 +1290,36 @@ function parsePastedTableElement(table) {
 
 function parseClipboardHtmlDocumentBlocks(html) {
   if (!html || typeof document === 'undefined') return [];
+  const sourceUrl = getClipboardHtmlSourceUrl(html);
   const container = document.createElement('div');
   container.innerHTML = DOMPurify.sanitize(String(html), {
     ALLOWED_TAGS: [
       'html', 'body', 'section', 'article', 'div', 'p',
       'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
       'ul', 'ol', 'li',
+      'img',
       'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td',
       ...inlineHtmlAllowedTags,
     ],
-    ALLOWED_ATTR: ['style', 'href', 'target', 'rel', 'colspan', 'rowspan', 'bgcolor', 'class'],
-    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'img', 'video', 'audio'],
-    FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus', 'src', 'srcset'],
+    ALLOWED_ATTR: [
+      'style', 'href', 'target', 'rel', 'colspan', 'rowspan', 'bgcolor', 'class',
+      'src', 'srcset', 'data-src', 'data-srcset', 'data-original', 'data-original-src', 'original_src',
+      'alt', 'title', 'width', 'height',
+    ],
+    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'video', 'audio'],
+    FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus'],
   });
 
   const blocks = [];
   Array.from(container.querySelectorAll(pasteHtmlBlockSelector)).forEach(element => {
     const tag = String(element.tagName || '').toLowerCase();
+    if (tag === 'img') {
+      const imageBlock = createPastedImageBlock(element, sourceUrl);
+      if (imageBlock) blocks.push(imageBlock);
+      return;
+    }
     if (tag !== 'table' && element.closest('table')) return;
     if (tag === 'div' && element.querySelector(pasteHtmlBlockSelector)) return;
-    if (tag === 'li' && element.parentElement?.closest('li')) return;
 
     if (tag === 'table') {
       const tableBlock = parsePastedTableElement(element);
@@ -1213,7 +1332,10 @@ function parseClipboardHtmlDocumentBlocks(html) {
     blocks.push({
       type: inferPastedBlockType(element),
       content,
-      meta: getDefaultBlockMeta(inferPastedBlockType(element)),
+      meta: {
+        ...getDefaultBlockMeta(inferPastedBlockType(element)),
+        ...(tag === 'li' ? { indent: getPastedListIndent(element) } : {}),
+      },
     });
   });
 
@@ -11220,6 +11342,7 @@ export default function Documents() {
                 key={`${item.url}-${itemIndex}`}
                 src={item.url}
                 alt={item.alt || item.filename || '图片'}
+                referrerPolicy="no-referrer"
                 style={{
                   display: 'block',
                   width: '100%',
@@ -11237,6 +11360,7 @@ export default function Documents() {
         <img
           src={image.url}
           alt={image.alt || image.filename || block.content || '图片'}
+          referrerPolicy="no-referrer"
           style={{
             display: 'block',
             maxWidth: '100%',
@@ -11296,7 +11420,7 @@ export default function Documents() {
         )}
         {meta.filename && <Text type="secondary">{meta.filename}</Text>}
         {kind === 'image' && url && (
-          <img src={url} alt={meta.filename || block.content || '图片'} style={{ maxWidth: '100%', maxHeight: 320, borderRadius: 6, border: '1px solid #e5e7eb' }} />
+          <img src={url} alt={meta.filename || block.content || '图片'} referrerPolicy="no-referrer" style={{ maxWidth: '100%', maxHeight: 320, borderRadius: 6, border: '1px solid #e5e7eb' }} />
         )}
         {kind === 'video' && url && !isExternalMedia && (
           <video src={url} controls style={{ width: '100%', maxHeight: 360, borderRadius: 6, background: '#111827' }} />
@@ -11669,6 +11793,7 @@ export default function Documents() {
                 key={`${item.url}-${itemIndex}`}
                 src={item.url}
                 alt={item.alt || item.filename || label}
+                referrerPolicy="no-referrer"
                 style={{ display: 'block', width: '100%', maxHeight: isMobile ? 320 : 620, objectFit: 'contain', borderRadius: 8 }}
               />
             ))}
@@ -11678,7 +11803,7 @@ export default function Documents() {
       const image = imageItems[0];
       return (
         <div>
-          <img src={image.url} alt={image.alt || label} style={{ display: 'block', maxWidth: '100%', maxHeight: isMobile ? 320 : 520, objectFit: 'contain', borderRadius: 8 }} />
+          <img src={image.url} alt={image.alt || label} referrerPolicy="no-referrer" style={{ display: 'block', maxWidth: '100%', maxHeight: isMobile ? 320 : 520, objectFit: 'contain', borderRadius: 8 }} />
           {meta.filename && <Text type="secondary" style={{ display: 'block', marginTop: 8 }}>{meta.filename}</Text>}
         </div>
       );
