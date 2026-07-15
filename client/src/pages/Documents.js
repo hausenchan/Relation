@@ -6612,14 +6612,18 @@ export default function Documents() {
     const activeInEditableInput = Boolean(
       activeElement?.closest?.('textarea, input, [contenteditable="true"]')
     );
-    const activeInTableCellEditor = Boolean(
+    const activeDatabaseEditorBlockId = activeElement
+      ?.closest?.('[data-document-database-editor-block-id]')
+      ?.getAttribute?.('data-document-database-editor-block-id');
+    const activeInTableLikeEditor = Boolean(
       activeElement?.closest?.('[data-document-table-cell="true"]')
+      || (activeDatabaseEditorBlockId && activeDatabaseEditorBlockId === targetBlock.id)
       || (selectedTableCell?.blockId && selectedTableCell.blockId === targetBlock.id)
     );
     const activeIsTargetBlock = !activeBlockId || activeBlockId === targetBlock.id;
     const shouldSkipBlockDelete = activeInEditableInput
       && activeIsTargetBlock
-      && (!isTableLikeBlock(targetBlock) || activeInTableCellEditor)
+      && (!isTableLikeBlock(targetBlock) || activeInTableLikeEditor)
       && targetBlock.type !== 'divider'
       && targetBlock.type !== 'attachment';
     if (shouldSkipBlockDelete) return [];
@@ -9394,6 +9398,10 @@ export default function Documents() {
         updateCell(rowIndex, columnIndex, sanitizeInlineHtml(target.innerHTML));
       }, 0);
     };
+    const stopDatabaseEditorKeyDown = (event) => {
+      if (!['Backspace', 'Delete', 'Enter'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
+      event.stopPropagation();
+    };
     const renderFieldTypeIcon = (type) => (
       <span style={{ width: 18, minWidth: 18, color: '#6b7280', display: 'inline-flex', justifyContent: 'center' }}>
         {databaseFieldTypeMap[type]?.icon || '☰'}
@@ -9456,10 +9464,12 @@ export default function Documents() {
     );
     const renderDatabasePanelFrame = (children, width = 340) => (
       <div
+        data-document-database-editor-block-id={block.id}
         onMouseDown={event => {
           event.stopPropagation();
           if (!event.target?.closest?.('input, textarea, [contenteditable="true"], .ant-select, .ant-picker')) event.preventDefault();
         }}
+        onKeyDown={stopDatabaseEditorKeyDown}
         style={{
           width,
           maxHeight: 'min(680px, calc(100vh - 120px))',
@@ -9606,10 +9616,12 @@ export default function Documents() {
       const options = tagOptions[columnIndex] || [];
       return (
         <div
+          data-document-database-editor-block-id={block.id}
           onMouseDown={event => {
             event.stopPropagation();
             if (!event.target?.closest?.('input, textarea, [contenteditable="true"], .ant-select')) event.preventDefault();
           }}
+          onKeyDown={stopDatabaseEditorKeyDown}
           style={{
             width: 320,
             maxHeight: 'min(680px, calc(100vh - 120px))',
@@ -9879,6 +9891,7 @@ export default function Documents() {
     return (
       <div
         id={`doc-database-shell-${block.id}`}
+        data-document-database-editor-block-id={block.id}
         tabIndex={0}
         onKeyDown={handleDatabaseShellKeyDown}
         style={{ width: '100%', outline: 'none', padding: '4px 0 8px' }}
@@ -9937,6 +9950,7 @@ export default function Documents() {
           placeholder="表格名称"
           bordered={false}
           onChange={event => updateTableName(event.target.value)}
+          onKeyDown={stopDatabaseEditorKeyDown}
           style={{ fontSize: 18, fontWeight: 700, color: tableName ? '#111827' : '#9ca3af', margin: '14px 0 10px', paddingLeft: 0 }}
         />
         <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
