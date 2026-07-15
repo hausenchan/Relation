@@ -1668,16 +1668,44 @@ function normalizeTableBlockData(block) {
   };
 }
 
-function normalizeDatabaseFieldType(value, columnIndex = 0, columnName = '') {
+function normalizeDatabaseFieldType(value, columnIndex = 0, columnName = '', options = {}) {
   const raw = String(value || '').trim().toLowerCase();
   const compact = raw.replace(/[\s-]+/g, '_');
   if (databaseFieldTypeMap[compact]) return compact;
+  const aliasMap = {
+    primary: 'title',
+    name: 'title',
+    single_select: 'select',
+    status: 'select',
+    enum: 'select',
+    option: 'select',
+    multiple_select: 'multi_select',
+    multi: 'multi_select',
+    rich_text: 'text',
+    plain_text: 'text',
+    datetime: 'date',
+    created_time: 'date',
+    updated_time: 'date',
+    people: 'person',
+    user: 'person',
+    users: 'person',
+    member: 'person',
+    integer: 'number',
+    float: 'number',
+    decimal: 'number',
+    link: 'url',
+    boolean: 'checkbox',
+    bool: 'checkbox',
+  };
+  if (aliasMap[compact]) return aliasMap[compact];
   if (compact === 'single_select') return 'select';
   if (compact === 'multi_select' || compact === 'multiple_select') return 'multi_select';
   if (compact === 'rich_text' || compact === 'plain_text') return 'text';
   if (compact === 'created_time' || compact === 'updated_time') return 'date';
+  const hasExplicitType = raw.length > 0;
+  if (!hasExplicitType && options.inferFromColumnName !== true) return columnIndex === 0 ? 'title' : 'text';
   const label = inlineHtmlToPlain(columnName || '').trim().toLowerCase();
-  const source = `${raw} ${label}`;
+  const source = hasExplicitType ? raw : label;
   if (/multi[_\s-]*select|multiple|checkboxes|多选/.test(source)) return 'multi_select';
   if (/select|single|option|status|tag|enum|choice|标签|状态|优先级|类型|单选/.test(source)) return 'select';
   if (/title|name|名称|标题|任务/.test(source)) return 'title';
@@ -1844,7 +1872,9 @@ function normalizeDatabaseBlockMeta(block) {
   ));
   const rawFieldTypes = Array.isArray(meta.fieldTypes) ? meta.fieldTypes : [];
   const fieldTypes = Array.from({ length: columnCount }, (_, index) => (
-    normalizeDatabaseFieldType(rawFieldTypes[index], index, columns[index])
+    normalizeDatabaseFieldType(rawFieldTypes[index], index, columns[index], {
+      inferFromColumnName: meta.inferFieldTypesFromColumns === true,
+    })
   ));
   const tagOptions = normalizeDatabaseTagOptions(meta.tagOptions || meta.selectOptions || meta.options, columnCount, fieldTypes, rows);
   const columnWidths = Array.from({ length: columnCount }, (_, index) => (
@@ -5317,6 +5347,7 @@ export default function Documents() {
 
   const handleEditorPaste = async (event) => {
     if (event.target?.closest?.('[data-inline-comment-panel="true"]')) return;
+    if (event.target?.closest?.('[data-document-table-cell="true"], [data-document-database-editor-block-id] input, [data-document-database-editor-block-id] textarea, [data-document-database-editor-block-id] [contenteditable="true"], [data-document-database-editor-block-id] .ant-select, [data-document-database-editor-block-id] .ant-picker')) return;
     const clipboardData = event.clipboardData;
     const targetBlockId = event.target?.closest?.('[data-doc-block-id]')?.getAttribute('data-doc-block-id')
       || selectedBlockId
@@ -6608,6 +6639,7 @@ export default function Documents() {
     const activeBlock = editorBlocks.find(block => block.id === activeBlockId);
     const targetBlock = selectedBlock || activeBlock;
     if (!targetBlock) return [];
+    if (isTableLikeBlock(targetBlock)) return [];
 
     const activeInEditableInput = Boolean(
       activeElement?.closest?.('textarea, input, [contenteditable="true"]')
@@ -9103,7 +9135,7 @@ export default function Documents() {
         sections.get(key).rows.push(item);
       });
       return Array.from(sections.values()).filter(section => (
-        section.rows.length && (!visibleGroupSet.size || visibleGroupSet.has(section.key))
+        !visibleGroupSet.size || visibleGroupSet.has(section.key)
       ));
     })();
     const hasActiveFilter = activeFilterRules.length > 0;
@@ -9398,6 +9430,145 @@ export default function Documents() {
         updateCell(rowIndex, columnIndex, sanitizeInlineHtml(target.innerHTML));
       }, 0);
     };
+    const normalizeDatabasePastedCellHtml = (value = '') => {
+      const html = normalizePastedInlineHtml(value);
+      return inlineHtmlToPlain(html).trim() ? html : '';
+    };
+    const normalizeDatabaseClipboardMatrix = (matrix = []) => {
+      const normalized = matrix
+        .map(row => (Array.isArray(row) ? row : [row]).map(cell => sanitizeInlineHtml(String(cell || ''))))
+        .filter(row => row.some(cell => inlineHtmlToPlain(cell).trim()));
+      while (normalized.length > 1 && normalized[normalized.length - 1].every(cell => !inlineHtmlToPlain(cell).trim())) {
+        normalized.pop();
+      }
+      const maxColumnCount = Math.max(0, ...normalized.map(row => row.length));
+      if (!normalized.length || maxColumnCount <= 0) return null;
+      return normalized.map(row => Array.from({ length: maxColumnCount }, (_, index) => row[index] || ''));
+    };
+    const parseDatabaseClipboardHtmlMatrix = (html = '') => {
+      if (!html || typeof DOMParser === 'undefined') return null;
+      const parsed = new DOMParser().parseFromString(html, 'text/html');
+      const table = parsed.querySelector('table');
+      if (!table) return null;
+      const matrix = Array.from(table.querySelectorAll('tr')).map(row => (
+        Array.from(row.querySelectorAll('th,td')).map(cell => normalizeDatabasePastedCellHtml(cell.innerHTML || cell.textContent || ''))
+      ));
+      return normalizeDatabaseClipboardMatrix(matrix);
+    };
+    const parseDatabaseClipboardTsvMatrix = (text = '') => {
+      if (!String(text || '').includes('\t')) return null;
+      const matrix = [];
+      let row = [];
+      let cell = '';
+      let inQuotes = false;
+      const source = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        const nextChar = source[index + 1];
+        if (char === '"') {
+          if (inQuotes && nextChar === '"') {
+            cell += '"';
+            index += 1;
+          } else {
+            inQuotes = !inQuotes;
+          }
+          continue;
+        }
+        if (!inQuotes && char === '\t') {
+          row.push(escapeHtml(cell).replace(/\n/g, '<br>'));
+          cell = '';
+          continue;
+        }
+        if (!inQuotes && char === '\n') {
+          row.push(escapeHtml(cell).replace(/\n/g, '<br>'));
+          matrix.push(row);
+          row = [];
+          cell = '';
+          continue;
+        }
+        cell += char;
+      }
+      if (cell || row.length || !source.endsWith('\n')) row.push(escapeHtml(cell).replace(/\n/g, '<br>'));
+      if (row.length) matrix.push(row);
+      return normalizeDatabaseClipboardMatrix(matrix);
+    };
+    const getDatabaseClipboardMatrix = (event) => {
+      const clipboardData = event.clipboardData;
+      const html = clipboardData?.getData?.('text/html') || '';
+      const text = clipboardData?.getData?.('text/plain') || '';
+      return parseDatabaseClipboardHtmlMatrix(html) || parseDatabaseClipboardTsvMatrix(text);
+    };
+    const isMultiCellClipboardMatrix = (matrix) => (
+      Array.isArray(matrix)
+      && (
+        matrix.length > 1
+        || matrix.some(row => Array.isArray(row) && row.length > 1)
+      )
+    );
+    const applyDatabaseClipboardMatrix = (matrix, rowIndex, columnIndex) => {
+      if (!isMultiCellClipboardMatrix(matrix)) return false;
+      const maxMatrixColumnCount = Math.max(1, ...matrix.map(row => row.length));
+      const nextColumnCount = Math.max(columns.length, columnIndex + maxMatrixColumnCount);
+      const nextRowCount = Math.max(rows.length, rowIndex + matrix.length);
+      const nextColumns = Array.from({ length: nextColumnCount }, (_, index) => (
+        index < columns.length ? columns[index] : `字段名 ${index + 1}`
+      ));
+      const nextRows = Array.from({ length: nextRowCount }, (_, currentRowIndex) => (
+        Array.from({ length: nextColumnCount }, (_, currentColumnIndex) => rows[currentRowIndex]?.[currentColumnIndex] || '')
+      ));
+      matrix.forEach((matrixRow, matrixRowIndex) => {
+        matrixRow.forEach((cell, matrixColumnIndex) => {
+          nextRows[rowIndex + matrixRowIndex][columnIndex + matrixColumnIndex] = cell;
+        });
+      });
+      persistDatabaseMeta({
+        columns: nextColumns,
+        rows: nextRows,
+        fieldTypes: Array.from({ length: nextColumnCount }, (_, index) => fieldTypes[index] || 'text'),
+        columnWidths: Array.from({ length: nextColumnCount }, (_, index) => columnWidths[index] || 200),
+      });
+      setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
+      return true;
+    };
+    const getDatabaseClipboardInlineHtml = (event) => {
+      const clipboardData = event.clipboardData;
+      const html = clipboardData?.getData?.('text/html') || '';
+      const text = clipboardData?.getData?.('text/plain') || '';
+      const normalizedHtml = normalizePastedInlineHtml(html);
+      if (inlineHtmlToPlain(normalizedHtml).trim()) return normalizedHtml;
+      if (!text) return '';
+      return escapeHtml(text).replace(/\r?\n/g, '<br>');
+    };
+    const handleDatabaseCellPaste = (event, rowIndex, columnIndex) => {
+      const matrix = getDatabaseClipboardMatrix(event);
+      if (applyDatabaseClipboardMatrix(matrix, rowIndex, columnIndex)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      const inlineHtml = getDatabaseClipboardInlineHtml(event);
+      if (!inlineHtml) return;
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        document.execCommand('insertHTML', false, inlineHtml);
+      } catch {
+        document.execCommand('insertText', false, inlineHtmlToPlain(inlineHtml));
+      }
+      const target = event.currentTarget;
+      window.setTimeout(() => {
+        updateCell(rowIndex, columnIndex, sanitizeInlineHtml(target.innerHTML));
+      }, 0);
+    };
+    const handleDatabaseInputCellPaste = (event, rowIndex, columnIndex) => {
+      const matrix = getDatabaseClipboardMatrix(event);
+      if (applyDatabaseClipboardMatrix(matrix, rowIndex, columnIndex)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      event.stopPropagation();
+    };
     const stopDatabaseEditorKeyDown = (event) => {
       if (!['Backspace', 'Delete', 'Enter'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
       event.stopPropagation();
@@ -9633,9 +9804,11 @@ export default function Documents() {
             padding: 12,
           }}
         >
+          <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>字段名称</Text>
           <Input
             value={columns[columnIndex]}
             onChange={event => updateColumn(columnIndex, event.target.value)}
+            onFocus={event => event.target.select()}
             style={{ marginBottom: 12, fontWeight: 600 }}
           />
           <Text type="secondary" style={{ display: 'block', marginBottom: 6 }}>字段类型</Text>
@@ -9769,6 +9942,7 @@ export default function Documents() {
           onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
           onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
           onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
+          onPaste={event => handleDatabaseInputCellPaste(event, rowIndex, columnIndex)}
           style={{
             minHeight: 38,
             padding: '6px 8px',
@@ -9806,6 +9980,7 @@ export default function Documents() {
             onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
             onChange={(_, dateString) => updateCell(rowIndex, columnIndex, dateString || '')}
             onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
+            onPaste={event => handleDatabaseInputCellPaste(event, rowIndex, columnIndex)}
             style={{ width: '100%', minHeight: 38, padding: '6px 8px' }}
           />
         );
@@ -9821,6 +9996,7 @@ export default function Documents() {
             onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
             onChange={value => updateCell(rowIndex, columnIndex, value === null || value === undefined ? '' : String(value))}
             onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
+            onPaste={event => handleDatabaseInputCellPaste(event, rowIndex, columnIndex)}
             style={{ width: '100%', padding: '6px 8px' }}
           />
         );
@@ -9842,6 +10018,7 @@ export default function Documents() {
           onMouseUp={event => handleTableCellTextSelection(block, { type: 'database', rowIndex, columnIndex }, event)}
           onKeyUp={event => handleTableCellTextSelection(block, { type: 'database', rowIndex, columnIndex }, event)}
           onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
+          onPaste={event => handleDatabaseCellPaste(event, rowIndex, columnIndex)}
           onBlur={() => {
             inlineToolbarHideTimerRef.current = window.setTimeout(() => {
               const activeElement = document.activeElement;
@@ -9862,6 +10039,56 @@ export default function Documents() {
         />
       );
     };
+    const renderDatabaseGroupColumnHeaderRow = (sectionKey) => (
+      <tr key={`database-group-header-${sectionKey}`}>
+        {columns.map((column, columnIndex) => {
+          const fieldType = fieldTypes[columnIndex];
+          const headerBackground = titleColorColumns[columnIndex] ? (columnColors[columnIndex] || '#fff') : '#fff';
+          return (
+            <td
+              key={`database-group-header-cell-${sectionKey}-${columnIndex}`}
+              style={{
+                position: 'relative',
+                border: '1px solid #e5e7eb',
+                background: headerBackground,
+                textAlign: 'left',
+                padding: 0,
+                height: 40,
+                verticalAlign: 'middle',
+              }}
+            >
+              <Dropdown trigger={['click']} placement="bottomLeft" autoAdjustOverflow={false} dropdownRender={() => renderDatabaseColumnMenu(columnIndex)}>
+                <button
+                  type="button"
+                  onClick={event => event.stopPropagation()}
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    border: 0,
+                    background: 'transparent',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '8px 12px',
+                    color: '#4b5563',
+                    fontWeight: 700,
+                    fontSize: 14,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  {renderFieldTypeIcon(fieldType)}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{column}</span>
+                </button>
+              </Dropdown>
+            </td>
+          );
+        })}
+        <td style={{ border: '1px solid #e5e7eb', background: '#fff', padding: 0, height: 40 }}>
+          <Button type="text" icon={<PlusOutlined />} aria-label="新增字段" onClick={() => insertColumn(columns.length - 1, 'after')} />
+        </td>
+      </tr>
+    );
     const renderDatabaseBodyRow = ({ row, rowIndex }) => (
       <tr key={`database-row-${rowIndex}`}>
         {columns.map((_, columnIndex) => {
@@ -9959,70 +10186,72 @@ export default function Documents() {
               {columnWidths.map((width, index) => <col key={`database-col-${index}`} style={{ width }} />)}
               <col style={{ width: 74 }} />
             </colgroup>
-            <thead>
-              <tr>
-                {columns.map((column, columnIndex) => {
-                  const fieldType = fieldTypes[columnIndex];
-                  const headerBackground = titleColorColumns[columnIndex] ? (columnColors[columnIndex] || '#fff') : '#fff';
-                  return (
-                    <th
-                      key={`database-header-${columnIndex}`}
-                      style={{
-                        position: 'relative',
-                        border: '1px solid #e5e7eb',
-                        borderLeft: columnIndex === 0 ? '1px solid #e5e7eb' : undefined,
-                        background: headerBackground,
-                        textAlign: 'left',
-                        padding: 0,
-                        height: 44,
-                        verticalAlign: 'middle',
-                      }}
-                    >
-                      <Dropdown trigger={['click']} dropdownRender={() => renderDatabaseColumnMenu(columnIndex)}>
-                        <button
-                          type="button"
-                          onClick={event => event.stopPropagation()}
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            border: 0,
-                            background: 'transparent',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 8,
-                            padding: '8px 12px',
-                            color: '#4b5563',
-                            fontWeight: 700,
-                            fontSize: 15,
-                            cursor: 'pointer',
-                            textAlign: 'left',
-                          }}
-                        >
-                          {renderFieldTypeIcon(fieldType)}
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{column}</span>
-                        </button>
-                      </Dropdown>
-                      <span
-                        role="presentation"
-                        onMouseDown={event => beginColumnResize(event, columnIndex)}
+            {!hasActiveGroup && (
+              <thead>
+                <tr>
+                  {columns.map((column, columnIndex) => {
+                    const fieldType = fieldTypes[columnIndex];
+                    const headerBackground = titleColorColumns[columnIndex] ? (columnColors[columnIndex] || '#fff') : '#fff';
+                    return (
+                      <th
+                        key={`database-header-${columnIndex}`}
                         style={{
-                          position: 'absolute',
-                          top: 0,
-                          right: -4,
-                          width: 8,
-                          height: '100%',
-                          cursor: 'col-resize',
-                          zIndex: 3,
+                          position: 'relative',
+                          border: '1px solid #e5e7eb',
+                          borderLeft: columnIndex === 0 ? '1px solid #e5e7eb' : undefined,
+                          background: headerBackground,
+                          textAlign: 'left',
+                          padding: 0,
+                          height: 44,
+                          verticalAlign: 'middle',
                         }}
-                      />
-                    </th>
-                  );
-                })}
-                <th style={{ border: '1px solid #e5e7eb', background: '#fff', padding: 0, height: 44 }}>
-                  <Button type="text" icon={<PlusOutlined />} aria-label="新增字段" onClick={() => insertColumn(columns.length - 1, 'after')} />
-                </th>
-              </tr>
-            </thead>
+                      >
+                        <Dropdown trigger={['click']} placement="bottomLeft" autoAdjustOverflow={false} dropdownRender={() => renderDatabaseColumnMenu(columnIndex)}>
+                          <button
+                            type="button"
+                            onClick={event => event.stopPropagation()}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              border: 0,
+                              background: 'transparent',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              padding: '8px 12px',
+                              color: '#4b5563',
+                              fontWeight: 700,
+                              fontSize: 15,
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                            }}
+                          >
+                            {renderFieldTypeIcon(fieldType)}
+                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{column}</span>
+                          </button>
+                        </Dropdown>
+                        <span
+                          role="presentation"
+                          onMouseDown={event => beginColumnResize(event, columnIndex)}
+                          style={{
+                            position: 'absolute',
+                            top: 0,
+                            right: -4,
+                            width: 8,
+                            height: '100%',
+                            cursor: 'col-resize',
+                            zIndex: 3,
+                          }}
+                        />
+                      </th>
+                    );
+                  })}
+                  <th style={{ border: '1px solid #e5e7eb', background: '#fff', padding: 0, height: 44 }}>
+                    <Button type="text" icon={<PlusOutlined />} aria-label="新增字段" onClick={() => insertColumn(columns.length - 1, 'after')} />
+                  </th>
+                </tr>
+              </thead>
+            )}
             <tbody>
               {groupSections.length ? groupSections.map(section => (
                 <React.Fragment key={`database-section-${section.key}`}>
@@ -10036,7 +10265,14 @@ export default function Documents() {
                       </td>
                     </tr>
                   )}
-                  {section.rows.map(renderDatabaseBodyRow)}
+                  {hasActiveGroup && renderDatabaseGroupColumnHeaderRow(section.key)}
+                  {section.rows.length ? section.rows.map(renderDatabaseBodyRow) : (
+                    <tr>
+                      <td colSpan={columns.length + 1} style={{ border: '1px solid #e5e7eb', background: '#fff', padding: '10px 14px' }}>
+                        <Text type="secondary">表格视图内容为空</Text>
+                      </td>
+                    </tr>
+                  )}
                 </React.Fragment>
               )) : (
                 <tr>

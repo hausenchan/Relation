@@ -946,15 +946,18 @@ function normalizeDatabaseFieldType(value = '', columnIndex = 0, columnName = ''
   const compact = raw.replace(/[\s-]+/g, '_');
   if (compact === 'single_select' || compact === 'select' || compact === 'status' || compact === 'enum' || compact === 'option') return 'select';
   if (compact === 'multi_select' || compact === 'multiple_select' || compact === 'multi') return 'multi_select';
-  if (compact === 'title' || compact === 'name') return 'title';
+  if (compact === 'title' || compact === 'name' || compact === 'primary') return 'title';
   if (compact === 'rich_text' || compact === 'plain_text' || compact === 'text') return 'text';
   if (compact === 'date' || compact === 'datetime' || compact === 'created_time' || compact === 'updated_time') return 'date';
-  if (compact === 'person' || compact === 'people' || compact === 'user' || compact === 'users') return 'person';
+  if (compact === 'person' || compact === 'people' || compact === 'user' || compact === 'users' || compact === 'member') return 'person';
   if (compact === 'number' || compact === 'integer' || compact === 'float' || compact === 'decimal') return 'number';
   if (compact === 'url' || compact === 'link') return 'url';
+  if (compact === 'email') return 'email';
+  if (compact === 'phone' || compact === 'tel' || compact === 'mobile') return 'phone';
   if (compact === 'checkbox' || compact === 'boolean' || compact === 'bool') return 'checkbox';
+  if (!raw) return columnIndex === 0 ? 'title' : 'text';
   const label = stripHtml(getNodeHtml(columnName || '')).trim().toLowerCase();
-  const source = `${raw} ${label}`;
+  const source = raw || label;
   if (/multi[_\s-]*select|multiple|多选/.test(source)) return 'multi_select';
   if (/select|single|option|status|tag|enum|choice|标签|状态|优先级|类型|单选/.test(source)) return 'select';
   if (/title|name|名称|标题|任务/.test(source)) return 'title';
@@ -1581,6 +1584,368 @@ function normalizeWolaiDatabaseViewMeta(view = {}, blockId = '', sourceUrl = '')
   };
 }
 
+function getWolaiApiData(payload = {}) {
+  return payload?.data || payload || {};
+}
+
+function collectArrayOrObjectValues(value) {
+  if (Array.isArray(value)) return value;
+  if (isPlainObject(value)) return Object.values(value);
+  return [];
+}
+
+function collectWolaiTableViewsFromMetaPayload(payload = {}) {
+  const data = getWolaiApiData(payload);
+  const candidates = [
+    data.views,
+    data.table?.views,
+    data.database?.views,
+    data.collection?.views,
+  ];
+  return candidates.flatMap(collectArrayOrObjectValues).filter(isPlainObject);
+}
+
+function getWolaiTableObjectFromMetaPayload(payload = {}) {
+  const data = getWolaiApiData(payload);
+  return data.table || data.database || data.collection || data;
+}
+
+function chooseWolaiTableMetaView(views = [], preferredViewId = '') {
+  const normalizedPreferredId = String(preferredViewId || '').trim();
+  const activeViews = views.filter(view => view.status === undefined || Number(view.status) !== 0);
+  return (normalizedPreferredId
+    ? activeViews.find(view => String(view.view_id || view.viewId || view.id || view._id || '').trim() === normalizedPreferredId)
+    : null)
+    || activeViews.find(view => String(view.type || '').toLowerCase() === 'table')
+    || activeViews[0]
+    || views[0]
+    || null;
+}
+
+function getWolaiViewPropertyItems(view = {}) {
+  const source = view?.properties || view?.fields || view?.columns_properties || view?.columnsProperties;
+  if (Array.isArray(source)) {
+    return source.map(item => ({
+      id: String(item?.id || item?.property_id || item?.propertyId || item?.key || '').trim(),
+      hidden: item?.hidden === true || item?.visible === false,
+      width: Number(item?.width || item?.column_width || item?.columnWidth) || 0,
+    })).filter(item => item.id);
+  }
+  if (isPlainObject(source)) {
+    return Object.entries(source).map(([id, item]) => ({
+      id: String(item?.id || item?.property_id || item?.propertyId || id).trim(),
+      hidden: item?.hidden === true || item?.visible === false,
+      width: Number(item?.width || item?.column_width || item?.columnWidth) || 0,
+    })).filter(item => item.id);
+  }
+  return [];
+}
+
+function normalizeWolaiTableOption(option, index = 0) {
+  const normalized = normalizeDatabaseOption(option, index);
+  if (!normalized) return null;
+  const id = isPlainObject(option)
+    ? String(option.id || option.option_id || option.optionId || option.key || option.value || normalized.name || '').trim()
+    : String(option || normalized.name || '').trim();
+  return {
+    ...normalized,
+    id: id || normalized.name,
+  };
+}
+
+function extractWolaiTablePropertyOptions(property = {}) {
+  if (!isPlainObject(property)) return [];
+  const candidates = [
+    property.options,
+    property.select?.options,
+    property.single_select?.options,
+    property.singleSelect?.options,
+    property.multi_select?.options,
+    property.multiSelect?.options,
+    property.status?.options,
+    property.config?.options,
+    property.type_options?.options,
+    property.typeOptions?.options,
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      const options = candidate.map((item, index) => normalizeWolaiTableOption(item, index)).filter(Boolean);
+      if (options.length) return options;
+    }
+    if (isPlainObject(candidate)) {
+      const options = Object.entries(candidate)
+        .map(([key, item], index) => normalizeWolaiTableOption(isPlainObject(item) ? { id: key, ...item } : { id: key, name: item || key }, index))
+        .filter(Boolean);
+      if (options.length) return options;
+    }
+  }
+  return [];
+}
+
+function normalizeWolaiTableProperty(rawProperty, propertyId = '', index = 0) {
+  const property = isPlainObject(rawProperty) ? rawProperty : { name: rawProperty };
+  const id = String(property.id || property.property_id || property.propertyId || property.key || propertyId || index).trim();
+  const name = stripHtml(getNodeHtml(property.name ?? property.title ?? property.label ?? property.text ?? propertyId ?? id)).trim() || `字段 ${index + 1}`;
+  const typeObject = isPlainObject(property.type) ? property.type : null;
+  const rawType = typeObject?.name || typeObject?.id || typeObject?.value
+    || property.type
+    || property.property_type
+    || property.propertyType
+    || property.value_type
+    || property.valueType
+    || property.kind
+    || property.format;
+  const options = extractWolaiTablePropertyOptions(property);
+  const optionMap = new Map();
+  options.forEach(option => {
+    optionMap.set(String(option.id || '').trim(), option.name);
+    optionMap.set(String(option.name || '').trim(), option.name);
+  });
+  return {
+    id,
+    name,
+    type: normalizeDatabaseFieldType(rawType, index, name),
+    options,
+    optionMap,
+    raw: property,
+  };
+}
+
+function collectWolaiTablePropertiesFromMetaPayload(payload = {}) {
+  const table = getWolaiTableObjectFromMetaPayload(payload);
+  const source = table.properties || table.property_schema || table.propertySchema || table.schema?.properties || table.fields || table.columns;
+  if (Array.isArray(source)) {
+    return source.map((item, index) => normalizeWolaiTableProperty(item, item?.id || item?.property_id || item?.propertyId || item?.key || '', index)).filter(item => item.id);
+  }
+  if (isPlainObject(source)) {
+    return Object.entries(source)
+      .map(([id, item], index) => normalizeWolaiTableProperty(item, id, index))
+      .filter(item => item.id);
+  }
+  return [];
+}
+
+function orderWolaiTableProperties(properties = [], view = {}) {
+  const propertyById = new Map(properties.map(property => [property.id, property]));
+  const viewPropertyItems = getWolaiViewPropertyItems(view);
+  const ordered = [];
+  const used = new Set();
+  viewPropertyItems.forEach(item => {
+    if (item.hidden || !propertyById.has(item.id)) return;
+    ordered.push({
+      ...propertyById.get(item.id),
+      width: item.width,
+    });
+    used.add(item.id);
+  });
+  properties.forEach(property => {
+    if (!used.has(property.id)) ordered.push(property);
+  });
+  return ordered;
+}
+
+function getWolaiTableTitle(table = {}, view = {}, fallback = '') {
+  const candidates = [
+    view?.title,
+    view?.name,
+    table?.title,
+    table?.name,
+    table?.table_name,
+    table?.tableName,
+    table?.database_name,
+    table?.databaseName,
+    fallback,
+  ];
+  for (const candidate of candidates) {
+    const text = stripHtml(getNodeHtml(candidate || '')).trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function getWolaiTablePropertyReference(value = {}) {
+  if (!isPlainObject(value)) return value;
+  return value.property_id || value.propertyId || value.property || value.field_id || value.fieldId || value.field || value.id || value.key;
+}
+
+function normalizeWolaiTableSorts(view = {}, propertyIndexById = new Map()) {
+  const sorters = Array.isArray(view.sorters || view.sorts) ? (view.sorters || view.sorts) : [];
+  return sorters.map(rule => {
+    const propertyId = String(getWolaiTablePropertyReference(rule) || '').trim();
+    if (!propertyIndexById.has(propertyId)) return null;
+    return {
+      columnIndex: propertyIndexById.get(propertyId),
+      direction: normalizeImportedDatabaseDirection(rule),
+    };
+  }).filter(Boolean);
+}
+
+function normalizeWolaiTableGroup(view = {}, properties = [], propertyIndexById = new Map()) {
+  const groupSource = view.grouping || view.group || view.group_by || view.groupBy || {};
+  const groupColumns = Array.isArray(view.columns) ? view.columns : [];
+  const inferredColumnPropertyId = groupColumns
+    .map(item => String(item?.property_id || item?.propertyId || item?.property || '').trim())
+    .find(Boolean) || '';
+  const propertyId = String(getWolaiTablePropertyReference(groupSource) || inferredColumnPropertyId || '').trim();
+  if (!propertyId || !propertyIndexById.has(propertyId)) return { columnIndex: null, visibleValues: [], collapsed: {} };
+  const visibleValues = groupColumns
+    .filter(item => isPlainObject(item) && item.hidden !== true)
+    .filter(item => {
+      const itemPropertyId = String(item.property_id || item.propertyId || item.property || propertyId).trim();
+      return itemPropertyId === propertyId;
+    })
+    .map(item => stripHtml(getNodeHtml(item.value ?? item.name ?? item.title ?? item.label ?? '')).trim())
+    .filter(Boolean);
+  const property = properties.find(item => item.id === propertyId);
+  const fallbackValues = property?.options?.map(option => option.name).filter(Boolean) || [];
+  return {
+    columnIndex: propertyIndexById.get(propertyId),
+    visibleValues: visibleValues.length ? visibleValues : fallbackValues,
+    collapsed: {},
+  };
+}
+
+function getWolaiRowPropertySource(row = {}) {
+  if (!isPlainObject(row)) return row;
+  return row.properties
+    || row.property_values
+    || row.propertyValues
+    || row.values
+    || row.cells
+    || row.data
+    || row;
+}
+
+function pickWolaiRowPropertyValue(row = {}, property = {}, columnIndex = 0) {
+  const source = getWolaiRowPropertySource(row);
+  if (Array.isArray(source)) return source[columnIndex];
+  if (!isPlainObject(source)) return undefined;
+  return source[property.id]
+    ?? source[property.name]
+    ?? source[property.raw?.name]
+    ?? source[property.raw?.id]
+    ?? source[property.raw?.property_id]
+    ?? source[property.raw?.propertyId];
+}
+
+function renderWolaiDatabaseCellValue(value, property = {}) {
+  if (value === undefined || value === null) return '';
+  if (Array.isArray(value)) {
+    const parts = value.map(item => renderWolaiDatabaseCellValue(item, property)).filter(item => stripHtml(item).trim());
+    return ['select', 'multi_select', 'person'].includes(property.type) ? parts.map(stripHtml).join('、') : parts.join('<br>');
+  }
+  if (isPlainObject(value)) {
+    const optionId = String(value.option_id || value.optionId || value.id || value.key || '').trim();
+    if (optionId && property.optionMap?.has(optionId)) return escapeHtml(property.optionMap.get(optionId));
+    const dateValue = value.start_date || value.startDate || value.date || value.start || value.timestamp;
+    if (dateValue && property.type === 'date') return escapeHtml(String(dateValue).slice(0, 10));
+    if (value.checked !== undefined && property.type === 'checkbox') return value.checked ? 'true' : '';
+    const directValue = value.value ?? value.name ?? value.title ?? value.label ?? value.text ?? value.plain_text ?? value.plainText;
+    if (directValue !== undefined && directValue !== value) return renderWolaiDatabaseCellValue(directValue, property);
+    const html = getNodeHtml(value);
+    return stripHtml(html).trim() ? html : '';
+  }
+  const text = String(value ?? '').trim();
+  if (!text) return '';
+  if (property.optionMap?.has(text)) return escapeHtml(property.optionMap.get(text));
+  return escapeHtml(text);
+}
+
+function collectWolaiDatabaseRowsFromPayload(payload = {}) {
+  const data = getWolaiApiData(payload);
+  const candidates = [
+    data.rows,
+    data.records,
+    data.items,
+    data.list,
+    data.data,
+    Array.isArray(data) ? data : null,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate.filter(isPlainObject);
+    if (isPlainObject(candidate)) {
+      const values = Object.values(candidate).filter(isPlainObject);
+      if (values.length) return values;
+    }
+  }
+  return [];
+}
+
+function normalizeWolaiDatabaseRowsFromPayload(payload = {}, properties = []) {
+  const rawRows = collectWolaiDatabaseRowsFromPayload(payload);
+  return rawRows.map(row => (
+    properties.map((property, columnIndex) => renderWolaiDatabaseCellValue(pickWolaiRowPropertyValue(row, property, columnIndex), property))
+  )).filter(row => row.some(cell => stripHtml(cell).trim()));
+}
+
+function buildWolaiDatabaseMetaFromTablePayload(payload = {}, options = {}) {
+  const table = getWolaiTableObjectFromMetaPayload(payload);
+  const views = collectWolaiTableViewsFromMetaPayload(payload);
+  const view = chooseWolaiTableMetaView(views, options.viewId);
+  const allProperties = collectWolaiTablePropertiesFromMetaPayload(payload);
+  const properties = orderWolaiTableProperties(allProperties, view || {});
+  if (!properties.length) return null;
+  const propertyIndexById = new Map(properties.map((property, index) => [property.id, index]));
+  const columns = properties.map(property => property.name);
+  const schema = { keys: properties.map(property => property.id) };
+  const columnWidths = properties.map((property, index) => Math.max(120, Number(property.width) || (index === 0 ? 220 : 200)));
+  const viewMeta = view ? normalizeWolaiDatabaseViewMeta(view, options.blockId, options.sourceUrl) : {};
+  const filters = view ? normalizeImportedDatabaseFilters({ view }, schema, columns) : [];
+  const group = view ? normalizeWolaiTableGroup(view, properties, propertyIndexById) : { columnIndex: null, visibleValues: [], collapsed: {} };
+  return {
+    meta: {
+      ...(options.fallbackMeta || {}),
+      source_system: 'wolai_mcp',
+      tableName: getWolaiTableTitle(table, view || {}, options.fallbackTitle),
+      columns,
+      rows: [],
+      view: 'table',
+      fieldTypes: properties.map(property => property.type),
+      tagOptions: properties.reduce((acc, property, index) => {
+        if (property.options?.length) acc[index] = property.options;
+        return acc;
+      }, {}),
+      columnWidths,
+      columnColors: options.fallbackMeta?.columnColors || {},
+      titleColorColumns: options.fallbackMeta?.titleColorColumns || {},
+      sorts: normalizeWolaiTableSorts(view || {}, propertyIndexById),
+      filters,
+      group,
+      wolaiPropertyIds: properties.map(property => property.id),
+      wolaiRowsCount: Number(table.rows_count || table.rowsCount || 0) || 0,
+      wolaiTableId: String(view?.table_id || view?.tableId || options.tableId || options.fallbackMeta?.wolaiTableId || '').trim(),
+      ...viewMeta,
+      source_url: buildWolaiPageUrl(options.blockId, options.sourceUrl),
+      embedUrl: buildWolaiPageUrl(options.blockId, options.sourceUrl),
+      liveEmbed: true,
+      externalEmbed: true,
+      rowDataUnavailable: true,
+    },
+    properties,
+  };
+}
+
+async function fetchWolaiDatabaseTableMeta(token = '', tableId = '', blockId = '') {
+  if (!token || !tableId) return null;
+  return wolaiApiRequest(token, 'database/tableMeta', {
+    query: {
+      table_id: tableId,
+      block_id: blockId,
+    },
+  });
+}
+
+async function fetchWolaiDatabaseRows(token = '', tableId = '') {
+  if (!token || !tableId) return null;
+  return wolaiApiRequest(token, 'database/rows', {
+    query: {
+      table_id: tableId,
+      limit: Number.MAX_SAFE_INTEGER,
+      timezoneOffset: -480,
+    },
+  });
+}
+
 function databaseMetaNeedsWolaiLiveEmbed(meta = {}) {
   if (meta.source_system !== 'wolai_mcp') return false;
   if (!meta.wolaiDatabaseBlockId) return false;
@@ -1629,32 +1994,105 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
   }
 
   let enrichedCount = 0;
-  const nextBlocks = blocks.map(block => {
-    if (block?.type !== 'database-embed' || !databaseMetaNeedsWolaiLiveEmbed(block.meta || {})) return block;
+  let tableMetaCount = 0;
+  let importedRowCount = 0;
+  let rowDataUnavailableCount = 0;
+  const detailWarnings = [];
+  const nextBlocks = [];
+  for (const block of blocks) {
+    if (block?.type !== 'database-embed' || !databaseMetaNeedsWolaiLiveEmbed(block.meta || {})) {
+      nextBlocks.push(block);
+      continue;
+    }
     const blockId = String(block.meta?.wolaiDatabaseBlockId || '').trim();
     const sourceUrl = buildWolaiPageUrl(blockId, block.meta?.source_url || block.meta?.embedUrl);
     const views = collectWolaiDatabaseViewsFromPayload(payload, blockId);
     const primaryView = choosePrimaryWolaiDatabaseView(views);
     const viewMeta = primaryView ? normalizeWolaiDatabaseViewMeta(primaryView, blockId, sourceUrl) : {};
     if (primaryView) enrichedCount += 1;
-    return {
-      ...block,
-      meta: {
-        ...(block.meta || {}),
-        source_url: sourceUrl,
-        embedUrl: sourceUrl,
-        liveEmbed: true,
-        externalEmbed: true,
-        rowDataUnavailable: true,
-        ...viewMeta,
-      },
+    let nextMeta = {
+      ...(block.meta || {}),
+      source_url: sourceUrl,
+      embedUrl: sourceUrl,
+      liveEmbed: true,
+      externalEmbed: true,
+      rowDataUnavailable: true,
+      ...viewMeta,
     };
-  });
+    const tableId = String(nextMeta.wolaiTableId || block.meta?.wolaiTableId || '').trim();
+    if (tableId) {
+      try {
+        const tablePayload = await fetchWolaiDatabaseTableMeta(token, tableId, blockId);
+        const tableBuild = buildWolaiDatabaseMetaFromTablePayload(tablePayload, {
+          blockId,
+          sourceUrl,
+          tableId,
+          viewId: nextMeta.wolaiViewId,
+          fallbackMeta: nextMeta,
+          fallbackTitle: nextMeta.tableName || nextMeta.wolaiViewTitle || '',
+        });
+        if (tableBuild?.meta) {
+          tableMetaCount += 1;
+          nextMeta = {
+            ...nextMeta,
+            ...tableBuild.meta,
+          };
+          try {
+            const rowsPayload = await fetchWolaiDatabaseRows(token, tableId);
+            const importedRows = normalizeWolaiDatabaseRowsFromPayload(rowsPayload, tableBuild.properties || []);
+            if (importedRows.length) {
+              importedRowCount += importedRows.length;
+              nextMeta = {
+                ...nextMeta,
+                rows: importedRows,
+                rowDataUnavailable: false,
+                liveEmbed: false,
+                externalEmbed: false,
+              };
+            } else if (!Number(nextMeta.wolaiRowsCount || 0)) {
+              nextMeta = {
+                ...nextMeta,
+                rows: [],
+                rowDataUnavailable: false,
+                liveEmbed: false,
+                externalEmbed: false,
+              };
+            } else {
+              rowDataUnavailableCount += 1;
+            }
+          } catch (error) {
+            rowDataUnavailableCount += 1;
+            nextMeta = {
+              ...nextMeta,
+              liveEmbed: true,
+              externalEmbed: true,
+              rowDataUnavailable: true,
+            };
+          }
+        }
+      } catch (error) {
+        detailWarnings.push(`Wolai 数据表格字段元数据读取失败：${error.message || '未知错误'}`);
+      }
+    }
+    nextBlocks.push({
+      ...block,
+      meta: nextMeta,
+    });
+  }
+  const warnings = [];
+  if (importedRowCount > 0) warnings.push(`Wolai 数据表格已导入 ${importedRowCount} 行记录`);
+  if (tableMetaCount > 0 && rowDataUnavailableCount > 0) {
+    warnings.push('Wolai 数据表格行数据接口未授权或未返回完整记录，已导入字段/选项/视图并保留原 Wolai 表格嵌入');
+  }
+  warnings.push(...detailWarnings);
+  if (!warnings.length) {
+    warnings.push(enrichedCount
+      ? 'Wolai 数据表格行数据未通过 MCP 返回，已保留原 Wolai 表格嵌入视图'
+      : 'Wolai 数据表格行数据未通过 MCP 返回，已保留原表链接');
+  }
   return {
     blocks: nextBlocks,
-    warnings: enrichedCount
-      ? ['Wolai 数据表格行数据未通过 MCP 返回，已保留原 Wolai 表格嵌入视图']
-      : ['Wolai 数据表格行数据未通过 MCP 返回，已保留原表链接'],
+    warnings,
   };
 }
 
