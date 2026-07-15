@@ -6105,15 +6105,32 @@ function normalizeRemoteImageFilename({ filename = '', url = '', mimetype = '', 
   return `${base}.${ext}`;
 }
 
-async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0 } = {}) {
+function getRemoteImageFetchReferer(url = '', referer = '') {
+  const rawReferer = String(referer || '').trim();
+  if (isHttpUrl(rawReferer)) {
+    try {
+      return new URL(rawReferer).toString();
+    } catch {}
+  }
+  try {
+    const parsed = new URL(url);
+    if (/wolai|wostatic/i.test(parsed.hostname)) return 'https://www.wolai.com/';
+    return `${parsed.protocol}//${parsed.host}/`;
+  } catch {
+    return '';
+  }
+}
+
+async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0, referer = '' } = {}) {
   if (isBlockedRemoteImageHost(url)) throw new Error('图片地址不允许由服务器下载');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.max(WOLAI_REMOTE_IMAGE_TIMEOUT_MS, 3000));
   try {
+    const fetchReferer = getRemoteImageFetchReferer(url, referer);
     const response = await fetch(url, {
       headers: {
         Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        Referer: 'https://www.wolai.com/',
+        ...(fetchReferer ? { Referer: fetchReferer } : {}),
         'User-Agent': 'Mozilla/5.0 RelationDocumentCenter/1.0',
       },
       signal: controller.signal,
@@ -19626,6 +19643,42 @@ app.delete('/api/executive/reports/:id', requireExecutive, (req, res) => {
 
 // SPA fallback - 必须放在所有 API 路由之后
 // =========== 附件 API ===========
+app.post('/api/attachments/import-url', auth, async (req, res) => {
+  const { source_type, source_id, url, filename = '', referer = '' } = req.body || {};
+  if (!source_type || !source_id) return res.status(400).json({ error: '缺少 source_type 或 source_id' });
+  if (!isHttpUrl(url)) return res.status(400).json({ error: '图片地址无效' });
+  if (!canModifyAttachmentSource(req.user, source_type, source_id)) {
+    return res.status(403).json({ error: '无权上传此附件' });
+  }
+
+  let uploadFile = null;
+  try {
+    uploadFile = await downloadRemoteImageAsUploadFile(url, { filename, referer });
+    const ext = getFileExtFromName(uploadFile.originalname);
+    if (!allowedUploadExtensions.has(ext) || !String(uploadFile.mimetype || '').startsWith('image/')) {
+      throw new Error('暂不支持该图片格式');
+    }
+    await persistUploadedFile(uploadFile, 'attachments');
+    const finalFilename = normalizeUploadedFilename(uploadFile.originalname);
+    const result = db.prepare(`
+      INSERT INTO attachments (source_type, source_id, filename, filepath, mimetype, size, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(source_type, source_id, finalFilename, uploadFile.filename, uploadFile.mimetype, uploadFile.size, req.user.id);
+    res.json(normalizeGenericAttachmentRow({
+      id: result.lastInsertRowid,
+      source_type,
+      source_id,
+      filename: finalFilename,
+      filepath: uploadFile.filename,
+      size: uploadFile.size,
+      mimetype: uploadFile.mimetype,
+    }));
+  } catch (error) {
+    if (uploadFile) cleanupStoredUploadedFiles([uploadFile]);
+    res.status(400).json({ error: error.message || '图片导入失败' });
+  }
+});
+
 app.post('/api/attachments/upload', auth, uploadAttachments, (req, res) => {
   const { source_type, source_id } = req.body;
   if (!source_type || !source_id) {

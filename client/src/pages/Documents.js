@@ -542,6 +542,61 @@ function normalizeClipboardImageFile(file, index = 0) {
   });
 }
 
+function isClipboardHtmlImageBlock(block = {}) {
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  return block.type === 'image' && meta.source_system === 'clipboard_html';
+}
+
+function getClipboardHtmlImageBlockUrl(block = {}) {
+  const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+  return String(meta.url || block.content || '').trim();
+}
+
+function normalizeClipboardHtmlImageFilename(filename = '', mime = '', index = 0) {
+  const mimeExt = clipboardImageExtByMime[String(mime || '').split(';')[0].trim().toLowerCase()];
+  const rawExt = getFileExt(filename);
+  const ext = imageExts.includes(rawExt) ? rawExt : (mimeExt || 'png');
+  const fallback = `clipboard-html-image-${dayjs().format('YYYYMMDD-HHmmss')}-${index + 1}.${ext}`;
+  const rawName = String(filename || fallback).split('?')[0].split('#')[0].split('/').pop() || fallback;
+  const safeName = rawName.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').trim() || fallback;
+  return imageExts.includes(getFileExt(safeName)) ? safeName.slice(0, 160) : `${safeName.slice(0, 140)}.${ext}`;
+}
+
+function dataUriToClipboardHtmlImageFile(dataUri = '', filename = '', index = 0) {
+  const match = String(dataUri || '').match(/^data:(image\/(?:png|jpe?g|gif|webp))(?:;charset=[^;,]+)?(;base64)?,(.*)$/i);
+  if (!match) throw new Error('不支持的图片 Data URL');
+  const mime = match[1].toLowerCase().replace('image/jpg', 'image/jpeg');
+  const rawData = match[3] || '';
+  const binary = match[2] ? window.atob(rawData) : decodeURIComponent(rawData);
+  const chunks = [];
+  for (let offset = 0; offset < binary.length; offset += 8192) {
+    const slice = binary.slice(offset, offset + 8192);
+    const bytes = new Uint8Array(slice.length);
+    for (let i = 0; i < slice.length; i += 1) bytes[i] = slice.charCodeAt(i);
+    chunks.push(bytes);
+  }
+  const name = normalizeClipboardHtmlImageFilename(filename, mime, index);
+  return new File(chunks, name, { type: mime, lastModified: Date.now() });
+}
+
+async function fetchClipboardHtmlImageAsFile(url = '', filename = '', index = 0) {
+  if (!/^https?:\/\//i.test(url)) throw new Error('不是可下载的远程图片地址');
+  const response = await fetch(url, {
+    credentials: 'include',
+    referrerPolicy: 'no-referrer',
+    cache: 'force-cache',
+  });
+  if (!response.ok) throw new Error(`图片下载失败：HTTP ${response.status}`);
+  const contentType = response.headers.get('content-type') || '';
+  const mime = contentType.split(';')[0].trim().toLowerCase() || getPastedImageMimeType(url);
+  if (!mime.startsWith('image/')) throw new Error('远程资源不是图片');
+  const blob = await response.blob();
+  if (!blob.size) throw new Error('图片内容为空');
+  const finalMime = String(blob.type || mime || 'image/png').toLowerCase();
+  const name = normalizeClipboardHtmlImageFilename(filename, finalMime, index);
+  return new File([blob], name, { type: finalMime, lastModified: Date.now() });
+}
+
 function createBlock(type = 'paragraph', content = '', extra = {}) {
   return {
     id: `b_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -5429,6 +5484,142 @@ export default function Documents() {
     }, 0);
   };
 
+  const buildLocalizedClipboardHtmlImageBlock = (block, attachment, originalUrl = '') => {
+    const currentMeta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+    const displayName = attachment.display_name || attachment.filename || currentMeta.display_name || currentMeta.filename || block.content || '图片';
+    return {
+      ...block,
+      type: 'image',
+      content: attachment.filename || displayName,
+      meta: {
+        ...getDefaultBlockMeta('image'),
+        ...currentMeta,
+        ...attachmentToMediaMeta(attachment),
+        display_name: displayName,
+        filepath: attachment.filepath || currentMeta.filepath || '',
+        file_ext: attachment.file_ext || getFileExt(displayName),
+        size: Number(attachment.size || currentMeta.size || 0),
+        preview_status: attachment.preview_status || currentMeta.preview_status || 'supported',
+        embedOnly: true,
+        remote: false,
+        source_system: 'clipboard_html',
+        original_url: currentMeta.original_url || originalUrl || currentMeta.url || '',
+        alt: currentMeta.alt || displayName,
+      },
+    };
+  };
+
+  const uploadClipboardHtmlImageFiles = async (entries = []) => {
+    if (!entries.length) return [];
+    const formData = new FormData();
+    formData.append('source_type', 'document');
+    formData.append('source_id', selectedDoc.id);
+    entries.forEach(entry => formData.append('files', entry.file));
+    const rows = await attachmentsApi.upload(formData);
+    return (rows || []).map((attachment, index) => ({ attachment, entry: entries[index] })).filter(item => item.attachment);
+  };
+
+  const importClipboardHtmlImageUrl = async (entry) => attachmentsApi.importUrl({
+    source_type: 'document',
+    source_id: selectedDoc.id,
+    url: entry.url,
+    filename: entry.filename,
+    referer: entry.referer,
+  });
+
+  const localizeClipboardHtmlImageBlocks = async (blocks = [], clipboardImageFiles = []) => {
+    const imageIndexes = blocks
+      .map((block, blockIndex) => ({ block, blockIndex }))
+      .filter(item => isClipboardHtmlImageBlock(item.block));
+    if (!imageIndexes.length) return { blocks, localizedCount: 0, failedCount: 0 };
+
+    const supportedClipboardFiles = Array.from(clipboardImageFiles || [])
+      .filter(file => {
+        const ext = getFileExt(file?.name);
+        const mime = String(file?.type || '').toLowerCase();
+        return imageExts.includes(ext) || Boolean(clipboardImageExtByMime[mime]);
+      })
+      .slice(0, clipboardImagePasteLimit)
+      .map(normalizeClipboardImageFile);
+
+    const nextBlocks = [...blocks];
+    const uploadEntries = [];
+    const serverImportEntries = [];
+    let fallbackFileIndex = 0;
+    let failedCount = 0;
+
+    for (let imagePosition = 0; imagePosition < imageIndexes.length; imagePosition += 1) {
+      const { block, blockIndex } = imageIndexes[imagePosition];
+      const meta = block.meta && typeof block.meta === 'object' ? block.meta : {};
+      const url = getClipboardHtmlImageBlockUrl(block);
+      const filename = meta.filename || meta.display_name || block.content || `clipboard-html-image-${imagePosition + 1}.png`;
+      let file = null;
+
+      if (/^data:image\//i.test(url)) {
+        try {
+          file = dataUriToClipboardHtmlImageFile(url, filename, imagePosition);
+        } catch {
+          file = null;
+        }
+      }
+
+      if (!file && supportedClipboardFiles.length === imageIndexes.length) {
+        file = supportedClipboardFiles[imagePosition] || null;
+      }
+
+      if (!file && /^https?:\/\//i.test(url)) {
+        try {
+          file = await fetchClipboardHtmlImageAsFile(url, filename, imagePosition);
+        } catch {
+          file = null;
+        }
+      }
+
+      if (!file && supportedClipboardFiles.length !== imageIndexes.length && fallbackFileIndex < supportedClipboardFiles.length) {
+        file = supportedClipboardFiles[fallbackFileIndex];
+        fallbackFileIndex += 1;
+      }
+
+      if (file) {
+        uploadEntries.push({ blockIndex, file, originalUrl: url });
+      } else if (/^https?:\/\//i.test(url)) {
+        serverImportEntries.push({
+          blockIndex,
+          url,
+          filename: normalizeClipboardHtmlImageFilename(filename, meta.mimetype, imagePosition),
+          referer: meta.source_url || '',
+        });
+      } else {
+        failedCount += 1;
+      }
+    }
+
+    let localizedCount = 0;
+    const uploadedItems = await uploadClipboardHtmlImageFiles(uploadEntries);
+    uploadedItems.forEach(({ attachment, entry }) => {
+      if (!isImageAttachment(attachment)) {
+        failedCount += 1;
+        return;
+      }
+      nextBlocks[entry.blockIndex] = buildLocalizedClipboardHtmlImageBlock(nextBlocks[entry.blockIndex], attachment, entry.originalUrl);
+      localizedCount += 1;
+    });
+    failedCount += Math.max(0, uploadEntries.length - uploadedItems.length);
+
+    for (const entry of serverImportEntries) {
+      try {
+        const attachment = await importClipboardHtmlImageUrl(entry);
+        if (!isImageAttachment(attachment)) throw new Error('远程资源不是图片');
+        nextBlocks[entry.blockIndex] = buildLocalizedClipboardHtmlImageBlock(nextBlocks[entry.blockIndex], attachment, entry.url);
+        localizedCount += 1;
+      } catch {
+        failedCount += 1;
+      }
+    }
+
+    return { blocks: nextBlocks, localizedCount, failedCount };
+  };
+
   const insertBlocksFromClipboard = (blockInputs = [], targetBlockId = null) => {
     const nextBlocks = blockInputs
       .map(input => createEditorBlock(input.type || 'paragraph', {
@@ -5478,6 +5669,7 @@ export default function Documents() {
       || selectedBlockId
       || editorBlocks[editorBlocks.length - 1]?.id
       || null;
+    const pastedImageFiles = getClipboardImageFiles(event);
     const documentBlocks = parseClipboardDocumentBlocks(clipboardData);
     const htmlBlocks = documentBlocks.length ? [] : parseClipboardHtmlDocumentBlocks(clipboardData?.getData?.('text/html'));
     const pastedBlocks = documentBlocks.length ? documentBlocks : htmlBlocks;
@@ -5488,11 +5680,37 @@ export default function Documents() {
         message.warning('你没有编辑该文档的权限');
         return;
       }
+      const hasClipboardHtmlImages = htmlBlocks.some(isClipboardHtmlImageBlock);
+      if (hasClipboardHtmlImages) {
+        if (!selectedDoc?.id) {
+          message.warning('请先保存文档，再粘贴带图片的内容');
+          return;
+        }
+        if (pastedImageFiles.length > clipboardImagePasteLimit) {
+          message.info(`一次最多粘贴 ${clipboardImagePasteLimit} 张剪贴板图片，已优先处理前 ${clipboardImagePasteLimit} 张`);
+        }
+        const imageCount = htmlBlocks.filter(isClipboardHtmlImageBlock).length;
+        const hideLoading = message.loading(imageCount > 1 ? `正在处理 ${imageCount} 张粘贴图片` : '正在处理粘贴图片', 0);
+        try {
+          const result = await localizeClipboardHtmlImageBlocks(htmlBlocks, pastedImageFiles);
+          if (insertBlocksFromClipboard(result.blocks, targetBlockId)) {
+            if (result.failedCount) {
+              message.warning(`已粘贴内容，${result.failedCount} 张图片未能转存，可能仍需手动上传`);
+            } else {
+              message.success(result.localizedCount > 1 ? `已粘贴内容和 ${result.localizedCount} 张图片` : '已粘贴内容和图片');
+            }
+          }
+        } catch (err) {
+          message.error(err.response?.data?.error || err.message || '粘贴图片处理失败');
+        } finally {
+          hideLoading();
+        }
+        return;
+      }
       if (insertBlocksFromClipboard(pastedBlocks, targetBlockId)) message.success(pastedBlocks.length > 1 ? `已粘贴 ${pastedBlocks.length} 个块` : '已粘贴');
       return;
     }
 
-    const pastedImageFiles = getClipboardImageFiles(event);
     if (!pastedImageFiles.length) return;
 
     event.preventDefault();

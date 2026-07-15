@@ -411,6 +411,7 @@ export const documentsApi = {
 
 export const attachmentsApi = {
   upload: (formData) => api.post('/attachments/upload', formData).then(r => r.data),
+  importUrl: (data) => api.post('/attachments/import-url', data).then(r => r.data),
   list: (params) => api.get('/attachments', { params }).then(r => r.data),
   delete: (id) => api.delete(`/attachments/${id}`).then(r => r.data),
   getBlob: async (id) => {
