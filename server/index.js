@@ -148,9 +148,11 @@ const documentImportFileExtensions = new Set([
   'vsdx', 'drawio', 'xmind', 'mind', 'mm',
   'eml', 'msg',
 ]);
+const MAX_UPLOAD_FILE_SIZE_BYTES = 100 * 1024 * 1024;
+const MAX_UPLOAD_FILE_SIZE_LABEL = '100MB';
 const upload = multer({
   storage,
-  limits: { fileSize: 50 * 1024 * 1024 },
+  limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
   fileFilter: (req, file, cb) => {
     const ext = path.extname(normalizeUploadedFilename(file.originalname)).slice(1).toLowerCase();
     if (!allowedUploadExtensions.has(ext)) {
@@ -390,7 +392,7 @@ function uploadAttachments(req, res, next) {
     }
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: '单个文件不能超过 50MB' });
+        return res.status(400).json({ error: `单个文件不能超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}` });
       }
       if (err.code === 'LIMIT_FILE_COUNT') {
         return res.status(400).json({ error: '最多只能上传 10 个文件' });
@@ -6022,7 +6024,7 @@ function createDocumentAttachmentRecord(docId, file, userId, { blockId = null, d
   return serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid));
 }
 
-const WOLAI_REMOTE_IMAGE_MAX_BYTES = 50 * 1024 * 1024;
+const WOLAI_REMOTE_IMAGE_MAX_BYTES = MAX_UPLOAD_FILE_SIZE_BYTES;
 const WOLAI_REMOTE_IMAGE_TIMEOUT_MS = Number(process.env.WOLAI_MCP_IMAGE_FETCH_TIMEOUT_MS || 20000);
 const WOLAI_REMOTE_IMAGE_LIMIT = Number(process.env.WOLAI_MCP_IMAGE_IMPORT_LIMIT || 80);
 const remoteImageMimeExtMap = {
@@ -6118,7 +6120,7 @@ async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0 }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const contentLength = Number(response.headers.get('content-length') || 0);
-    if (contentLength > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error('图片超过 50MB');
+    if (contentLength > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error(`图片超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}`);
     const contentType = response.headers.get('content-type') || '';
     const contentMime = contentType.split(';')[0].trim().toLowerCase();
     if (contentMime && !contentMime.startsWith('image/') && contentMime !== 'application/octet-stream') {
@@ -6126,7 +6128,7 @@ async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0 }
     }
     const buffer = Buffer.from(await response.arrayBuffer());
     if (!buffer.length) throw new Error('图片内容为空');
-    if (buffer.length > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error('图片超过 50MB');
+    if (buffer.length > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error(`图片超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}`);
     const originalname = normalizeRemoteImageFilename({ filename, url, mimetype: contentType, index });
     const ext = getRemoteImageExt(contentType, url, originalname);
     const mimetype = getRemoteImageMime(contentType, ext);
@@ -7909,7 +7911,7 @@ function handleDocumentAttachmentUpload(req, res, next) {
   upload.single('file')(req, res, (err) => {
     if (!err) return next();
     if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: '单个文件不能超过 50MB' });
+      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: `单个文件不能超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}` });
       return res.status(400).json({ error: err.message || '附件上传失败' });
     }
     return res.status(400).json({ error: err.message || '附件上传失败' });

@@ -9,7 +9,7 @@ export const ALLOWED_ATTACHMENT_EXT = [
 
 export const ATTACHMENT_ACCEPT = '.jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.mp4,.mov,.avi,.mp3,.wav,.m4a,.aac,.ogg';
 
-export const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
+export const MAX_ATTACHMENT_SIZE = 100 * 1024 * 1024;
 
 export function validateAttachment(file) {
   const ext = (file.name.split('.').pop() || '').toLowerCase();
@@ -18,7 +18,7 @@ export function validateAttachment(file) {
     return Upload.LIST_IGNORE;
   }
   if (file.size > MAX_ATTACHMENT_SIZE) {
-    message.error('单个文件不能超过 50MB');
+    message.error('单个文件不能超过 100MB');
     return Upload.LIST_IGNORE;
   }
   return false;

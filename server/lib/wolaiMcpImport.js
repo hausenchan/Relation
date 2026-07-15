@@ -912,6 +912,8 @@ function normalizeDatabaseFieldType(value = '', columnIndex = 0, columnName = ''
   if (/person|people|user|owner|member|assignee|负责人|人员|成员/.test(source)) return 'person';
   if (/number|amount|price|count|score|数字|数量|金额|预算/.test(source)) return 'number';
   if (/url|link|链接|地址/.test(source)) return 'url';
+  if (/email|mail|邮箱|邮件/.test(source)) return 'email';
+  if (/phone|mobile|tel|电话|手机/.test(source)) return 'phone';
   if (/check|bool|done|完成|勾选/.test(source)) return 'checkbox';
   return columnIndex === 0 ? 'title' : 'text';
 }
@@ -1020,6 +1022,7 @@ function extractDatabaseSchema(node = {}) {
     }
     if (fields.length) {
       return {
+        keys: fields.map(field => field.key),
         columns: fields.map(field => field.name),
         fieldTypes: fields.map(field => field.type),
         tagOptions: fields.reduce((acc, field, index) => {
@@ -1029,7 +1032,7 @@ function extractDatabaseSchema(node = {}) {
       };
     }
   }
-  return { columns: [], fieldTypes: [], tagOptions: {} };
+  return { keys: [], columns: [], fieldTypes: [], tagOptions: {} };
 }
 
 function hasDatabaseSchema(node = {}) {
@@ -1074,6 +1077,214 @@ function inferDatabaseTagOptions(rows = [], fieldTypes = []) {
     if (options.length) acc[columnIndex] = options;
     return acc;
   }, {});
+}
+
+function collectDatabaseViewSources(node = {}) {
+  if (!isPlainObject(node)) return [];
+  const candidates = [
+    node.view,
+    node.current_view,
+    node.currentView,
+    node.default_view,
+    node.defaultView,
+    node.table?.view,
+    node.table?.current_view,
+    node.database?.view,
+    node.database?.current_view,
+    node.collection?.view,
+    node.collection?.current_view,
+    node.data?.view,
+    node.data?.current_view,
+    node,
+  ];
+  [
+    node.views,
+    node.table?.views,
+    node.database?.views,
+    node.collection?.views,
+    node.data?.views,
+  ].forEach(source => {
+    if (Array.isArray(source)) candidates.push(...source);
+    else if (isPlainObject(source)) candidates.push(...Object.values(source));
+  });
+  const seen = new Set();
+  return candidates.filter(source => {
+    if (!isPlainObject(source)) return false;
+    const key = source.id || source.key || source.name || JSON.stringify(Object.keys(source).sort());
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function getDatabaseFieldReference(source = {}) {
+  if (!isPlainObject(source)) return source;
+  const candidates = [
+    source.columnIndex,
+    source.column_index,
+    source.fieldIndex,
+    source.field_index,
+    source.property_id,
+    source.propertyId,
+    source.property,
+    source.field_id,
+    source.fieldId,
+    source.field,
+    source.column_id,
+    source.columnId,
+    source.column,
+    source.key,
+    source.id,
+    source.name,
+    source.title,
+  ];
+  return candidates.find(candidate => candidate !== undefined && candidate !== null && candidate !== '');
+}
+
+function normalizeDatabaseReferenceText(value) {
+  if (isPlainObject(value)) return normalizeDatabaseReferenceText(getDatabaseFieldReference(value));
+  return stripHtml(getNodeHtml(value || '')).trim();
+}
+
+function resolveDatabaseColumnIndex(reference, schema = {}, columns = []) {
+  if (reference === undefined || reference === null || reference === '') return null;
+  if (typeof reference === 'number' && Number.isInteger(reference) && reference >= 0 && reference < columns.length) return reference;
+  const text = normalizeDatabaseReferenceText(reference);
+  if (!text) return null;
+  const numericIndex = Number(text);
+  if (Number.isInteger(numericIndex) && numericIndex >= 0 && numericIndex < columns.length) return numericIndex;
+  const keys = Array.isArray(schema.keys) ? schema.keys : [];
+  const keyIndex = keys.findIndex(key => String(key) === text);
+  if (keyIndex >= 0) return keyIndex;
+  const lowerText = text.toLowerCase();
+  const columnIndex = columns.findIndex(column => stripHtml(getNodeHtml(column)).trim().toLowerCase() === lowerText);
+  return columnIndex >= 0 ? columnIndex : null;
+}
+
+function normalizeImportedDatabaseDirection(rule = {}) {
+  const raw = String(rule.direction || rule.order || rule.sort || rule.type || '').trim().toLowerCase();
+  if (rule.ascending === false || rule.asc === false || rule.descending === true || rule.desc === true) return 'desc';
+  return /desc|reverse|down|9|倒|降/.test(raw) ? 'desc' : 'asc';
+}
+
+function normalizeImportedDatabaseSorts(node = {}, schema = {}, columns = []) {
+  const sources = collectDatabaseViewSources(node).flatMap(view => [
+    view.sorts,
+    view.sort,
+    view.sorters,
+    view.orders,
+    view.order_by,
+    view.orderBy,
+  ]).filter(Boolean);
+  const rules = [];
+  sources.forEach(source => {
+    const items = Array.isArray(source) ? source : [source];
+    items.forEach(rule => {
+      if (!rule || typeof rule !== 'object') return;
+      const columnIndex = resolveDatabaseColumnIndex(getDatabaseFieldReference(rule), schema, columns);
+      if (columnIndex === null) return;
+      rules.push({ columnIndex, direction: normalizeImportedDatabaseDirection(rule) });
+    });
+  });
+  return rules;
+}
+
+function normalizeImportedDatabaseFilterValues(value) {
+  const values = [];
+  const pushValue = item => {
+    if (item === undefined || item === null) return;
+    if (Array.isArray(item)) {
+      item.forEach(pushValue);
+      return;
+    }
+    if (isPlainObject(item)) {
+      const option = normalizeDatabaseOption(item, values.length);
+      if (option?.name) {
+        values.push(option.name);
+        return;
+      }
+      [
+        item.value,
+        item.values,
+        item.name,
+        item.title,
+        item.text,
+        item.label,
+      ].forEach(pushValue);
+      return;
+    }
+    const text = stripHtml(getNodeHtml(item || '')).trim();
+    if (text) values.push(text);
+  };
+  pushValue(value);
+  return Array.from(new Set(values));
+}
+
+function normalizeImportedDatabaseFilterOperator(rule = {}) {
+  const raw = String(rule.operator || rule.condition || rule.type || rule.compare || '').trim().toLowerCase();
+  if (/not.*empty|is_not_empty|not_empty|不为空/.test(raw)) return 'is_not_empty';
+  if (/empty|为空/.test(raw)) return 'is_empty';
+  if (/not|exclude|does_not|不包含/.test(raw)) return 'not_contains_any';
+  return 'contains_any';
+}
+
+function normalizeImportedDatabaseFilters(node = {}, schema = {}, columns = []) {
+  const sources = collectDatabaseViewSources(node).flatMap(view => [
+    view.filters,
+    view.filter,
+    view.conditions,
+    view.where,
+  ]).filter(Boolean);
+  const rules = [];
+  sources.forEach(source => {
+    const items = Array.isArray(source) ? source : [source];
+    items.forEach(rule => {
+      if (!rule || typeof rule !== 'object') return;
+      const nestedRules = rule.filters || rule.children || rule.rules;
+      if (Array.isArray(nestedRules)) {
+        nestedRules.forEach(nestedRule => {
+          const columnIndex = resolveDatabaseColumnIndex(getDatabaseFieldReference(nestedRule), schema, columns);
+          if (columnIndex === null) return;
+          rules.push({
+            columnIndex,
+            operator: normalizeImportedDatabaseFilterOperator(nestedRule),
+            values: normalizeImportedDatabaseFilterValues(nestedRule.values ?? nestedRule.value ?? nestedRule.option ?? nestedRule.options),
+          });
+        });
+        return;
+      }
+      const columnIndex = resolveDatabaseColumnIndex(getDatabaseFieldReference(rule), schema, columns);
+      if (columnIndex === null) return;
+      rules.push({
+        columnIndex,
+        operator: normalizeImportedDatabaseFilterOperator(rule),
+        values: normalizeImportedDatabaseFilterValues(rule.values ?? rule.value ?? rule.option ?? rule.options),
+      });
+    });
+  });
+  return rules;
+}
+
+function normalizeImportedDatabaseGroup(node = {}, schema = {}, columns = []) {
+  const candidates = collectDatabaseViewSources(node).flatMap(view => [
+    view.group,
+    view.group_by,
+    view.groupBy,
+    view.groups,
+  ]).filter(Boolean);
+  for (const candidate of candidates) {
+    const source = Array.isArray(candidate) ? candidate[0] : candidate;
+    if (!source) continue;
+    const columnIndex = resolveDatabaseColumnIndex(getDatabaseFieldReference(source), schema, columns);
+    if (columnIndex === null) continue;
+    const visibleValues = normalizeImportedDatabaseFilterValues(source.visibleValues || source.visible_values || source.values || source.options || source.groups);
+    return {
+      columnIndex,
+      visibleValues,
+      collapsed: {},
+    };
+  }
+  return { columnIndex: null, visibleValues: [], collapsed: {} };
 }
 
 function getDatabaseTableName(node = {}, fallback = '') {
@@ -1141,6 +1352,12 @@ function buildDatabaseTableMeta(node = {}, tableMeta = null, fallbackTitle = '')
     ...inferredTagOptions,
     ...(schema.tagOptions || {}),
   };
+  const importedSorts = normalizeImportedDatabaseSorts(node, schema, normalizedColumns);
+  const importedFilters = normalizeImportedDatabaseFilters(node, schema, normalizedColumns);
+  const importedGroup = normalizeImportedDatabaseGroup(node, schema, normalizedColumns);
+  const columnWidths = Array.isArray(tableMeta?.columnWidths) && tableMeta.columnWidths.length
+    ? Array.from({ length: columnCount }, (_, index) => Math.max(120, Number(tableMeta.columnWidths[index]) || (index === 0 ? 220 : 200)))
+    : Array.from({ length: columnCount }, (_, index) => (index === 0 ? 220 : 200));
   return {
     ...(tableMeta || {}),
     tableName: getDatabaseTableName(node, fallbackTitle),
@@ -1149,6 +1366,12 @@ function buildDatabaseTableMeta(node = {}, tableMeta = null, fallbackTitle = '')
     view: 'table',
     fieldTypes,
     tagOptions,
+    columnWidths,
+    columnColors: tableMeta?.columnColors || {},
+    titleColorColumns: tableMeta?.titleColorColumns || {},
+    sorts: importedSorts.length ? importedSorts : (Array.isArray(tableMeta?.sorts) ? tableMeta.sorts : []),
+    filters: importedFilters.length ? importedFilters : (Array.isArray(tableMeta?.filters) ? tableMeta.filters : []),
+    group: importedGroup.columnIndex !== null ? importedGroup : (tableMeta?.group || { columnIndex: null, visibleValues: [], collapsed: {} }),
     source_system: 'wolai_mcp',
   };
 }

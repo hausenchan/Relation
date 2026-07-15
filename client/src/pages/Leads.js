@@ -76,8 +76,8 @@ export default function Leads() {
       message.error('不支持该文件格式');
       return Upload.LIST_IGNORE;
     }
-    if (file.size > 50 * 1024 * 1024) {
-      message.error('单个文件不能超过 50MB');
+    if (file.size > 100 * 1024 * 1024) {
+      message.error('单个文件不能超过 100MB');
       return Upload.LIST_IGNORE;
     }
     return false;
@@ -934,7 +934,7 @@ export default function Leads() {
               maxCount={10}
               accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.mp4,.mov,.avi"
             >
-              <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大50MB）</Button>
+              <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大100MB）</Button>
             </Upload>
           </Form.Item>
         </Form>

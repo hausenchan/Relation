@@ -305,7 +305,7 @@ const documentImportFileExts = [
   'eml', 'msg',
 ];
 const documentImportAccept = documentImportFileExts.map(ext => `.${ext}`).join(',');
-const documentImportMaxSize = 50 * 1024 * 1024;
+const documentImportMaxSize = 100 * 1024 * 1024;
 const clipboardImagePasteLimit = 10;
 const clipboardImageExtByMime = {
   'image/jpeg': 'jpg',
@@ -335,6 +335,8 @@ const databaseFieldTypeOptions = [
   { value: 'date', label: '日期', icon: '▣' },
   { value: 'person', label: '人员', icon: '♙' },
   { value: 'url', label: '链接', icon: '↗' },
+  { value: 'email', label: '邮箱', icon: '@' },
+  { value: 'phone', label: '电话', icon: '☎' },
   { value: 'checkbox', label: '勾选', icon: '☑' },
 ];
 const databaseFieldTypeMap = Object.fromEntries(databaseFieldTypeOptions.map(item => [item.value, item]));
@@ -669,6 +671,9 @@ function getDefaultBlockMeta(type) {
       columnWidths: [220, 220, 220],
       columnColors: {},
       titleColorColumns: {},
+      sorts: [],
+      filters: [],
+      group: { columnIndex: null, visibleValues: [], collapsed: {} },
     };
   }
   if (type?.startsWith('database-')) return { columns: ['字段', '内容'], rows: [['', '']], view: type.replace('database-', '') };
@@ -1680,6 +1685,8 @@ function normalizeDatabaseFieldType(value, columnIndex = 0, columnName = '') {
   if (/person|people|user|owner|member|assignee|负责人|人员|成员/.test(source)) return 'person';
   if (/number|amount|price|count|score|数字|数量|金额|预算/.test(source)) return 'number';
   if (/url|link|链接|地址/.test(source)) return 'url';
+  if (/email|mail|邮箱|邮件/.test(source)) return 'email';
+  if (/phone|mobile|tel|电话|手机/.test(source)) return 'phone';
   if (/check|bool|done|完成|勾选/.test(source)) return 'checkbox';
   return columnIndex === 0 ? 'title' : 'text';
 }
@@ -1749,6 +1756,70 @@ function normalizeDatabaseIndexedMap(rawMap, columnCount, normalizer = value => 
   }, {});
 }
 
+function normalizeDatabaseColumnIndex(value, columnCount) {
+  const columnIndex = Number(value);
+  if (!Number.isInteger(columnIndex) || columnIndex < 0 || columnIndex >= columnCount) return null;
+  return columnIndex;
+}
+
+function normalizeDatabaseSorts(rawSorts, columnCount) {
+  const sources = Array.isArray(rawSorts) ? rawSorts : (rawSorts ? [rawSorts] : []);
+  return sources.reduce((acc, rule) => {
+    if (!rule || typeof rule !== 'object') return acc;
+    const columnIndex = normalizeDatabaseColumnIndex(rule.columnIndex ?? rule.column_index ?? rule.fieldIndex ?? rule.field_index, columnCount);
+    if (columnIndex === null) return acc;
+    const rawDirection = String(rule.direction || rule.order || rule.sort || 'asc').trim().toLowerCase();
+    acc.push({
+      columnIndex,
+      direction: /desc|reverse|down|9|倒/.test(rawDirection) ? 'desc' : 'asc',
+    });
+    return acc;
+  }, []);
+}
+
+function normalizeDatabaseFilters(rawFilters, columnCount, legacyFilter = null) {
+  const sources = Array.isArray(rawFilters) ? rawFilters : (rawFilters ? [rawFilters] : []);
+  if (legacyFilter && typeof legacyFilter === 'object') sources.push({
+    columnIndex: legacyFilter.columnIndex,
+    operator: 'contains_any',
+    values: [legacyFilter.value],
+  });
+  const operatorSet = new Set(['contains_any', 'not_contains_any', 'is_empty', 'is_not_empty']);
+  return sources.reduce((acc, rule) => {
+    if (!rule || typeof rule !== 'object') return acc;
+    const columnIndex = normalizeDatabaseColumnIndex(rule.columnIndex ?? rule.column_index ?? rule.fieldIndex ?? rule.field_index, columnCount);
+    if (columnIndex === null) return acc;
+    const rawValues = Array.isArray(rule.values)
+      ? rule.values
+      : (rule.value !== undefined && rule.value !== null ? [rule.value] : []);
+    const values = rawValues
+      .map(value => inlineHtmlToPlain(String(value || '')).trim())
+      .filter(Boolean);
+    const rawOperator = String(rule.operator || rule.condition || 'contains_any').trim().toLowerCase();
+    const operator = operatorSet.has(rawOperator) ? rawOperator : 'contains_any';
+    acc.push({ columnIndex, operator, values });
+    return acc;
+  }, []);
+}
+
+function normalizeDatabaseGroup(rawGroup, columnCount) {
+  if (!rawGroup || typeof rawGroup !== 'object') {
+    return { columnIndex: null, visibleValues: [], collapsed: {} };
+  }
+  const columnIndex = normalizeDatabaseColumnIndex(rawGroup.columnIndex ?? rawGroup.column_index ?? rawGroup.fieldIndex ?? rawGroup.field_index, columnCount);
+  const visibleValues = Array.isArray(rawGroup.visibleValues || rawGroup.visible_values)
+    ? (rawGroup.visibleValues || rawGroup.visible_values)
+      .map(value => inlineHtmlToPlain(String(value || '')).trim())
+      .filter(Boolean)
+    : [];
+  const collapsed = rawGroup.collapsed && typeof rawGroup.collapsed === 'object' ? rawGroup.collapsed : {};
+  return {
+    columnIndex,
+    visibleValues,
+    collapsed,
+  };
+}
+
 function normalizeDatabaseBlockMeta(block) {
   const meta = { ...getDefaultBlockMeta('database-embed'), ...cloneMeta(block?.meta) };
   let storedColumns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : ['标题', '标签', '字段名'];
@@ -1789,7 +1860,10 @@ function normalizeDatabaseBlockMeta(block) {
     columnWidths,
     columnColors: normalizeDatabaseIndexedMap(meta.columnColors, columnCount, normalizeCssColor),
     titleColorColumns: normalizeDatabaseIndexedMap(meta.titleColorColumns, columnCount, value => Boolean(value)),
-    filter: meta.filter && typeof meta.filter === 'object' ? meta.filter : null,
+    sorts: normalizeDatabaseSorts(meta.sorts || meta.sort, columnCount),
+    filters: normalizeDatabaseFilters(meta.filters, columnCount, meta.filter),
+    group: normalizeDatabaseGroup(meta.group, columnCount),
+    filter: null,
   };
 }
 
@@ -3921,7 +3995,7 @@ export default function Documents() {
       return Upload.LIST_IGNORE;
     }
     if (Number(file?.size || 0) > documentImportMaxSize) {
-      message.error('单个文件不能超过 50MB');
+      message.error('单个文件不能超过 100MB');
       return Upload.LIST_IGNORE;
     }
     return false;
@@ -8739,20 +8813,15 @@ export default function Documents() {
       columnWidths,
       columnColors,
       titleColorColumns,
+      sorts,
+      filters,
+      group,
     } = meta;
     const defaultName = getDefaultBlockContent('database-embed');
     const tableName = meta.tableName || (block.content && block.content !== defaultName ? inlineHtmlToPlain(block.content) : '');
     const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 520 : 720);
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
-    const filterColumnIndex = Number(meta.filter?.columnIndex);
-    const filterValue = String(meta.filter?.value || '').trim();
-    const hasActiveFilter = Number.isInteger(filterColumnIndex) && filterColumnIndex >= 0 && filterColumnIndex < columns.length && filterValue;
-    const visibleRows = rows
-      .map((row, rowIndex) => ({ row, rowIndex }))
-      .filter(item => {
-        if (!hasActiveFilter) return true;
-        return inlineHtmlToPlain(item.row?.[filterColumnIndex] || '').toLowerCase().includes(filterValue.toLowerCase());
-      });
+    const optionFieldTypes = ['select', 'multi_select', 'person'];
 
     const persistDatabaseMeta = (patch = {}) => {
       updateBlockMeta(block.id, {
@@ -8760,6 +8829,169 @@ export default function Documents() {
         ...patch,
       });
     };
+    const normalizeCellText = value => inlineHtmlToPlain(String(value || '')).trim();
+    const isOptionFieldType = type => optionFieldTypes.includes(type);
+    const getCellValues = (row, columnIndex) => {
+      const fieldType = fieldTypes[columnIndex];
+      const text = normalizeCellText(row?.[columnIndex] || '');
+      if (!text) return [];
+      if (isOptionFieldType(fieldType)) return splitDatabaseTagValue(text);
+      if (fieldType === 'checkbox') {
+        return (String(text).toLowerCase() === 'true' || text === '是') ? ['是'] : [];
+      }
+      return [text];
+    };
+    const getColumnChoices = (columnIndex, { includeEmpty = false } = {}) => {
+      const choiceMap = new Map();
+      const pushChoice = (name, option = {}) => {
+        const value = String(name || '').trim();
+        if (!value || choiceMap.has(value)) return;
+        choiceMap.set(value, {
+          value,
+          label: value,
+          color: normalizeCssColor(option.color) || databaseTagColorOptions[choiceMap.size % databaseTagColorOptions.length],
+        });
+      };
+      (tagOptions[columnIndex] || []).forEach(option => pushChoice(option.name, option));
+      rows.forEach(row => {
+        getCellValues(row, columnIndex).forEach(value => pushChoice(value));
+      });
+      const choices = Array.from(choiceMap.values());
+      if (includeEmpty && rows.some(row => !getCellValues(row, columnIndex).length)) {
+        choices.push({ value: '__empty__', label: '空白', color: '#f8fafc' });
+      }
+      return choices;
+    };
+    const getSortDirectionOptions = (fieldType) => {
+      if (isOptionFieldType(fieldType)) {
+        return [
+          { value: 'asc', label: '按选项正序排序' },
+          { value: 'desc', label: '按选项倒序排序' },
+        ];
+      }
+      if (fieldType === 'number' || fieldType === 'date') {
+        return [
+          { value: 'asc', label: '按 1 → 9 排序' },
+          { value: 'desc', label: '按 9 → 1 排序' },
+        ];
+      }
+      return [
+        { value: 'asc', label: '按 A → Z 排序' },
+        { value: 'desc', label: '按 Z → A 排序' },
+      ];
+    };
+    const getSortDirectionLabel = (fieldType, direction) => {
+      const options = getSortDirectionOptions(fieldType);
+      return options.find(option => option.value === direction)?.label || options[0]?.label || '升序';
+    };
+    const getOptionSortRank = (columnIndex, value) => {
+      const options = tagOptions[columnIndex] || [];
+      const index = options.findIndex(option => option.name === value);
+      return index >= 0 ? index : options.length + 1000;
+    };
+    const getDateSortValue = (value) => {
+      const text = normalizeCellText(value);
+      if (!text) return Number.POSITIVE_INFINITY;
+      const parsed = dayjs(text);
+      return parsed.isValid() ? parsed.valueOf() : Number.POSITIVE_INFINITY;
+    };
+    const getNumberSortValue = (value) => {
+      const text = normalizeCellText(value).replace(/,/g, '');
+      const number = Number(text);
+      return Number.isFinite(number) ? number : Number.POSITIVE_INFINITY;
+    };
+    const compareRowsByColumn = (leftRow, rightRow, columnIndex) => {
+      const fieldType = fieldTypes[columnIndex];
+      if (isOptionFieldType(fieldType)) {
+        const leftValue = getCellValues(leftRow, columnIndex)[0] || '';
+        const rightValue = getCellValues(rightRow, columnIndex)[0] || '';
+        const rankDiff = getOptionSortRank(columnIndex, leftValue) - getOptionSortRank(columnIndex, rightValue);
+        if (rankDiff !== 0) return rankDiff;
+        return leftValue.localeCompare(rightValue, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+      }
+      if (fieldType === 'date') {
+        const diff = getDateSortValue(leftRow?.[columnIndex]) - getDateSortValue(rightRow?.[columnIndex]);
+        if (diff !== 0) return diff;
+      }
+      if (fieldType === 'number') {
+        const diff = getNumberSortValue(leftRow?.[columnIndex]) - getNumberSortValue(rightRow?.[columnIndex]);
+        if (diff !== 0) return diff;
+      }
+      if (fieldType === 'checkbox') {
+        const leftChecked = getCellValues(leftRow, columnIndex).length ? 1 : 0;
+        const rightChecked = getCellValues(rightRow, columnIndex).length ? 1 : 0;
+        if (leftChecked !== rightChecked) return leftChecked - rightChecked;
+      }
+      return normalizeCellText(leftRow?.[columnIndex] || '').localeCompare(
+        normalizeCellText(rightRow?.[columnIndex] || ''),
+        'zh-Hans-CN',
+        { numeric: true, sensitivity: 'base' }
+      );
+    };
+    const activeFilterRules = filters.filter(rule => (
+      rule.operator === 'is_empty'
+      || rule.operator === 'is_not_empty'
+      || (Array.isArray(rule.values) && rule.values.length)
+    ));
+    const rowMatchesFilter = (row, rule) => {
+      const values = getCellValues(row, rule.columnIndex);
+      const text = normalizeCellText(row?.[rule.columnIndex] || '');
+      if (rule.operator === 'is_empty') return !text && !values.length;
+      if (rule.operator === 'is_not_empty') return Boolean(text || values.length);
+      const targetValues = Array.isArray(rule.values) ? rule.values : [];
+      if (!targetValues.length) return true;
+      if (isOptionFieldType(fieldTypes[rule.columnIndex]) || values.length > 1) {
+        const hit = values.some(value => targetValues.includes(value));
+        return rule.operator === 'not_contains_any' ? !hit : hit;
+      }
+      const lowerText = text.toLowerCase();
+      const hit = targetValues.some(value => lowerText.includes(String(value || '').toLowerCase()));
+      return rule.operator === 'not_contains_any' ? !hit : hit;
+    };
+    const applyViewSorts = (items) => {
+      if (!sorts.length) return items;
+      return [...items].sort((left, right) => {
+        for (const rule of sorts) {
+          const result = compareRowsByColumn(left.row, right.row, rule.columnIndex);
+          if (result !== 0) return rule.direction === 'desc' ? -result : result;
+        }
+        return left.rowIndex - right.rowIndex;
+      });
+    };
+    const visibleRows = applyViewSorts(
+      rows
+        .map((row, rowIndex) => ({ row, rowIndex }))
+        .filter(item => activeFilterRules.every(rule => rowMatchesFilter(item.row, rule)))
+    );
+    const groupColumnIndex = Number.isInteger(group.columnIndex) && group.columnIndex >= 0 && group.columnIndex < columns.length
+      ? group.columnIndex
+      : null;
+    const groupChoices = groupColumnIndex === null ? [] : getColumnChoices(groupColumnIndex, { includeEmpty: true });
+    const getRowGroupValue = (row) => {
+      if (groupColumnIndex === null) return '__all__';
+      return getCellValues(row, groupColumnIndex)[0] || '__empty__';
+    };
+    const visibleGroupSet = new Set(Array.isArray(group.visibleValues) ? group.visibleValues : []);
+    const groupSections = (() => {
+      if (groupColumnIndex === null) return [{ key: '__all__', label: '', rows: visibleRows }];
+      const sections = new Map();
+      groupChoices.forEach(choice => {
+        sections.set(choice.value, { key: choice.value, label: choice.label, color: choice.color, rows: [] });
+      });
+      visibleRows.forEach(item => {
+        const key = getRowGroupValue(item.row);
+        if (visibleGroupSet.size && !visibleGroupSet.has(key)) return;
+        if (!sections.has(key)) sections.set(key, { key, label: key === '__empty__' ? '空白' : key, color: '#f8fafc', rows: [] });
+        sections.get(key).rows.push(item);
+      });
+      return Array.from(sections.values()).filter(section => (
+        section.rows.length && (!visibleGroupSet.size || visibleGroupSet.has(section.key))
+      ));
+    })();
+    const hasActiveFilter = activeFilterRules.length > 0;
+    const hasConfiguredFilter = filters.length > 0;
+    const hasActiveSort = sorts.length > 0;
+    const hasActiveGroup = groupColumnIndex !== null;
     const updateTableName = (value) => {
       persistDatabaseMeta({ tableName: value });
     };
@@ -8801,11 +9033,37 @@ export default function Documents() {
       });
       return next;
     };
+    const shiftRuleForInsert = (rule, insertIndex) => ({
+      ...rule,
+      columnIndex: rule.columnIndex >= insertIndex ? rule.columnIndex + 1 : rule.columnIndex,
+    });
+    const shiftRuleForDelete = (rule, deleteIndex) => {
+      if (rule.columnIndex === deleteIndex) return null;
+      return {
+        ...rule,
+        columnIndex: rule.columnIndex > deleteIndex ? rule.columnIndex - 1 : rule.columnIndex,
+      };
+    };
+    const shiftGroupForInsert = (currentGroup, insertIndex) => {
+      if (!Number.isInteger(currentGroup?.columnIndex)) return currentGroup;
+      return {
+        ...currentGroup,
+        columnIndex: currentGroup.columnIndex >= insertIndex ? currentGroup.columnIndex + 1 : currentGroup.columnIndex,
+      };
+    };
+    const shiftGroupForDelete = (currentGroup, deleteIndex) => {
+      if (!Number.isInteger(currentGroup?.columnIndex)) return currentGroup;
+      if (currentGroup.columnIndex === deleteIndex) return { columnIndex: null, visibleValues: [], collapsed: {} };
+      return {
+        ...currentGroup,
+        columnIndex: currentGroup.columnIndex > deleteIndex ? currentGroup.columnIndex - 1 : currentGroup.columnIndex,
+      };
+    };
     const insertColumn = (targetIndex = columns.length - 1, position = 'after') => {
       const safeTargetIndex = Math.max(0, Math.min(columns.length - 1, Number(targetIndex) || 0));
       const insertIndex = position === 'before' ? safeTargetIndex : safeTargetIndex + 1;
       const nextColumns = [...columns];
-      nextColumns.splice(insertIndex, 0, `字段名 ${columns.length}`);
+      nextColumns.splice(insertIndex, 0, '字段名');
       const nextRows = rows.map(row => {
         const nextRow = [...row];
         nextRow.splice(insertIndex, 0, '');
@@ -8823,6 +9081,9 @@ export default function Documents() {
         tagOptions: shiftIndexedMapForInsert(tagOptions, insertIndex),
         columnColors: shiftIndexedMapForInsert(columnColors, insertIndex),
         titleColorColumns: shiftIndexedMapForInsert(titleColorColumns, insertIndex, false),
+        sorts: sorts.map(rule => shiftRuleForInsert(rule, insertIndex)),
+        filters: filters.map(rule => shiftRuleForInsert(rule, insertIndex)),
+        group: shiftGroupForInsert(group, insertIndex),
       });
       setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex: 0, columnIndex: insertIndex });
     };
@@ -8837,7 +9098,10 @@ export default function Documents() {
         tagOptions: shiftIndexedMapForDelete(tagOptions, safeIndex),
         columnColors: shiftIndexedMapForDelete(columnColors, safeIndex),
         titleColorColumns: shiftIndexedMapForDelete(titleColorColumns, safeIndex),
-        filter: meta.filter?.columnIndex === safeIndex ? null : meta.filter,
+        sorts: sorts.map(rule => shiftRuleForDelete(rule, safeIndex)).filter(Boolean),
+        filters: filters.map(rule => shiftRuleForDelete(rule, safeIndex)).filter(Boolean),
+        group: shiftGroupForDelete(group, safeIndex),
+        filter: null,
       });
     };
     const addRow = () => {
@@ -8906,22 +9170,47 @@ export default function Documents() {
         },
       });
     };
-    const sortRowsByColumn = (columnIndex, direction = 'asc') => {
-      const nextRows = [...rows].sort((left, right) => {
-        const leftText = inlineHtmlToPlain(left?.[columnIndex] || '');
-        const rightText = inlineHtmlToPlain(right?.[columnIndex] || '');
-        const result = leftText.localeCompare(rightText, 'zh-Hans-CN', { numeric: true, sensitivity: 'base' });
-        return direction === 'desc' ? -result : result;
-      });
-      persistDatabaseMeta({ rows: nextRows });
+    const setSortByColumn = (columnIndex, direction = 'asc') => {
+      persistDatabaseMeta({ sorts: [{ columnIndex, direction }] });
     };
-    const applyFilterByColumn = (columnIndex) => {
-      const currentValue = meta.filter?.columnIndex === columnIndex ? String(meta.filter?.value || '') : '';
-      const value = window.prompt('筛选内容', currentValue);
-      if (value === null) return;
-      const nextValue = value.trim();
+    const addSortRule = (columnIndex = 0) => {
+      const safeIndex = Math.max(0, Math.min(columns.length - 1, Number(columnIndex) || 0));
+      persistDatabaseMeta({ sorts: [...sorts, { columnIndex: safeIndex, direction: 'asc' }] });
+    };
+    const updateSortRule = (ruleIndex, patch) => {
       persistDatabaseMeta({
-        filter: nextValue ? { columnIndex, value: nextValue } : null,
+        sorts: sorts.map((rule, index) => (index === ruleIndex ? { ...rule, ...patch } : rule)),
+      });
+    };
+    const removeSortRule = (ruleIndex) => {
+      persistDatabaseMeta({ sorts: sorts.filter((_, index) => index !== ruleIndex) });
+    };
+    const addFilterRule = (columnIndex = 0) => {
+      const safeIndex = Math.max(0, Math.min(columns.length - 1, Number(columnIndex) || 0));
+      persistDatabaseMeta({ filters: [...filters, { columnIndex: safeIndex, operator: 'contains_any', values: [] }] });
+    };
+    const updateFilterRule = (ruleIndex, patch) => {
+      persistDatabaseMeta({
+        filters: filters.map((rule, index) => (index === ruleIndex ? { ...rule, ...patch } : rule)),
+      });
+    };
+    const removeFilterRule = (ruleIndex) => {
+      persistDatabaseMeta({ filters: filters.filter((_, index) => index !== ruleIndex) });
+    };
+    const updateGroup = (patch) => {
+      persistDatabaseMeta({
+        group: {
+          ...group,
+          ...patch,
+        },
+      });
+    };
+    const clearDatabaseViewRules = () => {
+      persistDatabaseMeta({
+        sorts: [],
+        filters: [],
+        group: { columnIndex: null, visibleValues: [], collapsed: {} },
+        filter: null,
       });
     };
     const beginColumnResize = (event, columnIndex) => {
@@ -9044,6 +9333,152 @@ export default function Documents() {
         ))}
       </div>
     );
+    const renderDatabasePanelFrame = (children, width = 340) => (
+      <div
+        onMouseDown={event => {
+          event.stopPropagation();
+          if (!event.target?.closest?.('input, textarea, [contenteditable="true"], .ant-select, .ant-picker')) event.preventDefault();
+        }}
+        style={{
+          width,
+          maxHeight: 'min(680px, calc(100vh - 120px))',
+          overflowY: 'auto',
+          background: '#fff',
+          border: '1px solid #e5e7eb',
+          borderRadius: 8,
+          boxShadow: '0 18px 44px rgba(15, 23, 42, 0.18)',
+          padding: 12,
+        }}
+      >
+        {children}
+      </div>
+    );
+    const renderSortPanel = () => renderDatabasePanelFrame(
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <Text strong>排序</Text>
+        {sorts.length ? sorts.map((rule, ruleIndex) => {
+          const fieldType = fieldTypes[rule.columnIndex] || 'text';
+          return (
+            <div key={`sort-rule-${ruleIndex}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 28px', gap: 8, alignItems: 'center' }}>
+              <Select
+                value={rule.columnIndex}
+                onChange={value => updateSortRule(ruleIndex, { columnIndex: value, direction: 'asc' })}
+                options={columns.map((column, index) => ({ value: index, label: column }))}
+              />
+              <Select
+                value={rule.direction}
+                onChange={value => updateSortRule(ruleIndex, { direction: value })}
+                options={getSortDirectionOptions(fieldType)}
+              />
+              <Button type="text" size="small" danger icon={<CloseOutlined />} onClick={() => removeSortRule(ruleIndex)} />
+            </div>
+          );
+        }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无排序规则" />}
+        <Button type="dashed" icon={<PlusOutlined />} onClick={() => addSortRule()} block>
+          新增排序规则
+        </Button>
+      </Space>
+    );
+    const renderFilterPanel = () => renderDatabasePanelFrame(
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <Text strong>筛选</Text>
+        {filters.length ? filters.map((rule, ruleIndex) => {
+          const valueOptions = getColumnChoices(rule.columnIndex);
+          const needsValues = !['is_empty', 'is_not_empty'].includes(rule.operator);
+          return (
+            <div key={`filter-rule-${ruleIndex}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 28px', gap: 8, alignItems: 'center' }}>
+              <Select
+                value={rule.columnIndex}
+                onChange={value => updateFilterRule(ruleIndex, { columnIndex: value, values: [] })}
+                options={columns.map((column, index) => ({ value: index, label: column }))}
+              />
+              <Select
+                value={rule.operator}
+                onChange={value => updateFilterRule(ruleIndex, { operator: value, values: [] })}
+                options={[
+                  { value: 'contains_any', label: '包含任一条件' },
+                  { value: 'not_contains_any', label: '不包含任一条件' },
+                  { value: 'is_empty', label: '为空' },
+                  { value: 'is_not_empty', label: '不为空' },
+                ]}
+              />
+              <Button type="text" size="small" danger icon={<CloseOutlined />} onClick={() => removeFilterRule(ruleIndex)} />
+              {needsValues && (
+                <Select
+                  mode={valueOptions.length ? 'multiple' : 'tags'}
+                  value={rule.values || []}
+                  onChange={values => updateFilterRule(ruleIndex, { values })}
+                  options={valueOptions.map(option => ({ value: option.value, label: option.label }))}
+                  placeholder="选择或输入条件"
+                  style={{ gridColumn: '1 / span 3' }}
+                />
+              )}
+            </div>
+          );
+        }) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无筛选规则" />}
+        <Button type="dashed" icon={<PlusOutlined />} onClick={() => addFilterRule()} block>
+          添加筛选
+        </Button>
+      </Space>
+    );
+    const renderGroupPanel = () => {
+      const currentGroupChoices = groupColumnIndex === null ? [] : groupChoices;
+      const selectedValues = group.visibleValues?.length ? group.visibleValues : currentGroupChoices.map(choice => choice.value);
+      return renderDatabasePanelFrame(
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Text strong>分组</Text>
+          <Select
+            value={groupColumnIndex === null ? 'none' : groupColumnIndex}
+            onChange={value => {
+              if (value === 'none') updateGroup({ columnIndex: null, visibleValues: [], collapsed: {} });
+              else updateGroup({ columnIndex: value, visibleValues: [], collapsed: {} });
+            }}
+            options={[
+              { value: 'none', label: '无分组' },
+              ...columns.map((column, index) => ({ value: index, label: column })),
+            ]}
+            style={{ width: '100%' }}
+          />
+          {groupColumnIndex !== null && (
+            <>
+              <Text type="secondary">展示分组</Text>
+              <Checkbox.Group
+                value={selectedValues}
+                onChange={values => updateGroup({ visibleValues: values })}
+                style={{ width: '100%', display: 'grid', gap: 8 }}
+              >
+                {currentGroupChoices.map(choice => (
+                  <Checkbox key={choice.value} value={choice.value}>
+                    <Tag style={{ ...getDatabaseTagStyle(choice), marginInlineEnd: 6 }}>{choice.label}</Tag>
+                  </Checkbox>
+                ))}
+              </Checkbox.Group>
+            </>
+          )}
+        </Space>
+      );
+    };
+    const renderViewConfigPanel = () => renderDatabasePanelFrame(
+      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+        <Text strong>视图配置</Text>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ padding: 8, border: '1px solid #e5e7eb', borderRadius: 6 }}>
+            <Text type="secondary">字段</Text>
+            <div style={{ fontWeight: 700 }}>{columns.length}</div>
+          </div>
+          <div style={{ padding: 8, border: '1px solid #e5e7eb', borderRadius: 6 }}>
+            <Text type="secondary">记录</Text>
+            <div style={{ fontWeight: 700 }}>{rows.length}</div>
+          </div>
+        </div>
+        <Text type="secondary">
+          当前显示 {visibleRows.length} 条，排序 {sorts.length} 条，筛选 {activeFilterRules.length} 条，{hasActiveGroup ? `按「${columns[groupColumnIndex]}」分组` : '无分组'}。
+        </Text>
+        <Button onClick={clearDatabaseViewRules} disabled={!hasActiveSort && !hasConfiguredFilter && !hasActiveGroup} block>
+          清空排序、筛选和分组
+        </Button>
+      </Space>
+    );
     const renderDatabaseColumnMenu = (columnIndex) => {
       const fieldType = fieldTypes[columnIndex];
       const isOptionType = ['select', 'multi_select', 'person'].includes(fieldType);
@@ -9139,9 +9574,9 @@ export default function Documents() {
             </>
           )}
           <Divider style={{ margin: '10px 0' }} />
-          {renderDatabaseMenuButton({ icon: '↑', label: '按 A → Z 排序', onClick: () => sortRowsByColumn(columnIndex, 'asc') })}
-          {renderDatabaseMenuButton({ icon: '↓', label: '按 Z → A 排序', onClick: () => sortRowsByColumn(columnIndex, 'desc') })}
-          {renderDatabaseMenuButton({ icon: '⌕', label: '按该字段筛选', onClick: () => applyFilterByColumn(columnIndex) })}
+          {renderDatabaseMenuButton({ icon: '↑', label: getSortDirectionLabel(fieldType, 'asc'), onClick: () => setSortByColumn(columnIndex, 'asc') })}
+          {renderDatabaseMenuButton({ icon: '↓', label: getSortDirectionLabel(fieldType, 'desc'), onClick: () => setSortByColumn(columnIndex, 'desc') })}
+          {renderDatabaseMenuButton({ icon: '⌕', label: '按该字段筛选', onClick: () => addFilterRule(columnIndex) })}
           <Divider style={{ margin: '10px 0' }} />
           {renderDatabaseMenuButton({ icon: '←', label: '在左侧添加字段', onClick: () => insertColumn(columnIndex, 'before') })}
           {renderDatabaseMenuButton({ icon: '→', label: '在右侧添加字段', onClick: () => insertColumn(columnIndex, 'after') })}
@@ -9196,6 +9631,43 @@ export default function Documents() {
           />
         );
       }
+      if (fieldType === 'date') {
+        const text = normalizeCellText(row[columnIndex]);
+        const dateValue = text && dayjs(text).isValid() ? dayjs(text) : null;
+        return (
+          <DatePicker
+            value={dateValue}
+            format="YYYY-MM-DD"
+            bordered={false}
+            placeholder=""
+            onFocus={() => {
+              setSelectedBlockId(block.id);
+              clearAreaBlockSelection();
+              setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
+            }}
+            onChange={(_, dateString) => updateCell(rowIndex, columnIndex, dateString || '')}
+            style={{ width: '100%', padding: '6px 8px' }}
+          />
+        );
+      }
+      if (fieldType === 'number') {
+        const numericValue = getNumberSortValue(row[columnIndex]);
+        return (
+          <InputNumber
+            value={Number.isFinite(numericValue) ? numericValue : null}
+            bordered={false}
+            controls={false}
+            placeholder=""
+            onFocus={() => {
+              setSelectedBlockId(block.id);
+              clearAreaBlockSelection();
+              setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
+            }}
+            onChange={value => updateCell(rowIndex, columnIndex, value === null || value === undefined ? '' : String(value))}
+            style={{ width: '100%', padding: '6px 8px' }}
+          />
+        );
+      }
       return (
         <InlineRichTextEditor
           id={`doc-table-cell-input-${block.id}-database-${rowIndex}-${columnIndex}`}
@@ -9230,6 +9702,28 @@ export default function Documents() {
         />
       );
     };
+    const renderDatabaseBodyRow = ({ row, rowIndex }) => (
+      <tr key={`database-row-${rowIndex}`}>
+        {columns.map((_, columnIndex) => {
+          const cellBackground = columnColors[columnIndex] || '#fff';
+          return (
+            <td
+              key={`database-cell-${rowIndex}-${columnIndex}`}
+              style={{
+                border: '1px solid #e5e7eb',
+                background: cellBackground,
+                minHeight: 44,
+                padding: 0,
+                verticalAlign: 'top',
+              }}
+            >
+              {renderDatabaseCell(row, rowIndex, columnIndex)}
+            </td>
+          );
+        })}
+        <td style={{ border: '1px solid #e5e7eb', background: '#fff' }} />
+      </tr>
+    );
     return (
       <div
         id={`doc-database-shell-${block.id}`}
@@ -9244,16 +9738,26 @@ export default function Documents() {
             <Button type="text" size="small" icon={<PlusOutlined />} aria-label="新增视图" />
           </Space>
           <Space size={4} style={{ marginLeft: 'auto' }}>
-            <Button type="text" size="small">视图配置</Button>
-            <Button type="text" size="small" onClick={() => sortRowsByColumn(0, 'asc')}>排序</Button>
-            <Button type="text" size="small" onClick={() => applyFilterByColumn(hasActiveFilter ? filterColumnIndex : 0)}>
-              筛选
-            </Button>
-            {hasActiveFilter && (
-              <Button type="text" size="small" onClick={() => persistDatabaseMeta({ filter: null })}>清除筛选</Button>
-            )}
+            <Dropdown trigger={['click']} dropdownRender={renderViewConfigPanel}>
+              <Button type="text" size="small">视图配置</Button>
+            </Dropdown>
+            <Dropdown trigger={['click']} dropdownRender={renderSortPanel}>
+              <Button type="text" size="small">
+                排序{sorts.length ? ` ${sorts.length}` : ''}
+              </Button>
+            </Dropdown>
+            <Dropdown trigger={['click']} dropdownRender={renderFilterPanel}>
+              <Button type="text" size="small">
+                筛选{activeFilterRules.length ? ` ${activeFilterRules.length}` : ''}
+              </Button>
+            </Dropdown>
+            <Dropdown trigger={['click']} dropdownRender={renderGroupPanel}>
+              <Button type="text" size="small">
+                分组{hasActiveGroup ? ` ${columns[groupColumnIndex]}` : ''}
+              </Button>
+            </Dropdown>
             <Tooltip title="搜索">
-              <Button type="text" size="small" icon={<SearchOutlined />} aria-label="搜索" onClick={() => applyFilterByColumn(0)} />
+              <Button type="text" size="small" icon={<SearchOutlined />} aria-label="搜索" onClick={() => addFilterRule(0)} />
             </Tooltip>
             <Tooltip title="更多">
               <Button type="text" size="small" icon={<MoreOutlined />} aria-label="更多" />
@@ -9354,28 +9858,27 @@ export default function Documents() {
               </tr>
             </thead>
             <tbody>
-              {(visibleRows.length ? visibleRows : [{ row: columns.map(() => ''), rowIndex: 0, empty: true }]).map(({ row, rowIndex, empty }) => (
-                <tr key={`database-row-${rowIndex}-${empty ? 'empty' : 'data'}`}>
-                  {columns.map((_, columnIndex) => {
-                    const cellBackground = columnColors[columnIndex] || '#fff';
-                    return (
-                      <td
-                        key={`database-cell-${rowIndex}-${columnIndex}`}
-                        style={{
-                          border: '1px solid #e5e7eb',
-                          background: cellBackground,
-                          minHeight: 44,
-                          padding: 0,
-                          verticalAlign: 'top',
-                        }}
-                      >
-                        {empty ? null : renderDatabaseCell(row, rowIndex, columnIndex)}
+              {groupSections.length ? groupSections.map(section => (
+                <React.Fragment key={`database-section-${section.key}`}>
+                  {hasActiveGroup && (
+                    <tr>
+                      <td colSpan={columns.length + 1} style={{ border: '1px solid #e5e7eb', background: '#f8fafc', padding: '8px 12px' }}>
+                        <Space size={8}>
+                          <Tag style={{ ...getDatabaseTagStyle(section), marginInlineEnd: 0 }}>{section.label}</Tag>
+                          <Text type="secondary">{section.rows.length} 条</Text>
+                        </Space>
                       </td>
-                    );
-                  })}
-                  <td style={{ border: '1px solid #e5e7eb', background: '#fff' }} />
+                    </tr>
+                  )}
+                  {section.rows.map(renderDatabaseBodyRow)}
+                </React.Fragment>
+              )) : (
+                <tr>
+                  <td colSpan={columns.length + 1} style={{ border: '1px solid #e5e7eb', background: '#fff', padding: 24 }}>
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无匹配记录" />
+                  </td>
                 </tr>
-              ))}
+              )}
             </tbody>
           </table>
         </div>
@@ -12390,7 +12893,7 @@ export default function Documents() {
                         <UploadOutlined style={{ color: '#64748b', fontSize: 20 }} />
                         <Text>拖入或选择文件</Text>
                         <Text type="secondary" style={{ fontSize: 12 }}>
-                          支持 Word、PDF、PPT、Excel、XMind、TXT 等常见文档内容导入，单个文件不超过 50MB
+                          支持 Word、PDF、PPT、Excel、XMind、TXT 等常见文档内容导入，单个文件不超过 100MB
                         </Text>
                       </Space>
                     </Upload.Dragger>

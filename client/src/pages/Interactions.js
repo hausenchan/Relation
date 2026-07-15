@@ -560,7 +560,7 @@ export default function Interactions() {
               maxCount={10}
               accept={ATTACHMENT_ACCEPT}
             >
-              <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大50MB）</Button>
+              <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大100MB）</Button>
             </Upload>
           </Form.Item>
         </Form>

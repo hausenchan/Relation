@@ -1042,7 +1042,7 @@ function ProductsTab({ companyId, entityId, entities = [] }) {
                   multiple
                   accept={ATTACHMENT_ACCEPT}
                 >
-                  <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
+                  <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大100MB）</Button>
                 </Upload>
               </Form.Item>
             </Col>
@@ -1452,7 +1452,7 @@ function CompetitorResearchTab({ companyId }) {
               multiple
               accept={ATTACHMENT_ACCEPT}
             >
-              <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大50MB）</Button>
+              <Button icon={<UploadOutlined />} size="small">选择文件（最多10个，单个最大100MB）</Button>
             </Upload>
           </Form.Item>
           {editing && (
