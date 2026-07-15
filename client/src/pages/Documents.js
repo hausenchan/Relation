@@ -530,6 +530,41 @@ function getClipboardImageFiles(event) {
     .filter(file => String(file?.type || '').startsWith('image/'));
 }
 
+function dedupeClipboardImageFiles(files = []) {
+  const seen = new Set();
+  return Array.from(files || []).filter(file => {
+    if (!file) return false;
+    const key = [file.name || '', file.type || '', file.size || 0, file.lastModified || 0].join(':');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function getAsyncClipboardImageFiles() {
+  if (!navigator.clipboard?.read || typeof window.ClipboardItem === 'undefined') return [];
+  try {
+    const clipboardItems = await navigator.clipboard.read();
+    const files = [];
+    for (const item of clipboardItems || []) {
+      const imageTypes = (item.types || []).filter(type => clipboardImageExtByMime[String(type || '').toLowerCase()]);
+      for (const type of imageTypes) {
+        const blob = await item.getType(type);
+        if (!blob?.size) continue;
+        const ext = clipboardImageExtByMime[String(type || '').toLowerCase()] || 'png';
+        const timestamp = dayjs().format('YYYYMMDD-HHmmss');
+        files.push(new File([blob], `clipboard-read-image-${timestamp}-${files.length + 1}.${ext}`, {
+          type,
+          lastModified: Date.now(),
+        }));
+      }
+    }
+    return dedupeClipboardImageFiles(files);
+  } catch {
+    return [];
+  }
+}
+
 function normalizeClipboardImageFile(file, index = 0) {
   const currentExt = getFileExt(file?.name);
   if (currentExt && imageExts.includes(currentExt)) return file;
@@ -563,11 +598,16 @@ function normalizeClipboardHtmlImageFilename(filename = '', mime = '', index = 0
 }
 
 function dataUriToClipboardHtmlImageFile(dataUri = '', filename = '', index = 0) {
-  const match = String(dataUri || '').match(/^data:(image\/(?:png|jpe?g|gif|webp))(?:;charset=[^;,]+)?(;base64)?,(.*)$/i);
-  if (!match) throw new Error('不支持的图片 Data URL');
-  const mime = match[1].toLowerCase().replace('image/jpg', 'image/jpeg');
-  const rawData = match[3] || '';
-  const binary = match[2] ? window.atob(rawData) : decodeURIComponent(rawData);
+  const value = String(dataUri || '').trim();
+  const commaIndex = value.indexOf(',');
+  if (commaIndex < 0) throw new Error('不支持的图片 Data URL');
+  const header = value.slice(0, commaIndex);
+  const rawData = value.slice(commaIndex + 1);
+  const mime = (header.match(/^data:(image\/(?:png|jpe?g|gif|webp))(?:;|$)/i)?.[1] || '').toLowerCase().replace('image/jpg', 'image/jpeg');
+  if (!mime) throw new Error('不支持的图片 Data URL');
+  const binary = /;base64(?:;|$)/i.test(header)
+    ? window.atob(rawData.replace(/\s/g, ''))
+    : decodeURIComponent(rawData);
   const chunks = [];
   for (let offset = 0; offset < binary.length; offset += 8192) {
     const slice = binary.slice(offset, offset + 8192);
@@ -1167,7 +1207,7 @@ function getClipboardHtmlSourceUrl(html) {
   return container.querySelector('base[href]')?.getAttribute('href') || '';
 }
 
-function getPastedImageSource(element, sourceUrl = '') {
+function getPastedImageRawSource(element) {
   if (!element) return '';
   const srcset = element.getAttribute?.('srcset') || element.getAttribute?.('data-srcset') || '';
   const srcsetSource = srcset.split(',').map(item => item.trim().split(/\s+/)[0]).find(Boolean);
@@ -1180,14 +1220,18 @@ function getPastedImageSource(element, sourceUrl = '') {
     element.getAttribute?.('href'),
     srcsetSource,
   ].find(Boolean);
-  const value = String(raw || '').trim();
+  return String(raw || '').trim();
+}
+
+function getPastedImageSource(element, sourceUrl = '') {
+  const value = getPastedImageRawSource(element);
   if (!value || /^(javascript|vbscript):/i.test(value)) return '';
   if (/^data:image\//i.test(value)) {
     return /^data:image\/(?:png|jpe?g|gif|webp)[;,]/i.test(value) ? value : '';
   }
   if (/^https?:\/\//i.test(value)) return value;
   if (/^\/\//.test(value)) return `${window.location.protocol}${value}`;
-  if (/^(blob:|file:)/i.test(value)) return '';
+  if (/^(blob:|file:|cid:|webkit-fake-url:)/i.test(value)) return '';
   try {
     return new URL(value, sourceUrl || document.baseURI).toString();
   } catch {
@@ -1223,12 +1267,13 @@ function getPastedImageMimeType(src) {
 }
 
 function createPastedImageBlock(element, sourceUrl = '') {
+  const rawSrc = getPastedImageRawSource(element);
   const src = getPastedImageSource(element, sourceUrl);
-  if (!src) return null;
-  const filename = getPastedImageFilename(src, element);
+  if (!src && !rawSrc) return null;
+  const filename = getPastedImageFilename(src || rawSrc, element);
   const alt = String(element?.getAttribute?.('alt') || element?.getAttribute?.('title') || filename || '图片').trim();
   const filenameExt = getFileExt(filename);
-  const sourceExt = getFileExt(src.split('?')[0]);
+  const sourceExt = getFileExt((src || rawSrc).split('?')[0]);
   const ext = imageExts.includes(filenameExt) ? filenameExt : (imageExts.includes(sourceExt) ? sourceExt : 'png');
   return {
     type: 'image',
@@ -1238,12 +1283,14 @@ function createPastedImageBlock(element, sourceUrl = '') {
       url: src,
       filename,
       display_name: filename,
-      mimetype: getPastedImageMimeType(src),
+      mimetype: getPastedImageMimeType(src || rawSrc),
       file_ext: ext,
       embedOnly: true,
       remote: !/^data:image\//i.test(src),
       source_system: 'clipboard_html',
       source_url: sourceUrl || '',
+      original_url: src && rawSrc && rawSrc !== src ? rawSrc : '',
+      needs_clipboard_file: !src,
       alt,
     },
   };
@@ -1361,6 +1408,7 @@ function parseClipboardHtmlDocumentBlocks(html) {
       'src', 'srcset', 'data-src', 'data-srcset', 'data-original', 'data-original-src', 'original_src',
       'alt', 'title', 'width', 'height',
     ],
+    ADD_DATA_URI_TAGS: ['img'],
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'video', 'audio'],
     FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus'],
   });
@@ -5686,13 +5734,15 @@ export default function Documents() {
           message.warning('请先保存文档，再粘贴带图片的内容');
           return;
         }
-        if (pastedImageFiles.length > clipboardImagePasteLimit) {
+        const asyncImageFiles = await getAsyncClipboardImageFiles();
+        const allPastedImageFiles = dedupeClipboardImageFiles([...pastedImageFiles, ...asyncImageFiles]);
+        if (allPastedImageFiles.length > clipboardImagePasteLimit) {
           message.info(`一次最多粘贴 ${clipboardImagePasteLimit} 张剪贴板图片，已优先处理前 ${clipboardImagePasteLimit} 张`);
         }
         const imageCount = htmlBlocks.filter(isClipboardHtmlImageBlock).length;
         const hideLoading = message.loading(imageCount > 1 ? `正在处理 ${imageCount} 张粘贴图片` : '正在处理粘贴图片', 0);
         try {
-          const result = await localizeClipboardHtmlImageBlocks(htmlBlocks, pastedImageFiles);
+          const result = await localizeClipboardHtmlImageBlocks(htmlBlocks, allPastedImageFiles);
           if (insertBlocksFromClipboard(result.blocks, targetBlockId)) {
             if (result.failedCount) {
               message.warning(`已粘贴内容，${result.failedCount} 张图片未能转存，可能仍需手动上传`);
