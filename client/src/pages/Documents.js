@@ -6613,7 +6613,8 @@ export default function Documents() {
       activeElement?.closest?.('textarea, input, [contenteditable="true"]')
     );
     const activeInTableCellEditor = Boolean(
-      activeElement?.isContentEditable && activeElement?.closest?.('[data-document-table-cell="true"]')
+      activeElement?.closest?.('[data-document-table-cell="true"]')
+      || (selectedTableCell?.blockId && selectedTableCell.blockId === targetBlock.id)
     );
     const activeIsTargetBlock = !activeBlockId || activeBlockId === targetBlock.id;
     const shouldSkipBlockDelete = activeInEditableInput
@@ -6642,7 +6643,7 @@ export default function Documents() {
     };
     window.addEventListener('keydown', handleSelectionDeleteKeyDown);
     return () => window.removeEventListener('keydown', handleSelectionDeleteKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen, editorBlocks, editorTitle, selectedBlockId, selectedAreaBlockIds]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen, editorBlocks, editorTitle, selectedBlockId, selectedAreaBlockIds, selectedTableCell]);
 
   const scrollToBlock = (id) => {
     setSelectedBlockId(id);
@@ -7709,10 +7710,18 @@ export default function Documents() {
 
   const getBlockMeta = (block) => ({ ...getDefaultBlockMeta(block?.type), ...cloneMeta(block?.meta) });
 
-  const updateBlockMeta = (id, patch) => {
+  const updateBlockMeta = (id, patchOrUpdater) => {
     pushEditorUndoSnapshot();
     setEditorBlocks(prev => prev.map(block => (
-      block.id === id ? { ...block, meta: { ...getBlockMeta(block), ...patch } } : block
+      block.id === id
+        ? {
+          ...block,
+          meta: {
+            ...getBlockMeta(block),
+            ...(typeof patchOrUpdater === 'function' ? patchOrUpdater(getBlockMeta(block), block) : patchOrUpdater),
+          },
+        }
+        : block
     )));
   };
 
@@ -8822,11 +8831,110 @@ export default function Documents() {
     const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 520 : 720);
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
     const optionFieldTypes = ['select', 'multi_select', 'person'];
+    const wolaiLiveEmbedUrl = meta.embedUrl || meta.source_url || meta.original_url || (
+      meta.wolaiDatabaseBlockId ? `https://www.wolai.com/${encodeURIComponent(meta.wolaiDatabaseBlockId)}` : ''
+    );
+    const shouldRenderWolaiLiveEmbed = Boolean(
+      meta.source_system === 'wolai_mcp'
+      && meta.rowDataUnavailable
+      && (meta.liveEmbed || meta.externalEmbed || wolaiLiveEmbedUrl)
+    );
 
-    const persistDatabaseMeta = (patch = {}) => {
-      updateBlockMeta(block.id, {
-        ...meta,
-        ...patch,
+    if (shouldRenderWolaiLiveEmbed) {
+      const viewTitle = String(meta.wolaiViewTitle || '').trim();
+      const visibleProperties = Array.isArray(meta.wolaiViewProperties)
+        ? meta.wolaiViewProperties.filter(item => !item.hidden)
+        : [];
+      const groupValues = (Array.isArray(meta.wolaiViewGroups) ? meta.wolaiViewGroups : [])
+        .map(item => String(item.value || '').trim())
+        .filter(Boolean);
+      const propertyCount = Number(meta.wolaiViewPropertyCount) || visibleProperties.length || columns.length;
+      const groupCount = Number(meta.wolaiViewGroupCount) || groupValues.length;
+      const sorterCount = Number(meta.wolaiViewSorterCount) || (Array.isArray(meta.wolaiViewSorters) ? meta.wolaiViewSorters.length : 0);
+      const filterCount = Number(meta.wolaiViewFilterCount) || 0;
+      const statusTags = [
+        propertyCount ? `字段 ${propertyCount}` : '',
+        groupCount ? `分组 ${groupCount}` : '',
+        sorterCount ? `排序 ${sorterCount}` : '',
+        filterCount ? `筛选 ${filterCount}` : '',
+      ].filter(Boolean);
+      return (
+        <div
+          id={`doc-database-shell-${block.id}`}
+          tabIndex={0}
+          onClick={() => setSelectedBlockId(block.id)}
+          style={{ width: '100%', outline: 'none', padding: '4px 0 12px' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: isMobile ? 'wrap' : 'nowrap', borderBottom: '1px solid #e5e7eb', padding: '6px 0 10px', minWidth: 0 }}>
+            <Space size={8} style={{ minWidth: 0, flex: '1 1 260px' }}>
+              <FundProjectionScreenOutlined style={{ color: '#1f2937' }} />
+              <Text strong style={{ fontSize: 16, maxWidth: isMobile ? 220 : 520, display: 'inline-block' }} ellipsis>
+                {tableName || viewTitle || 'Wolai 数据表格'}
+              </Text>
+              {viewTitle && viewTitle !== tableName && <Tag color="blue">{viewTitle}</Tag>}
+            </Space>
+            <Space size={6} wrap style={{ marginLeft: 'auto', justifyContent: 'flex-end' }}>
+              {statusTags.map(tag => <Tag key={tag}>{tag}</Tag>)}
+              <Button
+                size="small"
+                type="primary"
+                icon={<LinkOutlined />}
+                href={wolaiLiveEmbedUrl || undefined}
+                target="_blank"
+                rel="noreferrer"
+                disabled={!wolaiLiveEmbedUrl}
+              >
+                打开原表
+              </Button>
+            </Space>
+          </div>
+          {groupValues.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '10px 0 4px' }}>
+              {groupValues.slice(0, 8).map(value => <Tag key={value} color="processing">{value}</Tag>)}
+              {groupValues.length > 8 && <Tag>+{groupValues.length - 8}</Tag>}
+            </div>
+          )}
+          <div
+            style={{
+              marginTop: 10,
+              border: '1px solid #e5e7eb',
+              borderRadius: 8,
+              overflow: 'hidden',
+              background: '#fff',
+              minHeight: isMobile ? 520 : 680,
+            }}
+          >
+            {wolaiLiveEmbedUrl ? (
+              <iframe
+                title={tableName || viewTitle || 'Wolai 数据表格'}
+                src={wolaiLiveEmbedUrl}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-downloads"
+                style={{
+                  width: '100%',
+                  height: isMobile ? 520 : 680,
+                  border: 0,
+                  display: 'block',
+                  background: '#fff',
+                }}
+              />
+            ) : (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可打开的原表链接" style={{ padding: 48 }} />
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const persistDatabaseMeta = (patchOrUpdater = {}) => {
+      updateBlockMeta(block.id, currentRawMeta => {
+        const currentMeta = normalizeDatabaseBlockMeta({ ...block, meta: currentRawMeta });
+        const patch = typeof patchOrUpdater === 'function' ? patchOrUpdater(currentMeta) : patchOrUpdater;
+        return {
+          ...currentMeta,
+          ...patch,
+        };
       });
     };
     const normalizeCellText = value => inlineHtmlToPlain(String(value || '')).trim();
@@ -8869,7 +8977,13 @@ export default function Documents() {
           { value: 'desc', label: '按选项倒序排序' },
         ];
       }
-      if (fieldType === 'number' || fieldType === 'date') {
+      if (fieldType === 'date') {
+        return [
+          { value: 'asc', label: '按日期从早到晚排序' },
+          { value: 'desc', label: '按日期从晚到早排序' },
+        ];
+      }
+      if (fieldType === 'number') {
         return [
           { value: 'asc', label: '按 1 → 9 排序' },
           { value: 'desc', label: '按 9 → 1 排序' },
@@ -9001,18 +9115,20 @@ export default function Documents() {
       });
     };
     const updateFieldType = (columnIndex, value) => {
-      const nextType = normalizeDatabaseFieldType(value, columnIndex, columns[columnIndex]);
-      const nextFieldTypes = fieldTypes.map((item, index) => (index === columnIndex ? nextType : item));
-      const nextTagOptions = { ...tagOptions };
-      if (['select', 'multi_select', 'person'].includes(nextType) && !nextTagOptions[columnIndex]?.length) {
-        nextTagOptions[columnIndex] = rows.reduce((acc, row) => {
-          splitDatabaseTagValue(row?.[columnIndex]).forEach(name => {
-            if (!acc.some(item => item.name === name)) acc.push(normalizeDatabaseTagOption(name, acc.length));
-          });
-          return acc;
-        }, []).filter(Boolean);
-      }
-      persistDatabaseMeta({ fieldTypes: nextFieldTypes, tagOptions: nextTagOptions });
+      persistDatabaseMeta(currentMeta => {
+        const nextType = normalizeDatabaseFieldType(value, columnIndex, currentMeta.columns[columnIndex]);
+        const nextFieldTypes = currentMeta.fieldTypes.map((item, index) => (index === columnIndex ? nextType : item));
+        const nextTagOptions = { ...currentMeta.tagOptions };
+        if (['select', 'multi_select', 'person'].includes(nextType) && !nextTagOptions[columnIndex]?.length) {
+          nextTagOptions[columnIndex] = currentMeta.rows.reduce((acc, row) => {
+            splitDatabaseTagValue(row?.[columnIndex]).forEach(name => {
+              if (!acc.some(item => item.name === name)) acc.push(normalizeDatabaseTagOption(name, acc.length));
+            });
+            return acc;
+          }, []).filter(Boolean);
+        }
+        return { fieldTypes: nextFieldTypes, tagOptions: nextTagOptions };
+      });
     };
     const shiftIndexedMapForInsert = (map, insertIndex, insertedValue) => {
       const next = {};
@@ -9119,7 +9235,8 @@ export default function Documents() {
     };
     const updateSelectCell = (rowIndex, columnIndex, values = []) => {
       const fieldType = fieldTypes[columnIndex];
-      const normalizedValues = (fieldType === 'select' ? values.slice(-1) : values)
+      const rawValues = Array.isArray(values) ? values : [values];
+      const normalizedValues = (fieldType === 'select' ? rawValues.slice(-1) : rawValues)
         .map(item => String(item || '').trim())
         .filter(Boolean);
       const nextOptions = [...(tagOptions[columnIndex] || [])];
@@ -9260,6 +9377,10 @@ export default function Documents() {
       addBlockAfter(block.id, 'paragraph', { content: '' });
     };
     const handleDatabaseCellKeyDown = (event, rowIndex, columnIndex) => {
+      if ((event.key === 'Backspace' || event.key === 'Delete') && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        event.stopPropagation();
+        return;
+      }
       if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey) return;
       event.preventDefault();
       event.stopPropagation();
@@ -9584,23 +9705,31 @@ export default function Documents() {
         </div>
       );
     };
+    const focusDatabaseCell = (rowIndex, columnIndex) => {
+      setSelectedBlockId(block.id);
+      clearAreaBlockSelection();
+      setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
+    };
     const renderSelectCell = (row, rowIndex, columnIndex) => {
       const options = tagOptions[columnIndex] || [];
+      const fieldType = fieldTypes[columnIndex];
+      const isSingleSelect = fieldType === 'select';
       const values = splitDatabaseTagValue(row[columnIndex]);
       return (
         <Select
-          mode="tags"
+          mode={isSingleSelect ? undefined : 'tags'}
           bordered={false}
-          value={values}
+          value={isSingleSelect ? (values[0] || undefined) : values}
           placeholder=""
-          onFocus={() => {
-            setSelectedBlockId(block.id);
-            clearAreaBlockSelection();
-            setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
-          }}
+          onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
           onChange={nextValues => updateSelectCell(rowIndex, columnIndex, nextValues)}
+          onInputKeyDown={event => {
+            if (['Enter', 'Backspace', 'Delete'].includes(event.key) && !event.metaKey && !event.ctrlKey && !event.altKey) {
+              event.stopPropagation();
+            }
+          }}
           options={options.map(option => ({ value: option.name, label: option.name }))}
-          tagRender={({ value, closable, onClose }) => {
+          tagRender={!isSingleSelect ? ({ value, closable, onClose }) => {
             const option = options.find(item => item.name === value) || normalizeDatabaseTagOption(value, 0);
             const tagStyle = getDatabaseTagStyle(option);
             return (
@@ -9612,8 +9741,28 @@ export default function Documents() {
                 {value}
               </Tag>
             );
-          }}
+          } : undefined}
           style={{ width: '100%' }}
+        />
+      );
+    };
+    const renderTypedInputCell = (row, rowIndex, columnIndex, inputType, placeholder = '') => {
+      const activeCell = selectedCell?.type === 'database' && selectedCell.rowIndex === rowIndex && selectedCell.columnIndex === columnIndex;
+      return (
+        <Input
+          type={inputType}
+          bordered={false}
+          value={normalizeCellText(row[columnIndex])}
+          placeholder={placeholder}
+          onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
+          onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
+          onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
+          style={{
+            minHeight: 38,
+            padding: '6px 8px',
+            background: 'transparent',
+            boxShadow: activeCell ? 'inset 0 0 0 1px #6366f1' : 'none',
+          }}
         />
       );
     };
@@ -9627,6 +9776,7 @@ export default function Documents() {
         return (
           <Checkbox
             checked={String(row[columnIndex]).toLowerCase() === 'true' || inlineHtmlToPlain(row[columnIndex]) === '是'}
+            onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
             onChange={event => updateCell(rowIndex, columnIndex, event.target.checked ? 'true' : '')}
           />
         );
@@ -9639,14 +9789,12 @@ export default function Documents() {
             value={dateValue}
             format="YYYY-MM-DD"
             bordered={false}
-            placeholder=""
-            onFocus={() => {
-              setSelectedBlockId(block.id);
-              clearAreaBlockSelection();
-              setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
-            }}
+            allowClear
+            placeholder="选择日期"
+            onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
             onChange={(_, dateString) => updateCell(rowIndex, columnIndex, dateString || '')}
-            style={{ width: '100%', padding: '6px 8px' }}
+            onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
+            style={{ width: '100%', minHeight: 38, padding: '6px 8px' }}
           />
         );
       }
@@ -9658,16 +9806,16 @@ export default function Documents() {
             bordered={false}
             controls={false}
             placeholder=""
-            onFocus={() => {
-              setSelectedBlockId(block.id);
-              clearAreaBlockSelection();
-              setSelectedTableCell({ blockId: block.id, type: 'database', rowIndex, columnIndex });
-            }}
+            onFocus={() => focusDatabaseCell(rowIndex, columnIndex)}
             onChange={value => updateCell(rowIndex, columnIndex, value === null || value === undefined ? '' : String(value))}
+            onKeyDown={event => handleDatabaseCellKeyDown(event, rowIndex, columnIndex)}
             style={{ width: '100%', padding: '6px 8px' }}
           />
         );
       }
+      if (fieldType === 'url') return renderTypedInputCell(row, rowIndex, columnIndex, 'url', 'https://');
+      if (fieldType === 'email') return renderTypedInputCell(row, rowIndex, columnIndex, 'email', 'name@example.com');
+      if (fieldType === 'phone') return renderTypedInputCell(row, rowIndex, columnIndex, 'tel', '电话');
       return (
         <InlineRichTextEditor
           id={`doc-table-cell-input-${block.id}-database-${rowIndex}-${columnIndex}`}
@@ -9709,6 +9857,10 @@ export default function Documents() {
           return (
             <td
               key={`database-cell-${rowIndex}-${columnIndex}`}
+              data-document-table-cell="true"
+              data-table-block-id={block.id}
+              data-row-index={rowIndex}
+              data-column-index={columnIndex}
               style={{
                 border: '1px solid #e5e7eb',
                 background: cellBackground,
