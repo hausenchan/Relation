@@ -2048,21 +2048,29 @@ function normalizeDocumentFolderSelectValue(value) {
   return Number.isInteger(id) && id > 0 ? id : undefined;
 }
 
-function renderDocumentTreeTitle(title) {
+function renderDocumentTreeTitle(title, nodeType = 'document') {
   const text = String(title || '未命名文档');
   return (
     <span
+      className={`document-tree-title document-tree-title-${nodeType}`}
       title={text}
-      style={{
-        display: 'inline-block',
-        maxWidth: '100%',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-        verticalAlign: 'bottom',
-      }}
     >
-      {text}
+      <span className="document-tree-item-icon" aria-hidden="true" />
+      <span className="document-tree-title-text">{text}</span>
+    </span>
+  );
+}
+
+function renderDocumentTreeSwitcher({ expanded, isLeaf }) {
+  if (isLeaf) return <span className="document-tree-leaf-dot" aria-hidden="true" />;
+  return (
+    <span
+      className={`document-tree-switcher-chevron${expanded ? ' is-expanded' : ''}`}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 16 16" focusable="false">
+        <path d="M6 3.5L10.5 8L6 12.5" />
+      </svg>
     </span>
   );
 }
@@ -2072,7 +2080,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
   const childFolders = (childrenByParent.get(Number(folder.id)) || [])
     .map(child => buildFolderNode(child, childrenByParent, documentsByFolder));
   const documentChildren = folderDocuments.map(doc => ({
-    title: renderDocumentTreeTitle(doc.title || '未命名文档'),
+    title: renderDocumentTreeTitle(doc.title || '未命名文档', 'document'),
     key: `document-${doc.id}`,
     icon: <FileTextOutlined />,
     isLeaf: true,
@@ -2083,7 +2091,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
   }));
   const children = [...childFolders, ...documentChildren];
   return {
-    title: renderDocumentTreeTitle(folder.name),
+    title: renderDocumentTreeTitle(folder.name, 'folder'),
     key: `folder-${folder.id}`,
     icon: <FolderOutlined />,
     nodeType: 'folder',
@@ -2128,8 +2136,9 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
   getDocumentSpaceDomainKeys(scopedFolders, activeDomain).forEach(domainKey => {
     if (!domainMap.has(domainKey)) {
       domainMap.set(domainKey, {
-        title: domainLabel[domainKey] || domainKey,
+        title: renderDocumentTreeTitle(domainLabel[domainKey] || domainKey, 'domain'),
         key: `domain-${domainKey}`,
+        nodeType: 'domain',
         selectable: false,
         children: [],
       });
@@ -2140,8 +2149,9 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
     const domainKey = folder.domain || 'general';
     if (!domainMap.has(domainKey)) {
       domainMap.set(domainKey, {
-        title: domainLabel[domainKey] || domainKey,
+        title: renderDocumentTreeTitle(domainLabel[domainKey] || domainKey, 'domain'),
         key: `domain-${domainKey}`,
+        nodeType: 'domain',
         selectable: false,
         children: [],
       });
@@ -2754,21 +2764,152 @@ export default function Documents() {
       .document-block-menu-dropdown .ant-dropdown-menu-item {
         color: #1f2937 !important;
       }
+      .document-folder-tree {
+        padding: 2px 0 8px;
+        background: #f7f7f7 !important;
+        color: #5f6368;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 15px;
+        font-weight: 500;
+        line-height: 22px;
+      }
+      .document-folder-tree .ant-tree-list-holder-inner {
+        row-gap: 2px;
+      }
       .document-folder-tree .ant-tree-treenode {
+        position: relative;
+        align-items: center;
+        width: 100%;
+        min-height: 34px;
+        padding: 0 0 2px 0 !important;
         max-width: 100%;
+      }
+      .document-folder-tree .ant-tree-treenode::before {
+        content: "";
+        position: absolute;
+        inset: 1px 0 3px;
+        border-radius: 6px;
+        opacity: 0;
+        transition: opacity 0.12s ease;
+      }
+      .document-folder-tree .ant-tree-treenode:hover::before {
+        background: #eeeeee;
+        opacity: 1;
+      }
+      .document-folder-tree .ant-tree-treenode-selected::before {
+        background: #e9e9e9;
+        opacity: 1;
+      }
+      .document-folder-tree .ant-tree-indent,
+      .document-folder-tree .ant-tree-switcher,
+      .document-folder-tree .ant-tree-node-content-wrapper {
+        position: relative;
+        z-index: 1;
+      }
+      .document-folder-tree .ant-tree-indent-unit {
+        width: 32px;
+      }
+      .document-folder-tree .ant-tree-switcher {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 30px;
+        width: 30px;
+        height: 34px;
+        line-height: 34px;
+        color: #858585;
+      }
+      .document-folder-tree .ant-tree-switcher:hover {
+        color: #6f6f6f;
+      }
+      .document-folder-tree .ant-tree-switcher-noop {
+        cursor: default;
+      }
+      .document-tree-switcher-chevron {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        transform: rotate(0deg);
+        transition: transform 0.12s ease;
+      }
+      .document-tree-switcher-chevron.is-expanded {
+        transform: rotate(90deg);
+      }
+      .document-tree-switcher-chevron svg {
+        width: 16px;
+        height: 16px;
+      }
+      .document-tree-switcher-chevron path {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .document-tree-leaf-dot {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: #acacac;
       }
       .document-folder-tree .ant-tree-node-content-wrapper {
+        display: inline-flex;
+        align-items: center;
+        flex: 1 1 auto;
+        height: 34px;
+        padding: 0 8px 0 0 !important;
+        border-radius: 6px;
+        background: transparent !important;
+        color: inherit;
         min-width: 0;
-        max-width: calc(100% - 24px);
+        max-width: calc(100% - 30px);
+      }
+      .document-folder-tree .ant-tree-node-content-wrapper:hover,
+      .document-folder-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+        background: transparent !important;
       }
       .document-folder-tree .ant-tree-title {
-        display: inline-block;
+        display: block;
+        width: 100%;
         min-width: 0;
-        max-width: 100%;
+        overflow: hidden;
+      }
+      .document-tree-title {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-width: 0;
+        color: #5c5f63;
+      }
+      .document-tree-item-icon {
+        position: relative;
+        flex: 0 0 18px;
+        width: 18px;
+        height: 18px;
+        border: 1.8px solid #8a8d90;
+        border-radius: 4px;
+        background: #f7f7f7;
+      }
+      .document-tree-item-icon::before {
+        content: "";
+        position: absolute;
+        left: 4px;
+        right: 4px;
+        top: 5px;
+        height: 1.8px;
+        border-radius: 999px;
+        background: #8a8d90;
+        box-shadow: 0 5px 0 #8a8d90;
+      }
+      .document-tree-title-text {
+        display: block;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        vertical-align: bottom;
       }
       .document-sidebar-resize-handle:hover .document-sidebar-resize-line,
       .document-sidebar-resize-handle:active .document-sidebar-resize-line {
@@ -11572,14 +11713,12 @@ export default function Documents() {
                 {folderTree.length ? (
                   <Tree
                     className="document-folder-tree"
-                    showIcon
+                    blockNode
+                    showIcon={false}
                     expandedKeys={folderTreeExpandedKeys}
                     selectedKeys={selectedTreeKeys}
                     treeData={folderTree}
-                    switcherIcon={({ isLeaf }) => {
-                      if (isLeaf) return null;
-                      return <DownOutlined />;
-                    }}
+                    switcherIcon={renderDocumentTreeSwitcher}
                     onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
                     onRightClick={openTreeDocContextMenu}
                     onSelect={(keys, info) => {
