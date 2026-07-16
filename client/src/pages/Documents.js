@@ -914,13 +914,20 @@ function getListIndent(block) {
 }
 
 function hasImportedHierarchyIndent(block) {
-  return block?.meta?.source_system === 'wolai_mcp' && Number.isFinite(Number(block?.meta?.indent));
+  return Number.isFinite(Number(block?.meta?.indent))
+    && (block?.meta?.source_system === 'wolai_mcp' || block?.meta?.hierarchy === 'list');
 }
 
 function getBlockHierarchyIndent(block) {
   if (isHierarchicalListBlock(block)) return getListIndent(block);
   if (hasImportedHierarchyIndent(block)) return getListIndent(block);
   return 0;
+}
+
+function canAdjustBlockHierarchyIndent(block) {
+  return isHierarchicalListBlock(block)
+    || block?.meta?.source_system === 'wolai_mcp'
+    || block?.meta?.hierarchy === 'list';
 }
 
 function formatAlphaNumber(value) {
@@ -3037,6 +3044,7 @@ export default function Documents() {
   const [autoSaving, setAutoSaving] = useState(false);
   const [remoteUpdateHint, setRemoteUpdateHint] = useState('');
   const [attachmentDragOver, setAttachmentDragOver] = useState(false);
+  const [blockDragState, setBlockDragState] = useState(null);
   const [attachmentUploadingBlockIds, setAttachmentUploadingBlockIds] = useState([]);
   const [attachmentPreviewState, setAttachmentPreviewState] = useState({ open: false, mode: 'modal', attachment: null, loading: false });
   const [attachmentRenameTarget, setAttachmentRenameTarget] = useState(null);
@@ -6373,6 +6381,10 @@ export default function Documents() {
       addBlockBefore(block.id, 'paragraph', { content: '' });
       return;
     }
+    if (key === 'indent-right' || key === 'indent-left') {
+      updateBlocksHierarchyIndent(targetIds, key === 'indent-right' ? 1 : -1);
+      return;
+    }
     if (key.startsWith('type:')) {
       const type = key.replace('type:', '');
       if (type === 'recent-image') {
@@ -6409,8 +6421,15 @@ export default function Documents() {
     const targetBlocks = editorBlocks.filter(item => targetSet.has(item.id));
     const targetCount = Math.max(1, targetBlocks.length || targetIds.length);
     const tableSelected = targetBlocks.some(isTableLikeBlock) || isTableLikeBlock(block);
+    const hierarchyAdjustable = targetBlocks.length
+      ? targetBlocks.some(canAdjustBlockHierarchyIndent)
+      : canAdjustBlockHierarchyIndent(block);
     return [
       { key: 'copy', icon: <CopyOutlined />, label: targetCount > 1 ? `复制 ${targetCount} 个块` : (isTableLikeBlock(block) ? '复制整个表格' : '复制') },
+      ...(hierarchyAdjustable ? [
+        { key: 'indent-right', icon: <MenuUnfoldOutlined />, label: targetCount > 1 ? `右移 ${targetCount} 个块` : '右移一级' },
+        { key: 'indent-left', icon: <MenuFoldOutlined />, label: targetCount > 1 ? `左移 ${targetCount} 个块` : '左移一级' },
+      ] : []),
       ...(tableSelected && targetCount === 1 ? [
         { key: 'insert-paragraph-before', icon: <PlusOutlined />, label: '在表格上方插入文本' },
       ] : []),
@@ -6494,10 +6513,12 @@ export default function Documents() {
   };
 
   const updateListIndent = (block, index, direction) => {
-    if (!isHierarchicalListBlock(block)) return false;
-    const currentIndent = getListIndent(block);
+    if (!canAdjustBlockHierarchyIndent(block)) return false;
+    const currentIndent = getBlockHierarchyIndent(block);
     const previousBlock = editorBlocks[index - 1];
-    const previousIndent = isHierarchicalListBlock(previousBlock) ? getListIndent(previousBlock) : -1;
+    const previousIndent = (isHierarchicalListBlock(previousBlock) || hasImportedHierarchyIndent(previousBlock))
+      ? getBlockHierarchyIndent(previousBlock)
+      : -1;
     const maxAllowedIndent = direction > 0
       ? Math.min(maxListIndent, previousIndent + 1)
       : maxListIndent;
@@ -6509,11 +6530,169 @@ export default function Documents() {
       meta: {
         ...getBlockMeta(block),
         indent: nextIndent,
+        ...(!isHierarchicalListBlock(block) && block?.meta?.source_system !== 'wolai_mcp' ? { hierarchy: 'list' } : {}),
       },
     });
     setSelectedBlockId(block.id);
     focusBlock(block.id);
     return true;
+  };
+
+  const updateBlocksHierarchyIndent = (ids = [], direction) => {
+    const targetIds = normalizeBlockSelectionIds(ids);
+    if (!targetIds.length) return false;
+    const targetSet = new Set(targetIds);
+    let changed = false;
+    const nextBlocks = editorBlocks.map(block => ({ ...block, meta: cloneMeta(block.meta) }));
+    nextBlocks.forEach((block, index) => {
+      if (!targetSet.has(block.id) || !canAdjustBlockHierarchyIndent(block)) return;
+      const currentIndent = getBlockHierarchyIndent(block);
+      const previousBlock = nextBlocks[index - 1];
+      const previousIndent = (isHierarchicalListBlock(previousBlock) || hasImportedHierarchyIndent(previousBlock))
+        ? getBlockHierarchyIndent(previousBlock)
+        : -1;
+      const maxAllowedIndent = direction > 0
+        ? Math.min(maxListIndent, previousIndent + 1)
+        : maxListIndent;
+      const nextIndent = direction > 0
+        ? Math.min(currentIndent + 1, maxAllowedIndent)
+        : Math.max(0, currentIndent - 1);
+      if (nextIndent === currentIndent) return;
+      changed = true;
+      block.meta = {
+        ...(block.meta || {}),
+        indent: nextIndent,
+        ...(!isHierarchicalListBlock(block) && block?.meta?.source_system !== 'wolai_mcp' ? { hierarchy: 'list' } : {}),
+      };
+    });
+    if (!changed) return false;
+    pushEditorUndoSnapshot();
+    setEditorBlocks(nextBlocks);
+    const firstId = targetIds[0];
+    setSelectedBlockId(firstId);
+    setAreaBlockSelection(targetIds);
+    focusBlock(firstId);
+    return true;
+  };
+
+  const getBlockDragIdsFromEvent = (event) => {
+    const fallbackIds = Array.isArray(blockDragState?.ids) ? blockDragState.ids : [];
+    const raw = event?.dataTransfer?.getData?.(documentClipboardBlocksMime);
+    if (!raw) return normalizeBlockSelectionIds(fallbackIds);
+    try {
+      const parsed = JSON.parse(raw);
+      return normalizeBlockSelectionIds(parsed.blockIds || parsed.ids || fallbackIds);
+    } catch {
+      return normalizeBlockSelectionIds(fallbackIds);
+    }
+  };
+
+  const hasBlockDragData = (event) => {
+    const types = Array.from(event?.dataTransfer?.types || []);
+    return types.includes(documentClipboardBlocksMime) || Boolean(blockDragState?.ids?.length);
+  };
+
+  const startBlockDrag = (event, blockId) => {
+    const block = editorBlocks.find(item => item.id === blockId);
+    if (!block || isBlankBlock(block)) {
+      event.preventDefault();
+      return;
+    }
+    blockHandleSelectionRef.current?.cleanup?.();
+    const targetIds = captureBlockMenuTargetIds(blockId);
+    const payload = JSON.stringify({ blockIds: targetIds });
+    event.dataTransfer.setData(documentClipboardBlocksMime, payload);
+    event.dataTransfer.effectAllowed = 'move';
+    setBlockDragState({ ids: targetIds, sourceId: blockId });
+    setOpenBlockMenuId(null);
+  };
+
+  const finishBlockDrag = () => {
+    setBlockDragState(null);
+  };
+
+  const getBlockDropPlacement = (event) => {
+    const rect = event.currentTarget?.getBoundingClientRect?.();
+    if (!rect) return 'after';
+    return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+  };
+
+  const getDropIndentFromPointer = (event, targetBlock, placement, remainingBlocks, insertIndex) => {
+    const targetIndent = getBlockHierarchyIndent(targetBlock);
+    let desiredIndent = targetIndent;
+    if (placement === 'after' && targetBlock?.type === 'fold-list') {
+      desiredIndent = targetIndent + 1;
+    } else {
+      const rect = event.currentTarget?.getBoundingClientRect?.();
+      if (rect) {
+        const relativeX = event.clientX - rect.left - listMarkerBoxWidth - listMarkerTextGap;
+        if (relativeX > listIndentWidth / 2) desiredIndent = Math.round(relativeX / listIndentWidth);
+      }
+    }
+    const previousBlock = remainingBlocks[insertIndex - 1];
+    const previousIndent = previousBlock && (isHierarchicalListBlock(previousBlock) || hasImportedHierarchyIndent(previousBlock))
+      ? getBlockHierarchyIndent(previousBlock)
+      : -1;
+    const maxAllowedIndent = previousBlock ? Math.min(maxListIndent, previousIndent + 1) : 0;
+    return Math.max(0, Math.min(maxAllowedIndent, clampListIndent(desiredIndent)));
+  };
+
+  const moveDraggedBlocks = (dragIds = [], targetId, event) => {
+    const targetIds = normalizeBlockSelectionIds(dragIds);
+    if (!targetIds.length || !targetId) return false;
+    const targetSet = new Set(targetIds);
+    if (targetSet.has(targetId)) return false;
+    const movingBlocks = editorBlocks.filter(block => targetSet.has(block.id));
+    const remainingBlocks = editorBlocks.filter(block => !targetSet.has(block.id));
+    const targetIndex = remainingBlocks.findIndex(block => block.id === targetId);
+    if (targetIndex < 0 || !movingBlocks.length) return false;
+    const placement = getBlockDropPlacement(event);
+    const insertIndex = placement === 'before' ? targetIndex : targetIndex + 1;
+    const targetBlock = remainingBlocks[targetIndex];
+    const desiredIndent = getDropIndentFromPointer(event, targetBlock, placement, remainingBlocks, insertIndex);
+    const baseIndent = getBlockHierarchyIndent(movingBlocks[0]);
+    const adjustedMovingBlocks = movingBlocks.map(block => {
+      const currentIndent = (isHierarchicalListBlock(block) || hasImportedHierarchyIndent(block))
+        ? getBlockHierarchyIndent(block)
+        : baseIndent;
+      const nextIndent = clampListIndent(desiredIndent + currentIndent - baseIndent);
+      if (nextIndent === currentIndent && (isHierarchicalListBlock(block) || hasImportedHierarchyIndent(block))) return block;
+      return {
+        ...block,
+        meta: {
+          ...getBlockMeta(block),
+          indent: nextIndent,
+          ...(!isHierarchicalListBlock(block) && block?.meta?.source_system !== 'wolai_mcp' ? { hierarchy: 'list' } : {}),
+        },
+      };
+    });
+    pushEditorUndoSnapshot();
+    setEditorBlocks([
+      ...remainingBlocks.slice(0, insertIndex),
+      ...adjustedMovingBlocks,
+      ...remainingBlocks.slice(insertIndex),
+    ]);
+    const firstId = targetIds[0];
+    setSelectedBlockId(firstId);
+    setAreaBlockSelection(targetIds);
+    focusBlock(firstId);
+    return true;
+  };
+
+  const handleBlockDragOver = (event) => {
+    if (!hasBlockDragData(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleBlockDrop = (event, targetBlock) => {
+    if (!hasBlockDragData(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const dragIds = getBlockDragIdsFromEvent(event);
+    moveDraggedBlocks(dragIds, targetBlock.id, event);
+    finishBlockDrag();
   };
 
   const buildContinuationBlockExtra = (block) => {
@@ -6727,7 +6906,7 @@ export default function Documents() {
       || event.nativeEvent?.keyCode === 229
       || composingBlockIdsRef.current.has(block.id)
     );
-    if (event.key === 'Tab' && isHierarchicalListBlock(block)) {
+    if (event.key === 'Tab' && canAdjustBlockHierarchyIndent(block)) {
       event.preventDefault();
       updateListIndent(block, index, event.shiftKey ? -1 : 1);
       return;
@@ -12726,17 +12905,6 @@ export default function Documents() {
       );
     }
 
-    const importedHierarchyIndent = !isHierarchicalListBlock(block) && hasImportedHierarchyIndent(block)
-      ? getBlockHierarchyIndent(block)
-      : 0;
-    if (importedHierarchyIndent > 0) {
-      return (
-        <div style={{ paddingLeft: importedHierarchyIndent * listIndentWidth + listMarkerBoxWidth + listMarkerTextGap }}>
-          <InlineRichTextEditor {...commonProps} onChange={value => commonProps.onChange(value)} />
-        </div>
-      );
-    }
-
     return <InlineRichTextEditor {...commonProps} onChange={value => commonProps.onChange(value)} />;
   };
 
@@ -12829,6 +12997,9 @@ export default function Documents() {
     const blankAddVisible = isMobile || menuOpen || blockSelected || hoveredBlockId === block.id;
     const blockHandleVisible = blankParagraph ? blankAddVisible : handleVisible;
     const hierarchicalListBlock = isHierarchicalListBlock(block);
+    const importedHierarchyIndent = !hierarchicalListBlock && hasImportedHierarchyIndent(block)
+      ? getBlockHierarchyIndent(block)
+      : 0;
     const listBlockSelectionActive = hierarchicalListBlock && blockSelected && !menuOpen;
     const handleIcon = blankParagraph ? <BlockAddIcon /> : <BlockHandleIcon />;
     const handleLabel = blankParagraph ? '添加各种样式内容' : '块菜单';
@@ -12848,6 +13019,8 @@ export default function Documents() {
             clearAreaBlockSelection();
           }
         }}
+        onDragOver={handleBlockDragOver}
+        onDrop={event => handleBlockDrop(event, block)}
         onMouseEnter={() => setHoveredBlockId(block.id)}
         onMouseLeave={() => setHoveredBlockId(prev => (prev === block.id ? null : prev))}
         style={{
@@ -12948,6 +13121,9 @@ export default function Documents() {
                   size="small"
                   icon={handleIcon}
                   aria-label={handleLabel}
+                  draggable={!blankParagraph}
+                  onDragStart={event => startBlockDrag(event, block.id)}
+                  onDragEnd={finishBlockDrag}
                   onMouseDown={event => {
                     if (blankParagraph) {
                       event.preventDefault();
@@ -12984,7 +13160,15 @@ export default function Documents() {
               </Dropdown>
             </Tooltip>
           </div>
-          <div style={{ minWidth: 0, flex: 1 }}>
+          <div
+            style={{
+              minWidth: 0,
+              flex: 1,
+              ...(importedHierarchyIndent > 0
+                ? { paddingLeft: importedHierarchyIndent * listIndentWidth + listMarkerBoxWidth + listMarkerTextGap }
+                : {}),
+            }}
+          >
             {renderBlockInput(block, index, heading)}
             {renderInlineCommentHints(block)}
             {renderInlineCommentPanel(block)}

@@ -2634,13 +2634,15 @@ function extractMediaFromNode(node = {}, fallbackKey = '') {
   };
 }
 
-function getRecordMediaMeta(record = {}) {
+function getRecordMediaMeta(record = {}, options = {}) {
   const dimensions = isPlainObject(record.raw?.dimensions) ? record.raw.dimensions : null;
+  const indent = Number(options.indent);
   return {
     wolai_record_id: record.id || '',
     wolai_parent_id: record.parentId || '',
     wolai_parent_type: record.parentType || '',
     wolai_order: Number(record.order || 0),
+    ...(Number.isFinite(indent) ? { indent } : {}),
     ...(dimensions ? { dimensions } : {}),
   };
 }
@@ -2664,6 +2666,7 @@ function getMediaCommonMeta(media = {}) {
     ...(media.wolai_parent_id ? { wolai_parent_id: media.wolai_parent_id } : {}),
     ...(media.wolai_parent_type ? { wolai_parent_type: media.wolai_parent_type } : {}),
     ...(Number.isFinite(Number(media.wolai_order)) ? { wolai_order: Number(media.wolai_order) } : {}),
+    ...(Number.isFinite(Number(media.indent)) ? { indent: Math.max(0, Math.min(8, Math.floor(Number(media.indent)))) } : {}),
     ...(media.dimensions ? { dimensions: media.dimensions } : {}),
   };
 }
@@ -3320,7 +3323,12 @@ function recordsToBlocks(records = [], seed) {
       return;
     }
     if ((type === 'image' || type === 'attachment' || type === 'video') && record.media?.url) {
-      blocks.push(makeMediaBlock(makeBlock, { ...record.media, ...getRecordMediaMeta(record), kind: type }));
+      const depth = getDepth(record);
+      blocks.push(makeMediaBlock(makeBlock, {
+        ...record.media,
+        ...getRecordMediaMeta(record, depth > 0 && isWolaiListTreeRecord(record) ? { indent: depth } : {}),
+        kind: type,
+      }));
       return;
     }
     if (type === 'database-embed' || type === 'table-simple') {
@@ -3348,11 +3356,11 @@ function recordsToBlocks(records = [], seed) {
     const depth = getDepth(record);
     if (type === 'numbered' || type === 'bullet' || type === 'fold-list') meta.indent = depth;
     else if (depth > 0 && isWolaiListTreeRecord(record)) meta.indent = depth;
-    if (type === 'fold-list') meta.collapsed = getWolaiCollapsedState(record.raw || {}, false);
+    if (type === 'fold-list') meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
     if (type?.startsWith('fold-heading')) {
       const descendants = getDescendantRecords(record);
       descendants.forEach(item => consumedRecordIds.add(item.id));
-      meta.collapsed = getWolaiCollapsedState(record.raw || {}, false);
+      meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
       meta.body = buildFoldBodyHtml(descendants, getDepth, getDepth(record));
     }
     if (record.language) meta.language = record.language;
@@ -3544,8 +3552,8 @@ function nodesToBlocks(nodes, seed) {
         ...((type === 'bullet' || type === 'numbered' || type === 'fold-list')
           ? { indent: Number(node.indent ?? node.depth ?? node.level ?? 0) || 0 }
           : {}),
-        ...(type === 'fold-list' ? { collapsed: getWolaiCollapsedState(node, false) } : {}),
-        ...(type?.startsWith('fold-heading') ? { collapsed: getWolaiCollapsedState(node, false), body: '' } : {}),
+        ...(type === 'fold-list' ? { collapsed: getWolaiCollapsedState(node, true) } : {}),
+        ...(type?.startsWith('fold-heading') ? { collapsed: getWolaiCollapsedState(node, true), body: '' } : {}),
         ...(node.language ? { language: node.language } : {}),
       },
     }));
