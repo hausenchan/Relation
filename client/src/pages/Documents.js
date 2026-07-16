@@ -913,6 +913,16 @@ function getListIndent(block) {
   return clampListIndent(block?.meta?.indent);
 }
 
+function hasImportedHierarchyIndent(block) {
+  return block?.meta?.source_system === 'wolai_mcp' && Number.isFinite(Number(block?.meta?.indent));
+}
+
+function getBlockHierarchyIndent(block) {
+  if (isHierarchicalListBlock(block)) return getListIndent(block);
+  if (hasImportedHierarchyIndent(block)) return getListIndent(block);
+  return 0;
+}
+
 function formatAlphaNumber(value) {
   let number = Math.max(1, Number(value) || 1);
   let text = '';
@@ -1053,7 +1063,7 @@ function buildCollapsedListHiddenIds(blocks = []) {
   const hidden = new Set();
   let collapsedAncestors = [];
   blocks.forEach(block => {
-    const indent = isHierarchicalListBlock(block) ? getListIndent(block) : 0;
+    const indent = getBlockHierarchyIndent(block);
     collapsedAncestors = collapsedAncestors.filter(item => indent > item.indent);
     const isHidden = collapsedAncestors.length > 0;
     if (isHidden) hidden.add(block.id);
@@ -4558,8 +4568,8 @@ export default function Documents() {
       return updated;
     } catch (err) {
       if (err?.response?.status === 409 && err?.response?.data?.code === 'DOCUMENT_CONFLICT') {
-        await syncDocumentFromRemote(doc.id);
-        if (!silent) {
+        const alreadySaved = await resolveDocumentSaveConflict(doc, title, blocks, err);
+        if (!silent && !alreadySaved) {
           message.warning('检测到协作者更新，已自动同步最新内容并保留你的本地修改');
         }
         return null;
@@ -4572,6 +4582,53 @@ export default function Documents() {
       delete pendingSavePromisesRef.current[doc.id];
       if (!silent) setSaving(false);
     }
+  };
+
+  const applySavedDocumentMetadata = (doc, title, blocks, updated) => {
+    const docId = getDocTabId(doc?.id || updated?.id);
+    if (!docId || !updated) return;
+    const signature = getDocumentSaveSignature(title, blocks);
+    lastSavedSignatureRef.current[docId] = signature;
+    dirtyDocumentIdsRef.current.delete(docId);
+    setRemoteDocumentSnapshot(docId, {
+      title,
+      blocks,
+      updated_at: updated.updated_at,
+      updated_by: updated.updated_by,
+      updated_by_name: updated.updated_by_name,
+    });
+    const isActiveDoc = getDocTabId(selectedDocId) === docId;
+    if (isActiveDoc) {
+      setSelectedDoc(prev => ({ ...prev, ...updated }));
+      setRemoteUpdateHint('');
+    }
+    upsertDocTab(updated);
+    setDocTabStates(prev => ({
+      ...prev,
+      [docId]: {
+        ...(prev[docId] || {}),
+        doc: { ...(prev[docId]?.doc || {}), ...updated },
+      },
+    }));
+    setDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
+    setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
+  };
+
+  const resolveDocumentSaveConflict = async (doc, title, blocks, err) => {
+    const latest = err?.response?.data?.latest;
+    if (!latest?.id) {
+      await syncDocumentFromRemote(doc.id);
+      return false;
+    }
+    const latestBlocks = contentToBlocks(latest.content);
+    const localSignature = getDocumentSaveSignature(title, blocks);
+    const latestSignature = getDocumentSaveSignature(latest.title || '', latestBlocks);
+    if (localSignature !== latestSignature) {
+      await syncDocumentFromRemote(doc.id);
+      return false;
+    }
+    applySavedDocumentMetadata(doc, title, blocks, latest);
+    return true;
   };
 
   const saveDocumentSnapshot = async (snapshot, { force = false } = {}) => {
@@ -4618,7 +4675,7 @@ export default function Documents() {
       return updated;
     } catch (err) {
       if (err?.response?.status === 409 && err?.response?.data?.code === 'DOCUMENT_CONFLICT') {
-        await syncDocumentFromRemote(doc.id);
+        await resolveDocumentSaveConflict(doc, title, blocks, err);
         return null;
       }
       throw err;
@@ -4791,19 +4848,32 @@ export default function Documents() {
     };
   };
 
-  const saveDocTabSnapshot = async (docId) => {
-    const snapshot = await getDocTabSnapshot(docId);
+  const getCachedDocTabSnapshot = (docId) => {
+    const normalizedId = getDocTabId(docId);
+    if (getDocTabId(selectedDocId) === normalizedId && selectedDoc) {
+      return {
+        doc: selectedDoc,
+        editorTitle,
+        editorBlocks,
+      };
+    }
+    const cached = docTabStatesRef.current[normalizedId] || docTabStates[normalizedId];
+    if (cached?.doc && Array.isArray(cached.editorBlocks)) return cached;
+    return null;
+  };
+
+  const isDocTabSnapshotDirty = (snapshot) => {
     const doc = snapshot?.doc;
-    if (!doc?.id || !canEditDoc(doc)) return null;
+    if (!doc?.id || !canEditDoc(doc)) return false;
+    const docId = getDocTabId(doc.id);
     const blocks = Array.isArray(snapshot.editorBlocks) && snapshot.editorBlocks.length
       ? snapshot.editorBlocks
       : contentToBlocks(doc.content);
-    const payload = buildDocumentWritePayload(
-      snapshot.editorTitle || doc.title || '未命名文档',
-      blocks,
-      getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at
-    );
-    return documentsApi.update(doc.id, payload);
+    const title = snapshot.editorTitle ?? doc.title ?? '';
+    const signature = getDocumentSaveSignature(title, blocks);
+    const savedSignature = lastSavedSignatureRef.current[docId];
+    if (savedSignature) return savedSignature !== signature;
+    return dirtyDocumentIdsRef.current.has(docId);
   };
 
   const removeDocTab = (docId) => {
@@ -4844,7 +4914,14 @@ export default function Documents() {
     setClosingTabIds(prev => Array.from(new Set([...prev, ...targetIds])));
 
     try {
-      await Promise.all(targetIds.map(docId => saveDocTabSnapshot(docId)));
+      const snapshotsToSave = (await Promise.all(targetIds.map(async docId => {
+        const cachedSnapshot = getCachedDocTabSnapshot(docId);
+        if (cachedSnapshot && isDocTabSnapshotDirty(cachedSnapshot)) return cachedSnapshot;
+        if (!dirtyDocumentIdsRef.current.has(docId)) return null;
+        const loadedSnapshot = await getDocTabSnapshot(docId);
+        return isDocTabSnapshotDirty(loadedSnapshot) ? loadedSnapshot : null;
+      }))).filter(Boolean);
+      const savedResults = await Promise.all(snapshotsToSave.map(snapshot => saveDocumentSnapshot(snapshot)));
 
       targetIds.forEach(docId => {
         clearRemoteDocumentSnapshot(docId);
@@ -4882,8 +4959,10 @@ export default function Documents() {
         clearActiveDocument();
       }
 
-      await loadDocuments();
-      await loadFolderTreeDocuments();
+      if (savedResults.some(Boolean)) {
+        await loadDocuments();
+        await loadFolderTreeDocuments();
+      }
       message.success(options.successMessage || '已保存并关闭标签页');
     } catch (err) {
       message.error(getDocumentSaveErrorMessage(err, '关闭前自动保存失败'));
@@ -12143,7 +12222,7 @@ export default function Documents() {
   const renderPresentationBlock = (block) => {
     if (hiddenListBlockIds.has(block.id)) return null;
     const meta = getBlockMeta(block);
-    const indent = getListIndent(block);
+    const indent = getBlockHierarchyIndent(block);
     const blockStyle = {
       fontSize: isMobile ? 18 : 24,
       lineHeight: 1.7,
@@ -12310,7 +12389,19 @@ export default function Documents() {
         </Space>
       );
     }
-    return <InlineHtmlView as="div" value={block.content} style={blockStyle} />;
+    const importedHierarchyIndent = !isHierarchicalListBlock(block) && hasImportedHierarchyIndent(block) ? indent : 0;
+    return (
+      <InlineHtmlView
+        as="div"
+        value={block.content}
+        style={{
+          ...blockStyle,
+          ...(importedHierarchyIndent > 0
+            ? { paddingLeft: importedHierarchyIndent * (isMobile ? 26 : listIndentWidth) + (isMobile ? 24 : listMarkerBoxWidth) + listMarkerTextGap }
+            : {}),
+        }}
+      />
+    );
   };
 
   const renderPresentationMode = () => {
@@ -12631,6 +12722,17 @@ export default function Documents() {
             onChange={value => commonProps.onChange(value)}
             style={{ ...commonProps.style, fontWeight: 600 }}
           />
+        </div>
+      );
+    }
+
+    const importedHierarchyIndent = !isHierarchicalListBlock(block) && hasImportedHierarchyIndent(block)
+      ? getBlockHierarchyIndent(block)
+      : 0;
+    if (importedHierarchyIndent > 0) {
+      return (
+        <div style={{ paddingLeft: importedHierarchyIndent * listIndentWidth + listMarkerBoxWidth + listMarkerTextGap }}>
+          <InlineRichTextEditor {...commonProps} onChange={value => commonProps.onChange(value)} />
         </div>
       );
     }

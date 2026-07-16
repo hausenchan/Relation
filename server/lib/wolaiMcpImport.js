@@ -246,7 +246,10 @@ function getToolText(tool) {
 }
 
 function isDiscoveryTool(tool) {
+  const name = String(tool?.name || '').toLowerCase();
   const text = getToolText(tool);
+  if (/outline|structure|index|map/.test(name)) return true;
+  if (/索引|结构/.test(text) && !/content|正文/.test(name)) return true;
   if (/search|query|find|lookup|搜索|检索|查找/.test(text)) return true;
   if (/all[_-]?pages|recent|目录|列表|最近/.test(text)) return true;
   if (/space|workspace|database|collection|空间/.test(text) && /list|tree|catalog|目录|列表|列出/.test(text)) return true;
@@ -254,6 +257,8 @@ function isDiscoveryTool(tool) {
 }
 
 function isContentTool(tool) {
+  const name = String(tool?.name || '').toLowerCase();
+  if (/(^|_)(create|update|delete|move|insert|patch|replace|rewrite)($|_)/.test(name)) return false;
   const text = getToolText(tool);
   if (isDiscoveryTool(tool)) return false;
   const hasReadVerb = /get|read|fetch|retrieve|export|detail|load|open|获取|读取|导出|详情/.test(text)
@@ -316,11 +321,17 @@ function valueForProperty(name, schema, target) {
   const key = String(name || '').toLowerCase();
   if (/url|link|href/.test(key)) return target.url || target.raw;
   if (/page.*id|page_id|pageid/.test(key)) return target.pageId || target.blockId || target.raw;
-  if (/block.*id|block_id|blockid|section.*id|section_id|sectionid|record.*key/.test(key)) return target.blockId || target.pageId || target.raw;
+  if (/section.*id|section_id|sectionid/.test(key)) return target.sectionId || target.blockId || undefined;
+  if (/block.*id|block_id|blockid|record.*key/.test(key)) return target.blockId || target.pageId || target.raw;
   if (/^id$|uuid|node/.test(key)) return target.blockId || target.pageId || target.raw;
   if (/query|keyword|search|title|text|q/.test(key)) return target.raw;
   if (/recursive|children|include|with.*content|content|blocks/.test(key) && schema?.type === 'boolean') return true;
-  if (/limit|max|count|size|page_size/.test(key) && ['number', 'integer'].includes(schema?.type)) return 500;
+  if (/limit|max|count|size|page_size|depth|length/.test(key) && ['number', 'integer'].includes(schema?.type)) {
+    const min = Number.isFinite(Number(schema?.minimum)) ? Number(schema.minimum) : 0;
+    const max = Number.isFinite(Number(schema?.maximum)) ? Number(schema.maximum) : 500;
+    const preferred = /depth/.test(key) ? 9 : 500;
+    return Math.max(min, Math.min(max, preferred));
+  }
   if (schema?.type === 'boolean') return false;
   if (['number', 'integer'].includes(schema?.type)) return 0;
   if (Array.isArray(schema?.enum) && schema.enum.length) return schema.enum[0];
@@ -391,14 +402,14 @@ function buildArgumentsForTool(tool, target) {
     variants.push(
       { ...base, block_id: target.pageId },
       { ...base, blockId: target.pageId },
-      { ...base, section_id: target.pageId },
-      { ...base, sectionId: target.pageId }
     );
   }
   variants.push({ ...base, query: target.raw });
-  return variants.filter((item, index, list) => (
-    index === list.findIndex(other => JSON.stringify(other) === JSON.stringify(item))
-  ));
+  return variants
+    .filter(item => required.every(name => item[name] !== undefined && item[name] !== null && item[name] !== ''))
+    .filter((item, index, list) => (
+      index === list.findIndex(other => JSON.stringify(other) === JSON.stringify(item))
+    ));
 }
 
 function collectTextFromToolResult(result) {
@@ -766,6 +777,14 @@ function isFoldLikeTypeHint(value = '') {
   return /toggle|fold|collaps|expand|折叠|展开/.test(String(value || '').toLowerCase());
 }
 
+function isEnumListTypeHint(value = '') {
+  return /enum[_\s-]*list|enumlist|number|ordered|(^|\s)ol($|\s)|数字列表|有序列表/.test(String(value || '').toLowerCase());
+}
+
+function isBulletListTypeHint(value = '') {
+  return /bullet|unordered|(^|\s)ul($|\s)|无序列表|项目列表/.test(String(value || '').toLowerCase());
+}
+
 function hasFoldFlag(node = {}) {
   if (!isPlainObject(node)) return false;
   return Boolean(
@@ -821,7 +840,6 @@ function getWolaiCollapsedState(source = {}, fallback = false) {
     const value = readBoolean(candidate);
     if (value !== undefined) return !value;
   }
-  if (hasFoldFlag(source) || isFoldLikeTypeHint(getNodeTypeHint(source))) return true;
   return fallback;
 }
 
@@ -852,8 +870,8 @@ function mapNodeType(node) {
   if (isFold) return 'fold-list';
   if (isDatabaseLikeNode(node)) return 'database-embed';
   if (isTableLikeTypeHint(raw)) return 'table-simple';
-  if (/enum|number|ordered|ol/.test(raw)) return 'numbered';
-  if (/bullet|unordered|ul|list/.test(raw)) return 'bullet';
+  if (isEnumListTypeHint(raw)) return 'numbered';
+  if (isBulletListTypeHint(raw)) return 'bullet';
   if (/quote/.test(raw)) return 'quote';
   if (/code/.test(raw)) return 'code';
   if (/divider|hr|separator/.test(raw)) return 'divider';
@@ -2888,8 +2906,11 @@ function findTitle(value) {
     return '';
   }
   if (typeof value !== 'object') return '';
-  const candidate = value.title || value.name || value.page_title || value.document_title;
-  if (candidate && typeof candidate !== 'object') return stripHtml(candidate);
+  const typeHint = getNodeTypeHint(value);
+  const contentTitle = /^(page|document)$/.test(typeHint) ? value.content : null;
+  const candidate = value.title || value.name || value.page_title || value.pageTitle || value.document_title || value.documentTitle || contentTitle;
+  const titleText = stripHtml(getNodeHtml(candidate || ''));
+  if (titleText) return titleText;
   for (const key of ['page', 'document', 'data', 'meta', 'metadata']) {
     const title = findTitle(value[key]);
     if (title) return title;
@@ -2910,6 +2931,12 @@ function findSourceUrl(value) {
 
 function normalizeRecordId(value = '') {
   return String(value || '').trim();
+}
+
+function normalizeRecordDepth(value) {
+  const depth = Number(value);
+  if (!Number.isFinite(depth)) return null;
+  return Math.max(0, Math.min(8, Math.floor(depth)));
 }
 
 function getObjectValueByKeys(value, keys = []) {
@@ -2946,6 +2973,7 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
     parentType: String(getObjectValueByKeys(rawRecord, ['parent_type', 'parentType']) || ''),
     type: String(getObjectValueByKeys(rawRecord, ['type', 'block_type', 'blockType', 'kind']) || ''),
     level: Number(getObjectValueByKeys(rawRecord, ['level', 'heading_level', 'headingLevel']) || 0),
+    depth: normalizeRecordDepth(getObjectValueByKeys(rawRecord, ['depth', 'indent', 'list_level', 'listLevel'])),
     checked: Boolean(getObjectValueByKeys(rawRecord, ['checked', 'done', 'completed'])),
     language: String(getObjectValueByKeys(rawRecord, ['language', 'lang']) || ''),
     html,
@@ -2956,7 +2984,7 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
   };
 }
 
-function collectWolaiRecordsFromPayload(value, records = [], state = { order: 0 }, fallbackKey = '') {
+function collectWolaiRecordsFromPayload(value, records = [], state = { order: 0, parentId: '', parentType: '', depth: -1 }, fallbackKey = '') {
   if (!value) return records;
   if (Array.isArray(value)) {
     value.forEach(item => collectWolaiRecordsFromPayload(item, records, state));
@@ -2964,15 +2992,37 @@ function collectWolaiRecordsFromPayload(value, records = [], state = { order: 0 
   }
   if (!isPlainObject(value)) return records;
 
+  let currentRecord = null;
   if (isWolaiBlockLikeObject(value, fallbackKey)) {
     const record = normalizeWolaiRecord(value, state.order, fallbackKey);
     state.order += 1;
-    if (record) records.push(record);
+    if (record) {
+      if (!record.parentId && state.parentId) record.parentId = state.parentId;
+      if (!record.parentType && state.parentType) record.parentType = state.parentType;
+      if (record.depth === null && Number.isFinite(Number(state.depth)) && Number(state.depth) >= 0) {
+        record.depth = normalizeRecordDepth(state.depth);
+      }
+      records.push(record);
+      currentRecord = record;
+    }
   }
 
+  const childState = currentRecord
+    ? {
+      ...state,
+      parentId: currentRecord.id,
+      parentType: currentRecord.type || currentRecord.parentType || '',
+      depth: (currentRecord.depth ?? normalizeRecordDepth(state.depth) ?? -1) + 1,
+    }
+    : state;
+  const childContainerKeys = new Set(['blocks', 'children', 'items', 'records', 'rows', 'cells']);
   Object.entries(value).forEach(([key, child]) => {
     if (['title', 'content', 'text', 'plain_text', 'plainText', 'markdown', 'value', 'name'].includes(key)) return;
-    if (child && typeof child === 'object') collectWolaiRecordsFromPayload(child, records, state, key);
+    if (child && typeof child === 'object') {
+      const nextState = childContainerKeys.has(key) ? { ...childState, order: state.order } : state;
+      collectWolaiRecordsFromPayload(child, records, nextState, key);
+      if (nextState !== state) state.order = nextState.order;
+    }
   });
   return records;
 }
@@ -3060,8 +3110,8 @@ function inferWolaiRecordType(record = {}) {
   if (/image|picture/.test(hint)) return 'image';
   if (/file|attachment|asset/.test(hint)) return 'attachment';
   if (isFold) return 'fold-list';
-  if (/enum|number|ordered|ol/.test(hint)) return 'numbered';
-  if (/bullet|unordered|ul/.test(hint)) return 'bullet';
+  if (isEnumListTypeHint(hint)) return 'numbered';
+  if (isBulletListTypeHint(hint)) return 'bullet';
   return 'paragraph';
 }
 
@@ -3166,8 +3216,13 @@ function recordsToBlocks(records = [], seed) {
 
   const depthMemo = new Map();
   const getDepth = (record, stack = new Set()) => {
-    if (!record?.parentId || stack.has(record.id)) return 0;
     if (depthMemo.has(record.id)) return depthMemo.get(record.id);
+    if (record?.depth !== null && record?.depth !== undefined && Number.isFinite(Number(record.depth))) {
+      const explicitDepth = Math.max(0, Math.min(8, Math.floor(Number(record.depth))));
+      depthMemo.set(record.id, explicitDepth);
+      return explicitDepth;
+    }
+    if (!record?.parentId || stack.has(record.id)) return 0;
     const parent = byId.get(record.parentId);
     if (!parent) {
       depthMemo.set(record.id, 0);
@@ -3214,6 +3269,17 @@ function recordsToBlocks(records = [], seed) {
   const getDescendantRecords = (record) => {
     const ids = collectDescendantIds(record);
     return ordered.filter(item => ids.has(item.id));
+  };
+  const isWolaiListTreeRecord = (record, stack = new Set()) => {
+    if (!record || stack.has(record.id)) return false;
+    const type = inferWolaiRecordType(record);
+    if (type === 'numbered' || type === 'bullet' || type === 'fold-list') return true;
+    const parent = byId.get(record.parentId);
+    if (!parent) return false;
+    stack.add(record.id);
+    const result = isWolaiListTreeRecord(parent, stack);
+    stack.delete(record.id);
+    return result;
   };
   const tableRows = ordered.filter(isWolaiTableRowRecord);
   const tableRowsByParentId = new Map();
@@ -3272,13 +3338,21 @@ function recordsToBlocks(records = [], seed) {
       consumedRecordIds.add(record.id);
       return;
     }
-    const meta = {};
-    if (type === 'numbered' || type === 'bullet' || type === 'fold-list') meta.indent = getDepth(record);
-    if (type === 'fold-list') meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+    const meta = {
+      source_system: 'wolai_mcp',
+      wolai_record_id: record.id || '',
+      wolai_parent_id: record.parentId || '',
+      wolai_parent_type: record.parentType || '',
+      wolai_order: Number(record.order || 0),
+    };
+    const depth = getDepth(record);
+    if (type === 'numbered' || type === 'bullet' || type === 'fold-list') meta.indent = depth;
+    else if (depth > 0 && isWolaiListTreeRecord(record)) meta.indent = depth;
+    if (type === 'fold-list') meta.collapsed = getWolaiCollapsedState(record.raw || {}, false);
     if (type?.startsWith('fold-heading')) {
       const descendants = getDescendantRecords(record);
       descendants.forEach(item => consumedRecordIds.add(item.id));
-      meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+      meta.collapsed = getWolaiCollapsedState(record.raw || {}, false);
       meta.body = buildFoldBodyHtml(descendants, getDepth, getDepth(record));
     }
     if (record.language) meta.language = record.language;
@@ -3466,11 +3540,12 @@ function nodesToBlocks(nodes, seed) {
     blocks.push(makeBlock(type, html, {
       checked: Boolean(node.checked || node.done || node.completed),
       meta: {
+        source_system: 'wolai_mcp',
         ...((type === 'bullet' || type === 'numbered' || type === 'fold-list')
           ? { indent: Number(node.indent ?? node.depth ?? node.level ?? 0) || 0 }
           : {}),
-        ...(type === 'fold-list' ? { collapsed: getWolaiCollapsedState(node, true) } : {}),
-        ...(type?.startsWith('fold-heading') ? { collapsed: getWolaiCollapsedState(node, true), body: '' } : {}),
+        ...(type === 'fold-list' ? { collapsed: getWolaiCollapsedState(node, false) } : {}),
+        ...(type?.startsWith('fold-heading') ? { collapsed: getWolaiCollapsedState(node, false), body: '' } : {}),
         ...(node.language ? { language: node.language } : {}),
       },
     }));
@@ -3648,8 +3723,12 @@ function isListBlock(block) {
   return block?.type === 'bullet' || block?.type === 'numbered' || block?.type === 'fold-list';
 }
 
+function hasWolaiHierarchyIndent(block) {
+  return block?.meta?.source_system === 'wolai_mcp' && Number.isFinite(Number(block?.meta?.indent));
+}
+
 function normalizeListIndents(blocks = []) {
-  const listBlocks = blocks.filter(isListBlock);
+  const listBlocks = blocks.filter(block => isListBlock(block) || hasWolaiHierarchyIndent(block));
   if (!listBlocks.length) return blocks;
   const indents = listBlocks
     .map(block => Number(block?.meta?.indent))
@@ -3658,7 +3737,7 @@ function normalizeListIndents(blocks = []) {
   const minIndent = Math.min(...indents);
   if (minIndent <= 0) return blocks;
   return blocks.map(block => {
-    if (!isListBlock(block)) return block;
+    if (!isListBlock(block) && !hasWolaiHierarchyIndent(block)) return block;
     const indent = Number(block?.meta?.indent);
     if (!Number.isFinite(indent)) return block;
     return {
@@ -3714,6 +3793,16 @@ function isStrongImportedContent(imported) {
   const textLength = collectBlocksText(imported.blocks).length;
   const recursiveWarning = (imported.warnings || []).some(item => /递归读取/.test(String(item || '')));
   return recursiveWarning && imported.blocks.length >= 8 && textLength >= 120;
+}
+
+function isSubstantialImportedContent(imported) {
+  if (!imported?.blocks?.length) return false;
+  return imported.blocks.length >= 20 && collectBlocksText(imported.blocks).length >= 500;
+}
+
+function isFullPageBlocksTool(tool = {}) {
+  const name = String(tool?.name || '').toLowerCase();
+  return /page.*blocks|blocks.*page|document.*blocks|blocks.*document|get_doc/.test(name);
 }
 
 function normalizeImportedContent({ result, target, tool }) {
@@ -3860,7 +3949,9 @@ async function importWolaiMcpToBlocks(options = {}) {
             warnings: [...(imported.warnings || []), ...(databaseEnrichment.warnings || [])],
           };
           bestImported = chooseBetterImportedContent(bestImported, finalImported);
-          if (isStrongImportedContent(bestImported)) return bestImported;
+          if (isStrongImportedContent(bestImported) || (isFullPageBlocksTool(tool) && isSubstantialImportedContent(finalImported))) {
+            return bestImported;
+          }
           break;
         }
         errors.push(`${tool.name}: 未解析出正文`);
