@@ -79,6 +79,10 @@ import {
   getDocumentBlockHierarchyIndent,
   isDocumentBlockHierarchyMember,
 } from '../utils/documentBlockHierarchy';
+import {
+  mergeAdjacentDocumentBlocks,
+  shouldIgnoreGlobalDocumentDelete,
+} from '../utils/documentBlockKeyboard';
 import DOMPurify from 'dompurify';
 
 const { Text, Title } = Typography;
@@ -7293,27 +7297,13 @@ export default function Documents() {
     };
     if (!mergedComments.length) delete nextPreviousMeta.comments;
 
-    if (previousInput?.isContentEditable) {
-      previousInput.innerHTML = mergedContent;
-    }
-
     pushEditorUndoSnapshot();
     setEditorBlocks(prev => {
-      const blockIndex = prev.findIndex(item => item.id === block.id);
-      const previousIndex = blockIndex > 0 ? blockIndex - 1 : index - 1;
-      if (previousIndex < 0 || previousIndex >= prev.length) return prev;
-      const nextBlocks = [...prev];
-      nextBlocks[previousIndex] = {
-        ...nextBlocks[previousIndex],
+      const result = mergeAdjacentDocumentBlocks(prev, block.id, {
         content: mergedContent,
         meta: nextPreviousMeta,
-      };
-      if (blockIndex >= 0) {
-        nextBlocks.splice(blockIndex, 1);
-      } else if (index >= 0 && index < nextBlocks.length) {
-        nextBlocks.splice(index, 1);
-      }
-      return nextBlocks;
+      });
+      return result.changed ? result.blocks : prev;
     });
     setSelectedBlockId(previousBlock.id);
     clearAreaBlockSelection();
@@ -7346,8 +7336,9 @@ export default function Documents() {
       updateListIndent(block, index, -1);
       return;
     }
-    if ((event.key === 'Backspace' || event.key === 'Delete') && mergeBlockWithPreviousAtStart(event, block, index)) {
+    if (event.key === 'Backspace' && mergeBlockWithPreviousAtStart(event, block, index)) {
       event.preventDefault();
+      event.stopPropagation();
       return;
     }
     if (event.key === 'Backspace' && !block.content && editorBlocks.length > 1) {
@@ -7742,6 +7733,7 @@ export default function Documents() {
     const handleSelectionDeleteKeyDown = (event) => {
       if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       if (!['Delete', 'Backspace'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (shouldIgnoreGlobalDocumentDelete(event)) return;
       if (hasActiveNativeTextSelection()) return;
       const selectedBlockIds = getDeleteTargetBlockIds();
       if (!selectedBlockIds.length) return;
