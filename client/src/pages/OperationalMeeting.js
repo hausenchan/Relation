@@ -11,7 +11,9 @@ import {
 import dayjs from 'dayjs';
 import { cryptoKeysApi, operationalMeetingsApi } from '../api';
 import { useAuth } from '../AuthContext';
-import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
+import { RichTextView, richTextToPlain } from '../components/RichText';
+import DocumentBodyEditor from '../components/DocumentBodyEditor';
+import { documentBodyToPlain } from '../utils/documentBodyBlocks';
 import {
   inspectStoredKeyInfo,
   parseEncryptedPrivateKeyEnvelope,
@@ -59,7 +61,7 @@ function normalizeQuestionBlocks(value) {
 
 function blocksToPlain(blocks) {
   return normalizeQuestionBlocks(blocks).questions
-    .map(item => `${item.title}\n${richTextToPlain(item.content || '')}`.trim())
+    .map(item => `${item.title}\n${documentBodyToPlain(item.content, richTextToPlain)}`.trim())
     .filter(Boolean)
     .join('\n\n');
 }
@@ -526,7 +528,8 @@ export default function OperationalMeeting() {
       return false;
     }
     if (!unlocked?.privateKey) {
-      setKeyModalOpen(true);
+      if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyReset();
+      else setKeyModalOpen(true);
       return false;
     }
     return true;
@@ -713,7 +716,15 @@ export default function OperationalMeeting() {
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           {section.content_ciphertext && !unlocked?.privateKey && (
-            <Alert type="info" showIcon message="内容已加密，解锁安全密钥后可查看和编辑。" />
+            <Alert
+              type="info"
+              showIcon
+              message="内容已加密"
+              description="解锁安全密钥后可查看和编辑。"
+              action={keyInfo && !keyHealth.privateEnvelopeValid
+                ? <Button size="small" onClick={openKeyReset}>重新设置</Button>
+                : <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>}
+            />
           )}
           {lacksDecryptGrant && (
             <Alert type="warning" showIcon message="当前账号没有此填写块的记录密钥，无法查看或覆盖原内容。" />
@@ -722,12 +733,11 @@ export default function OperationalMeeting() {
             <div key={item.key}>
               <Text strong>{item.title}</Text>
               <div style={{ marginTop: 8 }}>
-                <RichTextEditor
+                <DocumentBodyEditor
                   value={item.content || ''}
                   onChange={value => patchQuestionContent(section.id, item.key, value)}
                   minHeight={96}
                   placeholder={`填写${item.title}`}
-                  enableTables
                   readOnly={disabled}
                 />
               </div>
@@ -778,8 +788,14 @@ export default function OperationalMeeting() {
               {unlocked?.privateKey ? (
                 <Tag icon={<UnlockOutlined />} color="green">安全密钥已解锁</Tag>
               ) : (
-                <Button icon={<LockOutlined />} onClick={() => setKeyModalOpen(true)}>
-                  {keyInfo ? '解锁安全密钥' : '设置安全密钥'}
+                <Button
+                  icon={<LockOutlined />}
+                  onClick={() => {
+                    if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyReset();
+                    else setKeyModalOpen(true);
+                  }}
+                >
+                  {keyInfo && !keyHealth.privateEnvelopeValid ? '重新设置安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
                 </Button>
               )}
               <Button icon={<ReloadOutlined />} onClick={loadMeetings}>刷新</Button>
@@ -823,21 +839,6 @@ export default function OperationalMeeting() {
             <Empty description="暂无详情" />
           ) : (
             <Space direction="vertical" size={18} style={{ width: '100%' }}>
-              <Alert
-                type={!keyHealth.privateEnvelopeValid && keyInfo ? 'error' : (unlocked?.privateKey ? 'success' : 'info')}
-                showIcon
-                message={
-                  !keyHealth.privateEnvelopeValid && keyInfo
-                    ? '安全密钥数据不完整，需要重新设置后才能保存内容。'
-                    : (unlocked?.privateKey ? '安全密钥已解锁，当前内容在浏览器本地解密。' : '请先解锁安全密钥，才能查看或保存加密内容。')
-                }
-                action={!unlocked?.privateKey && (
-                  !keyHealth.privateEnvelopeValid && keyInfo
-                    ? <Button size="small" danger onClick={openKeyReset}>重新设置</Button>
-                    : <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>
-                )}
-              />
-
               <Card size="small">
                 <Space wrap size={16}>
                   <Tag color={(statusMeta[detail.meeting.status] || statusMeta.draft).color}>
@@ -948,7 +949,7 @@ export default function OperationalMeeting() {
             value={keyPassword}
             onChange={event => setKeyPassword(event.target.value)}
             placeholder="请输入安全密码，至少 8 位"
-            autoComplete="new-password"
+            autoComplete={keyInfo && !keyResetMode ? 'current-password' : 'new-password'}
           />
           {(!keyInfo || keyResetMode) && (
             <Input.Password

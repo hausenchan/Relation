@@ -20143,10 +20143,12 @@ function parseOperationalPrivateKeyEnvelope(value) {
   if (
     !parsed
     || typeof parsed !== 'object'
-    || !parsed.salt
-    || !parsed.iv
+    || typeof parsed.salt !== 'string'
+    || parsed.salt.length < 16
+    || typeof parsed.iv !== 'string'
+    || parsed.iv.length < 12
     || typeof parsed.data !== 'string'
-    || parsed.data.length < 512
+    || parsed.data.length < 32
   ) {
     throw new Error('Encrypted private key is incomplete');
   }
