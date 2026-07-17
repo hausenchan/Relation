@@ -9088,8 +9088,18 @@ export default function Documents() {
     };
   };
 
+  const getInlineSelectionInput = (event) => {
+    const current = event?.currentTarget;
+    if (current?.isContentEditable || typeof current?.selectionStart === 'number') return current;
+    const target = event?.target;
+    const editableRoot = target?.closest?.('[contenteditable="true"]');
+    if (editableRoot) return editableRoot;
+    if (typeof target?.selectionStart === 'number') return target;
+    return null;
+  };
+
   const handleInlineTextSelection = (block, event) => {
-    const input = event?.target;
+    const input = getInlineSelectionInput(event);
     if (!input) return;
     window.setTimeout(() => {
       const selectionRange = input.isContentEditable
@@ -9110,7 +9120,7 @@ export default function Documents() {
   };
 
   const handleTableCellTextSelection = (block, tableCell, event) => {
-    const input = event?.target;
+    const input = getInlineSelectionInput(event);
     if (!input?.isContentEditable) return;
     window.setTimeout(() => {
       const selectionRange = getContentEditableSelectionRange(input);
