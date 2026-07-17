@@ -45,6 +45,12 @@ function hasMeaningfulTableRows(rows = []) {
   ));
 }
 
+function debugWolaiImport(...args) {
+  if (process.env.WOLAI_MCP_IMPORT_DEBUG !== '1') return;
+  // eslint-disable-next-line no-console
+  console.error('[wolai-mcp-import]', ...args);
+}
+
 async function wolaiApiRequest(token, path, options = {}) {
   const base = String(options.base || process.env.WOLAI_API_BASE || DEFAULT_WOLAI_API_BASE).trim();
   const normalizedBase = base.endsWith('/') ? base : `${base}/`;
@@ -560,7 +566,9 @@ function applyInlineMarks(html, marks) {
   if (hasInlineMark(marks, /strike|strikethrough|delete|删除线/i)) output = `<s>${output}</s>`;
   if (hasInlineMark(marks, /code|代码/i)) output = `<code>${output}</code>`;
   const color = pickInlineColor(marks, ['color', 'textColor', 'text_color']);
-  const backgroundColor = pickInlineColor(marks, ['backgroundColor', 'background_color', 'bgColor', 'bg_color']);
+  const backgroundColor = pickInlineColor(marks, [
+    'backgroundColor', 'background_color', 'backColor', 'back_color', 'bgColor', 'bg_color',
+  ]);
   const style = [
     color ? `color: ${color}` : '',
     backgroundColor ? `background-color: ${backgroundColor}` : '',
@@ -593,6 +601,8 @@ function pickInlineMarkSource(value = {}, annotations = null) {
     text_color: value.text_color,
     backgroundColor: value.backgroundColor,
     background_color: value.background_color,
+    backColor: value.backColor,
+    back_color: value.back_color,
     bgColor: value.bgColor,
     bg_color: value.bg_color,
   };
@@ -951,6 +961,10 @@ const wolaiColorMap = {
   red_background: '#fee2e2',
   light_gray_background: '#f3f4f6',
   fluorescent_purple_background: '#f3e8ff',
+  fluorescent_green_background: '#d9f99d',
+  fluorescent_yellow_background: '#fef08a',
+  fluorescent_blue_background: '#bae6fd',
+  fluorescent_red_background: '#fecaca',
   apricot_background: '#ffedd5',
   vivid_tangerine_background: '#fed7aa',
   light_pink_background: '#fce7f3',
@@ -1938,6 +1952,75 @@ function collectWolaiDatabaseRowsFromPayload(payload = {}) {
   return [];
 }
 
+function getWolaiPayloadValueByKeys(source = {}, keys = []) {
+  if (!isPlainObject(source)) return undefined;
+  for (const key of keys) {
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') return source[key];
+  }
+  return undefined;
+}
+
+function getWolaiRowsPaginationInfo(payload = {}) {
+  const data = getWolaiApiData(payload);
+  const pagination = data.pagination || data.pageInfo || data.page_info || data.meta || {};
+  const nextCursor = String(getWolaiPayloadValueByKeys(data, [
+    'next_cursor', 'nextCursor', 'cursor', 'next_page_token', 'nextPageToken', 'page_token', 'pageToken',
+  ]) || getWolaiPayloadValueByKeys(pagination, [
+    'next_cursor', 'nextCursor', 'cursor', 'next_page_token', 'nextPageToken', 'page_token', 'pageToken',
+  ]) || '').trim();
+  const hasMoreValue = getWolaiPayloadValueByKeys(data, ['has_more', 'hasMore', 'has_next', 'hasNext', 'more'])
+    ?? getWolaiPayloadValueByKeys(pagination, ['has_more', 'hasMore', 'has_next', 'hasNext', 'more']);
+  const total = Number(getWolaiPayloadValueByKeys(data, [
+    'total', 'total_count', 'totalCount', 'row_count', 'rowCount', 'rows_count', 'rowsCount', 'count',
+  ]) ?? getWolaiPayloadValueByKeys(pagination, [
+    'total', 'total_count', 'totalCount', 'row_count', 'rowCount', 'rows_count', 'rowsCount', 'count',
+  ]));
+  return {
+    nextCursor,
+    hasMore: hasMoreValue === true || hasMoreValue === 'true' || hasMoreValue === 1 || hasMoreValue === '1',
+    total: Number.isFinite(total) && total > 0 ? total : 0,
+  };
+}
+
+function getWolaiDatabaseRowId(row = {}) {
+  if (!isPlainObject(row)) return '';
+  return String(row.id || row.row_id || row.rowId || row.record_id || row.recordId || row.block_id || row.blockId || row.uuid || '').trim();
+}
+
+function getWolaiDatabaseRowsPageSignature(rows = []) {
+  return rows
+    .slice(0, 5)
+    .map(row => getWolaiDatabaseRowId(row) || sha256(JSON.stringify(row || {})).slice(0, 16))
+    .join('|');
+}
+
+function buildWolaiRowsPayload(basePayload = {}, rows = [], total = 0) {
+  const data = getWolaiApiData(basePayload);
+  return {
+    ...basePayload,
+    data: {
+      ...(isPlainObject(data) ? data : {}),
+      rows,
+      total: total || rows.length,
+      imported_rows_count: rows.length,
+    },
+  };
+}
+
+function appendUniqueWolaiRows(targetRows = [], sourceRows = [], seenRowIds = new Set()) {
+  let added = 0;
+  sourceRows.forEach(row => {
+    const rowId = getWolaiDatabaseRowId(row);
+    if (rowId) {
+      if (seenRowIds.has(rowId)) return;
+      seenRowIds.add(rowId);
+    }
+    targetRows.push(row);
+    added += 1;
+  });
+  return added;
+}
+
 function normalizeWolaiDatabaseRowsFromPayload(payload = {}, properties = []) {
   const rawRows = collectWolaiDatabaseRowsFromPayload(payload);
   return rawRows.map(row => (
@@ -2002,15 +2085,137 @@ async function fetchWolaiDatabaseTableMeta(token = '', tableId = '', blockId = '
   });
 }
 
-async function fetchWolaiDatabaseRows(token = '', tableId = '') {
+async function fetchWolaiDatabaseRowsPage(token = '', tableId = '', query = {}) {
   if (!token || !tableId) return null;
   return wolaiApiRequest(token, 'database/rows', {
     query: {
       table_id: tableId,
-      limit: Number.MAX_SAFE_INTEGER,
       timezoneOffset: -480,
+      ...query,
     },
   });
+}
+
+async function fetchWolaiDatabaseRows(token = '', tableId = '', options = {}) {
+  if (!token || !tableId) return null;
+  const expectedRows = Math.max(0, Number(options.expectedRows || 0) || 0);
+  const firstPayload = await fetchWolaiDatabaseRowsPage(token, tableId, {
+    limit: Number.MAX_SAFE_INTEGER,
+    snapshot: '',
+  });
+  const firstRows = collectWolaiDatabaseRowsFromPayload(firstPayload);
+  const firstPagination = getWolaiRowsPaginationInfo(firstPayload);
+  debugWolaiImport('database rows first result', {
+    tableId,
+    rows: firstRows.length,
+    expectedRows,
+    pagination: firstPagination,
+  });
+  if (!firstRows.length) return firstPayload;
+  if (!expectedRows || firstRows.length >= expectedRows) {
+    return buildWolaiRowsPayload(firstPayload, firstRows, firstPagination.total || expectedRows || firstRows.length);
+  }
+
+  const pageSize = Math.min(100, Math.max(50, expectedRows || 50));
+  const maxPages = Number(process.env.WOLAI_ROWS_MAX_PAGES || 200);
+  const allRows = [...firstRows];
+  const seenRowIds = new Set();
+  firstRows.forEach(row => {
+    const rowId = getWolaiDatabaseRowId(row);
+    if (rowId) seenRowIds.add(rowId);
+  });
+  const seenPageSignatures = new Set();
+  const firstSignature = getWolaiDatabaseRowsPageSignature(firstRows);
+  if (firstSignature) seenPageSignatures.add(firstSignature);
+  let lastPayload = firstPayload;
+  let offset = firstRows.length;
+  let nextCursor = firstPagination.nextCursor || '';
+  let total = firstPagination.total || expectedRows || 0;
+
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+    if (expectedRows && allRows.length >= expectedRows) break;
+    const queryCandidates = nextCursor
+      ? {
+        cursor: [
+          { limit: pageSize, cursor: nextCursor },
+          { limit: pageSize, start_cursor: nextCursor },
+          { limit: pageSize, startCursor: nextCursor },
+          { limit: pageSize, page_token: nextCursor },
+          { limit: pageSize, pageToken: nextCursor },
+        ],
+      }
+      : {
+        offset: [
+          { limit: pageSize, offset },
+          { limit: pageSize, start: offset },
+          { limit: pageSize, skip: offset },
+          { limit: pageSize, page: pageIndex + 2 },
+        ],
+      };
+    const candidates = nextCursor ? queryCandidates.cursor : queryCandidates.offset;
+    let accepted = false;
+    for (const query of candidates) {
+      debugWolaiImport('fetch database rows page', { tableId, pageIndex: pageIndex + 2, query });
+      // eslint-disable-next-line no-await-in-loop
+      const payload = await fetchWolaiDatabaseRowsPage(token, tableId, query);
+      lastPayload = payload;
+      const pageRows = collectWolaiDatabaseRowsFromPayload(payload);
+      const pagination = getWolaiRowsPaginationInfo(payload);
+      debugWolaiImport('database rows page result', {
+        tableId,
+        pageIndex: pageIndex + 2,
+        rows: pageRows.length,
+        pagination,
+      });
+      if (!pageRows.length) continue;
+      const pageSignature = getWolaiDatabaseRowsPageSignature(pageRows);
+      if (pageSignature && seenPageSignatures.has(pageSignature)) continue;
+      if (pageSignature) seenPageSignatures.add(pageSignature);
+      const added = appendUniqueWolaiRows(allRows, pageRows, seenRowIds);
+      if (!added) continue;
+      if (pagination.total) total = Math.max(total, pagination.total);
+      if (pagination.nextCursor && pagination.nextCursor !== nextCursor) nextCursor = pagination.nextCursor;
+      else nextCursor = '';
+      offset = allRows.length;
+      accepted = true;
+      break;
+    }
+    if (!accepted) break;
+    const shouldContinue = nextCursor
+      || (total > 0 && allRows.length < total)
+      || (expectedRows > 0 && allRows.length < expectedRows);
+    if (!shouldContinue) break;
+  }
+
+  debugWolaiImport('database rows combined', {
+    tableId,
+    rows: allRows.length,
+    total,
+    expectedRows,
+  });
+  return buildWolaiRowsPayload(lastPayload || firstPayload, allRows, total || expectedRows || allRows.length);
+}
+
+function getWolaiImportedRowsNotice(importedRows = 0, expectedRows = 0) {
+  const imported = Number(importedRows) || 0;
+  const expected = Number(expectedRows) || 0;
+  if (expected > 0 && imported > 0 && imported < expected) {
+    return `Wolai 数据表格行数据未完整返回，只导入 ${imported}/${expected} 行，请检查 Token 是否具备数据库行读取权限`;
+  }
+  if (expected > 0 && imported <= 0) {
+    return `Wolai 数据表格行数据接口未授权或未返回记录，当前应有 ${expected} 行，请检查 Token 是否具备数据库行读取权限`;
+  }
+  return '';
+}
+
+function makeWolaiDatabaseRowsBlockingError(message = '') {
+  const error = new Error(message || 'Wolai 数据表格行数据未完整返回');
+  error.isWolaiDatabaseRowsBlocking = true;
+  return error;
+}
+
+function isWolaiDatabaseRowsBlockingError(error) {
+  return Boolean(error?.isWolaiDatabaseRowsBlocking);
 }
 
 function databaseMetaNeedsWolaiLiveEmbed(meta = {}) {
@@ -2030,6 +2235,7 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
 
   let payload = null;
   try {
+    debugWolaiImport('fetch block database views', { blockIds });
     payload = await wolaiApiRequest(token, 'database/blockDatabaseViews', {
       method: 'POST',
       body: {
@@ -2064,7 +2270,9 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
   let tableMetaCount = 0;
   let importedRowCount = 0;
   let rowDataUnavailableCount = 0;
+  let rowDataIncompleteCount = 0;
   const detailWarnings = [];
+  const blockingErrors = [];
   const nextBlocks = [];
   for (const block of blocks) {
     if (block?.type !== 'database-embed' || !databaseMetaNeedsWolaiLiveEmbed(block.meta || {})) {
@@ -2087,8 +2295,15 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
       rowDataUnavailable: true,
     };
     const tableId = String(nextMeta.wolaiTableId || block.meta?.wolaiTableId || '').trim();
+    debugWolaiImport('database block meta', {
+      blockId,
+      tableId,
+      viewId: nextMeta.wolaiViewId || '',
+      rowsCount: nextMeta.wolaiRowsCount || 0,
+    });
     if (tableId) {
       try {
+        debugWolaiImport('fetch table meta', { tableId, blockId });
         const tablePayload = await fetchWolaiDatabaseTableMeta(token, tableId, blockId);
         const tableBuild = buildWolaiDatabaseMetaFromTablePayload(tablePayload, {
           blockId,
@@ -2105,14 +2320,35 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
             ...tableBuild.meta,
           };
           try {
-            const rowsPayload = await fetchWolaiDatabaseRows(token, tableId);
+            const expectedRows = Number(nextMeta.wolaiRowsCount || 0) || 0;
+            debugWolaiImport('fetch table rows start', { tableId, expectedRows });
+            const rowsPayload = await fetchWolaiDatabaseRows(token, tableId, { expectedRows });
             const importedRows = normalizeWolaiDatabaseRowsFromPayload(rowsPayload, tableBuild.properties || []);
+            const rowDataIncomplete = Boolean(expectedRows && importedRows.length > 0 && importedRows.length < expectedRows);
+            debugWolaiImport('fetch table rows normalized', {
+              tableId,
+              importedRows: importedRows.length,
+              expectedRows,
+              rowDataIncomplete,
+            });
             if (importedRows.length) {
               importedRowCount += importedRows.length;
+              if (rowDataIncomplete) {
+                rowDataIncompleteCount += 1;
+                rowDataUnavailableCount += 1;
+                const notice = getWolaiImportedRowsNotice(importedRows.length, expectedRows);
+                if (notice) {
+                  detailWarnings.push(notice);
+                  blockingErrors.push(notice);
+                }
+              }
               nextMeta = {
                 ...nextMeta,
                 rows: importedRows,
-                rowDataUnavailable: false,
+                wolaiImportedRowsCount: importedRows.length,
+                rowDataExpectedCount: expectedRows || importedRows.length,
+                rowDataIncomplete,
+                rowDataUnavailable: rowDataIncomplete,
                 liveEmbed: false,
                 externalEmbed: false,
               };
@@ -2120,17 +2356,45 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
               nextMeta = {
                 ...nextMeta,
                 rows: [],
+                wolaiImportedRowsCount: 0,
+                rowDataExpectedCount: 0,
+                rowDataIncomplete: false,
                 rowDataUnavailable: false,
                 liveEmbed: false,
                 externalEmbed: false,
               };
             } else {
               rowDataUnavailableCount += 1;
+              const notice = getWolaiImportedRowsNotice(0, expectedRows);
+              if (notice) {
+                detailWarnings.push(notice);
+                blockingErrors.push(notice);
+              }
+              nextMeta = {
+                ...nextMeta,
+                wolaiImportedRowsCount: 0,
+                rowDataExpectedCount: expectedRows,
+                rowDataIncomplete: false,
+                rowDataUnavailable: true,
+                liveEmbed: false,
+                externalEmbed: false,
+              };
             }
           } catch (error) {
+            debugWolaiImport('fetch table rows failed', { tableId, message: error.message || String(error) });
             rowDataUnavailableCount += 1;
+            const expectedRows = Number(nextMeta.wolaiRowsCount || 0) || 0;
+            const notice = getWolaiImportedRowsNotice(0, expectedRows);
+            const errorNotice = notice
+              ? `${notice}：${error.message || '未知错误'}`
+              : `Wolai 数据表格行数据读取失败：${error.message || '未知错误'}`;
+            detailWarnings.push(errorNotice);
+            blockingErrors.push(errorNotice);
             nextMeta = {
               ...nextMeta,
+              wolaiImportedRowsCount: 0,
+              rowDataExpectedCount: expectedRows,
+              rowDataIncomplete: false,
               liveEmbed: false,
               externalEmbed: false,
               rowDataUnavailable: true,
@@ -2148,10 +2412,13 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
   }
   const warnings = [];
   if (importedRowCount > 0) warnings.push(`Wolai 数据表格已导入 ${importedRowCount} 行记录`);
+  if (rowDataIncompleteCount > 0) {
+    warnings.push('Wolai 数据表格存在未完整导入的行数据，已保留已读取记录并标记为不完整');
+  }
   if (tableMetaCount > 0 && rowDataUnavailableCount > 0) {
     warnings.push('Wolai 数据表格行数据接口未授权或未返回完整记录，已导入字段/选项/视图并显示为本地表格结构');
   }
-  warnings.push(...detailWarnings);
+  warnings.push(...Array.from(new Set(detailWarnings.filter(Boolean))));
   if (!warnings.length) {
     warnings.push(enrichedCount
       ? 'Wolai 数据表格行数据未通过 MCP 返回，已显示为本地表格结构'
@@ -2160,6 +2427,7 @@ async function enrichWolaiDatabaseBlocks(blocks = [], token = '') {
   return {
     blocks: nextBlocks,
     warnings,
+    errors: Array.from(new Set(blockingErrors.filter(Boolean))),
   };
 }
 
@@ -2991,6 +3259,22 @@ function normalizeRecordDepth(value) {
   return Math.max(0, Math.min(8, Math.floor(depth)));
 }
 
+function getWolaiChildIds(rawRecord = {}) {
+  if (!isPlainObject(rawRecord)) return [];
+  const candidates = [
+    rawRecord.children?.ids,
+    rawRecord.children,
+    rawRecord.child_ids,
+    rawRecord.childIds,
+    rawRecord.block_ids,
+    rawRecord.blockIds,
+  ];
+  const source = candidates.find(Array.isArray) || [];
+  return source
+    .map(item => normalizeRecordId(isPlainObject(item) ? (item.id || item.block_id || item.blockId) : item))
+    .filter(Boolean);
+}
+
 function getObjectValueByKeys(value, keys = []) {
   if (!isPlainObject(value)) return undefined;
   for (const key of keys) {
@@ -3031,6 +3315,7 @@ function normalizeWolaiRecord(rawRecord = {}, order = 0, fallbackId = '') {
     html,
     media,
     tableMeta,
+    childIds: getWolaiChildIds(rawRecord),
     raw: rawRecord,
     order,
   };
@@ -3225,6 +3510,31 @@ function isLinkedPageRecord(record = {}, rootPageId = '') {
   return Boolean(stripHtml(record.html) || getWolaiRecordUrl(record));
 }
 
+function getWolaiExpansionQueueIds(records = [], targetPageId = '', knownRecords = records) {
+  const knownIds = new Set((knownRecords || []).map(record => normalizeRecordId(record?.id)).filter(Boolean));
+  const missingParentIds = [];
+  const recordIds = [];
+  const addUnique = (list, value) => {
+    const id = normalizeRecordId(value);
+    if (!id || list.includes(id)) return;
+    list.push(id);
+  };
+
+  (records || []).forEach(record => {
+    if (!record || record.id === targetPageId) return;
+    const parentId = normalizeRecordId(record.parentId);
+    const parentType = String(record.parentType || '').toLowerCase();
+    if (parentId && !knownIds.has(parentId) && !/^(page|document)$/.test(parentType)) {
+      addUnique(missingParentIds, parentId);
+    }
+  });
+  (records || []).forEach(record => {
+    if (!record || record.id === targetPageId || isLinkedPageRecord(record, targetPageId)) return;
+    addUnique(recordIds, record.id);
+  });
+  return [...missingParentIds, ...recordIds.filter(id => !missingParentIds.includes(id))];
+}
+
 function buildFoldBodyHtml(records = [], getDepth = () => 0, rootDepth = 0) {
   const lines = [];
   records.forEach((record, index) => {
@@ -3294,22 +3604,54 @@ function recordsToBlocks(records = [], seed) {
     if (!childrenByParentId.has(parentId)) childrenByParentId.set(parentId, []);
     childrenByParentId.get(parentId).push(record);
   });
-  childrenByParentId.forEach(children => children.sort((a, b) => (a.order || 0) - (b.order || 0)));
+  const declaredChildOrder = new Map();
+  normalized.forEach(parent => {
+    (parent.childIds || []).forEach((childId, index) => {
+      declaredChildOrder.set(`${parent.id}:${childId}`, index);
+    });
+  });
+  childrenByParentId.forEach((children, parentId) => children.sort((a, b) => {
+    const aDeclared = declaredChildOrder.get(`${parentId}:${a.id}`);
+    const bDeclared = declaredChildOrder.get(`${parentId}:${b.id}`);
+    if (aDeclared !== undefined || bDeclared !== undefined) {
+      if (aDeclared === undefined) return 1;
+      if (bDeclared === undefined) return -1;
+      if (aDeclared !== bDeclared) return aDeclared - bDeclared;
+    }
+    return (a.order || 0) - (b.order || 0);
+  }));
+
+  const rootPageId = extractWolaiPageId(seed);
+  const linkedPageDescendantIds = new Set();
+  const collectLinkedPageDescendantIds = (record, stack = new Set()) => {
+    if (!record?.id || stack.has(record.id)) return;
+    stack.add(record.id);
+    (childrenByParentId.get(record.id) || []).forEach(child => {
+      linkedPageDescendantIds.add(child.id);
+      collectLinkedPageDescendantIds(child, stack);
+    });
+    stack.delete(record.id);
+  };
+  normalized
+    .filter(record => isLinkedPageRecord(record, rootPageId))
+    .forEach(record => collectLinkedPageDescendantIds(record));
 
   const ordered = [];
   const emitted = new Set();
   const appendTree = (record) => {
-    if (!record || emitted.has(record.id)) return;
+    if (!record || emitted.has(record.id) || linkedPageDescendantIds.has(record.id)) return;
     emitted.add(record.id);
     ordered.push(record);
-    if (isPageContainerRecord(record)) return;
+    if (isPageContainerRecord(record) && record.id !== rootPageId) return;
     (childrenByParentId.get(record.id) || []).forEach(appendTree);
   };
+  normalized
+    .filter(record => record.id === rootPageId || !record.parentId || !byId.has(record.parentId))
+    .forEach(appendTree);
   normalized.forEach(appendTree);
 
   const makeBlock = makeBlockFactory(seed);
   const consumedRecordIds = new Set();
-  const rootPageId = extractWolaiPageId(seed);
   const collectDescendantIds = (record, output = new Set()) => {
     (childrenByParentId.get(record.id) || []).forEach(child => {
       if (output.has(child.id)) return;
@@ -3373,11 +3715,18 @@ function recordsToBlocks(records = [], seed) {
     const type = inferWolaiRecordType(record);
     if (isLinkedPageRecord(record, rootPageId)) {
       collectDescendantIds(record).forEach(id => consumedRecordIds.add(id));
+      const depth = getDepth(record);
       blocks.push(makeBlock('external-link', record.html || getWolaiRecordUrl(record), {
         meta: {
           url: getWolaiRecordUrl(record),
           title: stripHtml(record.html) || 'Wolai 文档链接',
           source_system: 'wolai_mcp',
+          reference_type: 'page',
+          wolai_record_id: record.id || '',
+          wolai_parent_id: record.parentId || '',
+          wolai_parent_type: record.parentType || '',
+          wolai_order: Number(record.order || 0),
+          ...(depth > 0 ? { indent: depth } : {}),
         },
       }));
       return;
@@ -3480,6 +3829,7 @@ function mergeWolaiRecords(records = []) {
       html: stripHtml(record.html).length >= stripHtml(existing.html).length ? record.html : existing.html,
       media: record.media?.url ? record.media : existing.media,
       tableMeta: record.tableMeta || existing.tableMeta,
+      childIds: record.childIds?.length ? record.childIds : existing.childIds,
       raw: record.raw || existing.raw,
       parentId: record.parentId || existing.parentId,
       parentType: record.parentType || existing.parentType,
@@ -3489,6 +3839,43 @@ function mergeWolaiRecords(records = []) {
     });
   });
   return Array.from(byKey.values()).sort((a, b) => (a.order || 0) - (b.order || 0));
+}
+
+function normalizeRecoveredWolaiParentRecords(records = [], blockId = '', targetPageId = '') {
+  const requestedRecord = records.find(record => record.id === blockId);
+  if (!requestedRecord) return { matched: false, records };
+  const nextRecords = [...records];
+  if (!requestedRecord.parentId && targetPageId) {
+    requestedRecord.parentId = targetPageId;
+    requestedRecord.parentType = requestedRecord.parentType || 'page';
+  }
+  if (/^bi[_-]?link$/i.test(String(requestedRecord.type || ''))) {
+    const supplements = nextRecords.filter(record => (
+      record.id !== blockId
+      && record.parentId === targetPageId
+      && /^(text|paragraph)?$/i.test(String(record.type || ''))
+      && stripHtml(record.html)
+    ));
+    const titleHtml = String(requestedRecord.html || '').replace(/^\s*\[/, '').replace(/\]\s*$/, '');
+    requestedRecord.html = [titleHtml, ...supplements.map(record => record.html)].filter(Boolean).join(' ');
+    const supplementIds = new Set(supplements.map(record => record.id));
+    return {
+      matched: true,
+      records: nextRecords.filter(record => !supplementIds.has(record.id)),
+    };
+  }
+  return { matched: true, records: nextRecords };
+}
+
+function buildWolaiChildTarget(blockId = '', target = {}, records = []) {
+  const missingParentRequest = !records.some(record => record.id === blockId)
+    && records.some(record => record.parentId === blockId);
+  return {
+    raw: blockId,
+    url: '',
+    pageId: missingParentRequest ? blockId : (target.pageId || blockId),
+    blockId,
+  };
 }
 
 async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, records, maxCalls = 160 }) {
@@ -3507,7 +3894,7 @@ async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, re
     queuedIds.add(normalized);
     queue.push(normalized);
   };
-  mergedRecords.forEach(record => enqueue(record.id));
+  getWolaiExpansionQueueIds(mergedRecords, target.pageId, mergedRecords).forEach(enqueue);
 
   let callCount = 0;
   while (queue.length && callCount < maxCalls) {
@@ -3516,12 +3903,7 @@ async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, re
     if (!blockId || seenCallIds.has(blockId)) continue;
     seenCallIds.add(blockId);
 
-    const childTarget = {
-      raw: blockId,
-      url: '',
-      pageId: target.pageId || blockId,
-      blockId,
-    };
+    const childTarget = buildWolaiChildTarget(blockId, target, mergedRecords);
     let foundChildrenForBlock = false;
     for (const childTool of childTools) {
       const argsVariants = buildArgumentsForTool(childTool, childTarget).slice(0, 4);
@@ -3533,8 +3915,14 @@ async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, re
           const toolErrorMessage = getMcpToolResultErrorMessage(result, childTarget);
           if (toolErrorMessage) continue;
           const parsed = parseToolContent(result);
-          const nextRecords = mergeWolaiRecords(parsed.wolaiRecords);
+          let nextRecords = mergeWolaiRecords(parsed.wolaiRecords);
           if (!nextRecords.length) continue;
+          const parentRecord = mergedRecords.find(item => item.id === blockId);
+          if (!parentRecord) {
+            const recovered = normalizeRecoveredWolaiParentRecords(nextRecords, blockId, target.pageId);
+            if (!recovered.matched) continue;
+            nextRecords = recovered.records;
+          }
           const existingIds = new Set(mergedRecords.map(record => record.id));
           const newRecords = nextRecords.filter(record => record.id && !existingIds.has(record.id));
           const metadataChanged = nextRecords.some(record => {
@@ -3542,18 +3930,25 @@ async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, re
             return existing && ((!existing.parentId && record.parentId) || (!existing.type && record.type) || (!existing.parentType && record.parentType));
           });
           if (!newRecords.length && !metadataChanged) continue;
-          const parentRecord = mergedRecords.find(item => item.id === blockId);
           const parentOrder = Number(parentRecord?.order);
-          const orderBase = Number.isFinite(parentOrder) ? parentOrder : mergedRecords.length + 1;
+          const waitingChildOrder = Math.min(...mergedRecords
+            .filter(item => item.parentId === blockId)
+            .map(item => Number(item.order))
+            .filter(Number.isFinite));
+          const orderBase = Number.isFinite(parentOrder)
+            ? parentOrder
+            : (Number.isFinite(waitingChildOrder) ? waitingChildOrder - 0.5 : mergedRecords.length + 1);
           nextRecords.forEach((record, index) => {
             if (!record.parentId && record.id !== blockId) record.parentId = blockId;
             const existingRecord = mergedRecords.find(item => item.id === record.id);
-            if (!existingRecord) record.order = orderBase + ((index + 1) / 1000);
-          });
-          newRecords.forEach(record => {
-            enqueue(record.id);
+            if (!existingRecord) {
+              record.order = record.id === blockId
+                ? orderBase
+                : orderBase + ((index + 1) / 1000);
+            }
           });
           mergedRecords = mergeWolaiRecords([...mergedRecords, ...nextRecords]);
+          getWolaiExpansionQueueIds(newRecords, target.pageId, mergedRecords).forEach(enqueue);
           foundChildrenForBlock = true;
           break;
         } catch {
@@ -4042,6 +4437,9 @@ async function importWolaiMcpToBlocks(options = {}) {
           let finalBlocks = cleanImportedBlocks(imported.blocks, finalTitle);
           // eslint-disable-next-line no-await-in-loop
           const databaseEnrichment = await enrichWolaiDatabaseBlocks(finalBlocks, token);
+          if (databaseEnrichment.errors?.length && process.env.WOLAI_MCP_ALLOW_INCOMPLETE_DATABASE !== '1') {
+            throw makeWolaiDatabaseRowsBlockingError(databaseEnrichment.errors.join('；'));
+          }
           finalBlocks = databaseEnrichment.blocks;
           const finalImported = {
             ...imported,
@@ -4062,6 +4460,7 @@ async function importWolaiMcpToBlocks(options = {}) {
         }
         errors.push(`${tool.name}: 未解析出正文`);
       } catch (error) {
+        if (isWolaiDatabaseRowsBlockingError(error)) throw error;
         errors.push(`${tool.name}: ${error.message || '调用失败'}`);
       }
     }
@@ -4075,4 +4474,11 @@ module.exports = {
   importWolaiMcpToBlocks,
   collectBlocksText,
   extractWolaiPageId,
+  __test: {
+    buildWolaiChildTarget,
+    getWolaiExpansionQueueIds,
+    getNodeHtml,
+    normalizeRecoveredWolaiParentRecords,
+    recordsToBlocks,
+  },
 };
