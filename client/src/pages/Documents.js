@@ -85,6 +85,12 @@ import {
   flattenDocumentClipboardHtml,
 } from '../utils/documentClipboard';
 import {
+  buildBulkShareTreeCheckState,
+  buildFolderDocumentSelectionMap,
+  chunkBulkDocumentIds,
+  updateBulkFolderSelection,
+} from '../utils/documentBulkShare';
+import {
   mergeAdjacentDocumentBlocks,
   shouldIgnoreGlobalDocumentDelete,
 } from '../utils/documentBlockKeyboard';
@@ -2494,10 +2500,10 @@ function renderDocumentTreeSwitcher({ expanded, isLeaf }) {
   );
 }
 
-function buildFolderNode(folder, childrenByParent, documentsByFolder) {
+function buildFolderNode(folder, childrenByParent, documentsByFolder, folderSelectionMap, folderCheckboxEnabled) {
   const folderDocuments = documentsByFolder.get(Number(folder.id)) || [];
   const childFolders = (childrenByParent.get(Number(folder.id)) || [])
-    .map(child => buildFolderNode(child, childrenByParent, documentsByFolder));
+    .map(child => buildFolderNode(child, childrenByParent, documentsByFolder, folderSelectionMap, folderCheckboxEnabled));
   const documentChildren = folderDocuments.map(doc => ({
     title: renderDocumentTreeTitle(doc.title || '未命名文档', 'document', doc.icon_key),
     key: `document-${doc.id}`,
@@ -2510,6 +2516,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
     disableCheckbox: !Number(doc.can_edit || 0),
   }));
   const children = [...childFolders, ...documentChildren];
+  const folderSelection = folderSelectionMap.get(Number(folder.id)) || { documentIds: [], editableDocumentIds: [] };
   return {
     title: renderDocumentTreeTitle(folder.name, 'folder'),
     key: `folder-${folder.id}`,
@@ -2521,12 +2528,14 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
     canAddChild: Boolean(Number(folder.can_add_child || 0)),
     canEditFolder: Boolean(Number(folder.can_edit_folder || 0)),
     canDeleteFolder: Boolean(Number(folder.can_delete_folder || 0)),
-    disableCheckbox: true,
+    documentIds: folderSelection.documentIds,
+    bulkDocumentIds: folderSelection.editableDocumentIds,
+    disableCheckbox: !folderCheckboxEnabled || !folderSelection.editableDocumentIds.length,
     ...(children.length ? { children } : {}),
   };
 }
 
-function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
+function buildFolderTree(folders, activeDomain, visibleDocuments = [], options = {}) {
   const scopedFolders = activeDomain === 'all'
     ? folders
     : folders.filter(folder => folder.domain === activeDomain);
@@ -2579,7 +2588,13 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
         children: [],
       });
     }
-    domainMap.get(domainKey).children.push(buildFolderNode(folder, childrenByParent, documentsByFolder));
+    domainMap.get(domainKey).children.push(buildFolderNode(
+      folder,
+      childrenByParent,
+      documentsByFolder,
+      options.folderSelectionMap || new Map(),
+      Boolean(options.folderCheckboxEnabled)
+    ));
   });
 
   return Array.from(domainMap.values());
@@ -3120,6 +3135,8 @@ export default function Documents() {
   const [bulkShareDraft, setBulkShareDraft] = useState(emptyShareDraft());
   const [bulkShareLoading, setBulkShareLoading] = useState(false);
   const [bulkShareSaving, setBulkShareSaving] = useState(false);
+  const [bulkShareDocuments, setBulkShareDocuments] = useState([]);
+  const [bulkShareDocumentsLoading, setBulkShareDocumentsLoading] = useState(false);
   const [changeLogOpen, setChangeLogOpen] = useState(false);
   const [activeChangeLogTab, setActiveChangeLogTab] = useState('version');
   const [changeLogSaving, setChangeLogSaving] = useState(false);
@@ -3452,9 +3469,16 @@ export default function Documents() {
     [folders, folderPathMap]
   );
 
+  const bulkFolderSelectionMap = useMemo(
+    () => buildFolderDocumentSelectionMap(folders, bulkShareDocuments),
+    [folders, bulkShareDocuments]
+  );
   const folderTree = useMemo(
-    () => buildFolderTree(folders, domainFilter, folderTreeDocuments),
-    [folders, domainFilter, folderTreeDocuments]
+    () => buildFolderTree(folders, domainFilter, folderTreeDocuments, {
+      folderSelectionMap: bulkFolderSelectionMap,
+      folderCheckboxEnabled: bulkShareMode && !bulkShareDocumentsLoading,
+    }),
+    [folders, domainFilter, folderTreeDocuments, bulkFolderSelectionMap, bulkShareMode, bulkShareDocumentsLoading]
   );
   const defaultFolderTreeExpandedKeys = useMemo(() => collectDefaultFolderExpandedKeys(folderTree), [folderTree]);
   const folderTreeKeySet = useMemo(() => collectTreeKeys(folderTree), [folderTree]);
@@ -3469,9 +3493,9 @@ export default function Documents() {
     () => new Set(bulkSelectedDocIds.map(id => Number(id)).filter(Boolean)),
     [bulkSelectedDocIds]
   );
-  const bulkCheckedTreeKeys = useMemo(
-    () => bulkSelectedDocIds.map(id => `document-${id}`),
-    [bulkSelectedDocIds]
+  const bulkTreeCheckState = useMemo(
+    () => buildBulkShareTreeCheckState(folderTree, bulkSelectedDocIds),
+    [folderTree, bulkSelectedDocIds]
   );
   const headingMeta = useMemo(
     () => buildHeadingMeta(editorBlocks, asSwitchValue(selectedDoc?.title_numbering_enabled)),
@@ -4064,6 +4088,32 @@ export default function Documents() {
     }, 300);
     return () => clearTimeout(timer);
   }, [keyword]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!bulkShareMode) {
+      setBulkShareDocuments([]);
+      setBulkShareDocumentsLoading(false);
+      return () => { cancelled = true; };
+    }
+
+    setBulkShareDocumentsLoading(true);
+    const params = domainFilter === 'all' ? {} : { domain: domainFilter };
+    documentsApi.list(params)
+      .then((rows) => {
+        if (!cancelled) setBulkShareDocuments(rows);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setBulkShareDocuments([]);
+        message.error(err.response?.data?.error || err.message || '加载文件夹文档失败');
+      })
+      .finally(() => {
+        if (!cancelled) setBulkShareDocumentsLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [bulkShareMode, domainFilter]);
 
   useEffect(() => {
     const handleGlobalSearchKeyDown = (event) => {
@@ -5393,6 +5443,7 @@ export default function Documents() {
     if (bulkShareMode) {
       setBulkShareMode(false);
       setBulkSelectedDocIds([]);
+      setBulkShareDocuments([]);
       return;
     }
     setBulkShareMode(true);
@@ -5413,7 +5464,26 @@ export default function Documents() {
     });
   };
 
-  const handleBulkTreeCheck = (checkedInfo) => {
+  const handleBulkTreeCheck = (checkedInfo, info = {}) => {
+    const node = info.node;
+    if (node?.nodeType === 'folder') {
+      const editableDocumentIds = Array.isArray(node.bulkDocumentIds) ? node.bulkDocumentIds : [];
+      if (!editableDocumentIds.length) {
+        message.warning('该文件夹下没有可批量共享的文档');
+        return;
+      }
+      setBulkSelectedDocIds(prev => updateBulkFolderSelection(prev, editableDocumentIds, Boolean(info.checked)));
+      const skippedCount = Math.max(0, Number(node.documentIds?.length || 0) - editableDocumentIds.length);
+      if (info.checked && skippedCount > 0) {
+        message.info(`已跳过 ${skippedCount} 篇无编辑权限的文档`);
+      }
+      return;
+    }
+    if (node?.nodeType === 'document') {
+      toggleBulkDocumentSelection(node.document || { id: node.documentId }, Boolean(info.checked));
+      return;
+    }
+
     const checkedKeys = Array.isArray(checkedInfo) ? checkedInfo : (checkedInfo?.checked || []);
     const visibleTreeDocIds = new Set(folderTreeDocuments.map(doc => Number(doc.id)).filter(Boolean));
     const checkedDocIds = checkedKeys
@@ -5474,7 +5544,13 @@ export default function Documents() {
     }
     setBulkShareSaving(true);
     try {
-      const data = await documentsApi.addBulkShares(bulkSelectedDocIds, shares);
+      const batches = chunkBulkDocumentIds(bulkSelectedDocIds);
+      const results = [];
+      for (const batch of batches) {
+        // Keep batches sequential so a large folder selection does not overload the server.
+        // eslint-disable-next-line no-await-in-loop
+        results.push(await documentsApi.addBulkShares(batch, shares));
+      }
       await loadDocuments();
       await loadFolderTreeDocuments();
       if (selectedDoc?.id && bulkSelectedDocIdSet.has(Number(selectedDoc.id))) {
@@ -5482,11 +5558,12 @@ export default function Documents() {
       }
       setBulkShareOpen(false);
       setBulkSelectedDocIds([]);
-      const failedCount = Number(data.failed_count || 0);
+      const successCount = results.reduce((sum, item) => sum + Number(item.success_count || 0), 0);
+      const failedCount = results.reduce((sum, item) => sum + Number(item.failed_count || 0), 0);
       if (failedCount > 0) {
-        message.warning(`已为 ${data.success_count || 0} 篇文档追加共享权限，${failedCount} 篇失败`);
+        message.warning(`已为 ${successCount} 篇文档追加共享权限，${failedCount} 篇失败`);
       } else {
-        message.success(`已为 ${data.success_count || 0} 篇文档追加共享权限`);
+        message.success(`已为 ${successCount} 篇文档追加共享权限`);
       }
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '批量共享失败');
@@ -14104,7 +14181,9 @@ export default function Documents() {
                   borderRadius: 8,
                   background: '#f0f9ff',
                 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>已选 {bulkSelectedDocIds.length} 篇</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {bulkShareDocumentsLoading ? '正在加载文件夹文档' : `已选 ${bulkSelectedDocIds.length} 篇`}
+                  </Text>
                   <Space size={6} wrap>
                     <Button size="small" onClick={selectVisibleBulkDocuments}>
                       全选当前
@@ -14139,7 +14218,7 @@ export default function Documents() {
                     selectedKeys={bulkShareMode ? [] : selectedTreeKeys}
                     checkable={bulkShareMode}
                     checkStrictly={bulkShareMode}
-                    checkedKeys={bulkShareMode ? { checked: bulkCheckedTreeKeys, halfChecked: [] } : []}
+                    checkedKeys={bulkShareMode ? bulkTreeCheckState : []}
                     treeData={folderTree}
                     switcherIcon={renderDocumentTreeSwitcher}
                     onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
