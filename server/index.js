@@ -2372,6 +2372,7 @@ addColumnIfMissing('documents', 'source_payload_hash', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'import_batch_no', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'import_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'quality_status', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'icon_key', 'TEXT DEFAULT NULL');
 const documentsMissingContentText = db.prepare(`
   SELECT id, content
   FROM documents
@@ -5884,9 +5885,26 @@ function getNextDocumentSequence() {
   return row.next_seq;
 }
 
+function canAdministrateDocuments(user) {
+  return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role)));
+}
+
+function canManageTeamDocument(user, document) {
+  if (!user || !document || user.role !== 'leader') return false;
+  const visibleIds = getVisibleUserIds(user.id, user.role);
+  return Array.isArray(visibleIds) && visibleIds.includes(Number(document.created_by));
+}
+
 function canManageDocument(user, document) {
   if (!user || !document) return false;
-  return user.role === 'admin' || Number(document.created_by) === Number(user.id);
+  return canAdministrateDocuments(user)
+    || Number(document.created_by) === Number(user.id);
+}
+
+function canMoveDocument(user, document) {
+  if (!user || !document) return false;
+  return canManageDocument(user, document)
+    || canManageTeamDocument(user, document);
 }
 
 function canUseDocumentWriteActions(user) {
@@ -5925,11 +5943,27 @@ function isDocumentSharedWithUser(user, document) {
 
 function canEditDocument(user, document) {
   if (!user || !document) return false;
-  return canUseDocumentWriteActions(user) && (canManageDocument(user, document) || isDocumentSharedWithUser(user, document));
+  return canUseDocumentWriteActions(user) && (
+    canAdministrateDocuments(user)
+    || Number(document.created_by) === Number(user.id)
+    || isDocumentSharedWithUser(user, document)
+  );
 }
 
 function canPinDocument(user, document) {
   return canEditDocument(user, document);
+}
+
+const documentIconKeys = new Set([
+  'star', 'pin', 'flag', 'target', 'rocket',
+  'idea', 'chart', 'calendar', 'task', 'team',
+  'money', 'media', 'doc', 'book', 'folder',
+  'link', 'lock', 'warning', 'heart', 'trophy',
+]);
+
+function normalizeDocumentIconKey(value = '') {
+  const key = String(value || '').trim();
+  return documentIconKeys.has(key) ? key : '';
 }
 
 function getFileExtFromName(filename = '') {
@@ -6383,10 +6417,18 @@ function buildDocumentFileImportContent(parsedImport, attachment) {
 }
 
 function buildDocumentVisibilityFilter(user, alias = 'd') {
-  if (user.role === 'admin') return { sql: '', params: [] };
+  if (canAdministrateDocuments(user)) return { sql: '', params: [] };
 
   const clauses = [`${alias}.created_by = ?`];
   const params = [user.id];
+
+  if (user.role === 'leader') {
+    const visibleIds = getVisibleUserIds(user.id, user.role);
+    if (Array.isArray(visibleIds) && visibleIds.length) {
+      clauses.push(`${alias}.created_by IN (${visibleIds.map(() => '?').join(',')})`);
+      params.push(...visibleIds);
+    }
+  }
 
   clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_user WHERE ds_user.document_id = ${alias}.id AND ds_user.target_type = 'user' AND ds_user.target_id = ?)`);
   params.push(user.id);
@@ -6586,13 +6628,9 @@ function serializeDocument(row, options = {}) {
   if (options.user) {
     const canUseWrite = canUseDocumentWriteActions(options.user);
     result.can_manage = canUseDocumentWriteActions(options.user) && canManageDocument(options.user, row) ? 1 : 0;
-    if (options.assumeVisible) {
-      result.can_edit = canUseWrite ? 1 : 0;
-      result.can_pin = canUseWrite ? 1 : 0;
-    } else {
-      result.can_edit = canEditDocument(options.user, row) ? 1 : 0;
-      result.can_pin = canPinDocument(options.user, row) ? 1 : 0;
-    }
+    result.can_move = canUseWrite && canMoveDocument(options.user, row) ? 1 : 0;
+    result.can_edit = canUseWrite && canEditDocument(options.user, row) ? 1 : 0;
+    result.can_pin = canUseWrite && canPinDocument(options.user, row) ? 1 : 0;
   }
   return result;
 }
@@ -6632,12 +6670,13 @@ function createDocumentRecord(body, user) {
     const content = body.content ?? JSON.stringify({ blocks: [] });
     const contentText = extractDocumentText(content, body.content_text);
     const tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : (body.tags || null);
+    const iconKey = normalizeDocumentIconKey(body.icon_key);
     const result = db.prepare(`
       INSERT INTO documents (
         document_no, global_seq, title, content, content_text, summary, domain,
         project_group_id, project_code, department_key, doc_type, current_version,
-        folder_id, tags, width_mode, created_by, updated_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        folder_id, tags, width_mode, icon_key, created_by, updated_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       documentNo,
       globalSeq,
@@ -6654,6 +6693,7 @@ function createDocumentRecord(body, user) {
       folderId,
       tags,
       body.width_mode || 'full',
+      iconKey || null,
       user.id,
       user.id
     );
@@ -6831,7 +6871,7 @@ app.get('/api/documents', (req, res) => {
   let q = `
     SELECT d.id, d.document_no, d.global_seq, d.title, d.summary, d.domain, d.project_group_id,
       d.project_code, d.department_key, d.doc_type, d.current_version, d.folder_id,
-      d.tags, d.pinned_at, d.created_by, d.updated_by, d.created_at, d.updated_at,
+      d.tags, d.icon_key, d.pinned_at, d.created_by, d.updated_by, d.created_at, d.updated_at,
       ${searchText ? 'd.content_text as search_content_text,' : ''}
       creator.display_name as created_by_name,
       updater.display_name as updated_by_name,
@@ -7595,84 +7635,110 @@ app.get('/api/documents/:id/live', (req, res) => {
 app.put('/api/documents/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
-  if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  const canEditCurrentDocument = canEditDocument(req.user, doc);
+  const canManageCurrentDocument = canManageDocument(req.user, doc);
+  const canMoveCurrentDocument = canMoveDocument(req.user, doc);
+  const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
+  const contentFieldKeys = ['title', 'content', 'content_text', 'summary'];
+  const managedFieldKeys = ['folder_id', 'domain', 'project_group_id', 'department_key', 'doc_type', 'project_code', 'current_version', 'tags', 'icon_key'];
+  const moveFieldKeys = new Set(['folder_id', 'domain', 'project_group_id', 'department_key', 'doc_type', 'project_code']);
+  const updatingContentFields = contentFieldKeys.some(key => hasBodyField(key));
+  const requestedManagedFields = managedFieldKeys.filter(key => hasBodyField(key));
+  const updatingMoveFields = requestedManagedFields.some(key => moveFieldKeys.has(key));
+  const updatingPropertyFields = requestedManagedFields.some(key => !moveFieldKeys.has(key));
+  const canApplyMoveFields = canManageCurrentDocument || (canMoveCurrentDocument && hasBodyField('folder_id'));
+  if (updatingContentFields && !canEditCurrentDocument) {
+    return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  }
+  if (updatingMoveFields && !canApplyMoveFields) {
+    return res.status(403).json({ error: '只有创建人、CXO 或小组长可以移动该文档' });
+  }
+  if (updatingPropertyFields && !canManageCurrentDocument) {
+    return res.status(403).json({ error: '只有创建人或超级管理员可以编辑文档属性' });
+  }
+  if (!updatingContentFields && !requestedManagedFields.length && !canEditCurrentDocument) {
+    return res.status(403).json({ error: '没有可更新的文档字段' });
+  }
   const clientBaseUpdatedAt = req.body?.base_updated_at ? String(req.body.base_updated_at) : '';
-  if (clientBaseUpdatedAt && String(doc.updated_at || '') !== clientBaseUpdatedAt) {
+  if (updatingContentFields && clientBaseUpdatedAt && String(doc.updated_at || '') !== clientBaseUpdatedAt) {
     return res.status(409).json({
       error: '文档已被其他协作者更新，请先同步最新内容',
       code: 'DOCUMENT_CONFLICT',
       latest: serializeDocument(doc, { withAccessSummary: true, user: req.user }),
     });
   }
-  const canManageCurrentDocument = canManageDocument(req.user, doc);
-  const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
   const nextFolderId = hasBodyField('folder_id') ? (req.body.folder_id || null) : doc.folder_id;
-  const updatingManagedFields = ['folder_id', 'domain', 'project_group_id', 'department_key', 'doc_type', 'project_code', 'current_version', 'tags']
-    .some(key => hasBodyField(key));
-  if (updatingManagedFields && !canManageCurrentDocument) {
-    return res.status(403).json({ error: '只有创建人或超级管理员可以编辑文档属性' });
-  }
-  const folder = canManageCurrentDocument && nextFolderId
+  const canApplyFolderFields = canManageCurrentDocument || canApplyMoveFields;
+  const folder = canApplyFolderFields && nextFolderId
     ? getDocumentFolderById(nextFolderId)
     : null;
-  if (canManageCurrentDocument && nextFolderId && !folder) return res.status(400).json({ error: '目标目录不存在' });
-  const folderFields = canManageCurrentDocument && nextFolderId
+  if (canApplyFolderFields && nextFolderId && !folder) return res.status(400).json({ error: '目标目录不存在' });
+  const folderFields = canApplyFolderFields && nextFolderId
     ? getDocumentBusinessFieldsFromFolder(nextFolderId, req.body)
     : null;
-  const domain = canManageCurrentDocument
+  const domain = canApplyFolderFields
     ? normalizeDocumentDomain(folderFields?.domain || (hasBodyField('domain') ? req.body.domain : doc.domain))
     : doc.domain;
-  const projectGroupId = canManageCurrentDocument
+  const projectGroupId = canApplyFolderFields
     ? (folderFields
       ? folderFields.project_group_id
       : hasBodyField('project_group_id')
       ? (req.body.project_group_id || null)
       : doc.project_group_id)
     : doc.project_group_id;
-  const departmentKey = canManageCurrentDocument
+  const departmentKey = canApplyFolderFields
     ? (folderFields?.department_key || normalizeDocumentDepartment(hasBodyField('department_key') ? req.body.department_key : doc.department_key))
     : doc.department_key;
-  const docType = canManageCurrentDocument
+  const docType = canApplyFolderFields
     ? (folderFields?.doc_type || normalizeDocumentType(hasBodyField('doc_type') ? req.body.doc_type : doc.doc_type))
     : doc.doc_type;
-  const content = Object.prototype.hasOwnProperty.call(req.body, 'content') ? req.body.content : doc.content;
+  const content = canEditCurrentDocument && hasBodyField('content') ? req.body.content : doc.content;
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
-  const contentText = extractDocumentText(content, req.body.content_text);
+  const contentText = canEditCurrentDocument && hasBodyField('content_text')
+    ? extractDocumentText(content, req.body.content_text)
+    : extractDocumentText(content, doc.content_text);
+  const nextTitle = canEditCurrentDocument && hasBodyField('title')
+    ? (req.body.title || doc.title)
+    : doc.title;
   const beforeSnapshot = {
     title: doc.title,
     content: doc.content,
     content_text: doc.content_text,
   };
   const afterSnapshot = {
-    title: req.body.title || doc.title,
+    title: nextTitle,
     content: storedContent,
     content_text: contentText,
   };
   const tags = canManageCurrentDocument
     ? (Array.isArray(req.body.tags) ? JSON.stringify(req.body.tags) : (req.body.tags ?? doc.tags))
     : doc.tags;
-  const explicitProjectCode = canManageCurrentDocument && folderFields && !projectGroupId
+  const explicitProjectCode = canApplyFolderFields && folderFields && !projectGroupId
     ? DOCUMENT_DOMAIN_CODES[domain]
     : (req.body.project_code || doc.project_code);
+  const iconKey = canManageCurrentDocument && hasBodyField('icon_key')
+    ? (normalizeDocumentIconKey(req.body.icon_key) || null)
+    : (doc.icon_key || null);
   db.prepare(`
     UPDATE documents SET
       title = ?, content = ?, content_text = ?, summary = ?, domain = ?, project_group_id = ?,
       project_code = ?, department_key = ?, doc_type = ?, current_version = ?, folder_id = ?,
-      tags = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+      tags = ?, icon_key = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(
-    req.body.title || doc.title,
+    nextTitle,
     storedContent,
     contentText,
     buildDocumentSummary(contentText),
     domain,
     projectGroupId || null,
-    canManageCurrentDocument ? getProjectCodeForDocument(projectGroupId, domain, explicitProjectCode) : doc.project_code,
+    canApplyFolderFields ? getProjectCodeForDocument(projectGroupId, domain, explicitProjectCode) : doc.project_code,
     departmentKey,
     docType,
     canManageCurrentDocument ? (req.body.current_version || doc.current_version || 'V1.0') : doc.current_version,
     nextFolderId,
     tags,
+    iconKey,
     req.user.id,
     doc.id
   );

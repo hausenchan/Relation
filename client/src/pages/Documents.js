@@ -250,6 +250,7 @@ const listIndentWidth = 28;
 const listMarkerBoxWidth = 24;
 const listMarkerCenterOffset = 12;
 const listMarkerColor = '#202124';
+const listMarkerMutedColor = '#d8dce0';
 const listGuideColor = '#f0f0f0';
 const listGuideWidth = 2;
 const listLineHeight = 1.96;
@@ -269,6 +270,29 @@ const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, it
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
+const documentIconOptions = [
+  { value: 'star', label: '重点', symbol: '★' },
+  { value: 'pin', label: '置顶', symbol: '📌' },
+  { value: 'flag', label: '旗标', symbol: '⚑' },
+  { value: 'target', label: '目标', symbol: '◎' },
+  { value: 'rocket', label: '启动', symbol: '🚀' },
+  { value: 'idea', label: '想法', symbol: '💡' },
+  { value: 'chart', label: '数据', symbol: '📈' },
+  { value: 'calendar', label: '日程', symbol: '◷' },
+  { value: 'task', label: '任务', symbol: '✓' },
+  { value: 'team', label: '团队', symbol: '👥' },
+  { value: 'money', label: '资金', symbol: '¥' },
+  { value: 'media', label: '媒体', symbol: '▶' },
+  { value: 'doc', label: '文档', symbol: '▤' },
+  { value: 'book', label: '手册', symbol: '📘' },
+  { value: 'folder', label: '归档', symbol: '📁' },
+  { value: 'link', label: '链接', symbol: '🔗' },
+  { value: 'lock', label: '权限', symbol: '🔒' },
+  { value: 'warning', label: '风险', symbol: '⚠' },
+  { value: 'heart', label: '关注', symbol: '♥' },
+  { value: 'trophy', label: '成果', symbol: '🏆' },
+];
+const documentIconMap = Object.fromEntries(documentIconOptions.map(item => [item.value, item]));
 const primaryDocumentSpaceDomains = ['domestic_project', 'overseas_project'];
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
 const blockTypeMap = Object.fromEntries(blockTypeOptions.map(item => [item.value, item]));
@@ -1020,8 +1044,15 @@ function renderBulletListMarker(indent, scale = 1) {
   );
 }
 
-function renderFoldListTriangle(collapsed, scale = 1) {
-  const color = listMarkerColor;
+function isFoldListMarkerSolid(meta = {}) {
+  const value = meta.hasChildren ?? meta.has_children ?? meta.hasContent ?? meta.has_content;
+  if (value === false || value === 0) return false;
+  if (typeof value === 'string' && /^(false|0|no)$/i.test(value.trim())) return false;
+  return true;
+}
+
+function renderFoldListTriangle(collapsed, scale = 1, solid = true) {
+  const color = solid ? listMarkerColor : listMarkerMutedColor;
   const size = 14 * scale;
   return (
     <svg
@@ -2397,14 +2428,17 @@ function normalizeDocumentFolderSelectValue(value) {
   return Number.isInteger(id) && id > 0 ? id : undefined;
 }
 
-function renderDocumentTreeTitle(title, nodeType = 'document') {
+function renderDocumentTreeTitle(title, nodeType = 'document', iconKey = '') {
   const text = String(title || '未命名文档');
+  const icon = nodeType === 'document' ? getDocumentIconOption(iconKey) : null;
   return (
     <span
       className={`document-tree-title document-tree-title-${nodeType}`}
       title={text}
     >
-      <span className="document-tree-item-icon" aria-hidden="true" />
+      <span className={`document-tree-item-icon${icon ? ' document-tree-item-icon-custom' : ''}`} aria-hidden="true">
+        {icon?.symbol || null}
+      </span>
       <span className="document-tree-title-text">{text}</span>
     </span>
   );
@@ -2429,7 +2463,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
   const childFolders = (childrenByParent.get(Number(folder.id)) || [])
     .map(child => buildFolderNode(child, childrenByParent, documentsByFolder));
   const documentChildren = folderDocuments.map(doc => ({
-    title: renderDocumentTreeTitle(doc.title || '未命名文档', 'document'),
+    title: renderDocumentTreeTitle(doc.title || '未命名文档', 'document', doc.icon_key),
     key: `document-${doc.id}`,
     icon: <FileTextOutlined />,
     isLeaf: true,
@@ -2671,6 +2705,33 @@ function getDocumentPathLabel(doc) {
     doc.folder_name,
   ].filter(Boolean);
   return parts.length ? parts.join(' / ') : '未归档';
+}
+
+function getDocumentIconOption(iconKey = '') {
+  return documentIconMap[String(iconKey || '').trim()] || null;
+}
+
+function renderDocumentInlineIcon(doc = {}, style = {}) {
+  const icon = getDocumentIconOption(doc.icon_key);
+  if (!icon) return <FileTextOutlined style={{ color: '#6b7280', ...style }} />;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        lineHeight: '18px',
+        fontSize: 15,
+        flex: '0 0 auto',
+        ...style,
+      }}
+    >
+      {icon.symbol}
+    </span>
+  );
 }
 
 function escapeRegExp(value) {
@@ -3267,6 +3328,40 @@ export default function Documents() {
         background: #8a8d90;
         box-shadow: 0 5px 0 #8a8d90;
       }
+      .document-tree-title-folder .document-tree-item-icon,
+      .document-tree-title-domain .document-tree-item-icon {
+        height: 14px;
+        margin-top: 2px;
+        border: 0;
+        border-radius: 3px;
+        background: linear-gradient(180deg, #7dd3fc 0%, #38bdf8 100%);
+        box-shadow: inset 0 -1px 0 rgba(14, 116, 144, 0.18);
+      }
+      .document-tree-title-folder .document-tree-item-icon::before,
+      .document-tree-title-domain .document-tree-item-icon::before {
+        content: "";
+        position: absolute;
+        left: 1px;
+        top: -4px;
+        width: 10px;
+        height: 5px;
+        border-radius: 3px 3px 0 0;
+        background: #67c6ee;
+        box-shadow: none;
+      }
+      .document-tree-item-icon-custom {
+        border: 0;
+        background: transparent;
+        border-radius: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        line-height: 18px;
+      }
+      .document-tree-item-icon-custom::before {
+        display: none;
+      }
       .document-tree-title-text {
         display: block;
         min-width: 0;
@@ -3390,6 +3485,13 @@ export default function Documents() {
     )
   );
 
+  const canMoveDoc = (doc) => Boolean(
+    canUseDocumentWriteActions && doc && (
+      Number(doc.can_move) === 1
+      || canManageDoc(doc)
+    )
+  );
+
   const isDocumentSharedWithCurrentUser = (doc) => {
     if (!currentUser || !doc) return false;
     const accessUser = (doc.access_summary?.users || []).find(user => Number(user.id) === Number(currentUser.id));
@@ -3399,12 +3501,14 @@ export default function Documents() {
   const canEditDoc = (doc) => Boolean(
     canUseDocumentWriteActions && doc && (
       Number(doc.can_edit) === 1
-      || canManageDoc(doc)
+      || isDocumentAdminUser(currentUser)
+      || Number(doc.created_by) === Number(currentUser.id)
       || isDocumentSharedWithCurrentUser(doc)
     )
   );
 
   const canManageSelectedDoc = canManageDoc(selectedDoc);
+  const canMoveSelectedDoc = canMoveDoc(selectedDoc);
   const isWolaiImportUpdateMode = Boolean(wolaiImportTargetDoc?.id);
 
   const resetEditorUndoStack = () => {
@@ -3472,6 +3576,7 @@ export default function Documents() {
     document_no: doc.document_no,
     current_version: doc.current_version,
     access_label: doc.access_summary?.label,
+    icon_key: doc.icon_key || '',
   });
 
   const upsertDocTab = (doc) => {
@@ -4274,6 +4379,7 @@ export default function Documents() {
     createForm.resetFields();
     createForm.setFieldsValue({
       title: '新页面',
+      icon_key: undefined,
       ...folderDefaults,
     });
     setCreateOpen(true);
@@ -4478,6 +4584,7 @@ export default function Documents() {
         department_key: doc.department_key || 'ALL',
         folder_id: normalizeDocumentFolderSelectValue(doc.folder_id),
         doc_type: doc.doc_type || 'TMP',
+        icon_key: doc.icon_key || undefined,
       });
       setEditingPropertyDoc(doc);
       setCreateOpen(true);
@@ -5304,6 +5411,10 @@ export default function Documents() {
 
   const handleDelete = async () => {
     if (!selectedDoc) return;
+    if (!canManageDoc(selectedDoc)) {
+      message.warning('你没有删除该文档的权限');
+      return;
+    }
     const deletedDocId = getDocTabId(selectedDoc.id);
     try {
       await documentsApi.delete(selectedDoc.id);
@@ -5319,6 +5430,10 @@ export default function Documents() {
   const openMoveFolder = (doc = selectedDoc) => {
     const targetDoc = doc?.id ? doc : selectedDoc;
     if (!targetDoc) return;
+    if (!canMoveDoc(targetDoc)) {
+      message.warning('你没有移动该文档的权限');
+      return;
+    }
     setPageMenuOpen(false);
     setDocContextMenu(prev => ({ ...prev, open: false }));
     setMoveFolderDoc(targetDoc);
@@ -5329,6 +5444,10 @@ export default function Documents() {
   const handleMoveFolder = async () => {
     const targetDoc = moveFolderDoc || selectedDoc;
     if (!targetDoc || !moveFolderId) return;
+    if (!canMoveDoc(targetDoc)) {
+      message.warning('你没有移动该文档的权限');
+      return;
+    }
     const targetFolder = folders.find(folder => Number(folder.id) === Number(moveFolderId));
     if (!targetFolder) {
       message.error('请选择目标文件夹');
@@ -5337,11 +5456,7 @@ export default function Documents() {
     setMoveFolderSaving(true);
     try {
       const isActiveDoc = getDocTabId(selectedDoc?.id) === getDocTabId(targetDoc.id);
-      const blocks = isActiveDoc ? editorBlocks : contentToBlocks(targetDoc.content);
       await documentsApi.update(targetDoc.id, {
-        title: isActiveDoc ? (editorTitle || targetDoc.title || '未命名文档') : (targetDoc.title || '未命名文档'),
-        content: blocksToContent(blocks),
-        content_text: blocksToText(blocks),
         folder_id: targetFolder.id,
         domain: targetFolder.domain || targetDoc.domain,
         project_group_id: targetFolder.project_group_id || 0,
@@ -7623,7 +7738,7 @@ export default function Documents() {
                         }}>
                           <div style={{ minWidth: 0 }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                              <FileTextOutlined style={{ color: '#6b7280', flex: '0 0 auto' }} />
+                              {renderDocumentInlineIcon(item, { flex: '0 0 auto' })}
                               <Text
                                 strong
                                 title={title}
@@ -7707,6 +7822,7 @@ export default function Documents() {
       ]}
     >
       <List.Item.Meta
+        avatar={renderDocumentInlineIcon(item, { marginTop: 2 })}
         title={
           <Space size={6} style={{ maxWidth: '100%', overflow: 'hidden', lineHeight: 1.25, whiteSpace: 'nowrap' }}>
             <Text
@@ -7807,7 +7923,7 @@ export default function Documents() {
                   boxShadow: active ? '0 2px 8px rgba(79, 70, 229, 0.12)' : 'none',
                 }}
               >
-                <FileTextOutlined style={{ flex: '0 0 auto', fontSize: 13 }} />
+                {renderDocumentInlineIcon(tab, { flex: '0 0 auto', fontSize: 13, width: 16, height: 16 })}
                 <Tooltip title={title}>
                   <Text
                     ellipsis
@@ -7878,6 +7994,7 @@ export default function Documents() {
           </Tooltip>
           <Popconfirm
             title="确认删除该页面？"
+            disabled={!canManageSelectedDoc}
             onConfirm={() => {
               setPageMenuOpen(false);
               handleDelete();
@@ -7885,7 +8002,15 @@ export default function Documents() {
             okText="删除"
             cancelText="取消"
           >
-            <Button danger type="text" block icon={<DeleteOutlined />} aria-label="删除页面" style={{ justifyContent: 'flex-start', padding: '4px 8px' }}>
+            <Button
+              danger
+              type="text"
+              block
+              icon={<DeleteOutlined />}
+              disabled={!canManageSelectedDoc}
+              aria-label="删除页面"
+              style={{ justifyContent: 'flex-start', padding: '4px 8px' }}
+            >
               删除页面
             </Button>
           </Popconfirm>
@@ -7893,6 +8018,7 @@ export default function Documents() {
             type="text"
             block
             icon={<FolderOpenOutlined />}
+            disabled={!canMoveSelectedDoc}
             onClick={openMoveFolder}
             style={{ justifyContent: 'flex-start', padding: '4px 8px' }}
           >
@@ -9391,6 +9517,7 @@ export default function Documents() {
     const meta = getBlockMeta(block);
     const indent = getListIndent(block);
     const collapsed = Boolean(meta.collapsed);
+    const foldListMarkerSolid = isFoldListMarkerSolid(meta);
     const markerColor = listMarkerColor;
     const marker = block.type === 'bullet'
       ? getBulletListMarker(indent)
@@ -9436,7 +9563,7 @@ export default function Documents() {
           appearance: 'none',
         }}
       >
-        {renderFoldListTriangle(collapsed)}
+        {renderFoldListTriangle(collapsed, 1, foldListMarkerSolid)}
       </button>
     ) : block.type === 'bullet' ? (
       <span style={markerContainerStyle}>
@@ -12524,6 +12651,7 @@ export default function Documents() {
       const presentationFontSize = isMobile ? 17 : 22;
       const presentationListFontSize = presentationFontSize;
       const presentationLineHeight = presentationListFontSize * listLineHeight;
+      const foldListMarkerSolid = isFoldListMarkerSolid(meta);
       const presentationGuideCenterY = presentationLineHeight / 2 + 1;
       const presentationGuideLineOffset = getListGuideLineOffset(block.type, presentationMarkerWidth);
       const marker = block.type === 'bullet'
@@ -12550,7 +12678,7 @@ export default function Documents() {
           }}
         >
           {block.type === 'fold-list'
-            ? renderFoldListTriangle(meta.collapsed, isMobile ? 1 : 1)
+            ? renderFoldListTriangle(meta.collapsed, isMobile ? 1 : 1, foldListMarkerSolid)
             : marker}
         </span>
       );
@@ -13498,7 +13626,12 @@ export default function Documents() {
                         label: docContextMenu.doc?.pinned_at ? '取消置顶' : '置顶',
                         disabled: !Number(docContextMenu.doc?.can_pin),
                       },
-                      { key: 'move', icon: <FolderOpenOutlined />, label: '移动到' },
+                      {
+                        key: 'move',
+                        icon: <FolderOpenOutlined />,
+                        label: '移动到',
+                        disabled: !canMoveDoc(docContextMenu.doc),
+                      },
                       {
                         key: 'edit-properties',
                         icon: <EditOutlined />,
@@ -14286,6 +14419,16 @@ export default function Documents() {
         <Form form={createForm} layout="vertical">
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
             <Input placeholder="请输入文档标题" />
+          </Form.Item>
+          <Form.Item name="icon_key" label="文档图标">
+            <Select
+              allowClear
+              placeholder="默认文档图标"
+              options={documentIconOptions.map(option => ({
+                value: option.value,
+                label: `${option.symbol} ${option.label}`,
+              }))}
+            />
           </Form.Item>
           <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
             <Select options={domainOptions.filter(item => item.value !== 'all')} />

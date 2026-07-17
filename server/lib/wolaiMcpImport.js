@@ -843,6 +843,55 @@ function getWolaiCollapsedState(source = {}, fallback = false) {
   return fallback;
 }
 
+function getWolaiHasChildrenState(source = {}, fallback = undefined) {
+  if (!isPlainObject(source)) return fallback;
+  const readBoolean = (value) => {
+    if (value === true || value === false) return value;
+    if (typeof value === 'number' && Number.isFinite(value)) return value > 0;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (/^(true|1|yes|has_children|hascontent)$/i.test(text)) return true;
+      if (/^(false|0|no|empty|none)$/i.test(text)) return false;
+      const numeric = Number(text);
+      if (Number.isFinite(numeric)) return numeric > 0;
+    }
+    return undefined;
+  };
+  const booleanCandidates = [
+    source.has_children,
+    source.hasChildren,
+    source.has_child,
+    source.hasChild,
+    source.has_content,
+    source.hasContent,
+    source.children?.length,
+    source.blocks?.length,
+    source.items?.length,
+    source.records?.length,
+    source.toggle?.has_children,
+    source.toggle?.hasChildren,
+  ];
+  for (const candidate of booleanCandidates) {
+    const value = readBoolean(candidate);
+    if (value !== undefined) return value;
+  }
+  const countCandidates = [
+    source.children_count,
+    source.childrenCount,
+    source.child_count,
+    source.childCount,
+    source.content_count,
+    source.contentCount,
+    source.block_count,
+    source.blockCount,
+  ];
+  for (const candidate of countCandidates) {
+    const value = readBoolean(candidate);
+    if (value !== undefined) return value;
+  }
+  return fallback;
+}
+
 function isTableRowTypeHint(value = '') {
   return /(^|\s)row($|\s)|table[_\s-]*row|database[_\s-]*row|collection[_\s-]*row|row[_\s-]*block|表格行|记录行/.test(String(value || '').toLowerCase());
 }
@@ -3273,6 +3322,17 @@ function recordsToBlocks(records = [], seed) {
     const ids = collectDescendantIds(record);
     return ordered.filter(item => ids.has(item.id));
   };
+  const hasRenderableDescendantRecords = (record, stack = new Set()) => {
+    const children = childrenByParentId.get(record.id) || [];
+    return children.some(child => {
+      if (!child?.id || stack.has(child.id)) return false;
+      stack.add(child.id);
+      const renderable = hasRenderableWolaiRecord(child);
+      const nestedRenderable = hasRenderableDescendantRecords(child, stack);
+      stack.delete(child.id);
+      return renderable || nestedRenderable;
+    });
+  };
   const isWolaiListTreeRecord = (record, stack = new Set()) => {
     if (!record || stack.has(record.id)) return false;
     const type = inferWolaiRecordType(record);
@@ -3356,7 +3416,12 @@ function recordsToBlocks(records = [], seed) {
     const depth = getDepth(record);
     if (type === 'numbered' || type === 'bullet' || type === 'fold-list') meta.indent = depth;
     else if (depth > 0 && isWolaiListTreeRecord(record)) meta.indent = depth;
-    if (type === 'fold-list') meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+    if (type === 'fold-list') {
+      const derivedHasChildren = hasRenderableDescendantRecords(record);
+      const explicitHasChildren = getWolaiHasChildrenState(record.raw || {}, undefined);
+      meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+      meta.hasChildren = derivedHasChildren || explicitHasChildren === true;
+    }
     if (type?.startsWith('fold-heading')) {
       const descendants = getDescendantRecords(record);
       descendants.forEach(item => consumedRecordIds.add(item.id));
@@ -3505,6 +3570,34 @@ async function expandWolaiRecordsWithChildCalls({ client, tools = [], target, re
 function nodesToBlocks(nodes, seed) {
   const makeBlock = makeBlockFactory(seed);
   const blocks = [];
+  const hasRenderableNodeContent = (node) => {
+    if (!node) return false;
+    if (!isPlainObject(node)) return Boolean(stripHtml(getNodeHtml(node)));
+    const type = mapNodeType(node);
+    return Boolean(
+      stripHtml(getNodeHtml(node))
+      || extractMediaFromNode(node, '')?.url
+      || type === 'database-embed'
+      || normalizeTableRows(node)
+    );
+  };
+  const getNestedNodeContainers = (node = {}) => {
+    const containers = [node.children, node.blocks, node.items, node.records, node.sub_blocks, node.subBlocks]
+      .filter(Array.isArray);
+    if (Array.isArray(node.content) && node.content.some(item => isWolaiBlockLikeObject(item))) {
+      containers.push(node.content);
+    }
+    return containers;
+  };
+  const hasRenderableNestedNodeContent = (node, stack = new Set()) => {
+    if (!isPlainObject(node) || stack.has(node)) return false;
+    stack.add(node);
+    const result = getNestedNodeContainers(node).some(children => children.some(child => (
+      hasRenderableNodeContent(child) || hasRenderableNestedNodeContent(child, stack)
+    )));
+    stack.delete(node);
+    return result;
+  };
   nodes.forEach(node => {
     const type = mapNodeType(node);
     if (type === 'database-embed') {
@@ -3552,7 +3645,12 @@ function nodesToBlocks(nodes, seed) {
         ...((type === 'bullet' || type === 'numbered' || type === 'fold-list')
           ? { indent: Number(node.indent ?? node.depth ?? node.level ?? 0) || 0 }
           : {}),
-        ...(type === 'fold-list' ? { collapsed: getWolaiCollapsedState(node, true) } : {}),
+        ...(type === 'fold-list'
+          ? {
+            collapsed: getWolaiCollapsedState(node, true),
+            hasChildren: hasRenderableNestedNodeContent(node) || getWolaiHasChildrenState(node, false) === true,
+          }
+          : {}),
         ...(type?.startsWith('fold-heading') ? { collapsed: getWolaiCollapsedState(node, true), body: '' } : {}),
         ...(node.language ? { language: node.language } : {}),
       },
