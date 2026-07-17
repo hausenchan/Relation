@@ -19,6 +19,30 @@ export function getDocumentBlockHierarchyIndent(block, maxIndent = 9) {
   return Math.max(0, Math.min(maxIndent, Math.floor(indent)));
 }
 
+export function buildDocumentNumberedListValues(blocks = [], maxIndent = 9) {
+  const counters = [];
+  const values = new Map();
+
+  blocks.forEach((block) => {
+    if (!isDocumentBlockHierarchyMember(block)) {
+      counters.length = 0;
+      return;
+    }
+
+    const indent = getDocumentBlockHierarchyIndent(block, maxIndent);
+    counters.length = indent + 1;
+    if (block.type !== 'numbered') {
+      counters.length = indent;
+      return;
+    }
+
+    counters[indent] = (counters[indent] || 0) + 1;
+    values.set(block.id, { index: counters[indent], indent });
+  });
+
+  return values;
+}
+
 export function buildCollapsedDocumentBlockIds(blocks = [], maxIndent = 9) {
   const hidden = new Set();
   let collapsedAncestors = [];

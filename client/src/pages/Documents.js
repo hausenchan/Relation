@@ -75,6 +75,7 @@ import { useAuth } from '../AuthContext';
 import {
   buildCollapsedDocumentBlockIds,
   buildDocumentBlockGuideMap,
+  buildDocumentNumberedListValues,
   canNestDocumentBlock,
   getDocumentBlockHierarchyIndent,
   isDocumentBlockHierarchyMember,
@@ -1088,21 +1089,9 @@ function renderFoldListTriangle(collapsed, scale = 1, solid = true) {
 }
 
 function buildNumberedListMarkers(blocks = []) {
-  const counters = [];
   const markers = new Map();
-  blocks.forEach(block => {
-    if (!isHierarchicalListBlock(block)) {
-      counters.length = 0;
-      return;
-    }
-    const indent = getListIndent(block);
-    counters.length = indent + 1;
-    if (block?.type !== 'numbered') {
-      counters.length = indent;
-      return;
-    }
-    counters[indent] = (counters[indent] || 0) + 1;
-    markers.set(block.id, formatNumberedListMarker(counters[indent], indent));
+  buildDocumentNumberedListValues(blocks, maxListIndent).forEach(({ index, indent }, blockId) => {
+    markers.set(blockId, formatNumberedListMarker(index, indent));
   });
   return markers;
 }
