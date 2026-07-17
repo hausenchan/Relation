@@ -80,6 +80,10 @@ import {
   isDocumentBlockHierarchyMember,
 } from '../utils/documentBlockHierarchy';
 import {
+  documentClipboardHasEmbeddedBlocks,
+  flattenDocumentClipboardHtml,
+} from '../utils/documentClipboard';
+import {
   mergeAdjacentDocumentBlocks,
   shouldIgnoreGlobalDocumentDelete,
 } from '../utils/documentBlockKeyboard';
@@ -1186,12 +1190,7 @@ function sanitizeInlineHtml(value) {
 }
 
 function normalizePastedInlineHtml(value) {
-  const html = String(value || '')
-    .replace(/<\/(p|div|h[1-6])>\s*<(p|div|h[1-6])[^>]*>/gi, '<br>')
-    .replace(/<\/?(p|div|h[1-6])[^>]*>/gi, '')
-    .replace(/<\/li>\s*<li[^>]*>/gi, '<br>')
-    .replace(/<\/?li[^>]*>/gi, '');
-  return sanitizeInlineHtml(html);
+  return sanitizeInlineHtml(flattenDocumentClipboardHtml(value));
 }
 
 function getElementStyleText(element) {
@@ -2334,6 +2333,47 @@ function parseClipboardDocumentBlocks(clipboardData) {
   } catch {
     return [];
   }
+}
+
+function getPastedInlineClipboardHtml(clipboardData) {
+  const html = clipboardData?.getData?.('text/html') || '';
+  const normalizedHtml = normalizePastedInlineHtml(html);
+  if (normalizedHtml) return normalizedHtml;
+  const text = clipboardData?.getData?.('text/plain') || '';
+  return text ? sanitizeInlineHtml(escapeHtml(text).replace(/\r\n?|\n/g, '<br>')) : '';
+}
+
+function insertPastedInlineHtml(editor, html) {
+  if (!editor?.isContentEditable || !html || typeof document === 'undefined') return false;
+  editor.focus();
+  const selection = window.getSelection?.();
+  if (!selection) return false;
+
+  let range = selection.rangeCount ? selection.getRangeAt(0) : null;
+  if (!range || !editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+
+  range.deleteContents();
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const fragment = template.content;
+  const lastNode = fragment.lastChild;
+  range.insertNode(fragment);
+  if (lastNode) {
+    range.setStartAfter(lastNode);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  const inputEvent = typeof window.InputEvent === 'function'
+    ? new window.InputEvent('input', { bubbles: true, inputType: 'insertFromPaste' })
+    : new Event('input', { bubbles: true });
+  editor.dispatchEvent(inputEvent);
+  return true;
 }
 
 function parseClipboardHtmlTableBlocks(html) {
@@ -6217,15 +6257,36 @@ export default function Documents() {
 
   const handleEditorPaste = async (event) => {
     if (event.target?.closest?.('[data-inline-comment-panel="true"]')) return;
+    if (event.target?.closest?.('input, textarea')) return;
     if (event.target?.closest?.('[data-document-table-cell="true"], [data-document-database-editor-block-id] input, [data-document-database-editor-block-id] textarea, [data-document-database-editor-block-id] [contenteditable="true"], [data-document-database-editor-block-id] .ant-select, [data-document-database-editor-block-id] .ant-picker')) return;
     const clipboardData = event.clipboardData;
+    const clipboardHtml = clipboardData?.getData?.('text/html') || '';
     const targetBlockId = event.target?.closest?.('[data-doc-block-id]')?.getAttribute('data-doc-block-id')
       || selectedBlockId
       || editorBlocks[editorBlocks.length - 1]?.id
       || null;
     const pastedImageFiles = getClipboardImageFiles(event);
     const documentBlocks = parseClipboardDocumentBlocks(clipboardData);
-    const htmlBlocks = documentBlocks.length ? [] : parseClipboardHtmlDocumentBlocks(clipboardData?.getData?.('text/html'));
+    const inlineEditor = event.target?.closest?.('[contenteditable="true"]');
+    const shouldPasteInline = Boolean(
+      inlineEditor
+      && !documentBlocks.length
+      && !pastedImageFiles.length
+      && !documentClipboardHasEmbeddedBlocks(clipboardHtml)
+    );
+    if (shouldPasteInline) {
+      const inlineHtml = getPastedInlineClipboardHtml(clipboardData);
+      if (!inlineHtml) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!canEditDoc(selectedDoc)) {
+        message.warning('你没有编辑该文档的权限');
+        return;
+      }
+      insertPastedInlineHtml(inlineEditor, inlineHtml);
+      return;
+    }
+    const htmlBlocks = documentBlocks.length ? [] : parseClipboardHtmlDocumentBlocks(clipboardHtml);
     const pastedBlocks = documentBlocks.length ? documentBlocks : htmlBlocks;
     if (pastedBlocks.length) {
       event.preventDefault();
