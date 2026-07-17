@@ -2656,6 +2656,12 @@ function getFolderPathLabel(folder, folderPathMap = null) {
   ].filter(Boolean).join(' / ');
 }
 
+function getFolderInnerPathLabel(folder, folderPathMap = null) {
+  if (!folder) return '';
+  const pathParts = folderPathMap?.get?.(Number(folder.id)) || [folder.name];
+  return pathParts.filter(Boolean).join(' / ');
+}
+
 function getDocumentPathLabel(doc) {
   if (!doc) return '未归档';
   const parts = [
@@ -3023,6 +3029,12 @@ export default function Documents() {
   const [folderCreateOpen, setFolderCreateOpen] = useState(false);
   const [folderCreateParent, setFolderCreateParent] = useState(null);
   const [folderCreateSaving, setFolderCreateSaving] = useState(false);
+  const [folderRenameOpen, setFolderRenameOpen] = useState(false);
+  const [folderRenameTarget, setFolderRenameTarget] = useState(null);
+  const [folderRenameSaving, setFolderRenameSaving] = useState(false);
+  const [folderDeleteOpen, setFolderDeleteOpen] = useState(false);
+  const [folderDeleteTarget, setFolderDeleteTarget] = useState(null);
+  const [folderDeleteSaving, setFolderDeleteSaving] = useState(false);
   const [moveFolderOpen, setMoveFolderOpen] = useState(false);
   const [moveFolderId, setMoveFolderId] = useState(null);
   const [moveFolderDoc, setMoveFolderDoc] = useState(null);
@@ -3096,6 +3108,7 @@ export default function Documents() {
   const [wolaiImportForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
   const [folderCreateForm] = Form.useForm();
+  const [folderRenameForm] = Form.useForm();
 
   useEffect(() => {
     const styleId = 'document-block-menu-style';
@@ -3330,6 +3343,12 @@ export default function Documents() {
   const selectedDocProjectGroupTag = getDirectoryProjectGroupLabel(selectedDoc);
   const selectedDocDepartmentTag = departmentLabel[selectedDoc?.department_key] || selectedDoc?.department_key || '';
   const selectedDocTypeTag = docTypeLabel[selectedDoc?.doc_type] || selectedDoc?.doc_type || '';
+  const selectedDocFolder = selectedDoc?.folder_id
+    ? folders.find(folder => Number(folder.id) === Number(selectedDoc.folder_id))
+    : null;
+  const selectedDocFolderPathTag = selectedDocFolder
+    ? getFolderInnerPathLabel(selectedDocFolder, folderPathMap)
+    : (selectedDoc?.folder_name || '');
   const deepLinkedDocId = useMemo(() => {
     return getDocumentIdFromSearch(searchParams);
   }, [searchParams]);
@@ -7407,6 +7426,77 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '创建文件夹失败');
     } finally {
       setFolderCreateSaving(false);
+    }
+  };
+
+  const openRenameFolder = (folder) => {
+    if (!folder || !canManageDocumentFolders || !Number(folder.can_edit_folder || 0)) return;
+    closeFolderContextMenu();
+    setFolderRenameTarget(folder);
+    folderRenameForm.resetFields();
+    folderRenameForm.setFieldsValue({ name: folder.name || '' });
+    setFolderRenameOpen(true);
+  };
+
+  const handleRenameFolder = async () => {
+    const target = folderRenameTarget;
+    if (!target?.id) return;
+    try {
+      const values = await folderRenameForm.validateFields();
+      setFolderRenameSaving(true);
+      await documentsApi.updateFolder(target.id, {
+        name: values.name,
+        sort_order: Number(target.sort_order || 0),
+      });
+      setFolderRenameOpen(false);
+      setFolderRenameTarget(null);
+      await loadFolders();
+      await loadFolderTreeDocuments();
+      message.success('文件夹已重命名');
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '重命名文件夹失败');
+    } finally {
+      setFolderRenameSaving(false);
+    }
+  };
+
+  const openDeleteFolder = (folder) => {
+    if (!folder || !canManageDocumentFolders || !Number(folder.can_delete_folder || 0)) return;
+    closeFolderContextMenu();
+    setFolderDeleteTarget(folder);
+    setFolderDeleteOpen(true);
+  };
+
+  const handleDeleteFolder = async () => {
+    const target = folderDeleteTarget;
+    if (!target?.id) return;
+    const targetId = Number(target.id);
+    const parentId = normalizeDocumentFolderSelectValue(target.parent_id);
+    setFolderDeleteSaving(true);
+    try {
+      const result = await documentsApi.deleteFolder(targetId);
+      setFolderDeleteOpen(false);
+      setFolderDeleteTarget(null);
+      if (Number(selectedFolderId) === targetId) {
+        setSelectedFolderId(parentId || null);
+      }
+      if (parentId) {
+        setFolderTreeExpandedKeys(prev => Array.from(new Set([...prev, `folder-${parentId}`])));
+      }
+      await loadFolders();
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      if (selectedDoc?.id) await loadDetail(selectedDoc.id, { force: true });
+      const movedFolders = Number(result?.moved_folders || 0);
+      const movedDocuments = Number(result?.moved_documents || 0);
+      const movedText = movedFolders || movedDocuments
+        ? `，已上移 ${movedFolders} 个子文件夹、${movedDocuments} 篇文档`
+        : '';
+      message.success(`文件夹已删除${movedText}`);
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '删除文件夹失败');
+    } finally {
+      setFolderDeleteSaving(false);
     }
   };
 
@@ -12642,7 +12732,9 @@ export default function Documents() {
               <Space size={8} wrap>
                 <Tag color="geekblue">{selectedDoc.current_version || 'V1.0'}</Tag>
                 <Tag>{docTypeLabel[selectedDoc.doc_type] || selectedDoc.doc_type}</Tag>
-                {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
+                {selectedDocFolderPathTag && (
+                  <Tag icon={<FolderOutlined />} title={selectedDocFolderPathTag}>{selectedDocFolderPathTag}</Tag>
+                )}
               </Space>
               <Title level={1} style={{ margin: 0, fontSize: isMobile ? 34 : 52, lineHeight: 1.12 }}>
                 {activePresentationSection?.title || editorTitle || selectedDoc.title || '未命名文档'}
@@ -13437,6 +13529,8 @@ export default function Documents() {
                       const folder = folderContextMenu.folder;
                       closeFolderContextMenu();
                       if (key === 'create-child') openCreateChildFolder(folder);
+                      if (key === 'rename') openRenameFolder(folder);
+                      if (key === 'delete') openDeleteFolder(folder);
                     },
                     items: [
                       {
@@ -13444,6 +13538,19 @@ export default function Documents() {
                         icon: <PlusOutlined />,
                         label: '新增子文件夹',
                         disabled: !Number(folderContextMenu.folder?.can_add_child || 0),
+                      },
+                      {
+                        key: 'rename',
+                        icon: <EditOutlined />,
+                        label: '重命名',
+                        disabled: !Number(folderContextMenu.folder?.can_edit_folder || 0),
+                      },
+                      {
+                        key: 'delete',
+                        icon: <DeleteOutlined />,
+                        label: '删除',
+                        danger: true,
+                        disabled: !Number(folderContextMenu.folder?.can_delete_folder || 0),
                       },
                     ],
                   }}
@@ -13596,7 +13703,9 @@ export default function Documents() {
                     {selectedDocProjectGroupTag && selectedDocProjectGroupTag !== selectedDocDomainTag && <Tag>{selectedDocProjectGroupTag}</Tag>}
                     {selectedDocDepartmentTag && <Tag>{selectedDocDepartmentTag}</Tag>}
                     {selectedDocTypeTag && <Tag>{selectedDocTypeTag}</Tag>}
-                    {selectedDoc.folder_name && <Tag icon={<FolderOutlined />}>{selectedDoc.folder_name}</Tag>}
+                    {selectedDocFolderPathTag && (
+                      <Tag icon={<FolderOutlined />} title={selectedDocFolderPathTag}>{selectedDocFolderPathTag}</Tag>
+                    )}
                   </Space>
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     创建人：{selectedDoc.created_by_name || '-'} · 最后编辑：{selectedDoc.updated_by_name || selectedDoc.created_by_name || '-'} · {formatDocumentTimestamp(selectedDoc.updated_at)}
@@ -13911,6 +14020,69 @@ export default function Documents() {
             仅支持在二级目录及其下级目录新增，最多 5 级。
           </Text>
         </Form>
+      </Modal>
+
+      <Modal
+        title="重命名文件夹"
+        open={folderRenameOpen}
+        onCancel={() => {
+          setFolderRenameOpen(false);
+          setFolderRenameTarget(null);
+        }}
+        onOk={handleRenameFolder}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={folderRenameSaving}
+        destroyOnClose
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
+      >
+        <Form form={folderRenameForm} layout="vertical">
+          <Form.Item label="当前路径">
+            <Input value={folderRenameTarget ? getFolderPathLabel(folderRenameTarget, folderPathMap) : ''} disabled />
+          </Form.Item>
+          <Form.Item
+            name="name"
+            label="文件夹名称"
+            rules={[
+              { required: true, whitespace: true, message: '请输入文件夹名称' },
+              { max: 40, message: '文件夹名称不能超过 40 个字符' },
+            ]}
+          >
+            <Input placeholder="请输入文件夹名称" maxLength={40} />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="删除文件夹"
+        open={folderDeleteOpen}
+        onCancel={() => {
+          setFolderDeleteOpen(false);
+          setFolderDeleteTarget(null);
+        }}
+        onOk={handleDeleteFolder}
+        okText="确认删除"
+        cancelText="取消"
+        okButtonProps={{ danger: true }}
+        confirmLoading={folderDeleteSaving}
+        destroyOnClose
+        width={isMobile ? '100%' : undefined}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
+      >
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Text>
+            确认删除「{folderDeleteTarget?.name || '该文件夹'}」吗？
+          </Text>
+          <Text type="secondary">
+            当前路径：{folderDeleteTarget ? getFolderPathLabel(folderDeleteTarget, folderPathMap) : '-'}
+          </Text>
+          <Text type="danger">
+            删除后，该文件夹下的文档和子文件夹会自动移动到上一级文件夹。此操作不可恢复。
+          </Text>
+        </Space>
       </Modal>
 
       <Modal

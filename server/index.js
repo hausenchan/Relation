@@ -6735,12 +6735,31 @@ app.delete('/api/document-folders/:id', canWrite, (req, res) => {
   if (!isManagedDocumentSpace(existing.domain)) return res.status(400).json({ error: '仅国内项目和海外项目支持删除目录' });
   const existingMeta = serializeDocumentFolder(existing, req.user);
   if (existingMeta.is_protected || existingMeta.depth < 3) return res.status(403).json({ error: '系统默认目录不允许删除' });
-  const childCount = db.prepare('SELECT COUNT(*) as count FROM document_folders WHERE parent_id = ?').get(req.params.id).count;
-  if (childCount > 0) return res.status(400).json({ error: '目录下仍有子目录，不能删除' });
-  const linked = db.prepare('SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND COALESCE(is_deleted, 0) = 0').get(req.params.id).count;
-  if (linked > 0) return res.status(400).json({ error: '目录下仍有文档，不能删除' });
-  db.prepare('DELETE FROM document_folders WHERE id = ?').run(req.params.id);
-  res.json({ success: true });
+  const folderId = Number(existing.id);
+  const parentId = existing.parent_id || null;
+  const childCount = db.prepare('SELECT COUNT(*) as count FROM document_folders WHERE parent_id = ?').get(folderId).count;
+  const linked = db.prepare('SELECT COUNT(*) as count FROM documents WHERE folder_id = ? AND COALESCE(is_deleted, 0) = 0').get(folderId).count;
+  const deleteFolder = db.transaction(() => {
+    db.prepare(`
+      UPDATE document_folders
+      SET parent_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE parent_id = ?
+    `).run(parentId, folderId);
+    db.prepare(`
+      UPDATE documents
+      SET folder_id = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE folder_id = ?
+        AND COALESCE(is_deleted, 0) = 0
+    `).run(parentId, req.user.id, folderId);
+    db.prepare('DELETE FROM document_folders WHERE id = ?').run(folderId);
+  });
+  deleteFolder();
+  res.json({
+    success: true,
+    parent_id: parentId,
+    moved_folders: childCount,
+    moved_documents: linked,
+  });
 });
 
 app.post('/api/document-folders/apply-template', canWrite, (req, res) => {
