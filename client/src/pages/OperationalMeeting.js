@@ -12,6 +12,12 @@ import dayjs from 'dayjs';
 import { cryptoKeysApi, operationalMeetingsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
+import {
+  inspectStoredKeyInfo,
+  parseEncryptedPrivateKeyEnvelope,
+  parseRsaPublicJwk,
+  publicJwkFromPrivateJwk,
+} from '../utils/operationalMeetingCrypto';
 
 const { RangePicker } = DatePicker;
 const { Text, Title } = Typography;
@@ -154,32 +160,54 @@ async function createUserKeyBundle(password) {
       data: bufferToBase64(encryptedPrivate),
     }),
     privateKey: keyPair.privateKey,
+    publicKeyJwk: publicJwk,
   };
 }
 
 async function unlockPrivateKey(keyInfo, password) {
-  const encrypted = JSON.parse(keyInfo.encrypted_private_key_jwk || '{}');
+  const encrypted = parseEncryptedPrivateKeyEnvelope(keyInfo.encrypted_private_key_jwk);
   const wrappingKey = await derivePasswordKey(password, encrypted.salt, Number(encrypted.iterations || 210000));
-  const decrypted = await window.crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToBuffer(encrypted.iv) },
-    wrappingKey,
-    base64ToBuffer(encrypted.data),
-  );
-  const privateJwk = JSON.parse(new TextDecoder().decode(decrypted));
-  return window.crypto.subtle.importKey(
+  let decrypted;
+  try {
+    decrypted = await window.crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: base64ToBuffer(encrypted.iv) },
+      wrappingKey,
+      base64ToBuffer(encrypted.data),
+    );
+  } catch {
+    throw new Error('安全密码不正确，或私钥数据已经损坏');
+  }
+  let privateJwk;
+  try {
+    privateJwk = JSON.parse(new TextDecoder().decode(decrypted));
+  } catch {
+    throw new Error('安全密码不正确，或私钥数据已经损坏');
+  }
+  const publicKeyJwk = publicJwkFromPrivateJwk(privateJwk);
+  const privateKey = await window.crypto.subtle.importKey(
     'jwk',
     privateJwk,
     { name: 'RSA-OAEP', hash: 'SHA-256' },
     false,
     ['decrypt'],
   );
+  return { privateKey, publicKeyJwk };
 }
 
-async function encryptPayloadForUsers(payload, userIds) {
+async function encryptPayloadForUsers(payload, userIds, localPublicKeys = {}) {
   const publicKeys = await cryptoKeysApi.publicKeys(userIds);
-  if (!publicKeys.length) {
-    throw new Error('授权人员尚未设置安全密钥，无法保存加密内容');
-  }
+  const requestedUserIds = [...new Set((userIds || []).map(Number).filter(Boolean))];
+  const candidates = new Map((Array.isArray(publicKeys) ? publicKeys : []).map(row => [Number(row.user_id), row]));
+  Object.entries(localPublicKeys || {}).forEach(([userId, publicKeyJwk]) => {
+    const localKey = publicKeyJwk?.jwk ? publicKeyJwk : { jwk: publicKeyJwk, key_version: 1 };
+    if (Number(userId) && localKey.jwk) {
+      candidates.set(Number(userId), {
+        user_id: Number(userId),
+        public_key_jwk: localKey.jwk,
+        key_version: Number(localKey.key_version || 1),
+      });
+    }
+  });
   const encoder = new TextEncoder();
   const aesKey = await window.crypto.subtle.generateKey(
     { name: 'AES-GCM', length: 256 },
@@ -194,21 +222,29 @@ async function encryptPayloadForUsers(payload, userIds) {
   );
   const rawDek = await window.crypto.subtle.exportKey('raw', aesKey);
   const recordKeys = [];
-  for (const row of publicKeys) {
-    const publicKey = await window.crypto.subtle.importKey(
-      'jwk',
-      JSON.parse(row.public_key_jwk),
-      { name: 'RSA-OAEP', hash: 'SHA-256' },
-      false,
-      ['encrypt'],
-    );
-    const encryptedDek = await window.crypto.subtle.encrypt({ name: 'RSA-OAEP' }, publicKey, rawDek);
-    recordKeys.push({
-      user_id: Number(row.user_id),
-      encrypted_dek: bufferToBase64(encryptedDek),
-      key_version: Number(row.key_version || 1),
-    });
+  for (const row of candidates.values()) {
+    try {
+      const publicKey = await window.crypto.subtle.importKey(
+        'jwk',
+        parseRsaPublicJwk(row.public_key_jwk),
+        { name: 'RSA-OAEP', hash: 'SHA-256' },
+        false,
+        ['encrypt'],
+      );
+      const encryptedDek = await window.crypto.subtle.encrypt({ name: 'RSA-OAEP' }, publicKey, rawDek);
+      recordKeys.push({
+        user_id: Number(row.user_id),
+        encrypted_dek: bufferToBase64(encryptedDek),
+        key_version: Number(row.key_version || 1),
+      });
+    } catch {
+      // An unavailable recipient must not expose a low-level JSON/Web Crypto error or block the author.
+    }
   }
+  if (!recordKeys.length) {
+    throw new Error('当前账号的安全密钥不可用，请先解锁或重新设置安全密钥');
+  }
+  const encryptedUserIds = new Set(recordKeys.map(item => Number(item.user_id)));
   return {
     ciphertext: JSON.stringify({
       alg: 'A256GCM',
@@ -216,6 +252,7 @@ async function encryptPayloadForUsers(payload, userIds) {
       data: bufferToBase64(encryptedPayload),
     }),
     record_keys: recordKeys,
+    unavailable_user_ids: requestedUserIds.filter(id => !encryptedUserIds.has(id)),
   };
 }
 
@@ -261,6 +298,7 @@ export default function OperationalMeeting() {
   const [keyPassword, setKeyPassword] = useState('');
   const [keyPasswordConfirm, setKeyPasswordConfirm] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
+  const [keyResetMode, setKeyResetMode] = useState(false);
   const [sectionDrafts, setSectionDrafts] = useState({});
   const [agendaDraft, setAgendaDraft] = useState(null);
   const [decisionDraft, setDecisionDraft] = useState('');
@@ -269,6 +307,7 @@ export default function OperationalMeeting() {
   const [decisionSaving, setDecisionSaving] = useState(false);
 
   const hasSensitiveAccess = canAccessSensitiveModule?.(MODULE_KEY);
+  const keyHealth = useMemo(() => inspectStoredKeyInfo(keyInfo), [keyInfo]);
   const authorizedUserIds = useMemo(() => {
     const ids = detail?.authorized_user_ids || [];
     return [...new Set([...ids.map(Number), Number(user?.id)].filter(Boolean))];
@@ -401,40 +440,84 @@ export default function OperationalMeeting() {
   };
 
   const handleKeyAction = async () => {
+    const creatingKey = !keyInfo || keyResetMode;
     if (!keyPassword || keyPassword.length < 8) {
       message.warning('安全密码至少 8 位');
       return;
     }
-    if (!keyInfo && keyPassword !== keyPasswordConfirm) {
+    if (creatingKey && keyPassword !== keyPasswordConfirm) {
       message.warning('两次安全密码不一致');
       return;
     }
     setKeyBusy(true);
     try {
-      if (keyInfo) {
-        const privateKey = await unlockPrivateKey(keyInfo, keyPassword);
-        setUnlocked({ privateKey, keyVersion: Number(keyInfo.key_version || 1) });
-        message.success('安全密钥已解锁');
+      if (keyInfo && !keyResetMode) {
+        const unlockedKey = await unlockPrivateKey(keyInfo, keyPassword);
+        let repaired = false;
+        try {
+          const storedPublicKey = parseRsaPublicJwk(keyInfo.public_key_jwk);
+          repaired = storedPublicKey.n !== unlockedKey.publicKeyJwk.n || storedPublicKey.e !== unlockedKey.publicKeyJwk.e;
+        } catch {
+          repaired = true;
+        }
+        if (repaired) {
+          await cryptoKeysApi.saveUserKey({
+            public_key_jwk: JSON.stringify(unlockedKey.publicKeyJwk),
+            encrypted_private_key_jwk: keyInfo.encrypted_private_key_jwk,
+            kdf_algorithm: keyInfo.kdf_algorithm || 'PBKDF2-SHA256',
+            kdf_params_json: keyInfo.kdf_params_json || null,
+            key_version: Number(keyInfo.key_version || 1),
+          });
+          await loadKeyInfo();
+        }
+        setUnlocked({
+          privateKey: unlockedKey.privateKey,
+          publicKeyJwk: unlockedKey.publicKeyJwk,
+          keyVersion: Number(keyInfo.key_version || 1),
+        });
+        message.success(repaired ? '安全密钥已解锁，损坏的公钥已自动修复' : '安全密钥已解锁');
       } else {
         const bundle = await createUserKeyBundle(keyPassword);
+        const keyVersion = keyInfo ? Number(keyInfo.key_version || 1) + 1 : 1;
         await cryptoKeysApi.saveUserKey({
           public_key_jwk: bundle.public_key_jwk,
           encrypted_private_key_jwk: bundle.encrypted_private_key_jwk,
           kdf_algorithm: 'PBKDF2-SHA256',
-          key_version: 1,
+          key_version: keyVersion,
         });
-        setUnlocked({ privateKey: bundle.privateKey, keyVersion: 1 });
+        setUnlocked({
+          privateKey: bundle.privateKey,
+          publicKeyJwk: bundle.publicKeyJwk,
+          keyVersion,
+        });
         await loadKeyInfo();
-        message.success('安全密钥已创建并解锁');
+        message.success(keyResetMode ? '安全密钥已重新设置并解锁' : '安全密钥已创建并解锁');
       }
       setKeyPassword('');
       setKeyPasswordConfirm('');
+      setKeyResetMode(false);
       setKeyModalOpen(false);
     } catch (error) {
       message.error(error.message || '安全密钥处理失败，请确认密码正确');
     } finally {
       setKeyBusy(false);
     }
+  };
+
+  const openKeyReset = () => {
+    Modal.confirm({
+      title: '确认重新设置安全密钥？',
+      content: '重新设置后，使用旧密钥加密且未重新授权的历史内容可能无法解密。仅在加密私钥确实损坏时使用。',
+      okText: '继续重置',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => {
+        setKeyResetMode(true);
+        setKeyPassword('');
+        setKeyPasswordConfirm('');
+        setKeyModalOpen(true);
+      },
+    });
   };
 
   const ensureUnlocked = () => {
@@ -468,7 +551,9 @@ export default function OperationalMeeting() {
     setSavingSectionId(section.id);
     try {
       const payload = normalizeQuestionBlocks(sectionDrafts[section.id] || section.default_blocks || { questions: section.default_questions });
-      const encrypted = await encryptPayloadForUsers(payload, authorizedUserIds);
+      const encrypted = await encryptPayloadForUsers(payload, authorizedUserIds, {
+        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
+      });
       await operationalMeetingsApi.updateSection(section.id, {
         content_ciphertext: encrypted.ciphertext,
         crypto_version: 'v2_client',
@@ -479,6 +564,9 @@ export default function OperationalMeeting() {
         message.success('填写块已提交');
       } else {
         message.success('填写块已保存');
+      }
+      if (encrypted.unavailable_user_ids.length) {
+        message.warning(`${encrypted.unavailable_user_ids.length} 位授权人的安全密钥尚未就绪，本次内容暂未向其加密授权`);
       }
       await loadMeetings();
       await loadDetail(section.meeting_id);
@@ -500,7 +588,9 @@ export default function OperationalMeeting() {
       }));
       const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, { sections });
       const agenda = result.agenda;
-      const encrypted = await encryptPayloadForUsers(agenda, authorizedUserIds);
+      const encrypted = await encryptPayloadForUsers(agenda, authorizedUserIds, {
+        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
+      });
       await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
         agenda_ciphertext: encrypted.ciphertext,
         crypto_version: 'v2_client',
@@ -526,7 +616,9 @@ export default function OperationalMeeting() {
     if (!detail?.meeting?.id || !ensureUnlocked()) return;
     setDecisionSaving(true);
     try {
-      const encrypted = await encryptPayloadForUsers({ text: decisionDraft || '' }, authorizedUserIds);
+      const encrypted = await encryptPayloadForUsers({ text: decisionDraft || '' }, authorizedUserIds, {
+        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
+      });
       await operationalMeetingsApi.saveDecision(detail.meeting.id, {
         decision_ciphertext: encrypted.ciphertext,
         crypto_version: 'v2_client',
@@ -732,11 +824,17 @@ export default function OperationalMeeting() {
           ) : (
             <Space direction="vertical" size={18} style={{ width: '100%' }}>
               <Alert
-                type={unlocked?.privateKey ? 'success' : 'info'}
+                type={!keyHealth.privateEnvelopeValid && keyInfo ? 'error' : (unlocked?.privateKey ? 'success' : 'info')}
                 showIcon
-                message={unlocked?.privateKey ? '安全密钥已解锁，当前内容在浏览器本地解密。' : '请先解锁安全密钥，才能查看或保存加密内容。'}
+                message={
+                  !keyHealth.privateEnvelopeValid && keyInfo
+                    ? '安全密钥数据不完整，需要重新设置后才能保存内容。'
+                    : (unlocked?.privateKey ? '安全密钥已解锁，当前内容在浏览器本地解密。' : '请先解锁安全密钥，才能查看或保存加密内容。')
+                }
                 action={!unlocked?.privateKey && (
-                  <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>
+                  !keyHealth.privateEnvelopeValid && keyInfo
+                    ? <Button size="small" danger onClick={openKeyReset}>重新设置</Button>
+                    : <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>
                 )}
               />
 
@@ -825,15 +923,16 @@ export default function OperationalMeeting() {
       </Modal>
 
       <Modal
-        title={keyInfo ? '解锁安全密钥' : '设置安全密码'}
+        title={keyInfo && !keyResetMode ? '解锁安全密钥' : '设置安全密码'}
         open={keyModalOpen}
         onCancel={() => {
           setKeyModalOpen(false);
           setKeyPassword('');
           setKeyPasswordConfirm('');
+          setKeyResetMode(false);
         }}
         onOk={handleKeyAction}
-        okText={keyInfo ? '解锁' : '创建'}
+        okText={keyInfo && !keyResetMode ? '解锁' : '创建'}
         cancelText="取消"
         confirmLoading={keyBusy}
         destroyOnClose
@@ -851,7 +950,7 @@ export default function OperationalMeeting() {
             placeholder="请输入安全密码，至少 8 位"
             autoComplete="new-password"
           />
-          {!keyInfo && (
+          {(!keyInfo || keyResetMode) && (
             <Input.Password
               value={keyPasswordConfirm}
               onChange={event => setKeyPasswordConfirm(event.target.value)}

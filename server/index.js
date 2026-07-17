@@ -20122,6 +20122,37 @@ function parseJsonSafe(value, fallback = null) {
   }
 }
 
+function parseOperationalRsaPublicJwk(value) {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+  if (
+    !parsed
+    || typeof parsed !== 'object'
+    || parsed.kty !== 'RSA'
+    || typeof parsed.n !== 'string'
+    || parsed.n.length < 300
+    || typeof parsed.e !== 'string'
+    || !parsed.e
+  ) {
+    throw new Error('RSA public key is incomplete');
+  }
+  return parsed;
+}
+
+function parseOperationalPrivateKeyEnvelope(value) {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+  if (
+    !parsed
+    || typeof parsed !== 'object'
+    || !parsed.salt
+    || !parsed.iv
+    || typeof parsed.data !== 'string'
+    || parsed.data.length < 512
+  ) {
+    throw new Error('Encrypted private key is incomplete');
+  }
+  return parsed;
+}
+
 function listOperationalMeetingAuthorizedUserIds(meetingId = null) {
   const rows = db.prepare(`
     SELECT user_id
@@ -20406,7 +20437,22 @@ app.get('/api/crypto/user-key', (req, res) => {
     FROM crypto_user_keys
     WHERE user_id = ?
   `).get(req.user.id);
-  res.json(row || null);
+  if (!row) return res.json(null);
+  let publicKeyValid = false;
+  let privateKeyEnvelopeValid = false;
+  try {
+    parseOperationalRsaPublicJwk(row.public_key_jwk);
+    publicKeyValid = true;
+  } catch {}
+  try {
+    parseOperationalPrivateKeyEnvelope(row.encrypted_private_key_jwk);
+    privateKeyEnvelopeValid = true;
+  } catch {}
+  res.json({
+    ...row,
+    public_key_valid: publicKeyValid ? 1 : 0,
+    private_key_envelope_valid: privateKeyEnvelopeValid ? 1 : 0,
+  });
 });
 
 app.put('/api/crypto/user-key', (req, res) => {
@@ -20414,10 +20460,10 @@ app.put('/api/crypto/user-key', (req, res) => {
   const encryptedPrivateKey = String(req.body?.encrypted_private_key_jwk || '').trim();
   if (!publicKey || !encryptedPrivateKey) return res.status(400).json({ error: '缺少公钥或加密私钥' });
   try {
-    JSON.parse(publicKey);
-    JSON.parse(encryptedPrivateKey);
+    parseOperationalRsaPublicJwk(publicKey);
+    parseOperationalPrivateKeyEnvelope(encryptedPrivateKey);
   } catch {
-    return res.status(400).json({ error: '密钥格式不正确' });
+    return res.status(400).json({ error: '密钥数据不完整，请重新生成后再保存' });
   }
   const keyVersion = Number(req.body?.key_version || 1);
   db.prepare(`
@@ -20457,7 +20503,14 @@ app.get('/api/crypto/public-keys', (req, res) => {
     WHERE status = 'active'
       AND user_id IN (${uniqueIds.map(() => '?').join(',')})
   `).all(...uniqueIds);
-  res.json(rows);
+  res.json(rows.filter(row => {
+    try {
+      parseOperationalRsaPublicJwk(row.public_key_jwk);
+      return true;
+    } catch {
+      return false;
+    }
+  }));
 });
 
 app.get('/api/admin/sensitive-modules', auth, systemAdminOnly, (req, res) => {
