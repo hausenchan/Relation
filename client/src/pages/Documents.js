@@ -3182,6 +3182,9 @@ export default function Documents() {
   const remoteDocumentSnapshotRef = useRef({});
   const selectedDocIdRef = useRef(null);
   const docTabStatesRef = useRef({});
+  const documentSelectionVersionRef = useRef(0);
+  const detailRequestIdsRef = useRef({});
+  const activeDetailLoadingRef = useRef(null);
   const lastSavedSignatureRef = useRef({});
   const documentSyncTimerRef = useRef(null);
   const liveSyncPendingDocIdsRef = useRef(new Set());
@@ -3637,20 +3640,45 @@ export default function Documents() {
     });
   };
 
+  const isActiveDocumentId = (docId) => (
+    getDocTabId(selectedDocIdRef.current) === getDocTabId(docId)
+  );
+
+  const setActiveDocumentId = (docId) => {
+    const normalizedId = getDocTabId(docId);
+    const nextDocId = Number.isFinite(normalizedId) && normalizedId > 0 ? normalizedId : null;
+    const documentChanged = getDocTabId(selectedDocIdRef.current) !== getDocTabId(nextDocId);
+    if (documentChanged) {
+      documentSelectionVersionRef.current += 1;
+      setSelectedDoc(null);
+      activeEditorSnapshotRef.current = null;
+      setEditorTitle('');
+      setEditorBlocks([createBlock()]);
+      setSelectedBlockId(null);
+      setHoveredBlockId(null);
+      setOpenBlockMenuId(null);
+      setTocOpen(true);
+      setRemoteUpdateHint('');
+      resetEditorUndoStack();
+    }
+    selectedDocIdRef.current = nextDocId;
+    activeDetailLoadingRef.current = null;
+    setDetailLoading(false);
+    setSelectedDocId(nextDocId);
+  };
+
+  const getValidDocTabState = (docId, states = docTabStatesRef.current) => {
+    const normalizedId = getDocTabId(docId);
+    const tabState = states?.[normalizedId];
+    return getDocTabId(tabState?.doc?.id) === normalizedId ? tabState : null;
+  };
+
   const clearActiveDocument = ({ keepQuery = false } = {}) => {
     if (selectedDocIdRef.current) {
       clearRemoteDocumentSnapshot(selectedDocIdRef.current);
     }
-    setSelectedDocId(null);
-    setSelectedDoc(null);
-    activeEditorSnapshotRef.current = null;
-    setEditorTitle('');
-    setEditorBlocks([createBlock()]);
-    setSelectedBlockId(null);
-    setHoveredBlockId(null);
-    setOpenBlockMenuId(null);
+    setActiveDocumentId(null);
     setMobileLibraryVisible(false);
-    setTocOpen(true);
     setMobileTocOpen(false);
     setPageMenuOpen(false);
     setMoveFolderOpen(false);
@@ -3661,30 +3689,36 @@ export default function Documents() {
       replaceDocumentLinkParam(null);
       setShareLinkError(null);
     }
-    resetEditorUndoStack();
   };
 
   const persistActiveDocTabState = () => {
     if (!selectedDoc?.id || !selectedDocId) return;
     const docId = getDocTabId(selectedDocId);
+    if (getDocTabId(selectedDoc.id) !== docId || !isActiveDocumentId(docId)) return;
     const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
-    setDocTabStates(prev => ({
-      ...prev,
-      [docId]: {
-        ...(prev[docId] || {}),
-        doc: docSnapshot,
-        editorTitle,
-        editorBlocks,
-        selectedBlockId,
-        tocOpen,
-      },
-    }));
+    setDocTabStates(prev => {
+      const previousState = getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {};
+      return {
+        ...prev,
+        [docId]: {
+          ...previousState,
+          doc: docSnapshot,
+          editorTitle,
+          editorBlocks,
+          selectedBlockId,
+          tocOpen,
+        },
+      };
+    });
     upsertDocTab(docSnapshot);
   };
 
-  const applyDocTabState = (tabState) => {
+  const applyDocTabState = (tabState, expectedDocId = null) => {
     const doc = tabState?.doc;
     if (!doc?.id) return false;
+    const docId = getDocTabId(doc.id);
+    const normalizedExpectedId = expectedDocId ? getDocTabId(expectedDocId) : docId;
+    if (docId !== normalizedExpectedId || !isActiveDocumentId(docId)) return false;
     const blocks = Array.isArray(tabState.editorBlocks) && tabState.editorBlocks.length
       ? tabState.editorBlocks
       : contentToBlocks(doc.content);
@@ -3726,10 +3760,11 @@ export default function Documents() {
 
   const getDocumentSummaryById = (id) => {
     const docId = getDocTabId(id);
+    const cachedDoc = getValidDocTabState(docId, docTabStates)?.doc;
     return documents.find(item => getDocTabId(item.id) === docId)
       || folderTreeDocuments.find(item => getDocTabId(item.id) === docId)
       || openDocTabs.find(item => getDocTabId(item.id) === docId)
-      || docTabStates[docId]?.doc;
+      || cachedDoc;
   };
 
   const focusBlock = (id, cursorPosition = null) => {
@@ -3796,17 +3831,39 @@ export default function Documents() {
   };
 
   const loadDetail = async (id, options = {}) => {
-    if (!id) return;
+    if (!id) return null;
     const docId = getDocTabId(id);
-    const cachedTabState = docTabStates[docId];
+    if (!Number.isFinite(docId) || docId <= 0) return null;
+    const requestId = Number(detailRequestIdsRef.current[docId] || 0) + 1;
+    detailRequestIdsRef.current[docId] = requestId;
+    const selectionVersion = documentSelectionVersionRef.current;
+    // Cache late responses by document, but only the current selection version may update the editor.
+    const isLatestRequest = () => detailRequestIdsRef.current[docId] === requestId;
+    const canApplyToActiveEditor = () => (
+      isLatestRequest()
+      && documentSelectionVersionRef.current === selectionVersion
+      && isActiveDocumentId(docId)
+    );
+    const cachedTabState = getValidDocTabState(docId, docTabStatesRef.current)
+      || getValidDocTabState(docId, docTabStates);
     const hasCachedPermissions = Object.prototype.hasOwnProperty.call(cachedTabState?.doc || {}, 'can_edit');
     if (!options.force && hasCachedPermissions && cachedTabState?.doc && Array.isArray(cachedTabState.editorBlocks)) {
-      applyDocTabState(cachedTabState);
-      return;
+      if (canApplyToActiveEditor()) {
+        activeDetailLoadingRef.current = null;
+        setDetailLoading(false);
+        applyDocTabState(cachedTabState, docId);
+      }
+      return cachedTabState.doc;
     }
-    setDetailLoading(true);
+    const loadingToken = { docId, requestId, selectionVersion };
+    if (canApplyToActiveEditor()) {
+      activeDetailLoadingRef.current = loadingToken;
+      setDetailLoading(true);
+    }
     try {
       const detail = await documentsApi.get(id);
+      if (getDocTabId(detail?.id) !== docId) throw new Error('文档详情与当前请求不匹配');
+      if (!isLatestRequest()) return detail;
       const blocks = contentToBlocks(detail.content);
       lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(detail.title || '', blocks);
       setRemoteDocumentSnapshot(docId, {
@@ -3823,8 +3880,12 @@ export default function Documents() {
         selectedBlockId: blocks[0]?.id || null,
         tocOpen: asSwitchValue(detail.toc_enabled, true),
       };
-      setDocTabStates(prev => ({ ...prev, [docId]: { ...(prev[docId] || {}), ...nextTabState } }));
+      setDocTabStates(prev => {
+        const previousState = getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {};
+        return { ...prev, [docId]: { ...previousState, ...nextTabState } };
+      });
       upsertDocTab(detail);
+      if (!canApplyToActiveEditor()) return detail;
       setSelectedDoc(detail);
       setEditorTitle(detail.title || '');
       setEditorBlocks(blocks);
@@ -3835,7 +3896,9 @@ export default function Documents() {
       setShareLinkError(null);
       setRemoteUpdateHint('');
       resetEditorUndoStack();
+      return detail;
     } catch (err) {
+      if (!isLatestRequest() || !canApplyToActiveEditor()) return null;
       const isDeepLinkTarget = Number(deepLinkedDocId) === Number(docId);
       setOpenDocTabs(prev => prev.filter(tab => getDocTabId(tab.id) !== docId));
       setDocTabStates(prev => {
@@ -3843,7 +3906,7 @@ export default function Documents() {
         delete next[docId];
         return next;
       });
-      if (getDocTabId(selectedDocId) === docId) clearActiveDocument({ keepQuery: isDeepLinkTarget });
+      if (isActiveDocumentId(docId)) clearActiveDocument({ keepQuery: isDeepLinkTarget });
       if (isDeepLinkTarget) {
         setShareLinkError({
           docId,
@@ -3854,8 +3917,12 @@ export default function Documents() {
       } else {
         message.error(err.response?.data?.error || err.message || '加载文档详情失败');
       }
+      return null;
     } finally {
-      setDetailLoading(false);
+      if (activeDetailLoadingRef.current === loadingToken) {
+        activeDetailLoadingRef.current = null;
+        setDetailLoading(false);
+      }
     }
   };
 
@@ -3871,24 +3938,36 @@ export default function Documents() {
     const docSummary = typeof docOrId === 'object' ? docOrId : getDocumentSummaryById(docId);
     if (docSummary?.id) {
       upsertDocTab(docSummary);
-      setDocTabStates(prev => ({
-        ...prev,
-        [docId]: {
-          ...(prev[docId] || {}),
-          doc: prev[docId]?.doc || docSummary,
-        },
-      }));
+      setDocTabStates(prev => {
+        const previousState = getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {};
+        return {
+          ...prev,
+          [docId]: {
+            ...previousState,
+            doc: previousState.doc || docSummary,
+          },
+        };
+      });
     }
-    if (getDocTabId(selectedDocId) !== docId) {
-      setSelectedDocId(docId);
-    } else if (!selectedDoc) {
-      loadDetail(docId);
+    if (!isActiveDocumentId(docId)) {
+      setActiveDocumentId(docId);
+      const cachedTabState = getValidDocTabState(docId, docTabStatesRef.current)
+        || getValidDocTabState(docId, docTabStates);
+      const hasCachedPermissions = Object.prototype.hasOwnProperty.call(cachedTabState?.doc || {}, 'can_edit');
+      if (hasCachedPermissions && Array.isArray(cachedTabState?.editorBlocks)) {
+        applyDocTabState(cachedTabState, docId);
+      }
+    } else if (!selectedDoc || getDocTabId(selectedDoc.id) !== docId) {
+      setSelectedDoc(null);
+      loadDetail(docId, { force: true });
     }
   };
 
   const refreshSelectedDocMeta = async () => {
     if (!selectedDoc?.id) return;
-    const detail = await documentsApi.get(selectedDoc.id);
+    const docId = getDocTabId(selectedDoc.id);
+    const detail = await documentsApi.get(docId);
+    if (getDocTabId(detail?.id) !== docId) return;
     const blocks = contentToBlocks(detail.content);
     setRemoteDocumentSnapshot(detail.id, {
       title: detail.title || '',
@@ -3897,13 +3976,17 @@ export default function Documents() {
       updated_by: detail.updated_by,
       updated_by_name: detail.updated_by_name,
     });
-    setSelectedDoc(prev => ({ ...prev, ...detail }));
+    if (isActiveDocumentId(docId)) {
+      setSelectedDoc(prev => (
+        getDocTabId(prev?.id) === docId ? { ...prev, ...detail } : prev
+      ));
+    }
     upsertDocTab(detail);
     setDocTabStates(prev => ({
       ...prev,
-      [getDocTabId(detail.id)]: {
-        ...(prev[getDocTabId(detail.id)] || {}),
-        doc: { ...(prev[getDocTabId(detail.id)]?.doc || {}), ...detail },
+      [docId]: {
+        ...(getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {}),
+        doc: { ...(getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId].doc : {}), ...detail },
       },
     }));
   };
@@ -4047,11 +4130,14 @@ export default function Documents() {
 
   useEffect(() => {
     const normalizedSelectedDocId = getDocTabId(selectedDocId);
-    if (normalizedSelectedDocId) loadDetail(normalizedSelectedDocId);
-  }, [selectedDocId]);
-
-  useEffect(() => {
-    selectedDocIdRef.current = getDocTabId(selectedDocId);
+    const nextDocId = Number.isFinite(normalizedSelectedDocId) && normalizedSelectedDocId > 0
+      ? normalizedSelectedDocId
+      : null;
+    if (getDocTabId(selectedDocIdRef.current) !== getDocTabId(nextDocId)) {
+      documentSelectionVersionRef.current += 1;
+      selectedDocIdRef.current = nextDocId;
+    }
+    if (nextDocId) loadDetail(nextDocId);
   }, [selectedDocId]);
 
   useEffect(() => {
@@ -4086,7 +4172,7 @@ export default function Documents() {
   useEffect(() => {
     if (!selectedDoc?.id || !selectedDocId) return;
     const docId = getDocTabId(selectedDocId);
-    if (getDocTabId(selectedDoc.id) !== docId) return;
+    if (getDocTabId(selectedDoc.id) !== docId || !isActiveDocumentId(docId)) return;
     const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
     const signature = getDocumentSaveSignature(editorTitle, editorBlocks);
     if (lastSavedSignatureRef.current[docId] && lastSavedSignatureRef.current[docId] !== signature) {
@@ -4325,7 +4411,8 @@ export default function Documents() {
       dirtyIds.forEach(docId => {
         const snapshot = selectedDocIdRef.current === docId
           ? activeEditorSnapshotRef.current
-          : docTabStatesRef.current[docId];
+          : getValidDocTabState(docId, docTabStatesRef.current);
+        if (getDocTabId(snapshot?.doc?.id) !== getDocTabId(docId)) return;
         saveSnapshotImmediately(snapshot);
       });
     };
@@ -4646,9 +4733,9 @@ export default function Documents() {
       const folderId = normalizeDocumentFolderSelectValue(values.folder_id) || null;
       if (editingPropertyDoc?.id) {
         setPropertySaving(true);
-        const isActiveDoc = getDocTabId(selectedDoc?.id) === getDocTabId(editingPropertyDoc.id);
+        const wasActiveDoc = isActiveDocumentId(editingPropertyDoc.id);
         const title = values.title || '未命名文档';
-        const blocks = isActiveDoc ? editorBlocks : contentToBlocks(editingPropertyDoc.content);
+        const blocks = wasActiveDoc ? editorBlocks : contentToBlocks(editingPropertyDoc.content);
         const payload = {
           ...buildDocumentSavePayload(title, blocks),
           ...values,
@@ -4661,20 +4748,29 @@ export default function Documents() {
         lastSavedSignatureRef.current[editingPropertyDoc.id] = getDocumentSaveSignature(payload.title, blocks);
         setCreateOpen(false);
         setEditingPropertyDoc(null);
-        if (isActiveDoc) {
-          setSelectedDoc(prev => ({ ...prev, ...updated }));
+        const isStillActiveDoc = isActiveDocumentId(updated.id);
+        if (isStillActiveDoc) {
+          setSelectedDoc(prev => (
+            getDocTabId(prev?.id) === getDocTabId(updated.id) ? { ...prev, ...updated } : prev
+          ));
           setEditorTitle(updated.title || title);
         }
         upsertDocTab(updated);
-        setDocTabStates(prev => ({
-          ...prev,
-          [getDocTabId(updated.id)]: {
-            ...(prev[getDocTabId(updated.id)] || {}),
-            doc: { ...(prev[getDocTabId(updated.id)]?.doc || {}), ...updated },
-            editorTitle: updated.title || title,
-            editorBlocks: isActiveDoc ? editorBlocks : blocks,
-          },
-        }));
+        const updatedDocId = getDocTabId(updated.id);
+        setDocTabStates(prev => {
+          const previousState = getDocTabId(prev[updatedDocId]?.doc?.id) === updatedDocId
+            ? prev[updatedDocId]
+            : {};
+          return {
+            ...prev,
+            [updatedDocId]: {
+              ...previousState,
+              doc: { ...(previousState.doc || {}), ...updated },
+              editorTitle: updated.title || title,
+              editorBlocks: blocks,
+            },
+          };
+        });
         await loadDocuments();
         await loadFolderTreeDocuments();
         message.success('文档属性已保存');
@@ -4700,8 +4796,11 @@ export default function Documents() {
   };
 
   const saveCurrentDocument = async ({ silent = false, force = false } = {}) => {
-    const snapshot = activeEditorSnapshotRef.current;
-    const doc = snapshot?.doc || selectedDoc;
+    const activeDocId = getDocTabId(selectedDocIdRef.current);
+    const snapshot = getDocTabId(activeEditorSnapshotRef.current?.doc?.id) === activeDocId
+      ? activeEditorSnapshotRef.current
+      : null;
+    const doc = snapshot?.doc || (getDocTabId(selectedDoc?.id) === activeDocId ? selectedDoc : null);
     if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot?.editorBlocks) ? snapshot.editorBlocks : editorBlocks;
     const title = snapshot?.editorTitle ?? editorTitle;
@@ -4726,22 +4825,26 @@ export default function Documents() {
         updated_by: updated.updated_by,
         updated_by_name: updated.updated_by_name,
       });
-      const isActiveDoc = getDocTabId(selectedDocId) === docId;
-      if (isActiveDoc) {
-        setSelectedDoc(prev => ({ ...prev, ...updated }));
+      if (isActiveDocumentId(docId)) {
+        setSelectedDoc(prev => (
+          getDocTabId(prev?.id) === docId ? { ...prev, ...updated } : prev
+        ));
         setRemoteUpdateHint('');
       }
       upsertDocTab(updated);
-      setDocTabStates(prev => ({
-        ...prev,
-        [docId]: {
-          ...(prev[docId] || {}),
-          doc: { ...(prev[docId]?.doc || {}), ...updated },
-        },
-      }));
+      setDocTabStates(prev => {
+        const previousState = getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {};
+        return {
+          ...prev,
+          [docId]: {
+            ...previousState,
+            doc: { ...(previousState.doc || {}), ...updated },
+          },
+        };
+      });
       setDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
-      if (!silent && getDocTabId(selectedDocId) === getDocTabId(doc.id)) {
+      if (!silent && isActiveDocumentId(doc.id)) {
         await loadDetail(doc.id, { force: true });
         await loadDocuments();
         await loadFolderTreeDocuments();
@@ -4779,19 +4882,23 @@ export default function Documents() {
       updated_by: updated.updated_by,
       updated_by_name: updated.updated_by_name,
     });
-    const isActiveDoc = getDocTabId(selectedDocId) === docId;
-    if (isActiveDoc) {
-      setSelectedDoc(prev => ({ ...prev, ...updated }));
+    if (isActiveDocumentId(docId)) {
+      setSelectedDoc(prev => (
+        getDocTabId(prev?.id) === docId ? { ...prev, ...updated } : prev
+      ));
       setRemoteUpdateHint('');
     }
     upsertDocTab(updated);
-    setDocTabStates(prev => ({
-      ...prev,
-      [docId]: {
-        ...(prev[docId] || {}),
-        doc: { ...(prev[docId]?.doc || {}), ...updated },
-      },
-    }));
+    setDocTabStates(prev => {
+      const previousState = getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {};
+      return {
+        ...prev,
+        [docId]: {
+          ...previousState,
+          doc: { ...(previousState.doc || {}), ...updated },
+        },
+      };
+    });
     setDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
     setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
   };
@@ -4840,19 +4947,23 @@ export default function Documents() {
         updated_by: updated.updated_by,
         updated_by_name: updated.updated_by_name,
       });
-      const isActiveDoc = getDocTabId(selectedDocId) === docId;
-      if (isActiveDoc) {
-        setSelectedDoc(prev => ({ ...prev, ...updated }));
+      if (isActiveDocumentId(docId)) {
+        setSelectedDoc(prev => (
+          getDocTabId(prev?.id) === docId ? { ...prev, ...updated } : prev
+        ));
         setRemoteUpdateHint('');
       }
       upsertDocTab(updated);
-      setDocTabStates(prev => ({
-        ...prev,
-        [docId]: {
-          ...(prev[docId] || {}),
-          doc: { ...(prev[docId]?.doc || {}), ...updated },
-        },
-      }));
+      setDocTabStates(prev => {
+        const previousState = getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {};
+        return {
+          ...prev,
+          [docId]: {
+            ...previousState,
+            doc: { ...(previousState.doc || {}), ...updated },
+          },
+        };
+      });
       setDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       return updated;
@@ -4872,8 +4983,11 @@ export default function Documents() {
     if (!dirtyIds.length) return [];
     const snapshots = dirtyIds
       .map(docId => {
-        if (selectedDocIdRef.current === docId) return activeEditorSnapshotRef.current;
-        return docTabStatesRef.current[docId];
+        if (
+          selectedDocIdRef.current === docId
+          && getDocTabId(activeEditorSnapshotRef.current?.doc?.id) === getDocTabId(docId)
+        ) return activeEditorSnapshotRef.current;
+        return getValidDocTabState(docId, docTabStatesRef.current);
       })
       .filter(Boolean);
     return Promise.all(snapshots.map(snapshot => saveDocumentSnapshot(snapshot).catch(() => null)));
@@ -4886,15 +5000,22 @@ export default function Documents() {
     if (!normalizedId || liveSyncPendingDocIdsRef.current.has(normalizedId)) return;
     const activeDocId = getDocTabId(selectedDocIdRef.current || selectedDocId);
     const isActiveDoc = activeDocId === normalizedId;
-    const localState = isActiveDoc
+    const activeSnapshot = getDocTabId(activeEditorSnapshotRef.current?.doc?.id) === normalizedId
+      ? activeEditorSnapshotRef.current
+      : null;
+    const activeSelectedDoc = getDocTabId(selectedDoc?.id) === normalizedId ? selectedDoc : null;
+    const activeState = (activeSnapshot || activeSelectedDoc)
       ? {
-          doc: activeEditorSnapshotRef.current?.doc || selectedDoc,
-          editorTitle: activeEditorSnapshotRef.current?.editorTitle ?? editorTitle,
-          editorBlocks: activeEditorSnapshotRef.current?.editorBlocks || editorBlocks,
+          doc: activeSnapshot?.doc || activeSelectedDoc,
+          editorTitle: activeSnapshot?.editorTitle ?? editorTitle,
+          editorBlocks: activeSnapshot?.editorBlocks || editorBlocks,
           selectedBlockId,
           tocOpen,
         }
-      : docTabStatesRef.current[normalizedId];
+      : null;
+    const localState = isActiveDoc
+      ? (activeState || getValidDocTabState(normalizedId, docTabStatesRef.current))
+      : getValidDocTabState(normalizedId, docTabStatesRef.current);
     const localDoc = localState?.doc;
     if (!localDoc?.id) return;
 
@@ -4971,22 +5092,27 @@ export default function Documents() {
         updated_by_name: remoteSnapshot.updated_by_name,
       });
 
-      setDocTabStates(prev => ({
-        ...prev,
-        [normalizedId]: {
-          ...(prev[normalizedId] || {}),
-          doc: mergedDoc,
-          editorTitle: nextTitle,
-          editorBlocks: nextBlocks,
-          selectedBlockId: prev[normalizedId]?.selectedBlockId ?? localState?.selectedBlockId ?? nextBlocks[0]?.id ?? null,
-          tocOpen: prev[normalizedId]?.tocOpen ?? localState?.tocOpen ?? asSwitchValue(mergedDoc.toc_enabled, true),
-        },
-      }));
+      setDocTabStates(prev => {
+        const previousState = getDocTabId(prev[normalizedId]?.doc?.id) === normalizedId
+          ? prev[normalizedId]
+          : {};
+        return {
+          ...prev,
+          [normalizedId]: {
+            ...previousState,
+            doc: mergedDoc,
+            editorTitle: nextTitle,
+            editorBlocks: nextBlocks,
+            selectedBlockId: previousState.selectedBlockId ?? localState?.selectedBlockId ?? nextBlocks[0]?.id ?? null,
+            tocOpen: previousState.tocOpen ?? localState?.tocOpen ?? asSwitchValue(mergedDoc.toc_enabled, true),
+          },
+        };
+      });
       upsertDocTab(mergedDoc);
       setDocuments(prev => prev.map(item => (getDocTabId(item.id) === normalizedId ? { ...item, ...mergedDoc } : item)));
       setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === normalizedId ? { ...item, ...mergedDoc } : item)));
 
-      if (isActiveDoc) {
+      if (isActiveDocumentId(normalizedId)) {
         setSelectedDoc(mergedDoc);
         setEditorTitle(nextTitle);
         setEditorBlocks(nextBlocks);
@@ -5012,15 +5138,15 @@ export default function Documents() {
 
   const getDocTabSnapshot = async (docId) => {
     const normalizedId = getDocTabId(docId);
-    if (getDocTabId(selectedDocId) === normalizedId && selectedDoc) {
+    if (isActiveDocumentId(normalizedId) && getDocTabId(selectedDoc?.id) === normalizedId) {
       return {
         doc: selectedDoc,
         editorTitle,
         editorBlocks,
       };
     }
-    const cached = docTabStates[normalizedId];
-    if (cached?.doc && Array.isArray(cached.editorBlocks)) {
+    const cached = getValidDocTabState(normalizedId, docTabStates);
+    if (cached && Array.isArray(cached.editorBlocks)) {
       return cached;
     }
     const detail = await documentsApi.get(normalizedId);
@@ -5033,15 +5159,16 @@ export default function Documents() {
 
   const getCachedDocTabSnapshot = (docId) => {
     const normalizedId = getDocTabId(docId);
-    if (getDocTabId(selectedDocId) === normalizedId && selectedDoc) {
+    if (isActiveDocumentId(normalizedId) && getDocTabId(selectedDoc?.id) === normalizedId) {
       return {
         doc: selectedDoc,
         editorTitle,
         editorBlocks,
       };
     }
-    const cached = docTabStatesRef.current[normalizedId] || docTabStates[normalizedId];
-    if (cached?.doc && Array.isArray(cached.editorBlocks)) return cached;
+    const cached = getValidDocTabState(normalizedId, docTabStatesRef.current)
+      || getValidDocTabState(normalizedId, docTabStates);
+    if (cached && Array.isArray(cached.editorBlocks)) return cached;
     return null;
   };
 
@@ -5072,12 +5199,12 @@ export default function Documents() {
       return next;
     });
 
-    if (getDocTabId(selectedDocId) !== normalizedId) return;
+    if (!isActiveDocumentId(normalizedId)) return;
     const nextActiveTab = nextTabs[closingIndex] || nextTabs[closingIndex - 1] || null;
     if (nextActiveTab) {
       const nextActiveDocId = getDocTabId(nextActiveTab.id);
       replaceDocumentLinkParam(nextActiveDocId);
-      setSelectedDocId(nextActiveDocId);
+      setActiveDocumentId(nextActiveDocId);
     } else {
       clearActiveDocument();
     }
@@ -5120,7 +5247,7 @@ export default function Documents() {
         return next;
       });
 
-      const activeDocId = getDocTabId(selectedDocId);
+      const activeDocId = getDocTabId(selectedDocIdRef.current);
       if (targetSet.has(activeDocId)) {
         const requestedNextActiveId = getDocTabId(options.nextActiveDocId);
         let nextActiveTab = null;
@@ -5135,7 +5262,7 @@ export default function Documents() {
         if (nextActiveTab?.id) {
           const nextActiveDocId = getDocTabId(nextActiveTab.id);
           replaceDocumentLinkParam(nextActiveDocId);
-          setSelectedDocId(nextActiveDocId);
+          setActiveDocumentId(nextActiveDocId);
         } else {
           clearActiveDocument();
         }
@@ -5208,6 +5335,7 @@ export default function Documents() {
 
   const savePageOptions = async (patch) => {
     if (!selectedDoc) return;
+    const docId = getDocTabId(selectedDoc.id);
     const payload = buildPageOptionsPayload(patch);
     if (Object.prototype.hasOwnProperty.call(patch, 'toc_enabled')) {
       setTocOpen(Boolean(patch.toc_enabled));
@@ -5215,8 +5343,12 @@ export default function Documents() {
     }
     setOptionsSaving(true);
     try {
-      await documentsApi.updatePageOptions(selectedDoc.id, payload);
-      setSelectedDoc(prev => ({ ...prev, ...payload }));
+      await documentsApi.updatePageOptions(docId, payload);
+      if (isActiveDocumentId(docId)) {
+        setSelectedDoc(prev => (
+          getDocTabId(prev?.id) === docId ? { ...prev, ...payload } : prev
+        ));
+      }
       message.success('页面选项已保存');
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '保存页面选项失败');
@@ -5227,16 +5359,21 @@ export default function Documents() {
 
   const openShare = async () => {
     if (!selectedDoc) return;
+    const docId = getDocTabId(selectedDoc.id);
     setShareOpen(true);
     setShareLoading(true);
     try {
       const [shares, accessSummary] = await Promise.all([
-        documentsApi.listShares(selectedDoc.id),
-        documentsApi.accessSummary(selectedDoc.id),
+        documentsApi.listShares(docId),
+        documentsApi.accessSummary(docId),
         loadShareOptions(),
       ]);
       setShareDraft(sharesToDraft(shares));
-      setSelectedDoc(prev => ({ ...prev, access_summary: accessSummary }));
+      if (isActiveDocumentId(docId)) {
+        setSelectedDoc(prev => (
+          getDocTabId(prev?.id) === docId ? { ...prev, access_summary: accessSummary } : prev
+        ));
+      }
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '加载共享范围失败');
     } finally {
@@ -5352,14 +5489,21 @@ export default function Documents() {
 
   const saveShares = async () => {
     if (!selectedDoc) return;
+    const docId = getDocTabId(selectedDoc.id);
     setShareSaving(true);
     try {
-      const data = await documentsApi.saveShares(selectedDoc.id, draftToShares(shareDraft));
-      setSelectedDoc(prev => ({
-        ...prev,
-        shares: data.shares,
-        access_summary: data.access_summary,
-      }));
+      const data = await documentsApi.saveShares(docId, draftToShares(shareDraft));
+      if (isActiveDocumentId(docId)) {
+        setSelectedDoc(prev => (
+          getDocTabId(prev?.id) === docId
+            ? {
+                ...prev,
+                shares: data.shares,
+                access_summary: data.access_summary,
+              }
+            : prev
+        ));
+      }
       await loadDocuments();
       await loadFolderTreeDocuments();
       setShareOpen(false);
