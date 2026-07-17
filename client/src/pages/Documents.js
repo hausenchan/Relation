@@ -292,6 +292,7 @@ const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, it
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
+const defaultDocumentIconFormValue = '__default_document_icon__';
 const documentIconOptions = [
   { value: 'star', label: '重点', symbol: '★' },
   { value: 'pin', label: '置顶', symbol: '📌' },
@@ -315,6 +316,11 @@ const documentIconOptions = [
   { value: 'trophy', label: '成果', symbol: '🏆' },
 ];
 const documentIconMap = Object.fromEntries(documentIconOptions.map(item => [item.value, item]));
+
+function normalizeDocumentIconFormValue(value) {
+  return value === defaultDocumentIconFormValue ? null : (value || null);
+}
+
 const primaryDocumentSpaceDomains = ['domestic_project', 'overseas_project'];
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
 const blockTypeMap = Object.fromEntries(blockTypeOptions.map(item => [item.value, item]));
@@ -4571,7 +4577,7 @@ export default function Documents() {
     createForm.resetFields();
     createForm.setFieldsValue({
       title: '新页面',
-      icon_key: undefined,
+      icon_key: defaultDocumentIconFormValue,
       ...folderDefaults,
     });
     setCreateOpen(true);
@@ -4776,7 +4782,7 @@ export default function Documents() {
         department_key: doc.department_key || 'ALL',
         folder_id: normalizeDocumentFolderSelectValue(doc.folder_id),
         doc_type: doc.doc_type || 'TMP',
-        icon_key: doc.icon_key || undefined,
+        icon_key: doc.icon_key || defaultDocumentIconFormValue,
       });
       setEditingPropertyDoc(doc);
       setCreateOpen(true);
@@ -4801,6 +4807,7 @@ export default function Documents() {
           project_group_id: values.project_group_id || null,
           folder_id: folderId,
           current_version: editingPropertyDoc.current_version || 'V1.0',
+          icon_key: normalizeDocumentIconFormValue(values.icon_key),
         };
         const updated = await documentsApi.update(editingPropertyDoc.id, payload);
         lastSavedSignatureRef.current[editingPropertyDoc.id] = getDocumentSaveSignature(payload.title, blocks);
@@ -4839,6 +4846,7 @@ export default function Documents() {
         project_group_id: values.project_group_id || null,
         folder_id: folderId,
         content: { blocks: [] },
+        icon_key: normalizeDocumentIconFormValue(values.icon_key),
         content_text: '',
       });
       message.success(`已创建 ${doc.document_no}`);
@@ -15112,10 +15120,21 @@ export default function Documents() {
             <Select
               allowClear
               placeholder="默认文档图标"
-              options={documentIconOptions.map(option => ({
-                value: option.value,
-                label: `${option.symbol} ${option.label}`,
-              }))}
+              options={[
+                {
+                  value: defaultDocumentIconFormValue,
+                  label: (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <FileTextOutlined />
+                      <span>默认文档图标</span>
+                    </span>
+                  ),
+                },
+                ...documentIconOptions.map(option => ({
+                  value: option.value,
+                  label: `${option.symbol} ${option.label}`,
+                })),
+              ]}
             />
           </Form.Item>
           <Form.Item name="domain" label="归属域" rules={[{ required: true, message: '请选择归属域' }]}>
