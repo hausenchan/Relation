@@ -1180,9 +1180,25 @@ function plainTextToBlocks(text) {
 const inlineHtmlAllowedTags = ['strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del', 'code', 'span', 'mark', 'a', 'br'];
 const inlineHtmlAllowedAttrs = ['style', 'href', 'target', 'rel'];
 
+function normalizeLegacyInlineHtml(value) {
+  const raw = String(value || '');
+  if (!raw || typeof document === 'undefined' || !/<font\b/i.test(raw)) return raw;
+  const template = document.createElement('template');
+  template.innerHTML = raw;
+  template.content.querySelectorAll('font').forEach(font => {
+    const face = String(font.getAttribute('face') || font.style?.fontFamily || '').toLowerCase();
+    const color = normalizeCssColor(font.getAttribute('color') || font.style?.color || '');
+    const wrapper = document.createElement(/mono|consolas|courier|menlo|monaco/.test(face) ? 'code' : 'span');
+    if (color) wrapper.setAttribute('style', `color: ${color};`);
+    while (font.firstChild) wrapper.appendChild(font.firstChild);
+    font.replaceWith(wrapper);
+  });
+  return template.innerHTML;
+}
+
 function sanitizeInlineHtml(value) {
   if (!value) return '';
-  return DOMPurify.sanitize(String(value), {
+  return DOMPurify.sanitize(normalizeLegacyInlineHtml(value), {
     ALLOWED_TAGS: inlineHtmlAllowedTags,
     ALLOWED_ATTR: inlineHtmlAllowedAttrs,
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'img', 'video', 'audio'],
@@ -9084,6 +9100,103 @@ export default function Documents() {
     color: ['<mark>', '</mark>'],
   }[kind] || ['', '']);
 
+  const persistContentEditableInlineChange = (selection, editor) => {
+    if (!selection?.blockId || !editor?.isContentEditable) return false;
+    const nextHtml = sanitizeInlineHtml(editor.innerHTML);
+    const block = editorBlocks.find(item => item.id === selection.blockId);
+    if (selection.tableCell) {
+      const changed = updateTableCellInlineContent(selection.blockId, selection.tableCell, nextHtml);
+      if (block) handleTableCellTextSelection(block, selection.tableCell, { target: editor });
+      return changed;
+    }
+    updateBlock(selection.blockId, { content: nextHtml });
+    if (block) handleInlineTextSelection(block, { target: editor });
+    return true;
+  };
+
+  const getRestoredContentEditableRange = (selection, editor) => {
+    if (!selection?.blockId || !editor?.isContentEditable || typeof window === 'undefined') return null;
+    editor.focus();
+    if (!setContentEditableSelectionRange(editor, selection.start, selection.end)) return null;
+    const currentSelection = window.getSelection?.();
+    if (!currentSelection?.rangeCount) return null;
+    const range = currentSelection.getRangeAt(0);
+    if (range.collapsed || !editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return null;
+    return { range, currentSelection };
+  };
+
+  const applyContentEditableInlineNode = (selection, editor, createNode) => {
+    const restored = getRestoredContentEditableRange(selection, editor);
+    if (!restored) return false;
+    const { range, currentSelection } = restored;
+    const wrapper = createNode();
+    if (!wrapper) return false;
+    const fragment = range.extractContents();
+    wrapper.appendChild(fragment);
+    range.insertNode(wrapper);
+    const nextRange = document.createRange();
+    nextRange.selectNodeContents(wrapper);
+    currentSelection.removeAllRanges();
+    currentSelection.addRange(nextRange);
+    persistContentEditableInlineChange(selection, editor);
+    return true;
+  };
+
+  const applyContentEditableInlineText = (selection, editor, text, selectStartOffset = 0, selectEndOffset = 0) => {
+    const restored = getRestoredContentEditableRange(selection, editor);
+    if (!restored) return false;
+    const { range, currentSelection } = restored;
+    const node = document.createTextNode(text);
+    range.deleteContents();
+    range.insertNode(node);
+    const nextRange = document.createRange();
+    const startOffset = Math.max(0, Math.min(node.textContent.length, selectStartOffset));
+    const endOffset = Math.max(startOffset, Math.min(node.textContent.length, node.textContent.length - selectEndOffset));
+    nextRange.setStart(node, startOffset);
+    nextRange.setEnd(node, endOffset);
+    currentSelection.removeAllRanges();
+    currentSelection.addRange(nextRange);
+    persistContentEditableInlineChange(selection, editor);
+    return true;
+  };
+
+  const applyContentEditableInlineStyle = (selection, editor, kind) => {
+    const selected = selection?.text || '';
+    if (!selected) return false;
+    if (kind === 'link') {
+      const url = window.prompt('请输入链接地址', 'https://');
+      if (!url) return true;
+      return applyContentEditableInlineNode(selection, editor, () => {
+        const node = document.createElement('a');
+        node.href = url;
+        node.target = '_blank';
+        node.rel = 'noreferrer';
+        return node;
+      });
+    }
+    if (kind === 'formula') {
+      return applyContentEditableInlineText(selection, editor, `$${selected}$`, 1, 1);
+    }
+    const tagMap = {
+      bold: 'strong',
+      italic: 'em',
+      underline: 'u',
+      strike: 's',
+      code: 'code',
+    };
+    const tag = tagMap[kind];
+    if (!tag) return false;
+    return applyContentEditableInlineNode(selection, editor, () => document.createElement(tag));
+  };
+
+  const applyInlineTextColorFallback = (selection, color) => {
+    const selected = selection?.text || '';
+    if (!selected) return false;
+    const safeColor = normalizeCssColor(color);
+    if (!safeColor) return false;
+    return applyInlineTextReplace(selection, `<span style="color: ${safeColor};">${escapeHtml(selected)}</span>`, 0);
+  };
+
   const applyInlineTextUnwrap = (selection, prefix, suffix) => {
     if (!selection?.blockId || (!prefix && !suffix)) return false;
     const block = editorBlocks.find(item => item.id === selection.blockId);
@@ -9131,34 +9244,7 @@ export default function Documents() {
     if (!selection) return;
     const editor = document.getElementById(getInlineSelectionElementId(selection));
     if (editor?.isContentEditable) {
-      editor.focus();
-      const commandMap = {
-        bold: 'bold',
-        italic: 'italic',
-        underline: 'underline',
-        strike: 'strikeThrough',
-        code: 'formatBlock',
-        formula: 'insertText',
-      };
-      if (kind === 'link') {
-        const url = window.prompt('请输入链接地址', 'https://');
-        if (!url) return;
-        document.execCommand('createLink', false, url);
-      } else if (kind === 'code') {
-        document.execCommand('fontName', false, 'monospace');
-      } else if (kind === 'formula') {
-        document.execCommand('insertText', false, `$${selection.text || ''}$`);
-      } else if (commandMap[kind]) {
-        document.execCommand(commandMap[kind], false, null);
-      }
-      const block = editorBlocks.find(item => item.id === selection.blockId);
-      if (selection.tableCell) {
-        updateTableCellInlineContent(selection.blockId, selection.tableCell, sanitizeInlineHtml(editor.innerHTML));
-        if (block) handleTableCellTextSelection(block, selection.tableCell, { target: editor });
-      } else {
-        updateBlock(selection.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
-        if (block) handleInlineTextSelection(block, { target: editor });
-      }
+      applyContentEditableInlineStyle(selection, editor, kind);
       return;
     }
     const selected = selection.text || '';
@@ -9178,19 +9264,17 @@ export default function Documents() {
     if (!inlineToolbar?.blockId || !color) return;
     const editor = document.getElementById(getInlineSelectionElementId(inlineToolbar));
     if (editor?.isContentEditable) {
-      editor.focus();
-      document.execCommand('foreColor', false, color);
-      const block = editorBlocks.find(item => item.id === inlineToolbar.blockId);
-      if (inlineToolbar.tableCell) {
-        updateTableCellInlineContent(inlineToolbar.blockId, inlineToolbar.tableCell, sanitizeInlineHtml(editor.innerHTML));
-        if (block) handleTableCellTextSelection(block, inlineToolbar.tableCell, { target: editor });
-      } else {
-        updateBlock(inlineToolbar.blockId, { content: sanitizeInlineHtml(editor.innerHTML) });
-        if (block) handleInlineTextSelection(block, { target: editor });
+      const safeColor = normalizeCssColor(color);
+      if (safeColor) {
+        applyContentEditableInlineNode(inlineToolbar, editor, () => {
+          const node = document.createElement('span');
+          node.setAttribute('style', `color: ${safeColor};`);
+          return node;
+        });
       }
       return;
     }
-    applyInlineWrap('color');
+    applyInlineTextColorFallback(inlineToolbar, color);
   };
 
   const openInlineCommentComposer = () => {
