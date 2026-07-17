@@ -3353,6 +3353,7 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/documents\/(\d+)$/, businessType: '文档中心', table: 'documents', idGroup: 1 },
   { pattern: /^\/documents\/(\d+)\/content$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存文档内容' },
   { pattern: /^\/documents\/(\d+)\/page-options$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存页面选项' },
+  { pattern: /^\/documents\/bulk-shares$/, businessType: '文档共享', table: 'document_shares', action: '批量追加共享范围' },
   { pattern: /^\/documents\/(\d+)\/shares$/, businessType: '文档共享', table: 'document_shares', idGroup: 1, action: '保存共享范围' },
   { pattern: /^\/documents\/(\d+)\/attachments$/, businessType: '文档附件', table: 'document_attachments', responseId: true, action: '上传附件' },
   { pattern: /^\/documents\/(\d+)\/blocks\/([^/]+)\/comments$/, businessType: '文档块评论', table: 'document_block_comments', responseId: true, action: '新增块评论' },
@@ -6785,6 +6786,10 @@ function normalizeDocumentShares(shares) {
   return rows;
 }
 
+function getDocumentShareKey(share) {
+  return `${share.target_type}:${share.target_id || ''}:${share.target_key || ''}`;
+}
+
 function replaceDocumentShares(documentId, shares, userId) {
   const normalized = normalizeDocumentShares(shares);
   db.prepare('DELETE FROM document_shares WHERE document_id = ?').run(documentId);
@@ -6794,6 +6799,29 @@ function replaceDocumentShares(documentId, shares, userId) {
   `);
   normalized.forEach(share => insert.run(documentId, share.target_type, share.target_id, share.target_key, userId));
   return normalized;
+}
+
+function addDocumentShares(documentId, shares, userId) {
+  const normalized = normalizeDocumentShares(shares);
+  const existing = db.prepare(`
+    SELECT target_type, target_id, target_key
+    FROM document_shares
+    WHERE document_id = ?
+  `).all(documentId);
+  const existingKeys = new Set(existing.map(getDocumentShareKey));
+  const insert = db.prepare(`
+    INSERT INTO document_shares (document_id, target_type, target_id, target_key, created_by)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  let added = 0;
+  normalized.forEach(share => {
+    const key = getDocumentShareKey(share);
+    if (existingKeys.has(key)) return;
+    insert.run(documentId, share.target_type, share.target_id, share.target_key, userId);
+    existingKeys.add(key);
+    added += 1;
+  });
+  return { requested: normalized.length, added };
 }
 
 function getDocumentShares(documentId) {
@@ -8178,6 +8206,53 @@ app.delete('/api/documents/:id', canWrite, (req, res) => {
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以删除文档' });
   db.prepare('UPDATE documents SET is_deleted = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.user.id, doc.id);
   res.json({ success: true });
+});
+
+app.post('/api/documents/bulk-shares', canWrite, (req, res) => {
+  const documentIds = Array.from(new Set(
+    (Array.isArray(req.body.document_ids) ? req.body.document_ids : [])
+      .map(id => Number(id))
+      .filter(id => Number.isInteger(id) && id > 0)
+  ));
+  if (!documentIds.length) return res.status(400).json({ error: '请选择要批量共享的文档' });
+  if (documentIds.length > 200) return res.status(400).json({ error: '单次最多支持批量处理 200 篇文档' });
+  const shares = normalizeDocumentShares(req.body.shares || []);
+  if (!shares.length) return res.status(400).json({ error: '请选择要追加的共享对象' });
+
+  const docs = [];
+  const errors = [];
+  documentIds.forEach(id => {
+    const doc = getVisibleDocument(id, req.user);
+    if (!doc) {
+      errors.push({ id, reason: '文档不存在或无权限访问' });
+      return;
+    }
+    if (!canEditDocument(req.user, doc)) {
+      errors.push({ id, title: doc.title, reason: '无权限调整共享范围' });
+      return;
+    }
+    docs.push(doc);
+  });
+  if (!docs.length) return res.status(403).json({ error: '没有可调整共享范围的文档', errors });
+
+  let addedCount = 0;
+  const results = [];
+  const addShares = db.transaction((rows) => {
+    rows.forEach(doc => {
+      const result = addDocumentShares(doc.id, shares, req.user.id);
+      addedCount += result.added;
+      results.push({ id: doc.id, title: doc.title, added: result.added });
+    });
+  });
+  addShares(docs);
+  res.json({
+    success: true,
+    success_count: docs.length,
+    failed_count: errors.length,
+    added_count: addedCount,
+    results,
+    errors,
+  });
 });
 
 app.get('/api/documents/:id/shares', (req, res) => {

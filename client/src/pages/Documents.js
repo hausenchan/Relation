@@ -2483,6 +2483,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
     documentId: doc.id,
     folderId: folder.id,
     document: doc,
+    disableCheckbox: !Number(doc.can_edit || 0),
   }));
   const children = [...childFolders, ...documentChildren];
   return {
@@ -2496,6 +2497,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder) {
     canAddChild: Boolean(Number(folder.can_add_child || 0)),
     canEditFolder: Boolean(Number(folder.can_edit_folder || 0)),
     canDeleteFolder: Boolean(Number(folder.can_delete_folder || 0)),
+    disableCheckbox: true,
     ...(children.length ? { children } : {}),
   };
 }
@@ -2535,6 +2537,7 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
         key: `domain-${domainKey}`,
         nodeType: 'domain',
         selectable: false,
+        disableCheckbox: true,
         children: [],
       });
     }
@@ -2548,6 +2551,7 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = []) {
         key: `domain-${domainKey}`,
         nodeType: 'domain',
         selectable: false,
+        disableCheckbox: true,
         children: [],
       });
     }
@@ -3086,6 +3090,12 @@ export default function Documents() {
   const [shareLoading, setShareLoading] = useState(false);
   const [shareSaving, setShareSaving] = useState(false);
   const [shareDraft, setShareDraft] = useState(emptyShareDraft());
+  const [bulkShareMode, setBulkShareMode] = useState(false);
+  const [bulkSelectedDocIds, setBulkSelectedDocIds] = useState([]);
+  const [bulkShareOpen, setBulkShareOpen] = useState(false);
+  const [bulkShareDraft, setBulkShareDraft] = useState(emptyShareDraft());
+  const [bulkShareLoading, setBulkShareLoading] = useState(false);
+  const [bulkShareSaving, setBulkShareSaving] = useState(false);
   const [changeLogOpen, setChangeLogOpen] = useState(false);
   const [activeChangeLogTab, setActiveChangeLogTab] = useState('version');
   const [changeLogSaving, setChangeLogSaving] = useState(false);
@@ -3428,6 +3438,14 @@ export default function Documents() {
     if (selectedTreeDoc) return [`document-${selectedDocId}`];
     return selectedFolderId ? [`folder-${selectedFolderId}`] : [];
   }, [folderTreeDocuments, selectedDocId, selectedFolderId]);
+  const bulkSelectedDocIdSet = useMemo(
+    () => new Set(bulkSelectedDocIds.map(id => Number(id)).filter(Boolean)),
+    [bulkSelectedDocIds]
+  );
+  const bulkCheckedTreeKeys = useMemo(
+    () => bulkSelectedDocIds.map(id => `document-${id}`),
+    [bulkSelectedDocIds]
+  );
   const headingMeta = useMemo(
     () => buildHeadingMeta(editorBlocks, asSwitchValue(selectedDoc?.title_numbering_enabled)),
     [editorBlocks, selectedDoc?.title_numbering_enabled]
@@ -4152,7 +4170,7 @@ export default function Documents() {
 
   useEffect(() => {
     const handleUndoKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const key = String(event.key || '').toLowerCase();
       if (key !== 'z' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
@@ -4160,11 +4178,11 @@ export default function Documents() {
     };
     window.addEventListener('keydown', handleUndoKeyDown);
     return () => window.removeEventListener('keydown', handleUndoKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
 
   useEffect(() => {
     const handleSaveKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const key = String(event.key || '').toLowerCase();
       if (key !== 's' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
@@ -4172,11 +4190,11 @@ export default function Documents() {
     };
     window.addEventListener('keydown', handleSaveKeyDown);
     return () => window.removeEventListener('keydown', handleSaveKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
 
   useEffect(() => {
     const handleDocumentCopy = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const activeElement = document.activeElement;
       const activeTextSelection = activeElement?.closest?.('textarea, input, [contenteditable="true"]')
         && window.getSelection?.()?.toString?.();
@@ -4195,6 +4213,7 @@ export default function Documents() {
     createOpen,
     templateOpen,
     shareOpen,
+    bulkShareOpen,
     changeLogOpen,
     moveFolderOpen,
     editorBlocks,
@@ -5206,6 +5225,112 @@ export default function Documents() {
       message.error(err.response?.data?.error || err.message || '加载共享范围失败');
     } finally {
       setShareLoading(false);
+    }
+  };
+
+  const toggleBulkShareMode = () => {
+    if (bulkShareMode) {
+      setBulkShareMode(false);
+      setBulkSelectedDocIds([]);
+      return;
+    }
+    setBulkShareMode(true);
+  };
+
+  const toggleBulkDocumentSelection = (doc, checked) => {
+    const docId = Number(doc?.id);
+    if (!docId) return;
+    if (!Number(doc?.can_edit || 0)) {
+      message.warning('只有可编辑的文档可以批量添加共享人');
+      return;
+    }
+    setBulkSelectedDocIds(prev => {
+      const current = new Set(prev.map(id => Number(id)));
+      if (checked) current.add(docId);
+      else current.delete(docId);
+      return Array.from(current);
+    });
+  };
+
+  const handleBulkTreeCheck = (checkedInfo) => {
+    const checkedKeys = Array.isArray(checkedInfo) ? checkedInfo : (checkedInfo?.checked || []);
+    const visibleTreeDocIds = new Set(folderTreeDocuments.map(doc => Number(doc.id)).filter(Boolean));
+    const checkedDocIds = checkedKeys
+      .map(key => String(key || ''))
+      .filter(key => key.startsWith('document-'))
+      .map(key => Number(key.replace('document-', '')))
+      .filter(id => visibleTreeDocIds.has(id));
+    setBulkSelectedDocIds(prev => {
+      const next = prev.map(id => Number(id)).filter(id => !visibleTreeDocIds.has(id));
+      checkedDocIds.forEach(id => {
+        if (!next.includes(id)) next.push(id);
+      });
+      return next;
+    });
+  };
+
+  const selectVisibleBulkDocuments = () => {
+    const visibleEditableIds = folderTreeDocuments
+      .filter(doc => Number(doc.can_edit || 0))
+      .map(doc => Number(doc.id))
+      .filter(Boolean);
+    if (!visibleEditableIds.length) {
+      message.warning('当前筛选范围没有可批量共享的文档');
+      return;
+    }
+    setBulkSelectedDocIds(prev => Array.from(new Set([
+      ...prev.map(id => Number(id)).filter(Boolean),
+      ...visibleEditableIds,
+    ])));
+  };
+
+  const openBulkShare = async () => {
+    if (!bulkSelectedDocIds.length) {
+      message.warning('请先勾选要批量共享的文档');
+      return;
+    }
+    setBulkShareDraft(emptyShareDraft());
+    setBulkShareOpen(true);
+    setBulkShareLoading(true);
+    try {
+      await loadShareOptions();
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '加载共享选项失败');
+    } finally {
+      setBulkShareLoading(false);
+    }
+  };
+
+  const saveBulkShares = async () => {
+    const shares = draftToShares(bulkShareDraft);
+    if (!bulkSelectedDocIds.length) {
+      message.warning('请先勾选要批量共享的文档');
+      return;
+    }
+    if (!shares.length) {
+      message.warning('请选择要追加的共享对象');
+      return;
+    }
+    setBulkShareSaving(true);
+    try {
+      const data = await documentsApi.addBulkShares(bulkSelectedDocIds, shares);
+      await loadDocuments();
+      await loadFolderTreeDocuments();
+      if (selectedDoc?.id && bulkSelectedDocIdSet.has(Number(selectedDoc.id))) {
+        await loadDetail(selectedDoc.id, { force: true });
+      }
+      setBulkShareOpen(false);
+      setBulkSelectedDocIds([]);
+      const failedCount = Number(data.failed_count || 0);
+      if (failedCount > 0) {
+        message.warning(`已为 ${data.success_count || 0} 篇文档追加共享权限，${failedCount} 篇失败`);
+      } else {
+        message.success(`已为 ${data.success_count || 0} 篇文档追加共享权限`);
+      }
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '批量共享失败');
+    } finally {
+      setBulkShareSaving(false);
     }
   };
 
@@ -7467,7 +7592,7 @@ export default function Documents() {
 
   useEffect(() => {
     const handleSelectionDeleteKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       if (!['Delete', 'Backspace'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
       if (hasActiveNativeTextSelection()) return;
       const selectedBlockIds = getDeleteTargetBlockIds();
@@ -7481,7 +7606,7 @@ export default function Documents() {
     };
     window.addEventListener('keydown', handleSelectionDeleteKeyDown);
     return () => window.removeEventListener('keydown', handleSelectionDeleteKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, changeLogOpen, moveFolderOpen, editorBlocks, editorTitle, selectedBlockId, selectedAreaBlockIds, selectedTableCell]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen, editorBlocks, editorTitle, selectedBlockId, selectedAreaBlockIds, selectedTableCell]);
 
   const scrollToBlock = (id) => {
     setSelectedBlockId(id);
@@ -7812,58 +7937,83 @@ export default function Documents() {
     );
   };
 
-  const renderDocItem = (item) => (
-    <List.Item
-      key={item.id}
-      onClick={() => openDocumentTab(item)}
-      onContextMenu={event => openDocContextMenu(event, item)}
-      style={{
-        cursor: 'pointer',
-        padding: isMobile ? '9px 10px' : '7px 8px',
-        borderRadius: 7,
-        background: getDocTabId(selectedDocId) === getDocTabId(item.id) ? '#eef2ff' : 'transparent',
-        border: getDocTabId(selectedDocId) === getDocTabId(item.id) ? '1px solid #c7d2fe' : '1px solid transparent',
-        marginBottom: isMobile ? 4 : 3,
-      }}
-      actions={[
-        <Button
-          key="favorite"
-          type="text"
-          size="small"
-          icon={item.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
-          onClick={(event) => {
-            event.stopPropagation();
-            toggleFavorite(item);
-          }}
-        />,
-      ]}
-    >
-      <List.Item.Meta
-        avatar={renderDocumentInlineIcon(item, { marginTop: 2 })}
-        title={
-          <Space size={6} style={{ maxWidth: '100%', overflow: 'hidden', lineHeight: 1.25, whiteSpace: 'nowrap' }}>
-            <Text
-              strong
-              ellipsis={{ tooltip: item.title }}
-              style={{
-                maxWidth: isMobile ? 'calc(100vw - 164px)' : Math.max(150, folderSidebarWidth - 188),
-                lineHeight: '20px',
-              }}
-            >
-              {item.title}
+  const renderDocItem = (item) => {
+    const docId = getDocTabId(item.id);
+    const bulkSelected = bulkSelectedDocIdSet.has(docId);
+    const bulkDisabled = !Number(item.can_edit || 0);
+    return (
+      <List.Item
+        key={item.id}
+        onClick={() => {
+          if (bulkShareMode) {
+            toggleBulkDocumentSelection(item, !bulkSelected);
+            return;
+          }
+          openDocumentTab(item);
+        }}
+        onContextMenu={event => openDocContextMenu(event, item)}
+        style={{
+          cursor: bulkShareMode && bulkDisabled ? 'not-allowed' : 'pointer',
+          padding: isMobile ? '9px 10px' : '7px 8px',
+          borderRadius: 7,
+          background: bulkSelected ? '#ecfeff' : (getDocTabId(selectedDocId) === docId ? '#eef2ff' : 'transparent'),
+          border: bulkSelected ? '1px solid #67e8f9' : (getDocTabId(selectedDocId) === docId ? '1px solid #c7d2fe' : '1px solid transparent'),
+          marginBottom: isMobile ? 4 : 3,
+          opacity: bulkShareMode && bulkDisabled ? 0.58 : 1,
+        }}
+        actions={bulkShareMode ? [] : [
+          <Button
+            key="favorite"
+            type="text"
+            size="small"
+            icon={item.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleFavorite(item);
+            }}
+          />,
+        ]}
+      >
+        <List.Item.Meta
+          avatar={(
+            <Space size={6} align="start">
+              {bulkShareMode && (
+                <Checkbox
+                  checked={bulkSelected}
+                  disabled={bulkDisabled}
+                  onClick={event => event.stopPropagation()}
+                  onChange={event => toggleBulkDocumentSelection(item, event.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+              )}
+              {renderDocumentInlineIcon(item, { marginTop: 2 })}
+            </Space>
+          )}
+          title={
+            <Space size={6} style={{ maxWidth: '100%', overflow: 'hidden', lineHeight: 1.25, whiteSpace: 'nowrap' }}>
+              <Text
+                strong
+                ellipsis={{ tooltip: item.title }}
+                style={{
+                  maxWidth: isMobile ? 'calc(100vw - 164px)' : Math.max(150, folderSidebarWidth - (bulkShareMode ? 214 : 188)),
+                  lineHeight: '20px',
+                }}
+              >
+                {item.title}
+              </Text>
+              {item.pinned_at && <Tag color="gold" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>置顶</Tag>}
+              <Tag color="blue" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
+            </Space>
+          }
+          description={
+            <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.35 }}>
+              {item.updated_by_name || item.created_by_name || '-'} · {formatDocumentTimestamp(item.updated_at)}
             </Text>
-            {item.pinned_at && <Tag color="gold" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>置顶</Tag>}
-            <Tag color="blue" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
-          </Space>
-        }
-        description={
-          <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.35 }}>
-            {item.updated_by_name || item.created_by_name || '-'} · {formatDocumentTimestamp(item.updated_at)}
-          </Text>
-        }
-      />
-    </List.Item>
-  );
+          }
+        />
+      </List.Item>
+    );
+  };
 
   const renderDocTabs = () => {
     if (!openDocTabs.length) return null;
@@ -8107,17 +8257,30 @@ export default function Documents() {
     </div>
   );
 
-  const renderShareSelector = () => {
-    const accessUsers = selectedDoc?.access_summary?.users || [];
+  const renderShareSelector = ({
+    mode = 'single',
+    draft = shareDraft,
+    setDraft = setShareDraft,
+    loading = shareLoading,
+  } = {}) => {
+    const isBulk = mode === 'bulk';
+    const accessUsers = isBulk ? [] : (selectedDoc?.access_summary?.users || []);
     return (
-      <Spin spinning={shareLoading}>
+      <Spin spinning={loading}>
         <Space direction="vertical" size={14} style={{ width: '100%' }}>
           <div style={{ padding: 12, background: '#f8fafc', borderRadius: 8 }}>
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <Space size={8} wrap>
-                <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
-                <Text type="secondary">新建文档默认仅创建人可访问；超级管理员可查看所有文档权限。已被共享且可编辑该文档的成员，也可以继续追加共享范围。</Text>
-              </Space>
+              {isBulk ? (
+                <Space size={8} wrap>
+                  <Tag color="blue">已选 {bulkSelectedDocIds.length} 篇文档</Tag>
+                  <Text type="secondary">批量共享会把下方对象追加到这些文档，不会覆盖每篇文档原有共享范围。</Text>
+                </Space>
+              ) : (
+                <Space size={8} wrap>
+                  <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
+                  <Text type="secondary">新建文档默认仅创建人可访问；超级管理员可查看所有文档权限。已被共享且可编辑该文档的成员，也可以继续追加共享范围。</Text>
+                </Space>
+              )}
               {accessUsers.length > 0 && (
                 <div>
                   <Text type="secondary" style={{ fontSize: 12 }}>有权限成员</Text>
@@ -8154,8 +8317,8 @@ export default function Documents() {
             showSearch
             optionFilterProp="label"
             placeholder="选择项目组"
-            value={shareDraft.project_group_ids}
-            onChange={value => setShareDraft(prev => ({ ...prev, project_group_ids: value }))}
+            value={draft.project_group_ids}
+            onChange={value => setDraft(prev => ({ ...prev, project_group_ids: value }))}
             options={projectGroups.map(group => ({
               value: group.id,
               label: `${group.name}${group.code ? ` (${group.code})` : ''}`,
@@ -8169,8 +8332,8 @@ export default function Documents() {
             mode="multiple"
             allowClear
             placeholder="选择部门"
-            value={shareDraft.departments}
-            onChange={value => setShareDraft(prev => ({ ...prev, departments: value }))}
+            value={draft.departments}
+            onChange={value => setDraft(prev => ({ ...prev, departments: value }))}
             options={orgDepartmentOptions}
             style={{ width: '100%', marginTop: 8 }}
           />
@@ -8183,8 +8346,8 @@ export default function Documents() {
             showSearch
             optionFilterProp="label"
             placeholder="选择小组"
-            value={shareDraft.team_ids}
-            onChange={value => setShareDraft(prev => ({ ...prev, team_ids: value }))}
+            value={draft.team_ids}
+            onChange={value => setDraft(prev => ({ ...prev, team_ids: value }))}
             options={teams.map(team => ({
               value: team.id,
               label: `${team.name}${team.department ? ` / ${orgDepartmentLabel[team.department] || team.department}` : ''}`,
@@ -8200,8 +8363,8 @@ export default function Documents() {
             showSearch
             optionFilterProp="label"
             placeholder="选择个人"
-            value={shareDraft.user_ids}
-            onChange={value => setShareDraft(prev => ({ ...prev, user_ids: value }))}
+            value={draft.user_ids}
+            onChange={value => setDraft(prev => ({ ...prev, user_ids: value }))}
             options={users.map(item => ({
               value: item.id,
               label: item.display_name || item.username,
@@ -8211,22 +8374,22 @@ export default function Documents() {
         </div>
         <Divider style={{ margin: '2px 0' }} />
         <Space size={6} wrap>
-          {(shareDraft.project_group_ids || []).map(id => {
+          {(draft.project_group_ids || []).map(id => {
             const group = projectGroups.find(item => Number(item.id) === Number(id));
             return <Tag key={`pg-${id}`} icon={<TeamOutlined />} color="blue">{group?.name || `项目组 ${id}`}</Tag>;
           })}
-          {(shareDraft.departments || []).map(key => (
+          {(draft.departments || []).map(key => (
             <Tag key={`dept-${key}`} color="green">{orgDepartmentLabel[key] || key}</Tag>
           ))}
-          {(shareDraft.team_ids || []).map(id => {
+          {(draft.team_ids || []).map(id => {
             const team = teams.find(item => Number(item.id) === Number(id));
             return <Tag key={`team-${id}`} icon={<TeamOutlined />} color="purple">{team?.name || `小组 ${id}`}</Tag>;
           })}
-          {(shareDraft.user_ids || []).map(id => {
+          {(draft.user_ids || []).map(id => {
             const item = users.find(user => Number(user.id) === Number(id));
             return <Tag key={`user-${id}`} icon={<UserOutlined />} color="orange">{item?.display_name || item?.username || `用户 ${id}`}</Tag>;
           })}
-          {draftToShares(shareDraft).length === 0 && <Text type="secondary">尚未追加共享对象</Text>}
+          {draftToShares(draft).length === 0 && <Text type="secondary">尚未追加共享对象</Text>}
         </Space>
         </Space>
       </Spin>
@@ -13528,6 +13691,14 @@ export default function Documents() {
                 <Tooltip title="搜索文档">
                   <Button icon={<SearchOutlined />} aria-label="搜索文档" onClick={openGlobalDocumentSearch} />
                 </Tooltip>
+                <Tooltip title={bulkShareMode ? '退出批量共享' : '批量添加共享人'}>
+                  <Button
+                    type={bulkShareMode ? 'primary' : 'default'}
+                    icon={<UserAddOutlined />}
+                    aria-label={bulkShareMode ? '退出批量共享' : '批量添加共享人'}
+                    onClick={toggleBulkShareMode}
+                  />
+                </Tooltip>
                 <Tooltip title="刷新">
                   <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); loadFolderTreeDocuments(); }} />
                 </Tooltip>
@@ -13564,6 +13735,36 @@ export default function Documents() {
                 }}
               />
 
+              {bulkShareMode && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  padding: '8px 10px',
+                  border: '1px solid #bae6fd',
+                  borderRadius: 8,
+                  background: '#f0f9ff',
+                }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>已选 {bulkSelectedDocIds.length} 篇</Text>
+                  <Space size={6} wrap>
+                    <Button size="small" onClick={selectVisibleBulkDocuments}>
+                      全选当前
+                    </Button>
+                    <Button size="small" type="primary" icon={<UserAddOutlined />} disabled={!bulkSelectedDocIds.length} onClick={openBulkShare}>
+                      添加共享人
+                    </Button>
+                    <Button size="small" disabled={!bulkSelectedDocIds.length} onClick={() => setBulkSelectedDocIds([])}>
+                      清空
+                    </Button>
+                    <Button size="small" icon={<CloseOutlined />} onClick={toggleBulkShareMode}>
+                      退出
+                    </Button>
+                  </Space>
+                </div>
+              )}
+
               {canManageDocumentFolders && (
                 <Space size={8} wrap>
                   <Button size="small" icon={<FolderOutlined />} onClick={() => setTemplateOpen(true)}>初始化目录</Button>
@@ -13578,20 +13779,33 @@ export default function Documents() {
                     blockNode
                     showIcon={false}
                     expandedKeys={folderTreeExpandedKeys}
-                    selectedKeys={selectedTreeKeys}
+                    selectedKeys={bulkShareMode ? [] : selectedTreeKeys}
+                    checkable={bulkShareMode}
+                    checkStrictly={bulkShareMode}
+                    checkedKeys={bulkShareMode ? { checked: bulkCheckedTreeKeys, halfChecked: [] } : []}
                     treeData={folderTree}
                     switcherIcon={renderDocumentTreeSwitcher}
                     onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
+                    onCheck={handleBulkTreeCheck}
                     onRightClick={openTreeDocContextMenu}
                     onSelect={(keys, info) => {
                       const key = keys[0] || info?.node?.key;
                       if (typeof key === 'string' && key.startsWith('folder-')) {
+                        if (bulkShareMode) {
+                          setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]));
+                          return;
+                        }
                         const folderId = normalizeDocumentFolderSelectValue(key.replace('folder-', ''));
                         if (folderId) setSelectedFolderId(folderId);
                         if (isMobile) setMobileLibraryVisible(true);
                         setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev : [...prev, key]));
                       } else if (typeof key === 'string' && key.startsWith('document-')) {
                         const documentId = Number(key.replace('document-', ''));
+                        if (bulkShareMode) {
+                          const doc = info?.node?.document || getDocumentSummaryById(documentId);
+                          toggleBulkDocumentSelection(doc || { id: documentId }, !bulkSelectedDocIdSet.has(documentId));
+                          return;
+                        }
                         const folderId = normalizeDocumentFolderSelectValue(info?.node?.folderId);
                         if (folderId) {
                           const folderKey = `folder-${folderId}`;
@@ -13988,6 +14202,27 @@ export default function Documents() {
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
         {renderShareSelector()}
+      </Modal>
+
+      <Modal
+        title="批量添加共享人"
+        open={bulkShareOpen}
+        onCancel={() => setBulkShareOpen(false)}
+        onOk={saveBulkShares}
+        okText="追加共享"
+        cancelText="取消"
+        confirmLoading={bulkShareSaving}
+        destroyOnClose
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
+      >
+        {renderShareSelector({
+          mode: 'bulk',
+          draft: bulkShareDraft,
+          setDraft: setBulkShareDraft,
+          loading: bulkShareLoading,
+        })}
       </Modal>
 
       {renderGlobalDocumentSearchModal()}

@@ -397,6 +397,7 @@ export const documentsApi = {
   applyFolderTemplate: (data) => api.post('/document-folders/apply-template', data).then(r => r.data),
   listShares: (id) => api.get(`/documents/${id}/shares`).then(r => r.data),
   saveShares: (id, shares) => api.put(`/documents/${id}/shares`, { shares }).then(r => r.data),
+  addBulkShares: (documentIds, shares) => api.post('/documents/bulk-shares', { document_ids: documentIds, shares }).then(r => r.data),
   accessSummary: (id) => api.get(`/documents/${id}/access-summary`).then(r => r.data),
   favorite: (id) => api.post(`/documents/${id}/favorite`).then(r => r.data),
   unfavorite: (id) => api.delete(`/documents/${id}/favorite`).then(r => r.data),
