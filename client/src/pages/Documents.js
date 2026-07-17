@@ -7373,6 +7373,65 @@ export default function Documents() {
     return true;
   };
 
+  const mergeBlockWithNextAtEnd = (event, block, index) => {
+    const nextBlock = editorBlocks[index + 1];
+    if (!nextBlock) return false;
+    if (isTableLikeBlock(block) || isTableLikeBlock(nextBlock)) return false;
+    if (block.type === 'divider' || nextBlock.type === 'divider') return false;
+    if (block.type === 'attachment' || nextBlock.type === 'attachment') return false;
+
+    const input = event.target;
+    const selectionRange = input?.isContentEditable
+      ? getContentEditableSelectionRange(input)
+      : (
+        typeof input?.selectionStart === 'number' && typeof input?.selectionEnd === 'number'
+          ? { start: Math.min(input.selectionStart, input.selectionEnd), end: Math.max(input.selectionStart, input.selectionEnd) }
+          : null
+      );
+    if (!selectionRange || selectionRange.start !== selectionRange.end) return false;
+
+    const currentContent = input?.isContentEditable
+      ? sanitizeInlineHtml(input.innerHTML)
+      : String(block.content || '');
+    const currentPlainLength = inlineHtmlToPlain(currentContent).length;
+    if (selectionRange.start !== currentPlainLength) return false;
+
+    const nextInput = document.getElementById(`doc-block-input-${nextBlock.id}`);
+    const nextContent = nextInput?.isContentEditable
+      ? sanitizeInlineHtml(nextInput.innerHTML)
+      : String(nextBlock.content || '');
+    const mergedContent = sanitizeInlineHtml(`${currentContent}${nextContent}`);
+    const currentMeta = getBlockMeta(block);
+    const shiftedNextComments = normalizeInlineComments(getBlockMeta(nextBlock).comments).map(comment => ({
+      ...comment,
+      start: comment.start + currentPlainLength,
+      end: comment.end + currentPlainLength,
+    }));
+    const mergedComments = [
+      ...normalizeInlineComments(currentMeta.comments),
+      ...shiftedNextComments,
+    ];
+    const nextCurrentMeta = {
+      ...currentMeta,
+      ...(mergedComments.length ? { comments: mergedComments } : {}),
+    };
+    if (!mergedComments.length) delete nextCurrentMeta.comments;
+
+    pushEditorUndoSnapshot();
+    setEditorBlocks(prev => {
+      const result = mergeAdjacentDocumentBlocks(prev, nextBlock.id, {
+        content: mergedContent,
+        meta: nextCurrentMeta,
+      });
+      return result.changed ? result.blocks : prev;
+    });
+    setSelectedBlockId(block.id);
+    clearAreaBlockSelection();
+    setOpenBlockMenuId(null);
+    focusBlock(block.id, currentPlainLength);
+    return true;
+  };
+
   const handleBlockKeyDown = (event, block, index) => {
     const composing = Boolean(
       event.nativeEvent?.isComposing
@@ -7398,6 +7457,11 @@ export default function Documents() {
       return;
     }
     if (event.key === 'Backspace' && mergeBlockWithPreviousAtStart(event, block, index)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.key === 'Delete' && mergeBlockWithNextAtEnd(event, block, index)) {
       event.preventDefault();
       event.stopPropagation();
       return;
