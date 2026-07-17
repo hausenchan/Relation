@@ -8038,31 +8038,44 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
       latest: serializeDocument(doc, { withAccessSummary: true, user: req.user }),
     });
   }
-  const content = req.body.content ?? JSON.stringify({ blocks: [] });
+  const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
+  const nextTitle = hasBodyField('title') ? (req.body.title || doc.title) : doc.title;
+  const content = hasBodyField('content') ? req.body.content : doc.content;
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
-  const contentText = extractDocumentText(content, req.body.content_text);
+  const contentText = extractDocumentText(
+    content,
+    hasBodyField('content_text') ? req.body.content_text : doc.content_text
+  );
+  const updatedAt = new Date().toISOString();
   const beforeSnapshot = {
     title: doc.title,
     content: doc.content,
     content_text: doc.content_text,
   };
   const afterSnapshot = {
-    title: doc.title,
+    title: nextTitle,
     content: storedContent,
     content_text: contentText,
   };
-  db.prepare(`
-    UPDATE documents SET content = ?, content_text = ?, summary = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP
+  const updateResult = db.prepare(`
+    UPDATE documents SET title = ?, content = ?, content_text = ?, summary = ?, updated_by = ?, updated_at = ?
     WHERE id = ?
   `).run(
+    nextTitle,
     storedContent,
     contentText,
     buildDocumentSummary(contentText),
     req.user.id,
+    updatedAt,
     doc.id
   );
+  if (updateResult.changes !== 1) return res.status(500).json({ error: '文档保存失败，请重试' });
   insertDocumentEditRecord(doc.id, req.user.id, 'content_update', beforeSnapshot, afterSnapshot);
-  res.json({ success: true, summary: buildDocumentSummary(contentText), updated_at: new Date().toISOString() });
+  const updated = getVisibleDocument(doc.id, req.user);
+  if (!updated || updated.title !== nextTitle || updated.content !== storedContent) {
+    return res.status(500).json({ error: '文档保存结果校验失败，请重试' });
+  }
+  res.json(serializeDocument(updated, { withAccessSummary: true, user: req.user }));
 });
 
 app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) => {

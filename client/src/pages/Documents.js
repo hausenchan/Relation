@@ -1652,6 +1652,18 @@ function getDocumentSaveSignature(title, blocks) {
   return JSON.stringify(buildDocumentSavePayload(title, blocks));
 }
 
+function assertDocumentSaveApplied(document, expectedSignature) {
+  if (!document?.id) throw new Error('服务器未返回已保存的文档');
+  const persistedSignature = getDocumentSaveSignature(
+    document.title || '',
+    contentToBlocks(document.content)
+  );
+  if (persistedSignature !== expectedSignature) {
+    throw new Error('服务器未写入本次文档修改，请重试');
+  }
+  return document;
+}
+
 function buildDocumentWritePayload(title, blocks, baseUpdatedAt) {
   const payload = buildDocumentSavePayload(title, blocks);
   if (baseUpdatedAt) payload.base_updated_at = baseUpdatedAt;
@@ -1837,7 +1849,7 @@ function mergeCollaborativeDocumentSnapshots(baseSnapshot, localSnapshot, remote
 function saveDocumentDraftBeforeUnload(docId, payload, baseUpdatedAt = '') {
   const token = localStorage.getItem('token');
   const requestPayload = baseUpdatedAt ? { ...payload, base_updated_at: baseUpdatedAt } : payload;
-  return fetch(`/api/documents/${docId}`, {
+  return fetch(`/api/documents/${docId}/content`, {
     method: 'PUT',
     keepalive: true,
     headers: {
@@ -4665,7 +4677,8 @@ export default function Documents() {
 
     if (!silent) setSaving(true);
     try {
-      const savePromise = documentsApi.update(doc.id, payload);
+      const savePromise = documentsApi.updateContent(doc.id, payload)
+        .then(updated => assertDocumentSaveApplied(updated, signature));
       pendingSavePromisesRef.current[doc.id] = savePromise;
       const updated = await savePromise;
       lastSavedSignatureRef.current[doc.id] = signature;
@@ -4778,7 +4791,8 @@ export default function Documents() {
       return null;
     }
     if (pendingSavePromisesRef.current[doc.id]) return pendingSavePromisesRef.current[doc.id];
-    const savePromise = documentsApi.update(doc.id, payload);
+    const savePromise = documentsApi.updateContent(doc.id, payload)
+      .then(updated => assertDocumentSaveApplied(updated, signature));
     pendingSavePromisesRef.current[doc.id] = savePromise;
     try {
       const updated = await savePromise;
@@ -5049,11 +5063,12 @@ export default function Documents() {
 
     try {
       const snapshotsToSave = (await Promise.all(targetIds.map(async docId => {
-        const cachedSnapshot = getCachedDocTabSnapshot(docId);
-        if (cachedSnapshot && isDocTabSnapshotDirty(cachedSnapshot)) return cachedSnapshot;
         if (!dirtyDocumentIdsRef.current.has(docId)) return null;
-        const loadedSnapshot = await getDocTabSnapshot(docId);
-        return isDocTabSnapshotDirty(loadedSnapshot) ? loadedSnapshot : null;
+        const snapshot = getCachedDocTabSnapshot(docId) || await getDocTabSnapshot(docId);
+        if (!canEditDoc(snapshot?.doc)) {
+          throw new Error('你没有编辑该文档的权限，本地修改尚未保存');
+        }
+        return isDocTabSnapshotDirty(snapshot) ? snapshot : null;
       }))).filter(Boolean);
       const savedResults = await Promise.all(snapshotsToSave.map(snapshot => saveDocumentSnapshot(snapshot)));
 
@@ -5097,7 +5112,9 @@ export default function Documents() {
         await loadDocuments();
         await loadFolderTreeDocuments();
       }
-      message.success(options.successMessage || '已保存并关闭标签页');
+      message.success(savedResults.some(Boolean)
+        ? (options.successMessage || '已保存并关闭标签页')
+        : (options.closeMessage || '已关闭标签页'));
     } catch (err) {
       message.error(getDocumentSaveErrorMessage(err, '关闭前自动保存失败'));
     } finally {
