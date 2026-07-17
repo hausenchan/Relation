@@ -11391,7 +11391,6 @@ function buildZhixiaoBusinessGrowthRuntimeResponse({ session, skill, version, pr
   const peak = routeConfig.facts?.peak_day || {};
   const strategies = routeConfig.strategies || {};
   const asksStrategy = /策略|怎么做|冲|5万|10万|五万|十万|动作|止损|增长/.test(String(promptText || ''));
-  const asksAnalysis = /分析|诊断|归因|为什么|缺口|毛利|收入|成本|投放|订单/.test(String(promptText || '')) || !asksStrategy;
   const sectionTitles = asksStrategy
     ? ['策略结论', '数据诊断', '目标拆解', 'P0/P1/P2动作', '止损阈值', '需要补的数据']
     : ['结论', '核心数据', '毛利波动拆解', '收入/成本拆解', '异常和风险', '下一步动作'];
@@ -11715,7 +11714,7 @@ function seedAiTrainingBusinessGrowthMvpSkills(actorUserId = 1) {
       skill_id, version_no, version_label, status, system_prompt, input_schema_json, output_schema_json,
       reasoning_steps_text, output_template_text, guardrails_text, hook_policy_json, example_summary,
       source_case_ids_json, eval_summary_json, notes_text, created_by, published_by, published_at
-    ) VALUES (?, 'v0.1', 'Gcad MVP 路由版', 'published', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ) VALUES (?, ?, 'Gcad MVP 路由版', 'published', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `);
   const updateSkill = db.prepare(`
     UPDATE ai_training_skills
@@ -11756,8 +11755,10 @@ function seedAiTrainingBusinessGrowthMvpSkills(actorUserId = 1) {
         JSON.stringify(skillDef.tags || ['支小', '业务增长', 'Gcad MVP']),
       ).lastInsertRowid);
 
+      const versionNo = getNextAiTrainingSkillVersionNo(skillId);
       const versionResult = insertVersion.run(
         skillId,
+        versionNo,
         skillDef.system_prompt || '',
         JSON.stringify(skillDef.input_schema_json || {
           required_fields: ['target_date', 'batch_id'],

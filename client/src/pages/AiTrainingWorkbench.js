@@ -29,6 +29,7 @@ const TAB_OPTIONS = [
 const SCENE_OPTIONS = [
   { value: '', label: '全部场景' },
   { value: 'general_chat', label: '通用训练' },
+  { value: 'business_growth', label: '业务增长' },
   { value: 'revenue_diagnosis', label: '收入异常诊断' },
   { value: 'budget_advice', label: '预算建议' },
   { value: 'daily_report', label: '日报生成' },
@@ -767,6 +768,10 @@ export default function AiTrainingWorkbench() {
   };
 
   const setActiveDraftByScene = (sceneCode) => {
+    if (sceneCode === 'business_growth') {
+      setComposeValue('请先用 zhixiao-dashboard-analysis 分析支小 2026-07-15 距离 5 万毛利的缺口和主因，再用 zhixiao-ad-ops-strategy 给出明天冲 5 万和挑战 10 万的增长策略、P0/P1/P2 动作、止损线。');
+      return;
+    }
     if (sceneCode === 'revenue_diagnosis') {
       setComposeValue('请先按预算侧视角，帮我判断最近 7 天收入回撤是量的问题、结构的问题，还是入口质量的问题，并补一个是否需要跨流量侧联合复盘的判断。');
       return;

@@ -1,0 +1,125 @@
+{
+  "route_code": "zhixiao_business_growth_mvp",
+  "route_name": "支小业务增长 MVP 双 Skill 路由",
+  "business_line": "zhixiao",
+  "batch_id": "midmax_zhixiao_20260716_90d",
+  "latest_complete_date": "2026-07-15",
+  "partial_dates": ["2026-07-16"],
+  "route_chain": [
+    "zhixiao-dashboard-analysis",
+    "zhixiao-ad-ops-strategy"
+  ],
+  "default_sources": {
+    "daily_kpi": "Gcad/dataAnalysis/datasets/zhixiao/batches/midmax_zhixiao_20260716_90d/curated/zhixiao_daily_kpi_20260417_20260716.csv",
+    "daily_summary": "Gcad/dataAnalysis/datasets/zhixiao/batches/midmax_zhixiao_20260716_90d/reports/daily_kpi_summary.json",
+    "distill_summary": "Gcad/dataAnalysis/datasets/zhixiao/batches/midmax_zhixiao_20260716_90d/reports/distill_summary.md"
+  },
+  "skills": [
+    {
+      "skill_code": "zhixiao_dashboard_analysis",
+      "name": "支小数据分析",
+      "description": "基于支小 MVP 日 KPI 宽表，对收入、成本、毛利、UV、ARPU、投放和订单进行日粒度诊断。",
+      "business_line": "zhixiao",
+      "business_side": "预算侧",
+      "budget_side": "C端",
+      "scene_code": "revenue_diagnosis",
+      "role_scope": "strategy",
+      "tags": ["支小", "数据分析", "毛利归因", "Gcad MVP"],
+      "system_prompt": "你是支小数据分析 Skill。先判断目标日期是否完整，再基于日 KPI 宽表输出事实、归因、风险和下一步验证。MVP 阶段不能编造应用、媒体、广告位 Top 贡献项。",
+      "reasoning_steps_text": "1. 确认目标日期和批次；2. 判断是否完整日；3. 汇总毛利、收入、成本、投放、订单、UV、ARPU；4. 与近7日和峰值日对比；5. 输出事实、推断、风险和下一步。",
+      "output_template_text": "## 结论\n\n## 核心数据\n\n## 毛利波动拆解\n\n## 收入/成本拆解\n\n## 异常和风险\n\n## 下一步动作",
+      "guardrails_text": "2026-07-16 是未完整归档日，不可作为毛利策略基准。缺少完整事实层时，不得编造 Top 应用/媒体/广告位。",
+      "example_summary": "输入：分析支小 2026-07-15 距离 5 万毛利的缺口和主因。输出：完整日判断、核心指标、缺口、风险和下一步验证。"
+    },
+    {
+      "skill_code": "zhixiao_ad_ops_strategy",
+      "name": "支小广告运营策略",
+      "description": "基于支小数据诊断，输出冲 5 万/10 万日毛利的 P0/P1/P2 动作、止损线和补数需求。",
+      "business_line": "zhixiao",
+      "business_side": "预算侧",
+      "budget_side": "C端",
+      "scene_code": "business_growth",
+      "role_scope": "strategy",
+      "tags": ["支小", "广告运营", "增长策略", "冲毛利", "Gcad MVP"],
+      "system_prompt": "你是支小广告运营策略 Skill。必须先引用数据诊断，再输出保底 5 万和挑战 10 万两档目标拆解。高风险动作必须给止损线，不自动执行关包、调价、回传或生产配置。",
+      "reasoning_steps_text": "1. 接收 zhixiao-dashboard-analysis 诊断；2. 识别主要问题；3. 拆 5 万和 10 万目标；4. 给 P0/P1/P2 动作；5. 给止损阈值；6. 列出补数据和产品需求。",
+      "output_template_text": "## 策略结论\n\n## 目标拆解\n\n## P0/P1/P2 动作\n\n## 分问题处理\n\n## 止损阈值\n\n## 需要补的数据\n\n## 可转产品/数据需求",
+      "guardrails_text": "不得建议自动执行高风险运营动作。投放毛利为负时，不得建议无条件加预算。缺少应用/媒体/广告位明细时必须说明限制。",
+      "example_summary": "输入：明天支小要冲 5 万和挑战 10 万日毛利怎么做。输出：目标缺口、P0/P1/P2、止损线和补数需求。"
+    }
+  ],
+  "facts": {
+    "latest_complete": {
+      "date": "2026-07-15",
+      "dashboard_gross_profit": 33309.257,
+      "business_revenue": 45191.22,
+      "business_cost": 13344.98,
+      "business_gross_profit_calc": 31846.24,
+      "launch_gross_profit": -1791.38,
+      "launch_cost": 1977.8,
+      "v2_order_count": 574208,
+      "task_apply_uv": 212670,
+      "order_uv": 86570,
+      "dau": 151820,
+      "order_arpu": 0.078,
+      "click_valid_rate_pct": 90.67,
+      "gap_to_50k_gross_profit": 16690.743,
+      "gap_to_100k_gross_profit": 66690.743
+    },
+    "last7_avg": {
+      "dashboard_gross_profit": 27149.02657142857,
+      "business_revenue": 40143.40571428571,
+      "business_cost": 13672.562857142857,
+      "launch_gross_profit": -2476.387142857143,
+      "launch_cost": 2693.2,
+      "v2_order_count": 569344.7142857143,
+      "task_apply_uv": 216606.42857142858,
+      "order_uv": 89547.71428571429,
+      "dau": 155958.14285714287,
+      "order_arpu": 0.06714285714285714,
+      "click_valid_rate_pct": 91.00414285714284
+    },
+    "peak_day": {
+      "date": "2026-06-26",
+      "dashboard_gross_profit": 70877.5075,
+      "business_revenue": 126327.1,
+      "business_cost": 23902.0,
+      "v2_order_count": 794687,
+      "task_apply_uv": 216454,
+      "order_uv": 84017,
+      "dau": 175241,
+      "order_arpu": 0.109
+    }
+  },
+  "strategies": {
+    "p0": [
+      "以 2026-07-15 为基准，先补 16690.743 元毛利缺口；当天未归档数据只看过程指标。",
+      "复盘 2026-06-26 峰值日，抽取高 ARPU、高点击有效率、高毛利应用/媒体/广告位组合做放量白名单。",
+      "冻结或收缩投放 ROI 低于 1 且投放毛利为负的组合，避免收入做大但毛利做薄。"
+    ],
+    "p1": [
+      "按应用媒体占比做 Pareto 分层，优先保住 UV 和订单占比前 20% 的媒体。",
+      "按广告位维度排查高请求低填充、高点击低收入广告位，优先优化请求、填充和点击有效率。"
+    ],
+    "p2": [
+      "将应用、媒体、广告位三张明细表聚合成完整事实层，补齐 Top 贡献项归因。",
+      "把每日输出沉淀为训练 case，持续反哺支小数据分析和广告运营策略 skill。"
+    ],
+    "stop_loss": [
+      "投放 ROI < 1 且投放毛利连续为负：停止扩量，只保留验证预算。",
+      "点击有效率较近 7 日均值下降超过 5 个百分点：暂停低质渠道加量并排查广告位/渠道号。",
+      "订单 ARPU 低于近 7 日均值 10% 以上：暂停低 ARPU 任务扩量，优先回到峰值日任务结构。"
+    ]
+  },
+  "risks": [
+    "MVP 当前只稳定支持日粒度诊断，应用/媒体/广告位 Top 贡献项需要完整事实层补齐。",
+    "2026-07-16 是未完整归档日，不能基于收入为 0 直接判断业务异常。",
+    "订单汇总导出为空，订单侧暂用支小大盘表中的 V2 订单字段。"
+  ],
+  "missing_data": [
+    "支小应用日事实层：curated/zhixiao_daily_app_metrics.jsonl",
+    "支小媒体日事实层：curated/zhixiao_daily_media_metrics.jsonl",
+    "支小广告位日事实层：curated/zhixiao_daily_adslot_metrics.jsonl",
+    "订单明细或订单汇总 API，用于替代当前空表"
+  ]
+}
