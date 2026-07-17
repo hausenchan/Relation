@@ -5452,7 +5452,7 @@ const DOCUMENT_LEGACY_DOC_TYPE_MAP = {
   MEET: 'TEAM',
   TPL: 'TEAM',
 };
-const DOCUMENT_MAX_FOLDER_DEPTH = 5;
+const DOCUMENT_MAX_FOLDER_DEPTH = 10;
 
 function normalizeDocumentCode(value, fallback = 'GEN', maxLength = 16) {
   const code = String(value || fallback || 'GEN')

@@ -7826,7 +7826,14 @@ export default function Documents() {
 
   const handleCreateChildFolder = async () => {
     const parent = folderCreateParent;
-    if (!parent?.id) return;
+    if (!parent?.id) {
+      message.error('请选择父级目录后再创建文件夹');
+      return;
+    }
+    if (!canManageDocumentFolders || !Number(parent.can_add_child || 0)) {
+      message.error('当前目录不支持新增子文件夹');
+      return;
+    }
     try {
       const values = await folderCreateForm.validateFields();
       setFolderCreateSaving(true);
@@ -7840,7 +7847,9 @@ export default function Documents() {
       setFolderTreeExpandedKeys(prev => Array.from(new Set([...prev, `folder-${parent.id}`, `folder-${result.id}`])));
       message.success('子文件夹已创建');
     } catch (err) {
-      message.error(err.response?.data?.error || err.message || '创建文件夹失败');
+      if (!err?.errorFields) {
+        message.error(err.response?.data?.error || err.message || '创建文件夹失败');
+      }
     } finally {
       setFolderCreateSaving(false);
     }
@@ -14630,7 +14639,7 @@ export default function Documents() {
             <Input placeholder="例如 SOP" maxLength={40} />
           </Form.Item>
           <Text type="secondary" style={{ fontSize: 12 }}>
-            仅支持在二级目录及其下级目录新增，最多 5 级。
+            仅支持在二级目录及其下级目录新增，最多 10 级。
           </Text>
         </Form>
       </Modal>
