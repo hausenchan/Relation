@@ -25,6 +25,7 @@ const MENU_TREE = [
     children: [
       { title: '目标管理', key: '/goals' },
       { title: '周报管理', key: '/weekly-reports' },
+      { title: '经营周会', key: '/executive/operational' },
     ],
   },
   {

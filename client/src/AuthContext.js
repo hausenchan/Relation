@@ -78,6 +78,12 @@ export function AuthProvider({ children }) {
     return Array.isArray(user.menuPerms) && user.menuPerms.includes(menuKey);
   };
 
+  const canAccessSensitiveModule = (moduleKey) => {
+    if (!user) return false;
+    return Array.isArray(user.sensitiveModules) &&
+      user.sensitiveModules.some(item => item?.module_key === moduleKey);
+  };
+
   const canWrite = (module) => {
     if (!user) return false;
     if (isAdmin(user) || ['member', 'leader', 'sales_director'].includes(user.role)) return true;
@@ -102,7 +108,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, canAccessModule, canWrite, canAccessMenu, canApprove, canAssign, isExecutive }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, canAccessModule, canWrite, canAccessMenu, canAccessSensitiveModule, canApprove, canAssign, isExecutive }}>
       {children}
     </AuthContext.Provider>
   );

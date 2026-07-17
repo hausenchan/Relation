@@ -691,6 +691,19 @@ function getUserMenuPerms(userId) {
   ));
 }
 
+function getUserSensitiveModules(userId) {
+  const id = Number(userId);
+  if (!id) return [];
+  return getRuntimeCached(`user-sensitive-modules:${id}`, RUNTIME_CACHE_TTL_MS, () => (
+    db.prepare(`
+      SELECT module_key, permission_level
+      FROM sensitive_module_members
+      WHERE user_id = ?
+      ORDER BY module_key ASC
+    `).all(id)
+  ));
+}
+
 function getAuthMePayload(userId, passwordVersion = '') {
   const id = Number(userId);
   if (!id) return null;
@@ -709,6 +722,7 @@ function getAuthMePayload(userId, passwordVersion = '') {
       project_group_ids: getUserProjectGroupIds(id),
       modulePerms: getUserModulePerms(id),
       menuPerms: getUserMenuPerms(id),
+      sensitiveModules: getUserSensitiveModules(id),
     };
   });
 }
@@ -824,6 +838,52 @@ db.exec(`
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
   );
+
+  CREATE TABLE IF NOT EXISTS sensitive_modules (
+    module_key TEXT PRIMARY KEY,
+    module_name TEXT NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS sensitive_module_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    module_key TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    permission_level TEXT NOT NULL DEFAULT 'view',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(module_key, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS crypto_user_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL UNIQUE,
+    public_key_jwk TEXT NOT NULL,
+    encrypted_private_key_jwk TEXT NOT NULL,
+    kdf_algorithm TEXT DEFAULT 'PBKDF2-SHA256',
+    kdf_params_json TEXT,
+    key_version INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS crypto_record_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    record_type TEXT NOT NULL,
+    record_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    encrypted_dek TEXT NOT NULL,
+    key_version INTEGER DEFAULT 1,
+    grant_status TEXT DEFAULT 'active',
+    granted_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    revoked_at DATETIME,
+    UNIQUE(record_type, record_id, user_id)
+  );
 `);
 
 // 初始化默认管理员账号（admin / admin123）
@@ -831,6 +891,34 @@ const adminExists = db.prepare("SELECT id FROM users WHERE username = 'admin'").
 if (!adminExists) {
   const hash = bcrypt.hashSync('admin123', 10);
   db.prepare("INSERT INTO users (username, password_hash, display_name, role) VALUES ('admin', ?, '超级管理员', 'admin')").run(hash);
+}
+
+db.prepare(`
+  INSERT OR IGNORE INTO sensitive_modules (module_key, module_name, description)
+  VALUES ('operational_meeting', '经营周会', '经营周会简报、会议提纲和会议结论等高敏内容')
+`).run();
+
+const operationalMeetingMemberCount = db.prepare(`
+  SELECT COUNT(*) as count
+  FROM sensitive_module_members
+  WHERE module_key = 'operational_meeting'
+`).get().count;
+if (!operationalMeetingMemberCount) {
+  const seedUserCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+  const executiveRoleFilter = seedUserCols.includes('executive_role')
+    ? " OR executive_role IN ('ceo', 'coo', 'cto', 'cmo')"
+    : '';
+  const seedMembers = db.prepare(`
+    SELECT id
+    FROM users
+    WHERE role IN ('admin', 'ceo', 'coo', 'cto', 'cmo')
+      ${executiveRoleFilter}
+  `).all();
+  const insertSensitiveMember = db.prepare(`
+    INSERT OR IGNORE INTO sensitive_module_members (module_key, user_id, permission_level, created_by)
+    VALUES ('operational_meeting', ?, 'manage', ?)
+  `);
+  seedMembers.forEach(member => insertSensitiveMember.run(member.id, member.id));
 }
 
 // =========== 建表 ===========
@@ -2794,6 +2882,197 @@ if (executiveReportCols.length > 0) {
   addExecutiveReportColumn('updated_at', 'DATETIME');
 }
 
+// =========== 经营周会模块（模板驱动 + 客户端加密）===========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS operational_meeting_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    module_key TEXT DEFAULT 'operational_meeting',
+    is_default INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS operational_meeting_template_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    section_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    owner_user_id INTEGER,
+    owner_role TEXT,
+    is_required INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    default_collapsed INTEGER DEFAULT 0,
+    default_questions_json TEXT,
+    default_blocks_json TEXT,
+    editable_by_owner_only INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS operational_meetings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER,
+    title TEXT,
+    week_start TEXT NOT NULL,
+    week_end TEXT NOT NULL,
+    status TEXT DEFAULT 'draft',
+    brief_status TEXT DEFAULT 'draft',
+    agenda_status TEXT DEFAULT 'none',
+    decision_status TEXT DEFAULT 'none',
+    created_by INTEGER,
+    updated_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    archived_at DATETIME,
+    deleted_at DATETIME
+  );
+
+  CREATE TABLE IF NOT EXISTS operational_meeting_sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id INTEGER NOT NULL,
+    template_section_id INTEGER,
+    section_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    owner_user_id INTEGER,
+    is_required INTEGER DEFAULT 1,
+    sort_order INTEGER DEFAULT 0,
+    default_questions_json TEXT,
+    default_blocks_json TEXT,
+    editable_by_owner_only INTEGER DEFAULT 1,
+    status TEXT DEFAULT 'draft',
+    content_ciphertext TEXT,
+    content_text_ciphertext TEXT,
+    crypto_version TEXT DEFAULT 'v2_client',
+    submitted_by INTEGER,
+    submitted_at DATETIME,
+    locked_at DATETIME,
+    updated_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS operational_meeting_agendas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id INTEGER NOT NULL UNIQUE,
+    agenda_ciphertext TEXT,
+    agenda_text_ciphertext TEXT,
+    crypto_version TEXT DEFAULT 'v2_client',
+    source_hash TEXT,
+    model_provider TEXT,
+    model_name TEXT,
+    prompt_version TEXT,
+    safety_scan_status TEXT,
+    generated_by INTEGER,
+    generated_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS operational_meeting_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id INTEGER NOT NULL UNIQUE,
+    decision_ciphertext TEXT,
+    decision_text_ciphertext TEXT,
+    crypto_version TEXT DEFAULT 'v2_client',
+    owner_user_id INTEGER,
+    due_date TEXT,
+    status TEXT DEFAULT 'draft',
+    created_by INTEGER,
+    updated_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
+createIndexesIfColumnsExist('sensitive_module_members', [
+  { name: 'idx_sensitive_module_members_user', columnsSql: 'user_id', columns: ['user_id'] },
+  { name: 'idx_sensitive_module_members_module', columnsSql: 'module_key', columns: ['module_key'] },
+]);
+createIndexesIfColumnsExist('crypto_record_keys', [
+  { name: 'idx_crypto_record_keys_record', columnsSql: 'record_type, record_id', columns: ['record_type', 'record_id'] },
+  { name: 'idx_crypto_record_keys_user', columnsSql: 'user_id', columns: ['user_id'] },
+]);
+createIndexesIfColumnsExist('operational_meeting_template_sections', [
+  { name: 'idx_operational_template_sections_template', columnsSql: 'template_id, sort_order', columns: ['template_id', 'sort_order'] },
+]);
+createIndexesIfColumnsExist('operational_meetings', [
+  { name: 'idx_operational_meetings_week', columnsSql: 'week_start, week_end', columns: ['week_start', 'week_end'] },
+  { name: 'idx_operational_meetings_status', columnsSql: 'status', columns: ['status'] },
+]);
+createIndexesIfColumnsExist('operational_meeting_sections', [
+  { name: 'idx_operational_sections_meeting', columnsSql: 'meeting_id, sort_order', columns: ['meeting_id', 'sort_order'] },
+]);
+
+function resolveOperationalMeetingOwnerId(candidates = []) {
+  const names = candidates.map(item => String(item || '').trim()).filter(Boolean);
+  for (const name of names) {
+    const row = db.prepare(`
+      SELECT id
+      FROM users
+      WHERE display_name = ? OR username = ?
+      ORDER BY id ASC
+      LIMIT 1
+    `).get(name, name);
+    if (row?.id) return row.id;
+  }
+  return null;
+}
+
+function seedDefaultOperationalMeetingTemplate() {
+  const existing = db.prepare(`
+    SELECT id
+    FROM operational_meeting_templates
+    WHERE module_key = 'operational_meeting'
+      AND is_default = 1
+      AND status = 'active'
+    ORDER BY id ASC
+    LIMIT 1
+  `).get();
+  if (existing?.id) return existing.id;
+
+  const result = db.prepare(`
+    INSERT INTO operational_meeting_templates (name, module_key, is_default, status)
+    VALUES ('经营周会默认模板', 'operational_meeting', 1, 'active')
+  `).run();
+  const templateId = result.lastInsertRowid;
+  const defaultQuestions = [
+    { key: 'weekly_result', title: '本周核心结果' },
+    { key: 'key_judgment', title: '一个最重要的判断' },
+    { key: 'decision_needed', title: '需要会上决策的问题' },
+    { key: 'next_action', title: '下周建议动作' },
+  ];
+  const sectionSeeds = [
+    { key: 'overseas_project', title: '海外项目组（陈锦标）', owner: ['陈锦标'], order: 10 },
+    { key: 'domestic_project', title: '国内项目组（陈豪赞）', owner: ['陈豪赞', 'chenhaozan'], order: 20 },
+    { key: 'business_info', title: '商务信息（林璐韵）', owner: ['林璐韵'], order: 30 },
+    { key: 'product_delivery', title: '产研落地（贺敏）', owner: ['贺敏'], order: 40 },
+  ];
+  const insertSection = db.prepare(`
+    INSERT INTO operational_meeting_template_sections (
+      template_id, section_key, title, owner_user_id, is_required, sort_order,
+      default_collapsed, default_questions_json, default_blocks_json, editable_by_owner_only
+    ) VALUES (?, ?, ?, ?, 1, ?, 0, ?, ?, 1)
+  `);
+  sectionSeeds.forEach(section => {
+    const ownerId = resolveOperationalMeetingOwnerId(section.owner);
+    insertSection.run(
+      templateId,
+      section.key,
+      section.title,
+      ownerId,
+      section.order,
+      JSON.stringify(defaultQuestions),
+      JSON.stringify({ questions: defaultQuestions.map(item => ({ ...item, content: '' })) }),
+    );
+  });
+  return templateId;
+}
+
+seedDefaultOperationalMeetingTemplate();
+
 try {
   db.exec(`
     INSERT OR IGNORE INTO user_teams (user_id, team_id)
@@ -4630,6 +4909,7 @@ app.post('/api/auth/login', (req, res) => {
       executive_role: user.executive_role,
       modulePerms: [],
       menuPerms: [],
+      sensitiveModules: getUserSensitiveModules(user.id),
     },
   });
 });
@@ -10796,6 +11076,7 @@ app.delete('/api/agents/notification-rules/:id', canWrite, (req, res) => {
 
 const AI_TRAINING_SCENE_LABELS = {
   general_chat: '通用训练',
+  business_growth: '业务增长',
   revenue_diagnosis: '收入异常诊断',
   budget_advice: '预算建议',
   daily_report: '日报生成',
@@ -10811,6 +11092,12 @@ const ZHIXIAO_FACT_PACK_PATH = path.join(
   'output',
   'training',
   'zhixiao_resolved_fact_pack.sqlite',
+);
+const ZHIXIAO_BUSINESS_GROWTH_MVP_ROUTE_PATH = path.join(
+  __dirname,
+  'seeds',
+  'ai_training_routes',
+  'zhixiao_business_growth_mvp.json',
 );
 
 function clipAiTrainingText(value, maxLength = 32) {
@@ -11055,6 +11342,210 @@ function buildZhixiaoAppRevenueRuntimeResponse({ session, skill, version, prompt
   };
 }
 
+function loadZhixiaoBusinessGrowthMvpRoute() {
+  if (!fs.existsSync(ZHIXIAO_BUSINESS_GROWTH_MVP_ROUTE_PATH)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(ZHIXIAO_BUSINESS_GROWTH_MVP_ROUTE_PATH, 'utf8'));
+  } catch (error) {
+    console.error('读取支小业务增长 MVP 路由配置失败:', error);
+    return null;
+  }
+}
+
+function isZhixiaoBusinessGrowthPrompt(text, session = {}) {
+  const raw = String(text || '');
+  const normalized = raw.toLowerCase();
+  const isZhixiao = raw.includes('支小') || normalized.includes('zhixiao') || session.business_line === 'zhixiao';
+  const isGrowthScene = session.scene_code === 'business_growth';
+  const hasGrowthIntent = [
+    '毛利', '增长', '冲', '5万', '10万', '五万', '十万', '策略', '增长策略',
+    '诊断', '归因', '收入', '成本', '投放', '订单', 'arpu', 'roi', '止损',
+  ].some((keyword) => raw.includes(keyword) || normalized.includes(keyword));
+  return Boolean(isZhixiao && (isGrowthScene || hasGrowthIntent));
+}
+
+function resolveZhixiaoBusinessGrowthTargetDate(promptText, routeConfig) {
+  const requestedDate = extractAiTrainingDate(promptText);
+  if (requestedDate) return requestedDate;
+  return routeConfig?.latest_complete_date || '2026-07-15';
+}
+
+function formatAiTrainingSignedAmount(value, fractionDigits = 2) {
+  const numeric = Number(value || 0);
+  const text = formatAiTrainingAmount(Math.abs(numeric), fractionDigits);
+  if (numeric > 0) return `+${text}`;
+  if (numeric < 0) return `-${text}`;
+  return text;
+}
+
+function buildZhixiaoBusinessGrowthRuntimeResponse({ session, skill, version, promptText }) {
+  const routeConfig = loadZhixiaoBusinessGrowthMvpRoute();
+  if (!routeConfig || !isZhixiaoBusinessGrowthPrompt(promptText, session)) return null;
+
+  const requestedDate = resolveZhixiaoBusinessGrowthTargetDate(promptText, routeConfig);
+  const partialDates = new Set(routeConfig.partial_dates || []);
+  const isPartialDate = partialDates.has(requestedDate);
+  const targetDate = isPartialDate ? routeConfig.latest_complete_date : requestedDate;
+  const latest = routeConfig.facts?.latest_complete || {};
+  const last7 = routeConfig.facts?.last7_avg || {};
+  const peak = routeConfig.facts?.peak_day || {};
+  const strategies = routeConfig.strategies || {};
+  const asksStrategy = /策略|怎么做|冲|5万|10万|五万|十万|动作|止损|增长/.test(String(promptText || ''));
+  const asksAnalysis = /分析|诊断|归因|为什么|缺口|毛利|收入|成本|投放|订单/.test(String(promptText || '')) || !asksStrategy;
+  const sectionTitles = asksStrategy
+    ? ['策略结论', '数据诊断', '目标拆解', 'P0/P1/P2动作', '止损阈值', '需要补的数据']
+    : ['结论', '核心数据', '毛利波动拆解', '收入/成本拆解', '异常和风险', '下一步动作'];
+
+  const gap50 = Number(latest.gap_to_50k_gross_profit || 0);
+  const gap100 = Number(latest.gap_to_100k_gross_profit || 0);
+  const diagnosisSummary = [
+    `${targetDate} 是当前支小 MVP 的最新完整经营基准日。`,
+    `大盘毛利 ${formatAiTrainingAmount(latest.dashboard_gross_profit)} 元，距 5 万差 ${formatAiTrainingAmount(gap50)} 元，距 10 万差 ${formatAiTrainingAmount(gap100)} 元。`,
+    `投放毛利 ${formatAiTrainingSignedAmount(latest.launch_gross_profit)} 元，短期扩量需要先过 ROI/毛利止损线。`,
+  ].join('');
+  const partialDateWarning = isPartialDate
+    ? `用户请求的 ${requestedDate} 是未完整归档日，已自动切换到 ${targetDate} 作为策略基准；${requestedDate} 只可做过程指标观察。`
+    : null;
+
+  const evidence = [
+    `数据批次：${routeConfig.batch_id}；事实层：${routeConfig.default_sources?.daily_kpi || 'zhixiao_daily_kpi'}`,
+    `${targetDate} 大盘毛利 ${formatAiTrainingAmount(latest.dashboard_gross_profit)}，汇总收入 ${formatAiTrainingAmount(latest.business_revenue)}，汇总成本 ${formatAiTrainingAmount(latest.business_cost)}。`,
+    `${targetDate} V2订单数 ${formatAiTrainingAmount(latest.v2_order_count, 0)}，申请任务UV ${formatAiTrainingAmount(latest.task_apply_uv, 0)}，订单UV ${formatAiTrainingAmount(latest.order_uv, 0)}，订单ARPU ${formatAiTrainingAmount(latest.order_arpu, 3)}。`,
+    `最近7个完整日平均大盘毛利 ${formatAiTrainingAmount(last7.dashboard_gross_profit)}，峰值正样本日 ${peak.date} 毛利 ${formatAiTrainingAmount(peak.dashboard_gross_profit)}。`,
+  ].filter(Boolean);
+  if (partialDateWarning) evidence.unshift(partialDateWarning);
+
+  const riskReminders = [
+    ...(partialDateWarning ? [partialDateWarning] : []),
+    ...(routeConfig.risks || []),
+  ];
+  const p0Actions = strategies.p0 || [];
+  const p1Actions = strategies.p1 || [];
+  const p2Actions = strategies.p2 || [];
+  const actions = [
+    ...(asksStrategy ? p0Actions.slice(0, 3) : ['先用 2026-07-15 做完整日基准，不用 2026-07-16 的未归档收入判断毛利。']),
+    ...(asksStrategy ? p1Actions.slice(0, 2) : ['复盘 2026-06-26 峰值日，与最新完整日对比订单ARPU、订单规模、点击有效率、DAU。']),
+  ];
+
+  const dataPreview = [
+    { 指标: '最新完整日', 数值: targetDate },
+    { 指标: '大盘毛利', 数值: latest.dashboard_gross_profit },
+    { 指标: '距5万毛利缺口', 数值: gap50 },
+    { 指标: '距10万毛利缺口', 数值: gap100 },
+    { 指标: '投放毛利', 数值: latest.launch_gross_profit },
+    { 指标: 'V2订单数', 数值: latest.v2_order_count },
+    { 指标: '订单ARPU', 数值: latest.order_arpu },
+  ];
+
+  const strategyBlock = asksStrategy ? [
+    '## 目标拆解',
+    `- 保底 5 万：在 ${formatAiTrainingAmount(latest.dashboard_gross_profit)} 元基础上补 ${formatAiTrainingAmount(gap50)} 元毛利。`,
+    `- 挑战 10 万：需要补 ${formatAiTrainingAmount(gap100)} 元毛利，不能只靠小幅调参，必须找到高ARPU增量组合。`,
+    '',
+    '## P0/P1/P2 动作',
+    ...p0Actions.map((item) => `- P0：${item}`),
+    ...p1Actions.map((item) => `- P1：${item}`),
+    ...p2Actions.map((item) => `- P2：${item}`),
+    '',
+    '## 止损阈值',
+    ...(strategies.stop_loss || []).map((item) => `- ${item}`),
+  ] : [];
+  const contentText = [
+    '已命中 Relation Agent 中台的支小业务增长 MVP 路由。',
+    '',
+    '## 结论',
+    diagnosisSummary,
+    partialDateWarning ? `\n${partialDateWarning}` : '',
+    '',
+    '## 核心数据',
+    `- 大盘毛利：${formatAiTrainingAmount(latest.dashboard_gross_profit)} 元`,
+    `- 汇总收入：${formatAiTrainingAmount(latest.business_revenue)} 元`,
+    `- 汇总成本：${formatAiTrainingAmount(latest.business_cost)} 元`,
+    `- 投放毛利：${formatAiTrainingSignedAmount(latest.launch_gross_profit)} 元`,
+    `- V2订单数：${formatAiTrainingAmount(latest.v2_order_count, 0)}`,
+    `- 订单ARPU：${formatAiTrainingAmount(latest.order_arpu, 3)}`,
+    `- 最近7日均毛利：${formatAiTrainingAmount(last7.dashboard_gross_profit)} 元`,
+    `- 峰值日：${peak.date}，毛利 ${formatAiTrainingAmount(peak.dashboard_gross_profit)} 元`,
+    '',
+    ...(strategyBlock.length ? strategyBlock : [
+      '## 下一步动作',
+      '- 先做 2026-06-26 峰值日与 2026-07-15 最新完整日的差异归因。',
+      '- 若要定位应用/媒体/广告位贡献项，需要补齐完整事实层聚合。',
+    ]),
+    '',
+    '## 需要补的数据',
+    ...(routeConfig.missing_data || []).map((item) => `- ${item}`),
+  ].filter(Boolean).join('\n');
+
+  const analysisProcess = {
+    summary: '先路由到支小数据分析，再将诊断结果转入广告运营策略。',
+    steps: [
+      '识别业务线：支小。',
+      '识别场景：业务增长/毛利冲刺。',
+      `完整日保护：${isPartialDate ? `请求日 ${requestedDate} 未完整，改用 ${targetDate}` : `使用 ${targetDate}` }。`,
+      '执行 zhixiao-dashboard-analysis：读取日KPI宽表并计算缺口。',
+      asksStrategy ? '执行 zhixiao-ad-ops-strategy：生成5万/10万目标拆解、优先级动作和止损线。' : '当前只输出数据诊断，策略可在下一轮继续生成。',
+    ],
+    trace_tags: ['支小', '业务增长', 'MVP双Skill路由', targetDate],
+    llm_backed: false,
+  };
+
+  const structured = {
+    summary: diagnosisSummary,
+    evidence,
+    risk_reminders: riskReminders,
+    actions,
+    follow_up_questions: [],
+    confidence: 94,
+    references: [{
+      id: 'zhixiao_business_growth_mvp_route',
+      title: '支小业务增长 MVP 路由配置',
+      type: 'local_route_seed',
+      source_path: ZHIXIAO_BUSINESS_GROWTH_MVP_ROUTE_PATH,
+    }],
+    route_chain: routeConfig.route_chain || ['zhixiao-dashboard-analysis', 'zhixiao-ad-ops-strategy'],
+    analysis_process: analysisProcess,
+    data_columns: [
+      { key: '指标', title: '指标' },
+      { key: '数值', title: '数值' },
+    ],
+    data_preview: dataPreview,
+    data_total: {
+      latest_complete_date: targetDate,
+      requested_date: requestedDate,
+      is_partial_date: isPartialDate,
+      gap_to_50k_gross_profit: gap50,
+      gap_to_100k_gross_profit: gap100,
+    },
+    runtime_meta: {
+      mode: 'local_fact',
+      route_code: routeConfig.route_code,
+      route_chain: routeConfig.route_chain || [],
+      skill_id: skill?.id || null,
+      skill_name: skill?.name || '支小业务增长MVP路由',
+      skill_version_id: version?.id || null,
+      skill_version_no: version?.version_no || 'mvp-route',
+      matched_suggestion_ids: [],
+      matched_suggestion_count: 0,
+      model_name: 'gcad-mvp-route',
+      llm_enabled: false,
+      model_config_source: 'local_fact',
+    },
+  };
+
+  return {
+    contentText,
+    structured,
+    evidence,
+    actions,
+    section_titles: sectionTitles,
+    confidence: 94,
+    analysis_process: analysisProcess,
+    runtime_mode: 'local_fact',
+    llm_usage: null,
+  };
+}
+
 function normalizeAiTrainingCandidateRow(row) {
   const base = decryptRow('ai_training_case_candidates', row);
   return {
@@ -11206,6 +11697,107 @@ function ensureAiTrainingDefaultHooks(sceneCode, businessLine, roleScope, actorU
     return normalizeAiTrainingHookRow(hookRow);
   });
 }
+
+function seedAiTrainingBusinessGrowthMvpSkills(actorUserId = 1) {
+  const routeConfig = loadZhixiaoBusinessGrowthMvpRoute();
+  const skillDefs = Array.isArray(routeConfig?.skills) ? routeConfig.skills : [];
+  if (!skillDefs.length) return;
+
+  const insertSkill = db.prepare(`
+    INSERT INTO ai_training_skills (
+      skill_code, name, description, business_line, business_side, budget_side, scene_code,
+      role_scope, owner_user_id, maintainer_user_id, latest_version_id, publish_version_id,
+      status, visibility_scope, source_type, source_summary, tags_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'published', 'team', 'gcad_mvp', ?, ?)
+  `);
+  const insertVersion = db.prepare(`
+    INSERT INTO ai_training_skill_versions (
+      skill_id, version_no, version_label, status, system_prompt, input_schema_json, output_schema_json,
+      reasoning_steps_text, output_template_text, guardrails_text, hook_policy_json, example_summary,
+      source_case_ids_json, eval_summary_json, notes_text, created_by, published_by, published_at
+    ) VALUES (?, 'v0.1', 'Gcad MVP 路由版', 'published', ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `);
+  const updateSkill = db.prepare(`
+    UPDATE ai_training_skills
+    SET latest_version_id = ?, publish_version_id = ?, status = 'published', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  const bindHook = db.prepare(`
+    INSERT OR IGNORE INTO ai_training_skill_hook_bindings (
+      skill_version_id, hook_id, required, sort_order
+    ) VALUES (?, ?, ?, ?)
+  `);
+
+  db.transaction(() => {
+    skillDefs.forEach((skillDef) => {
+      const skillCode = String(skillDef.skill_code || '').trim();
+      if (!skillCode) return;
+      const existing = db.prepare('SELECT * FROM ai_training_skills WHERE skill_code = ?').get(skillCode);
+      if (existing?.publish_version_id) return;
+
+      const hooks = ensureAiTrainingDefaultHooks(
+        skillDef.scene_code || 'business_growth',
+        skillDef.business_line || routeConfig.business_line || 'zhixiao',
+        skillDef.role_scope || 'strategy',
+        actorUserId,
+      );
+      const skillId = existing?.id || Number(insertSkill.run(
+        skillCode,
+        skillDef.name || skillCode,
+        skillDef.description || null,
+        skillDef.business_line || routeConfig.business_line || 'zhixiao',
+        skillDef.business_side || '预算侧',
+        skillDef.budget_side || 'C端',
+        skillDef.scene_code || 'business_growth',
+        skillDef.role_scope || 'strategy',
+        actorUserId,
+        actorUserId,
+        routeConfig.route_name || '支小业务增长 MVP 路由',
+        JSON.stringify(skillDef.tags || ['支小', '业务增长', 'Gcad MVP']),
+      ).lastInsertRowid);
+
+      const versionResult = insertVersion.run(
+        skillId,
+        skillDef.system_prompt || '',
+        JSON.stringify(skillDef.input_schema_json || {
+          required_fields: ['target_date', 'batch_id'],
+          optional_fields: ['goal', 'lookback_days', 'data_mode'],
+        }),
+        JSON.stringify(skillDef.output_schema_json || {
+          sections: ['结论', '核心数据', '策略动作', '风险提醒'],
+          style: 'markdown',
+        }),
+        skillDef.reasoning_steps_text || '',
+        skillDef.output_template_text || '',
+        skillDef.guardrails_text || '',
+        JSON.stringify({
+          hooks: hooks.map((hook) => ({
+            hook_id: hook.id,
+            hook_code: hook.hook_code,
+            hook_stage: hook.hook_stage,
+          })),
+          route_code: routeConfig.route_code,
+          route_chain: routeConfig.route_chain || [],
+        }),
+        skillDef.example_summary || null,
+        JSON.stringify({
+          source: 'gcad_mvp_seed',
+          batch_id: routeConfig.batch_id,
+          latest_complete_date: routeConfig.latest_complete_date,
+          eval_note: 'MVP route seed, manually verified with zhixiao_daily_kpi facts.',
+        }),
+        skillDef.notes_text || '由 Gcad 支小 MVP 双 Skill 使用手册同步到 Relation Agent 中台。',
+        actorUserId,
+        actorUserId,
+      );
+      const versionId = Number(versionResult.lastInsertRowid);
+      updateSkill.run(versionId, versionId, skillId);
+      hooks.forEach((hook, index) => bindHook.run(versionId, hook.id, 1, index));
+    });
+  })();
+}
+
+seedAiTrainingBusinessGrowthMvpSkills();
 
 function ensureAiTrainingEvalSet(caseItem, actorUserId) {
   const setCode = `eval_${toAiTrainingSlug(caseItem.scene_code)}_${toAiTrainingSlug(caseItem.business_line)}`;
@@ -13354,6 +13946,14 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
       version: runtimeBundle.version,
       promptText: contentText,
     });
+    if (!runtimeResponse) {
+      runtimeResponse = buildZhixiaoBusinessGrowthRuntimeResponse({
+        session: runtimeSession,
+        skill: runtimeBundle.skill,
+        version: runtimeBundle.version,
+        promptText: contentText,
+      });
+    }
     if (!runtimeResponse) {
       runtimeResponse = await generateAiTrainingSkillResponse({
         session: runtimeSession,
@@ -19371,6 +19971,740 @@ app.delete('/api/notifications/:id', (req, res) => {
   db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?').run(id, userId);
   clearRuntimeCache(`notifications:${userId}:`);
   res.json({ success: true });
+});
+
+// =========== 经营周会模块 API ===========
+const OPERATIONAL_MEETING_MODULE_KEY = 'operational_meeting';
+const OPERATIONAL_MEETING_MENU_KEY = '/executive/operational';
+const OPERATIONAL_MEETING_SECTION_RECORD = 'operational_meeting_section';
+const OPERATIONAL_MEETING_AGENDA_RECORD = 'operational_meeting_agenda';
+const OPERATIONAL_MEETING_DECISION_RECORD = 'operational_meeting_decision';
+const OPERATIONAL_MEETING_PROMPT_VERSION = 'operational-meeting-agenda-v1';
+
+function isPrivilegedIdentity(user) {
+  return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role)));
+}
+
+function hasMenuAccess(user, menuKey) {
+  if (!user?.id) return false;
+  if (isPrivilegedIdentity(user)) return true;
+  return getUserMenuPerms(user.id).includes(menuKey);
+}
+
+function getSensitiveModuleMember(userId, moduleKey) {
+  const id = Number(userId);
+  if (!id || !moduleKey) return null;
+  return db.prepare(`
+    SELECT module_key, user_id, permission_level
+    FROM sensitive_module_members
+    WHERE module_key = ? AND user_id = ?
+  `).get(moduleKey, id) || null;
+}
+
+function hasSensitiveModuleAccess(user, moduleKey) {
+  return Boolean(user?.id && getSensitiveModuleMember(user.id, moduleKey));
+}
+
+function getSensitiveModulePermission(user, moduleKey) {
+  return getSensitiveModuleMember(user?.id, moduleKey)?.permission_level || '';
+}
+
+function requireOperationalMeetingAccess(req, res, next) {
+  if (!hasMenuAccess(req.user, OPERATIONAL_MEETING_MENU_KEY)) {
+    return res.status(403).json({ error: '无经营周会菜单权限' });
+  }
+  if (!hasSensitiveModuleAccess(req.user, OPERATIONAL_MEETING_MODULE_KEY)) {
+    return res.status(403).json({ error: '无经营周会敏感信息权限' });
+  }
+  next();
+}
+
+function canManageOperationalMeeting(user) {
+  const level = getSensitiveModulePermission(user, OPERATIONAL_MEETING_MODULE_KEY);
+  return ['manage', 'edit_all'].includes(level) || isPrivilegedIdentity(user);
+}
+
+function parseJsonSafe(value, fallback = null) {
+  try {
+    if (value === null || value === undefined || value === '') return fallback;
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function listOperationalMeetingAuthorizedUserIds(meetingId = null) {
+  const rows = db.prepare(`
+    SELECT user_id
+    FROM sensitive_module_members
+    WHERE module_key = ?
+  `).all(OPERATIONAL_MEETING_MODULE_KEY);
+  const ids = rows.map(row => Number(row.user_id)).filter(Boolean);
+  if (meetingId) {
+    const sectionOwners = db.prepare(`
+      SELECT DISTINCT owner_user_id as user_id
+      FROM operational_meeting_sections
+      WHERE meeting_id = ? AND owner_user_id IS NOT NULL
+    `).all(meetingId);
+    ids.push(...sectionOwners.map(row => Number(row.user_id)).filter(Boolean));
+  }
+  return [...new Set(ids)].sort((a, b) => a - b);
+}
+
+function getMyRecordKey(recordType, recordId, userId) {
+  return db.prepare(`
+    SELECT user_id, encrypted_dek, key_version, grant_status
+    FROM crypto_record_keys
+    WHERE record_type = ?
+      AND record_id = ?
+      AND user_id = ?
+      AND grant_status = 'active'
+  `).get(recordType, recordId, userId) || null;
+}
+
+function replaceRecordKeys(recordType, recordId, recordKeys = [], actorUserId = null) {
+  const normalizedKeys = Array.isArray(recordKeys)
+    ? recordKeys
+      .map(item => ({
+        user_id: Number(item.user_id),
+        encrypted_dek: String(item.encrypted_dek || '').trim(),
+        key_version: Number(item.key_version || 1),
+      }))
+      .filter(item => item.user_id && item.encrypted_dek)
+    : [];
+
+  db.prepare(`
+    UPDATE crypto_record_keys
+    SET grant_status = 'revoked',
+        revoked_at = CURRENT_TIMESTAMP
+    WHERE record_type = ? AND record_id = ?
+  `).run(recordType, recordId);
+
+  const upsert = db.prepare(`
+    INSERT INTO crypto_record_keys (
+      record_type, record_id, user_id, encrypted_dek, key_version, grant_status, granted_by, created_at, revoked_at
+    ) VALUES (?, ?, ?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, NULL)
+    ON CONFLICT(record_type, record_id, user_id)
+    DO UPDATE SET
+      encrypted_dek = excluded.encrypted_dek,
+      key_version = excluded.key_version,
+      grant_status = 'active',
+      granted_by = excluded.granted_by,
+      revoked_at = NULL
+  `);
+  normalizedKeys.forEach(item => {
+    upsert.run(recordType, recordId, item.user_id, item.encrypted_dek, item.key_version, actorUserId);
+  });
+}
+
+function serializeOperationalTemplate(row) {
+  if (!row) return null;
+  const sections = db.prepare(`
+    SELECT s.*, u.display_name as owner_name, u.username as owner_username
+    FROM operational_meeting_template_sections s
+    LEFT JOIN users u ON u.id = s.owner_user_id
+    WHERE s.template_id = ?
+    ORDER BY s.sort_order ASC, s.id ASC
+  `).all(row.id).map(section => ({
+    ...section,
+    default_questions: parseJsonSafe(section.default_questions_json, []),
+    default_blocks: parseJsonSafe(section.default_blocks_json, null),
+  }));
+  return { ...row, sections };
+}
+
+function getDefaultOperationalTemplate() {
+  const row = db.prepare(`
+    SELECT *
+    FROM operational_meeting_templates
+    WHERE module_key = ? AND status = 'active'
+    ORDER BY is_default DESC, id ASC
+    LIMIT 1
+  `).get(OPERATIONAL_MEETING_MODULE_KEY);
+  return row || { id: seedDefaultOperationalMeetingTemplate() };
+}
+
+function serializeOperationalMeetingRow(row = {}) {
+  const sectionStats = row.id ? db.prepare(`
+    SELECT
+      COUNT(*) as total_sections,
+      SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
+      SUM(CASE WHEN is_required = 1 AND status = 'submitted' THEN 1 ELSE 0 END) as submitted_required_sections
+    FROM operational_meeting_sections
+    WHERE meeting_id = ?
+  `).get(row.id) : {};
+  return {
+    ...row,
+    total_sections: Number(sectionStats?.total_sections || 0),
+    required_sections: Number(sectionStats?.required_sections || 0),
+    submitted_required_sections: Number(sectionStats?.submitted_required_sections || 0),
+  };
+}
+
+function refreshOperationalMeetingStatuses(meetingId) {
+  const id = Number(meetingId);
+  if (!id) return;
+  const meeting = db.prepare('SELECT * FROM operational_meetings WHERE id = ?').get(id);
+  if (!meeting) return;
+  const stats = db.prepare(`
+    SELECT
+      SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
+      SUM(CASE WHEN is_required = 1 AND status = 'submitted' THEN 1 ELSE 0 END) as submitted_required_sections
+    FROM operational_meeting_sections
+    WHERE meeting_id = ?
+  `).get(id);
+  const agenda = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(id);
+  const decision = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(id);
+  const required = Number(stats?.required_sections || 0);
+  const submitted = Number(stats?.submitted_required_sections || 0);
+  const briefStatus = required > 0 && submitted >= required ? 'completed' : (submitted > 0 ? 'filling' : 'draft');
+  const agendaStatus = agenda ? 'generated' : 'none';
+  const decisionStatus = decision ? 'saved' : 'none';
+  let status = 'draft';
+  if (meeting.archived_at) status = 'archived';
+  else if (decision) status = 'completed';
+  else if (agenda) status = 'agenda_generated';
+  else if (briefStatus === 'completed') status = 'brief_completed';
+  else if (briefStatus === 'filling') status = 'filling';
+  db.prepare(`
+    UPDATE operational_meetings
+    SET status = ?,
+        brief_status = ?,
+        agenda_status = ?,
+        decision_status = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(status, briefStatus, agendaStatus, decisionStatus, id);
+}
+
+function getOperationalMeetingForAccess(meetingId) {
+  return db.prepare(`
+    SELECT *
+    FROM operational_meetings
+    WHERE id = ? AND deleted_at IS NULL
+  `).get(meetingId);
+}
+
+function getOperationalSectionForAccess(sectionId) {
+  return db.prepare(`
+    SELECT s.*, m.deleted_at
+    FROM operational_meeting_sections s
+    JOIN operational_meetings m ON m.id = s.meeting_id
+    WHERE s.id = ? AND m.deleted_at IS NULL
+  `).get(sectionId);
+}
+
+function canEditOperationalSection(user, section) {
+  if (!user || !section) return false;
+  if (canManageOperationalMeeting(user)) return true;
+  if (Number(section.owner_user_id) === Number(user.id)) return true;
+  return Number(section.editable_by_owner_only || 0) !== 1;
+}
+
+function operationalMeetingAgendaLooksSensitive(value) {
+  return /(毛利|毛利率|利润率|利润|gross\s*profit|gross\s*margin|\bGM\b)/i.test(String(value || ''));
+}
+
+function sanitizeOperationalMeetingInput(value) {
+  return String(value || '')
+    .replace(/(毛利率?|利润率?|利润|gross\s*profit|gross\s*margin|\bGM\b)[^\n。；;]{0,120}/ig, '[已脱敏经营指标]')
+    .replace(/(收入|成本|分成比例|分成后)[^\n。；;]{0,80}(利润|毛利)[^\n。；;]{0,80}/ig, '[已脱敏经营指标]')
+    .slice(0, 24000);
+}
+
+function buildFallbackOperationalMeetingAgenda(sections = []) {
+  const titles = sections.map(item => item.title).filter(Boolean).join('、') || '各业务模块';
+  const topics = sections
+    .map(item => {
+      const text = sanitizeOperationalMeetingInput(item.content || item.text || '').replace(/\s+/g, ' ').trim();
+      return text ? `${item.title || '简报'}：${text.slice(0, 120)}` : '';
+    })
+    .filter(Boolean)
+    .slice(0, 4);
+  return {
+    meeting_goal: `对齐${titles}本周经营事实、关键判断和需要会上决策的问题。`,
+    weekly_overview: topics.length ? topics.join('\n') : '各负责人已提交本周简报，建议会上围绕结果、判断和风险逐项确认。',
+    key_topics: '优先讨论各模块提出的需决策事项、跨部门协同阻塞点，以及会后需要明确负责人的动作。',
+    agenda: '1. 快速确认本周关键结果\n2. 逐项讨论需决策问题\n3. 明确会后负责人和完成时间\n4. 确认下周重点动作',
+    next_actions: '会后将决策事项拆成明确动作，补充负责人、截止时间和验收口径。',
+    preparation: '请各负责人会前确认简报内容准确性，准备需决策事项的背景、可选方案和推荐判断。',
+  };
+}
+
+async function callOperationalMeetingLlm(sections = []) {
+  const config = getSystemAiModelConfig();
+  if (!config || config.disabled || !config.apiKey) {
+    return {
+      agenda: buildFallbackOperationalMeetingAgenda(sections),
+      runtime: { mode: 'fallback', model_name: null, provider: 'rule' },
+    };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs || DEFAULT_AI_TIMEOUT_MS);
+  const sanitizedSections = sections.map(section => ({
+    title: section.title || '未命名简报',
+    owner: section.owner || '',
+    content: sanitizeOperationalMeetingInput(section.content || section.text || ''),
+  }));
+  try {
+    const response = await fetch(`${String(config.baseUrl || '').replace(/\/+$/g, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+        messages: [
+          {
+            role: 'system',
+            content: [
+              '你是公司经营周会助手，只能基于已脱敏的简报内容生成会议提纲。',
+              '严禁输出毛利、毛利率、利润、利润率、GM、gross profit、gross margin 等信息。',
+              '严禁猜测、推导或补全被脱敏的数据。',
+              '只输出 JSON，字段为 meeting_goal, weekly_overview, key_topics, agenda, next_actions, preparation。',
+            ].join('\n'),
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({ sections: sanitizedSections }),
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(sanitizeAiModelErrorMessage(data?.error?.message || `模型接口失败 ${response.status}`));
+    }
+    const raw = data?.choices?.[0]?.message?.content || '';
+    const parsed = parseJsonSafe(raw, null);
+    if (!parsed || typeof parsed !== 'object') throw new Error('模型返回内容不是 JSON');
+    const agenda = {
+      meeting_goal: String(parsed.meeting_goal || ''),
+      weekly_overview: String(parsed.weekly_overview || ''),
+      key_topics: String(parsed.key_topics || ''),
+      agenda: String(parsed.agenda || ''),
+      next_actions: String(parsed.next_actions || ''),
+      preparation: String(parsed.preparation || ''),
+    };
+    return {
+      agenda,
+      runtime: {
+        mode: 'llm',
+        model_name: data?.model || config.model,
+        provider: config.provider || 'openai_compatible',
+        usage: data?.usage || null,
+      },
+    };
+  } catch (error) {
+    console.error('经营周会 AI 生成失败，使用规则兜底:', sanitizeAiModelErrorMessage(error.message));
+    return {
+      agenda: buildFallbackOperationalMeetingAgenda(sections),
+      runtime: { mode: 'fallback', model_name: null, provider: 'rule', error: sanitizeAiModelErrorMessage(error.message) },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+app.get('/api/crypto/user-key', (req, res) => {
+  const row = db.prepare(`
+    SELECT user_id, public_key_jwk, encrypted_private_key_jwk, kdf_algorithm, kdf_params_json, key_version, status, updated_at
+    FROM crypto_user_keys
+    WHERE user_id = ?
+  `).get(req.user.id);
+  res.json(row || null);
+});
+
+app.put('/api/crypto/user-key', (req, res) => {
+  const publicKey = String(req.body?.public_key_jwk || '').trim();
+  const encryptedPrivateKey = String(req.body?.encrypted_private_key_jwk || '').trim();
+  if (!publicKey || !encryptedPrivateKey) return res.status(400).json({ error: '缺少公钥或加密私钥' });
+  try {
+    JSON.parse(publicKey);
+    JSON.parse(encryptedPrivateKey);
+  } catch {
+    return res.status(400).json({ error: '密钥格式不正确' });
+  }
+  const keyVersion = Number(req.body?.key_version || 1);
+  db.prepare(`
+    INSERT INTO crypto_user_keys (
+      user_id, public_key_jwk, encrypted_private_key_jwk, kdf_algorithm, kdf_params_json, key_version, status
+    ) VALUES (?, ?, ?, ?, ?, ?, 'active')
+    ON CONFLICT(user_id)
+    DO UPDATE SET
+      public_key_jwk = excluded.public_key_jwk,
+      encrypted_private_key_jwk = excluded.encrypted_private_key_jwk,
+      kdf_algorithm = excluded.kdf_algorithm,
+      kdf_params_json = excluded.kdf_params_json,
+      key_version = excluded.key_version,
+      status = 'active',
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    req.user.id,
+    publicKey,
+    encryptedPrivateKey,
+    String(req.body?.kdf_algorithm || 'PBKDF2-SHA256'),
+    req.body?.kdf_params_json ? String(req.body.kdf_params_json) : null,
+    keyVersion,
+  );
+  res.json({ success: true });
+});
+
+app.get('/api/crypto/public-keys', (req, res) => {
+  const ids = String(req.query.user_ids || '')
+    .split(',')
+    .map(item => Number(item))
+    .filter(Boolean);
+  const uniqueIds = [...new Set(ids)];
+  if (!uniqueIds.length) return res.json([]);
+  const rows = db.prepare(`
+    SELECT user_id, public_key_jwk, key_version, status
+    FROM crypto_user_keys
+    WHERE status = 'active'
+      AND user_id IN (${uniqueIds.map(() => '?').join(',')})
+  `).all(...uniqueIds);
+  res.json(rows);
+});
+
+app.get('/api/admin/sensitive-modules', auth, systemAdminOnly, (req, res) => {
+  const modules = db.prepare(`
+    SELECT sm.*,
+      COUNT(smm.user_id) as member_count
+    FROM sensitive_modules sm
+    LEFT JOIN sensitive_module_members smm ON smm.module_key = sm.module_key
+    GROUP BY sm.module_key
+    ORDER BY sm.module_key ASC
+  `).all();
+  res.json(modules);
+});
+
+app.get('/api/admin/sensitive-modules/:moduleKey/members', auth, systemAdminOnly, (req, res) => {
+  const rows = db.prepare(`
+    SELECT smm.*, u.display_name, u.username, u.role, u.executive_role
+    FROM sensitive_module_members smm
+    JOIN users u ON u.id = smm.user_id
+    WHERE smm.module_key = ?
+    ORDER BY u.display_name ASC, u.username ASC
+  `).all(req.params.moduleKey);
+  res.json({ module_key: req.params.moduleKey, members: rows });
+});
+
+app.put('/api/admin/sensitive-modules/:moduleKey/members', auth, systemAdminOnly, (req, res) => {
+  const moduleKey = String(req.params.moduleKey || '').trim();
+  const userIds = Array.isArray(req.body?.user_ids)
+    ? [...new Set(req.body.user_ids.map(id => Number(id)).filter(Boolean))]
+    : [];
+  const level = String(req.body?.permission_level || 'manage').trim() || 'manage';
+  const moduleRow = db.prepare('SELECT module_key FROM sensitive_modules WHERE module_key = ?').get(moduleKey);
+  if (!moduleRow) return res.status(404).json({ error: '敏感模块不存在' });
+  const replaceMembers = db.transaction(() => {
+    db.prepare('DELETE FROM sensitive_module_members WHERE module_key = ?').run(moduleKey);
+    const ins = db.prepare(`
+      INSERT OR IGNORE INTO sensitive_module_members (module_key, user_id, permission_level, created_by)
+      VALUES (?, ?, ?, ?)
+    `);
+    userIds.forEach(userId => ins.run(moduleKey, userId, level, req.user.id));
+  });
+  replaceMembers();
+  clearRuntimeCache();
+  res.json({ success: true });
+});
+
+app.get('/api/operational-meeting-templates', requireOperationalMeetingAccess, (req, res) => {
+  const rows = db.prepare(`
+    SELECT *
+    FROM operational_meeting_templates
+    WHERE module_key = ? AND status = 'active'
+    ORDER BY is_default DESC, id ASC
+  `).all(OPERATIONAL_MEETING_MODULE_KEY);
+  res.json(rows.map(serializeOperationalTemplate));
+});
+
+app.get('/api/operational-meetings', requireOperationalMeetingAccess, (req, res) => {
+  const rows = db.prepare(`
+    SELECT m.*,
+      creator.display_name as created_by_name,
+      updater.display_name as updated_by_name
+    FROM operational_meetings m
+    LEFT JOIN users creator ON creator.id = m.created_by
+    LEFT JOIN users updater ON updater.id = m.updated_by
+    WHERE m.deleted_at IS NULL
+    ORDER BY date(m.week_start) DESC, m.id DESC
+  `).all();
+  res.json(rows.map(serializeOperationalMeetingRow));
+});
+
+app.post('/api/operational-meetings', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const weekStart = String(req.body?.week_start || '').trim();
+  const weekEnd = String(req.body?.week_end || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart) || !/^\d{4}-\d{2}-\d{2}$/.test(weekEnd)) {
+    return res.status(400).json({ error: '请选择有效的周时间范围' });
+  }
+  const templateId = Number(req.body?.template_id || getDefaultOperationalTemplate().id);
+  const template = db.prepare(`
+    SELECT *
+    FROM operational_meeting_templates
+    WHERE id = ? AND status = 'active'
+  `).get(templateId);
+  if (!template) return res.status(400).json({ error: '模板不存在或已停用' });
+  const title = String(req.body?.title || `${weekStart} ~ ${weekEnd} 经营周会`).trim();
+  const createMeeting = db.transaction(() => {
+    const result = db.prepare(`
+      INSERT INTO operational_meetings (template_id, title, week_start, week_end, created_by, updated_by)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(template.id, title, weekStart, weekEnd, req.user.id, req.user.id);
+    const meetingId = result.lastInsertRowid;
+    const sections = db.prepare(`
+      SELECT *
+      FROM operational_meeting_template_sections
+      WHERE template_id = ?
+      ORDER BY sort_order ASC, id ASC
+    `).all(template.id);
+    const insertSection = db.prepare(`
+      INSERT INTO operational_meeting_sections (
+        meeting_id, template_section_id, section_key, title, owner_user_id, is_required,
+        sort_order, default_questions_json, default_blocks_json, editable_by_owner_only
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    sections.forEach(section => {
+      insertSection.run(
+        meetingId,
+        section.id,
+        section.section_key,
+        section.title,
+        section.owner_user_id || null,
+        Number(section.is_required || 0),
+        Number(section.sort_order || 0),
+        section.default_questions_json || null,
+        section.default_blocks_json || null,
+        Number(section.editable_by_owner_only ?? 1),
+      );
+    });
+    return meetingId;
+  });
+  const id = createMeeting();
+  refreshOperationalMeetingStatuses(id);
+  res.json({ id });
+});
+
+app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  const sections = db.prepare(`
+    SELECT s.*,
+      owner.display_name as owner_name,
+      owner.username as owner_username,
+      submitter.display_name as submitted_by_name
+    FROM operational_meeting_sections s
+    LEFT JOIN users owner ON owner.id = s.owner_user_id
+    LEFT JOIN users submitter ON submitter.id = s.submitted_by
+    WHERE s.meeting_id = ?
+    ORDER BY s.sort_order ASC, s.id ASC
+  `).all(meeting.id).map(section => ({
+    ...section,
+    default_questions: parseJsonSafe(section.default_questions_json, []),
+    default_blocks: parseJsonSafe(section.default_blocks_json, null),
+    my_record_key: getMyRecordKey(OPERATIONAL_MEETING_SECTION_RECORD, section.id, req.user.id),
+    can_edit: canEditOperationalSection(req.user, section) ? 1 : 0,
+  }));
+  const agenda = db.prepare(`
+    SELECT *
+    FROM operational_meeting_agendas
+    WHERE meeting_id = ?
+  `).get(meeting.id);
+  const decision = db.prepare(`
+    SELECT *
+    FROM operational_meeting_decisions
+    WHERE meeting_id = ?
+  `).get(meeting.id);
+  res.json({
+    meeting: serializeOperationalMeetingRow(meeting),
+    sections,
+    agenda: agenda ? {
+      ...agenda,
+      my_record_key: getMyRecordKey(OPERATIONAL_MEETING_AGENDA_RECORD, agenda.id, req.user.id),
+    } : null,
+    decision: decision ? {
+      ...decision,
+      my_record_key: getMyRecordKey(OPERATIONAL_MEETING_DECISION_RECORD, decision.id, req.user.id),
+    } : null,
+    authorized_user_ids: listOperationalMeetingAuthorizedUserIds(meeting.id),
+    can_manage: canManageOperationalMeeting(req.user) ? 1 : 0,
+  });
+});
+
+app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const section = getOperationalSectionForAccess(req.params.sectionId);
+  if (!section) return res.status(404).json({ error: '填写块不存在' });
+  if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权编辑此填写块' });
+  const updateSection = db.transaction(() => {
+    db.prepare(`
+      UPDATE operational_meeting_sections
+      SET content_ciphertext = ?,
+          content_text_ciphertext = ?,
+          crypto_version = ?,
+          status = CASE WHEN status = 'submitted' THEN status ELSE 'draft' END,
+          updated_by = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      req.body?.content_ciphertext || null,
+      req.body?.content_text_ciphertext || null,
+      req.body?.crypto_version || 'v2_client',
+      req.user.id,
+      section.id,
+    );
+    replaceRecordKeys(OPERATIONAL_MEETING_SECTION_RECORD, section.id, req.body?.record_keys || [], req.user.id);
+  });
+  updateSection();
+  refreshOperationalMeetingStatuses(section.meeting_id);
+  res.json({ success: true });
+});
+
+app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const section = getOperationalSectionForAccess(req.params.sectionId);
+  if (!section) return res.status(404).json({ error: '填写块不存在' });
+  if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权提交此填写块' });
+  db.prepare(`
+    UPDATE operational_meeting_sections
+    SET status = 'submitted',
+        submitted_by = ?,
+        submitted_at = CURRENT_TIMESTAMP,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(req.user.id, req.user.id, section.id);
+  refreshOperationalMeetingStatuses(section.meeting_id);
+  res.json({ success: true });
+});
+
+app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeetingAccess, canWrite, async (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  const sections = Array.isArray(req.body?.sections) ? req.body.sections : [];
+  if (!sections.length) return res.status(400).json({ error: '缺少用于生成提纲的简报内容' });
+  const result = await callOperationalMeetingLlm(sections);
+  const combined = Object.values(result.agenda || {}).join('\n');
+  if (operationalMeetingAgendaLooksSensitive(combined)) {
+    return res.status(422).json({ error: 'AI 提纲疑似包含毛利或利润类敏感信息，已阻断保存' });
+  }
+  const sourceHash = crypto.createHash('sha256').update(JSON.stringify(sections)).digest('hex');
+  res.json({
+    agenda: result.agenda,
+    runtime: result.runtime,
+    source_hash: sourceHash,
+    prompt_version: OPERATIONAL_MEETING_PROMPT_VERSION,
+  });
+});
+
+app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  let agendaId = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id)?.id;
+  const saveAgenda = db.transaction(() => {
+    if (agendaId) {
+      db.prepare(`
+        UPDATE operational_meeting_agendas
+        SET agenda_ciphertext = ?,
+            agenda_text_ciphertext = ?,
+            crypto_version = ?,
+            source_hash = ?,
+            model_provider = ?,
+            model_name = ?,
+            prompt_version = ?,
+            safety_scan_status = ?,
+            generated_by = ?,
+            generated_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        req.body?.agenda_ciphertext || null,
+        req.body?.agenda_text_ciphertext || null,
+        req.body?.crypto_version || 'v2_client',
+        req.body?.source_hash || null,
+        req.body?.model_provider || null,
+        req.body?.model_name || null,
+        req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
+        req.body?.safety_scan_status || 'passed',
+        req.user.id,
+        agendaId,
+      );
+    } else {
+      const result = db.prepare(`
+        INSERT INTO operational_meeting_agendas (
+          meeting_id, agenda_ciphertext, agenda_text_ciphertext, crypto_version, source_hash,
+          model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `).run(
+        meeting.id,
+        req.body?.agenda_ciphertext || null,
+        req.body?.agenda_text_ciphertext || null,
+        req.body?.crypto_version || 'v2_client',
+        req.body?.source_hash || null,
+        req.body?.model_provider || null,
+        req.body?.model_name || null,
+        req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
+        req.body?.safety_scan_status || 'passed',
+        req.user.id,
+      );
+      agendaId = result.lastInsertRowid;
+    }
+    replaceRecordKeys(OPERATIONAL_MEETING_AGENDA_RECORD, agendaId, req.body?.record_keys || [], req.user.id);
+  });
+  saveAgenda();
+  refreshOperationalMeetingStatuses(meeting.id);
+  res.json({ success: true, id: agendaId });
+});
+
+app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  let decisionId = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id)?.id;
+  const saveDecision = db.transaction(() => {
+    if (decisionId) {
+      db.prepare(`
+        UPDATE operational_meeting_decisions
+        SET decision_ciphertext = ?,
+            decision_text_ciphertext = ?,
+            crypto_version = ?,
+            status = ?,
+            updated_by = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        req.body?.decision_ciphertext || null,
+        req.body?.decision_text_ciphertext || null,
+        req.body?.crypto_version || 'v2_client',
+        req.body?.status || 'saved',
+        req.user.id,
+        decisionId,
+      );
+    } else {
+      const result = db.prepare(`
+        INSERT INTO operational_meeting_decisions (
+          meeting_id, decision_ciphertext, decision_text_ciphertext, crypto_version, status, created_by, updated_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        meeting.id,
+        req.body?.decision_ciphertext || null,
+        req.body?.decision_text_ciphertext || null,
+        req.body?.crypto_version || 'v2_client',
+        req.body?.status || 'saved',
+        req.user.id,
+        req.user.id,
+      );
+      decisionId = result.lastInsertRowid;
+    }
+    replaceRecordKeys(OPERATIONAL_MEETING_DECISION_RECORD, decisionId, req.body?.record_keys || [], req.user.id);
+  });
+  saveDecision();
+  refreshOperationalMeetingStatuses(meeting.id);
+  res.json({ success: true, id: decisionId });
 });
 
 // =========== 公司经营模块 API ===========

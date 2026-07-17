@@ -77,6 +77,10 @@ export function getAuthorizedRedirectPath(value, user) {
   const safePath = getSafeInternalPath(value);
   const pathname = getPathname(safePath);
   if (!user) return safePath;
+  const sensitiveModules = Array.isArray(user.sensitiveModules) ? user.sensitiveModules : [];
+  if (pathname === '/executive/operational' && !sensitiveModules.some(item => item?.module_key === 'operational_meeting')) {
+    return '/';
+  }
   if (isAdmin(user)) return safePath;
   if (ADMIN_ONLY_PATHS.has(pathname)) return '/';
   if (pathname.startsWith('/executive/recruit-radar')) return '/';

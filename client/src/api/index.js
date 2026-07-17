@@ -262,6 +262,27 @@ export const systemSettingsApi = {
   getAiModelSetting: () => api.get('/system/settings/ai-model').then(r => r.data),
   saveAiModelSetting: (data) => api.put('/system/settings/ai-model', data).then(r => r.data),
   testAiModelSetting: (data) => api.post('/system/settings/ai-model/test', data).then(r => r.data),
+  listSensitiveModules: () => api.get('/admin/sensitive-modules').then(r => r.data),
+  getSensitiveModuleMembers: (moduleKey) => api.get(`/admin/sensitive-modules/${moduleKey}/members`).then(r => r.data),
+  saveSensitiveModuleMembers: (moduleKey, data) => api.put(`/admin/sensitive-modules/${moduleKey}/members`, data).then(r => r.data),
+};
+
+export const cryptoKeysApi = {
+  getUserKey: () => api.get('/crypto/user-key').then(r => r.data),
+  saveUserKey: (data) => api.put('/crypto/user-key', data).then(r => r.data),
+  publicKeys: (userIds) => api.get('/crypto/public-keys', { params: { user_ids: (userIds || []).join(',') } }).then(r => r.data),
+};
+
+export const operationalMeetingsApi = {
+  templates: () => api.get('/operational-meeting-templates').then(r => r.data),
+  list: (params) => api.get('/operational-meetings', { params }).then(r => r.data),
+  create: (data) => api.post('/operational-meetings', data).then(r => r.data),
+  get: (id) => api.get(`/operational-meetings/${id}`).then(r => r.data),
+  updateSection: (sectionId, data) => api.put(`/operational-meeting-sections/${sectionId}`, data).then(r => r.data),
+  submitSection: (sectionId) => api.post(`/operational-meeting-sections/${sectionId}/submit`).then(r => r.data),
+  generateAgenda: (id, data) => api.post(`/operational-meetings/${id}/agenda/generate`, data).then(r => r.data),
+  saveAgenda: (id, data) => api.put(`/operational-meetings/${id}/agenda`, data).then(r => r.data),
+  saveDecision: (id, data) => api.put(`/operational-meetings/${id}/decision`, data).then(r => r.data),
 };
 
 export const tasksApi = {

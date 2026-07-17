@@ -511,7 +511,7 @@ function AppLayout() {
   const isMobile = !screens.md;
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, logout, canAccessModule, canAccessMenu } = useAuth();
+  const { user, logout, canAccessModule, canAccessMenu, canAccessSensitiveModule } = useAuth();
   const sidebarCollapsedStorageKey = 'relation.appSidebarCollapsed.v1';
   const mobileMenuOpenStorageKey = 'relation.appMobileMenuOpen.v1';
   const menuOpenKeysStorageKey = 'relation.appMenuOpenKeys.v1';
@@ -735,6 +735,11 @@ function AppLayout() {
   const goalChildren = [
     canAccessMenu('/goals') && { key: '/goals', icon: <AimOutlined />, label: <Link to="/goals">目标管理</Link> },
     canAccessMenu('/weekly-reports') && { key: '/weekly-reports', icon: <FileTextOutlined />, label: <Link to="/weekly-reports">周报管理</Link> },
+    canAccessMenu('/executive/operational') && canAccessSensitiveModule('operational_meeting') && {
+      key: '/executive/operational',
+      icon: <ScheduleOutlined />,
+      label: <Link to="/executive/operational">经营周会</Link>,
+    },
   ].filter(Boolean);
 
   // ── 业务流转 ────────────────────────────────────────────────

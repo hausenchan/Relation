@@ -4,10 +4,10 @@ import {
   Row, Select, Space, Spin, Switch, Tabs, Tag, Typography, message,
 } from 'antd';
 import {
-  ApiOutlined, ReloadOutlined, SaveOutlined, SettingOutlined, ThunderboltOutlined,
+  ApiOutlined, LockOutlined, ReloadOutlined, SaveOutlined, SettingOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { systemSettingsApi } from '../api';
+import { systemSettingsApi, usersApi } from '../api';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -49,6 +49,12 @@ export default function SystemSettings() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [users, setUsers] = useState([]);
+  const [sensitiveModules, setSensitiveModules] = useState([]);
+  const [selectedSensitiveModule, setSelectedSensitiveModule] = useState('operational_meeting');
+  const [sensitiveMemberIds, setSensitiveMemberIds] = useState([]);
+  const [sensitiveLoading, setSensitiveLoading] = useState(false);
+  const [sensitiveSaving, setSensitiveSaving] = useState(false);
 
   const fillForm = useCallback((nextSetting) => {
     form.setFieldsValue({
@@ -78,6 +84,28 @@ export default function SystemSettings() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const loadSensitiveModules = useCallback(async (moduleKey = selectedSensitiveModule) => {
+    setSensitiveLoading(true);
+    try {
+      const [moduleRows, userRows, memberData] = await Promise.all([
+        systemSettingsApi.listSensitiveModules(),
+        usersApi.listSimple({ include_readonly: true }),
+        systemSettingsApi.getSensitiveModuleMembers(moduleKey),
+      ]);
+      setSensitiveModules(Array.isArray(moduleRows) ? moduleRows : []);
+      setUsers(Array.isArray(userRows) ? userRows : []);
+      setSensitiveMemberIds((memberData?.members || []).map(item => Number(item.user_id)).filter(Boolean));
+    } catch (error) {
+      message.error(error.response?.data?.error || '加载敏感授权失败');
+    } finally {
+      setSensitiveLoading(false);
+    }
+  }, [selectedSensitiveModule]);
+
+  useEffect(() => {
+    loadSensitiveModules(selectedSensitiveModule);
+  }, [loadSensitiveModules, selectedSensitiveModule]);
 
   const save = async () => {
     const values = await form.validateFields();
@@ -110,6 +138,22 @@ export default function SystemSettings() {
       message.error(error.response?.data?.error || '模型连接失败');
     } finally {
       setTesting(false);
+    }
+  };
+
+  const saveSensitiveMembers = async () => {
+    setSensitiveSaving(true);
+    try {
+      await systemSettingsApi.saveSensitiveModuleMembers(selectedSensitiveModule, {
+        user_ids: sensitiveMemberIds,
+        permission_level: 'manage',
+      });
+      message.success('敏感授权已保存');
+      await loadSensitiveModules(selectedSensitiveModule);
+    } catch (error) {
+      message.error(error.response?.data?.error || '保存敏感授权失败');
+    } finally {
+      setSensitiveSaving(false);
     }
   };
 
@@ -223,6 +267,58 @@ export default function SystemSettings() {
     </Spin>
   );
 
+  const sensitiveAccessTab = (
+    <Spin spinning={sensitiveLoading}>
+      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+        <Alert
+          type="warning"
+          showIcon
+          message="敏感模块是菜单权限之外的第二道门"
+          description="用户即使拥有菜单权限，如果不在这里授权，也不能进入经营周会或访问相关接口。"
+        />
+        <Card title={<Space><LockOutlined />敏感授权</Space>} bodyStyle={{ padding: isMobile ? 16 : 20 }}>
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Form layout="vertical">
+              <Form.Item label="敏感模块">
+                <Select
+                  value={selectedSensitiveModule}
+                  onChange={setSelectedSensitiveModule}
+                  options={(sensitiveModules.length ? sensitiveModules : [{ module_key: 'operational_meeting', module_name: '经营周会' }]).map(item => ({
+                    value: item.module_key,
+                    label: `${item.module_name || item.module_key}${item.member_count !== undefined ? `（${item.member_count}人）` : ''}`,
+                  }))}
+                />
+              </Form.Item>
+              <Form.Item label="授权人员">
+                <Select
+                  mode="multiple"
+                  allowClear
+                  showSearch
+                  value={sensitiveMemberIds}
+                  onChange={setSensitiveMemberIds}
+                  optionFilterProp="label"
+                  placeholder="请选择可以查看该敏感模块的人员"
+                  options={users.map(item => ({
+                    value: Number(item.id),
+                    label: `${item.display_name || item.username}${item.role ? ` · ${item.role}` : ''}`,
+                  }))}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Form>
+            <Space wrap>
+              <Button icon={<ReloadOutlined />} onClick={() => loadSensitiveModules(selectedSensitiveModule)}>刷新</Button>
+              <Button type="primary" icon={<SaveOutlined />} loading={sensitiveSaving} onClick={saveSensitiveMembers}>保存授权</Button>
+            </Space>
+            <Text type="secondary">
+              当前已授权 {sensitiveMemberIds.length} 人。经营周会内容仍会使用用户侧密钥加密，授权只决定谁可以进入和解密。
+            </Text>
+          </Space>
+        </Card>
+      </Space>
+    </Spin>
+  );
+
   return (
     <div>
       <Space direction="vertical" size={4} style={{ marginBottom: 16 }}>
@@ -236,6 +332,11 @@ export default function SystemSettings() {
             key: 'ai-model',
             label: <Space><ApiOutlined />模型设置</Space>,
             children: aiModelTab,
+          },
+          {
+            key: 'sensitive-access',
+            label: <Space><LockOutlined />敏感授权</Space>,
+            children: sensitiveAccessTab,
           },
         ]}
       />
