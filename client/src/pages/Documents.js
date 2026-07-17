@@ -72,6 +72,13 @@ import dayjs from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
+import {
+  buildCollapsedDocumentBlockIds,
+  buildDocumentBlockGuideMap,
+  canNestDocumentBlock,
+  getDocumentBlockHierarchyIndent,
+  isDocumentBlockHierarchyMember,
+} from '../utils/documentBlockHierarchy';
 import DOMPurify from 'dompurify';
 
 const { Text, Title } = Typography;
@@ -938,20 +945,15 @@ function getListIndent(block) {
 }
 
 function hasImportedHierarchyIndent(block) {
-  return Number.isFinite(Number(block?.meta?.indent))
-    && (block?.meta?.source_system === 'wolai_mcp' || block?.meta?.hierarchy === 'list');
+  return !isHierarchicalListBlock(block) && isDocumentBlockHierarchyMember(block);
 }
 
 function getBlockHierarchyIndent(block) {
-  if (isHierarchicalListBlock(block)) return getListIndent(block);
-  if (hasImportedHierarchyIndent(block)) return getListIndent(block);
-  return 0;
+  return getDocumentBlockHierarchyIndent(block, maxListIndent);
 }
 
 function canAdjustBlockHierarchyIndent(block) {
-  return isHierarchicalListBlock(block)
-    || block?.meta?.source_system === 'wolai_mcp'
-    || block?.meta?.hierarchy === 'list';
+  return canNestDocumentBlock(block);
 }
 
 function formatAlphaNumber(value) {
@@ -1098,38 +1100,11 @@ function buildNumberedListMarkers(blocks = []) {
 }
 
 function buildCollapsedListHiddenIds(blocks = []) {
-  const hidden = new Set();
-  let collapsedAncestors = [];
-  blocks.forEach(block => {
-    const indent = getBlockHierarchyIndent(block);
-    collapsedAncestors = collapsedAncestors.filter(item => indent > item.indent);
-    const isHidden = collapsedAncestors.length > 0;
-    if (isHidden) hidden.add(block.id);
-    if (!isHidden && block?.type === 'fold-list' && block?.meta?.collapsed) {
-      collapsedAncestors.push({ id: block.id, indent });
-    }
-  });
-  return hidden;
+  return buildCollapsedDocumentBlockIds(blocks, maxListIndent);
 }
 
 function buildHierarchicalGuideMap(blocks = [], hiddenIds = new Set()) {
-  const visibleBlocks = blocks.filter(block => isHierarchicalListBlock(block) && !hiddenIds.has(block.id));
-  const map = new Map();
-
-  visibleBlocks.forEach((block, index) => {
-    const indent = getListIndent(block);
-    const nextBlocks = visibleBlocks.slice(index + 1);
-    const nextVisible = nextBlocks[0] || null;
-    map.set(block.id, {
-      ancestorLines: Array.from({ length: indent }, (_, level) => ({
-        level,
-        continuesBelow: nextBlocks.some(next => getListIndent(next) >= level + 1),
-      })),
-      hasChildren: Boolean(nextVisible && getListIndent(nextVisible) > indent),
-    });
-  });
-
-  return map;
+  return buildDocumentBlockGuideMap(blocks, hiddenIds, maxListIndent);
 }
 
 function renderBlockMenuLabel(item, checked = false) {
@@ -5958,11 +5933,15 @@ export default function Documents() {
     const content = type === 'divider'
       ? ''
       : (extra.content ?? (isBlankBlock(block) ? defaultContent : (block?.content || defaultContent)));
-    const currentIndent = isHierarchicalListBlock(block) ? getListIndent(block) : 0;
+    const currentHasHierarchy = isDocumentBlockHierarchyMember(block);
+    const currentIndent = currentHasHierarchy ? getBlockHierarchyIndent(block) : 0;
     const currentComments = normalizeInlineComments(block?.meta?.comments);
+    const nextIsHierarchicalList = isHierarchicalListBlock({ type });
     const nextMeta = {
       ...getDefaultBlockMeta(type),
-      ...(isHierarchicalListBlock({ type }) ? { indent: currentIndent } : {}),
+      ...(nextIsHierarchicalList
+        ? { indent: currentIndent }
+        : (currentHasHierarchy ? { indent: currentIndent, hierarchy: 'list' } : {})),
       ...(currentComments.length ? { comments: currentComments } : {}),
       ...cloneMeta(extra.meta),
     };
@@ -6952,7 +6931,7 @@ export default function Documents() {
     if (!canAdjustBlockHierarchyIndent(block)) return false;
     const currentIndent = getBlockHierarchyIndent(block);
     const previousBlock = editorBlocks[index - 1];
-    const previousIndent = (isHierarchicalListBlock(previousBlock) || hasImportedHierarchyIndent(previousBlock))
+    const previousIndent = isDocumentBlockHierarchyMember(previousBlock)
       ? getBlockHierarchyIndent(previousBlock)
       : -1;
     const maxAllowedIndent = direction > 0
@@ -6984,7 +6963,7 @@ export default function Documents() {
       if (!targetSet.has(block.id) || !canAdjustBlockHierarchyIndent(block)) return;
       const currentIndent = getBlockHierarchyIndent(block);
       const previousBlock = nextBlocks[index - 1];
-      const previousIndent = (isHierarchicalListBlock(previousBlock) || hasImportedHierarchyIndent(previousBlock))
+      const previousIndent = isDocumentBlockHierarchyMember(previousBlock)
         ? getBlockHierarchyIndent(previousBlock)
         : -1;
       const maxAllowedIndent = direction > 0
@@ -7066,7 +7045,7 @@ export default function Documents() {
       }
     }
     const previousBlock = remainingBlocks[insertIndex - 1];
-    const previousIndent = previousBlock && (isHierarchicalListBlock(previousBlock) || hasImportedHierarchyIndent(previousBlock))
+    const previousIndent = previousBlock && isDocumentBlockHierarchyMember(previousBlock)
       ? getBlockHierarchyIndent(previousBlock)
       : -1;
     const maxAllowedIndent = previousBlock ? Math.min(maxListIndent, previousIndent + 1) : 0;
@@ -7088,11 +7067,11 @@ export default function Documents() {
     const desiredIndent = getDropIndentFromPointer(event, targetBlock, placement, remainingBlocks, insertIndex);
     const baseIndent = getBlockHierarchyIndent(movingBlocks[0]);
     const adjustedMovingBlocks = movingBlocks.map(block => {
-      const currentIndent = (isHierarchicalListBlock(block) || hasImportedHierarchyIndent(block))
+      const currentIndent = isDocumentBlockHierarchyMember(block)
         ? getBlockHierarchyIndent(block)
         : baseIndent;
       const nextIndent = clampListIndent(desiredIndent + currentIndent - baseIndent);
-      if (nextIndent === currentIndent && (isHierarchicalListBlock(block) || hasImportedHierarchyIndent(block))) return block;
+      if (nextIndent === currentIndent && isDocumentBlockHierarchyMember(block)) return block;
       return {
         ...block,
         meta: {
@@ -7132,7 +7111,16 @@ export default function Documents() {
   };
 
   const buildContinuationBlockExtra = (block) => {
-    if (!isHierarchicalListBlock(block)) return { content: '' };
+    if (!isHierarchicalListBlock(block)) {
+      if (!isDocumentBlockHierarchyMember(block)) return { content: '' };
+      return {
+        content: '',
+        meta: {
+          indent: getBlockHierarchyIndent(block),
+          hierarchy: 'list',
+        },
+      };
+    }
     return {
       content: '',
       meta: {
@@ -7353,7 +7341,7 @@ export default function Documents() {
       splitBlockAtCursor(event, block, index);
       return;
     }
-    if (event.key === 'Backspace' && !block.content && isHierarchicalListBlock(block) && getListIndent(block) > 0) {
+    if (event.key === 'Backspace' && !block.content && isDocumentBlockHierarchyMember(block) && getBlockHierarchyIndent(block) > 0) {
       event.preventDefault();
       updateListIndent(block, index, -1);
       return;
@@ -13214,17 +13202,26 @@ export default function Documents() {
       );
     }
     const importedHierarchyIndent = !isHierarchicalListBlock(block) && hasImportedHierarchyIndent(block) ? indent : 0;
+    const presentationIndentWidth = isMobile ? 26 : listIndentWidth;
+    const presentationMarkerWidth = isMobile ? 24 : listMarkerBoxWidth;
     return (
-      <InlineHtmlView
-        as="div"
-        value={block.content}
+      <div
         style={{
-          ...blockStyle,
+          position: 'relative',
           ...(importedHierarchyIndent > 0
-            ? { paddingLeft: importedHierarchyIndent * (isMobile ? 26 : listIndentWidth) + (isMobile ? 24 : listMarkerBoxWidth) + listMarkerTextGap }
+            ? { paddingLeft: importedHierarchyIndent * presentationIndentWidth + presentationMarkerWidth + listMarkerTextGap }
             : {}),
         }}
-      />
+      >
+        {importedHierarchyIndent > 0 && renderListGuides(block, {
+          top: -8,
+          bottom: -8,
+          centerY: 18,
+          lineOffset: presentationMarkerWidth / 2,
+          indentWidth: presentationIndentWidth,
+        })}
+        <InlineHtmlView as="div" value={block.content} style={blockStyle} />
+      </div>
     );
   };
 
@@ -13809,6 +13806,7 @@ export default function Documents() {
           </div>
           <div
             style={{
+              position: 'relative',
               minWidth: 0,
               flex: 1,
               ...(importedHierarchyIndent > 0
@@ -13816,6 +13814,12 @@ export default function Documents() {
                 : {}),
             }}
           >
+            {importedHierarchyIndent > 0 && renderListGuides(block, {
+              top: -7,
+              bottom: -7,
+              centerY: 14,
+              lineOffset: listMarkerCenterOffset,
+            })}
             {renderBlockInput(block, index, heading)}
             {renderInlineCommentHints(block)}
             {renderInlineCommentPanel(block)}
