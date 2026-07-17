@@ -40,6 +40,16 @@ const {
   selectRelevantSuggestions,
   testLlmConnection,
 } = require('./lib/aiTrainingRuntime');
+const {
+  canEditDecision: canEditOperationalDecision,
+  canEditPreparation: canEditOperationalPreparation,
+  canGenerateAgenda: canGenerateOperationalAgenda,
+  canViewMeeting: canViewOperationalMeeting,
+  canViewPreparation: canViewOperationalPreparation,
+  isMeetingCxo: isOperationalMeetingCxoForMeeting,
+  isOperationalMeetingCxo,
+  normalizeRecordKeyRecipients,
+} = require('./lib/operationalMeetingPolicy');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -895,7 +905,7 @@ if (!adminExists) {
 
 db.prepare(`
   INSERT OR IGNORE INTO sensitive_modules (module_key, module_name, description)
-  VALUES ('operational_meeting', '经营周会', '经营周会简报、会议提纲和会议结论等高敏内容')
+  VALUES ('operational_meeting', '经营周会', '经营周会准备内容、会议提纲和会议结论等高敏内容')
 `).run();
 
 const operationalMeetingMemberCount = db.prepare(`
@@ -2954,6 +2964,22 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS operational_meeting_participants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    meeting_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    participant_type TEXT NOT NULL DEFAULT 'designated',
+    preparation_section_id INTEGER,
+    preparation_template_id INTEGER,
+    can_generate_agenda INTEGER DEFAULT 0,
+    can_edit_decision INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(meeting_id, user_id)
+  );
+
   CREATE TABLE IF NOT EXISTS operational_meeting_agendas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     meeting_id INTEGER NOT NULL UNIQUE,
@@ -2987,6 +3013,10 @@ db.exec(`
   );
 `);
 
+addColumnIfMissing('operational_meeting_sections', 'owner_type', "TEXT DEFAULT 'cxo'");
+addColumnIfMissing('operational_meeting_sections', 'template_snapshot_json', 'TEXT DEFAULT NULL');
+addColumnIfMissing('operational_meeting_sections', 'visibility_scope', "TEXT DEFAULT 'cxo_and_owner'");
+
 createIndexesIfColumnsExist('sensitive_module_members', [
   { name: 'idx_sensitive_module_members_user', columnsSql: 'user_id', columns: ['user_id'] },
   { name: 'idx_sensitive_module_members_module', columnsSql: 'module_key', columns: ['module_key'] },
@@ -3004,6 +3034,10 @@ createIndexesIfColumnsExist('operational_meetings', [
 ]);
 createIndexesIfColumnsExist('operational_meeting_sections', [
   { name: 'idx_operational_sections_meeting', columnsSql: 'meeting_id, sort_order', columns: ['meeting_id', 'sort_order'] },
+]);
+createIndexesIfColumnsExist('operational_meeting_participants', [
+  { name: 'idx_operational_participants_meeting', columnsSql: 'meeting_id, status', columns: ['meeting_id', 'status'] },
+  { name: 'idx_operational_participants_user', columnsSql: 'user_id, status', columns: ['user_id', 'status'] },
 ]);
 
 function resolveOperationalMeetingOwnerId(candidates = []) {
@@ -5120,7 +5154,7 @@ app.get('/api/users/simple', auth, (req, res) => {
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const users = db.prepare(`
-      SELECT id, username, display_name, role, account_status, team_id, leader_id, department
+      SELECT id, username, display_name, role, executive_role, account_status, team_id, leader_id, department
       FROM users
       ${whereSql}
       ORDER BY COALESCE(account_status, 'active') ASC, display_name ASC
@@ -20108,9 +20142,155 @@ function requireOperationalMeetingAccess(req, res, next) {
   next();
 }
 
-function canManageOperationalMeeting(user) {
-  const level = getSensitiveModulePermission(user, OPERATIONAL_MEETING_MODULE_KEY);
-  return ['manage', 'edit_all'].includes(level) || isPrivilegedIdentity(user);
+function getOperationalMeetingParticipant(meetingId, userId, includeRemoved = false) {
+  const id = Number(meetingId);
+  const targetUserId = Number(userId);
+  if (!id || !targetUserId) return null;
+  const statusSql = includeRemoved ? '' : "AND status = 'active'";
+  return db.prepare(`
+    SELECT *
+    FROM operational_meeting_participants
+    WHERE meeting_id = ? AND user_id = ? ${statusSql}
+    LIMIT 1
+  `).get(id, targetUserId) || null;
+}
+
+function canManageOperationalMeeting(user, participant = null) {
+  return isOperationalMeetingCxoForMeeting(user, participant);
+}
+
+function listOperationalMeetingEligibleUsers() {
+  return db.prepare(`
+    SELECT u.id, u.username, u.display_name, u.role, u.executive_role, u.account_status
+    FROM users u
+    JOIN sensitive_module_members smm
+      ON smm.user_id = u.id AND smm.module_key = ?
+    WHERE COALESCE(u.account_status, 'active') = 'active'
+    ORDER BY COALESCE(u.display_name, u.username) ASC, u.id ASC
+  `).all(OPERATIONAL_MEETING_MODULE_KEY).filter(user => hasMenuAccess(user, OPERATIONAL_MEETING_MENU_KEY));
+}
+
+function listOperationalMeetingCxoUserIds(meetingId = null) {
+  const ids = listOperationalMeetingEligibleUsers()
+    .filter(isOperationalMeetingCxo)
+    .map(user => Number(user.id));
+  if (meetingId) {
+    const meetingCxos = db.prepare(`
+      SELECT user_id
+      FROM operational_meeting_participants
+      WHERE meeting_id = ? AND participant_type = 'cxo' AND status = 'active'
+    `).all(meetingId);
+    ids.push(...meetingCxos.map(row => Number(row.user_id)).filter(Boolean));
+  }
+  return [...new Set(ids)].sort((a, b) => a - b);
+}
+
+function listOperationalMeetingParticipantUserIds(meetingId) {
+  const ids = listOperationalMeetingCxoUserIds(meetingId);
+  const rows = db.prepare(`
+    SELECT user_id
+    FROM operational_meeting_participants
+    WHERE meeting_id = ? AND status = 'active'
+  `).all(meetingId);
+  ids.push(...rows.map(row => Number(row.user_id)).filter(Boolean));
+  return [...new Set(ids)].sort((a, b) => a - b);
+}
+
+function listOperationalPreparationAuthorizedUserIds(meetingId, ownerUserId) {
+  const ids = listOperationalMeetingCxoUserIds(meetingId);
+  if (Number(ownerUserId) && getOperationalMeetingParticipant(meetingId, ownerUserId)) {
+    ids.push(Number(ownerUserId));
+  }
+  return [...new Set(ids)].sort((a, b) => a - b);
+}
+
+function upsertOperationalMeetingParticipant({
+  meetingId,
+  userId,
+  participantType = 'designated',
+  preparationSectionId = null,
+  preparationTemplateId = null,
+  canGenerateAgenda = 0,
+  canEditDecision = 0,
+  createdBy = null,
+}) {
+  db.prepare(`
+    INSERT INTO operational_meeting_participants (
+      meeting_id, user_id, participant_type, preparation_section_id, preparation_template_id,
+      can_generate_agenda, can_edit_decision, status, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)
+    ON CONFLICT(meeting_id, user_id)
+    DO UPDATE SET
+      participant_type = excluded.participant_type,
+      preparation_section_id = COALESCE(excluded.preparation_section_id, operational_meeting_participants.preparation_section_id),
+      preparation_template_id = COALESCE(excluded.preparation_template_id, operational_meeting_participants.preparation_template_id),
+      can_generate_agenda = excluded.can_generate_agenda,
+      can_edit_decision = excluded.can_edit_decision,
+      status = 'active',
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    Number(meetingId),
+    Number(userId),
+    participantType === 'cxo' ? 'cxo' : 'designated',
+    preparationSectionId ? Number(preparationSectionId) : null,
+    preparationTemplateId ? Number(preparationTemplateId) : null,
+    Number(canGenerateAgenda || 0),
+    Number(canEditDecision || 0),
+    createdBy ? Number(createdBy) : null,
+  );
+}
+
+function backfillOperationalMeetingParticipants() {
+  const eligibleUsers = new Map(listOperationalMeetingEligibleUsers().map(user => [Number(user.id), user]));
+  const cxoUsers = [...eligibleUsers.values()].filter(isOperationalMeetingCxo);
+  const meetings = db.prepare('SELECT id, created_by FROM operational_meetings WHERE deleted_at IS NULL').all();
+  meetings.forEach(meeting => {
+    const creator = eligibleUsers.get(Number(meeting.created_by));
+    if (!creator || !isOperationalMeetingCxo(creator)) return;
+    db.prepare(`
+      UPDATE operational_meeting_sections
+      SET owner_user_id = ?, owner_type = 'cxo', updated_at = CURRENT_TIMESTAMP
+      WHERE meeting_id = ? AND owner_user_id IS NULL
+    `).run(creator.id, meeting.id);
+  });
+  const sectionsByMeeting = new Map();
+  db.prepare(`
+    SELECT id, meeting_id, template_section_id, owner_user_id
+    FROM operational_meeting_sections
+    WHERE owner_user_id IS NOT NULL
+  `).all().forEach(section => {
+    if (!sectionsByMeeting.has(Number(section.meeting_id))) sectionsByMeeting.set(Number(section.meeting_id), []);
+    sectionsByMeeting.get(Number(section.meeting_id)).push(section);
+  });
+
+  const backfill = db.transaction(() => {
+    meetings.forEach(meeting => {
+      cxoUsers.forEach(user => upsertOperationalMeetingParticipant({
+        meetingId: meeting.id,
+        userId: user.id,
+        participantType: 'cxo',
+        canGenerateAgenda: 1,
+        canEditDecision: 1,
+        createdBy: meeting.created_by,
+      }));
+      (sectionsByMeeting.get(Number(meeting.id)) || []).forEach(section => {
+        const owner = eligibleUsers.get(Number(section.owner_user_id));
+        if (!owner) return;
+        const ownerIsCxo = isOperationalMeetingCxo(owner);
+        upsertOperationalMeetingParticipant({
+          meetingId: meeting.id,
+          userId: owner.id,
+          participantType: ownerIsCxo ? 'cxo' : 'designated',
+          preparationSectionId: section.id,
+          preparationTemplateId: section.template_section_id,
+          canGenerateAgenda: ownerIsCxo ? 1 : 0,
+          canEditDecision: ownerIsCxo ? 1 : 0,
+          createdBy: meeting.created_by,
+        });
+      });
+    });
+  });
+  backfill();
 }
 
 function parseJsonSafe(value, fallback = null) {
@@ -20155,24 +20335,6 @@ function parseOperationalPrivateKeyEnvelope(value) {
   return parsed;
 }
 
-function listOperationalMeetingAuthorizedUserIds(meetingId = null) {
-  const rows = db.prepare(`
-    SELECT user_id
-    FROM sensitive_module_members
-    WHERE module_key = ?
-  `).all(OPERATIONAL_MEETING_MODULE_KEY);
-  const ids = rows.map(row => Number(row.user_id)).filter(Boolean);
-  if (meetingId) {
-    const sectionOwners = db.prepare(`
-      SELECT DISTINCT owner_user_id as user_id
-      FROM operational_meeting_sections
-      WHERE meeting_id = ? AND owner_user_id IS NOT NULL
-    `).all(meetingId);
-    ids.push(...sectionOwners.map(row => Number(row.user_id)).filter(Boolean));
-  }
-  return [...new Set(ids)].sort((a, b) => a - b);
-}
-
 function getMyRecordKey(recordType, recordId, userId) {
   return db.prepare(`
     SELECT user_id, encrypted_dek, key_version, grant_status
@@ -20184,16 +20346,18 @@ function getMyRecordKey(recordType, recordId, userId) {
   `).get(recordType, recordId, userId) || null;
 }
 
-function replaceRecordKeys(recordType, recordId, recordKeys = [], actorUserId = null) {
-  const normalizedKeys = Array.isArray(recordKeys)
-    ? recordKeys
-      .map(item => ({
-        user_id: Number(item.user_id),
-        encrypted_dek: String(item.encrypted_dek || '').trim(),
-        key_version: Number(item.key_version || 1),
-      }))
-      .filter(item => item.user_id && item.encrypted_dek)
-    : [];
+function prepareOperationalRecordKeys(recordKeys, allowedUserIds) {
+  const normalized = normalizeRecordKeyRecipients(recordKeys, allowedUserIds);
+  if (normalized.rejectedUserIds.length) {
+    return {
+      error: `记录密钥包含未授权接收人：${normalized.rejectedUserIds.join(',')}`,
+      recordKeys: [],
+    };
+  }
+  return { error: '', recordKeys: normalized.recordKeys };
+}
+
+function replaceRecordKeys(recordType, recordId, normalizedKeys = [], actorUserId = null) {
 
   db.prepare(`
     UPDATE crypto_record_keys
@@ -20218,6 +20382,8 @@ function replaceRecordKeys(recordType, recordId, recordKeys = [], actorUserId = 
     upsert.run(recordType, recordId, item.user_id, item.encrypted_dek, item.key_version, actorUserId);
   });
 }
+
+backfillOperationalMeetingParticipants();
 
 function serializeOperationalTemplate(row) {
   if (!row) return null;
@@ -20246,7 +20412,10 @@ function getDefaultOperationalTemplate() {
   return row || { id: seedDefaultOperationalMeetingTemplate() };
 }
 
-function serializeOperationalMeetingRow(row = {}) {
+function serializeOperationalMeetingRow(row = {}, user = null, participant = null) {
+  const accessParticipant = participant || row._accessParticipant || null;
+  const canViewAllPreparations = user ? isOperationalMeetingCxoForMeeting(user, accessParticipant) : true;
+  const { _accessParticipant, ...publicRow } = row;
   const sectionStats = row.id ? db.prepare(`
     SELECT
       COUNT(*) as total_sections,
@@ -20254,9 +20423,11 @@ function serializeOperationalMeetingRow(row = {}) {
       SUM(CASE WHEN is_required = 1 AND status = 'submitted' THEN 1 ELSE 0 END) as submitted_required_sections
     FROM operational_meeting_sections
     WHERE meeting_id = ?
-  `).get(row.id) : {};
+      ${canViewAllPreparations ? '' : 'AND owner_user_id = ?'}
+  `).get(...(canViewAllPreparations ? [row.id] : [row.id, user?.id])) : {};
   return {
-    ...row,
+    ...publicRow,
+    preparation_status: row.brief_status || 'draft',
     total_sections: Number(sectionStats?.total_sections || 0),
     required_sections: Number(sectionStats?.required_sections || 0),
     submitted_required_sections: Number(sectionStats?.submitted_required_sections || 0),
@@ -20299,28 +20470,225 @@ function refreshOperationalMeetingStatuses(meetingId) {
   `).run(status, briefStatus, agendaStatus, decisionStatus, id);
 }
 
-function getOperationalMeetingForAccess(meetingId) {
-  return db.prepare(`
+function getOperationalMeetingForAccess(meetingId, user) {
+  const meeting = db.prepare(`
     SELECT *
     FROM operational_meetings
     WHERE id = ? AND deleted_at IS NULL
   `).get(meetingId);
+  if (!meeting || !user?.id) return null;
+  const participant = getOperationalMeetingParticipant(meeting.id, user.id);
+  if (!canViewOperationalMeeting(user, participant)) return null;
+  return { ...meeting, _accessParticipant: participant };
 }
 
-function getOperationalSectionForAccess(sectionId) {
-  return db.prepare(`
+function getOperationalSectionForAccess(sectionId, user) {
+  const section = db.prepare(`
     SELECT s.*, m.deleted_at
     FROM operational_meeting_sections s
     JOIN operational_meetings m ON m.id = s.meeting_id
     WHERE s.id = ? AND m.deleted_at IS NULL
   `).get(sectionId);
+  if (!section || !user?.id) return null;
+  const participant = getOperationalMeetingParticipant(section.meeting_id, user.id);
+  if (!canViewOperationalPreparation(user, participant, section)) return null;
+  return { ...section, _accessParticipant: participant };
 }
 
 function canEditOperationalSection(user, section) {
   if (!user || !section) return false;
-  if (canManageOperationalMeeting(user)) return true;
-  if (Number(section.owner_user_id) === Number(user.id)) return true;
-  return Number(section.editable_by_owner_only || 0) !== 1;
+  return canEditOperationalPreparation(
+    user,
+    section._accessParticipant || null,
+    section,
+    getSensitiveModulePermission(user, OPERATIONAL_MEETING_MODULE_KEY),
+  );
+}
+
+function listOperationalMeetingParticipants(meetingId) {
+  return db.prepare(`
+    SELECT p.*,
+      u.username,
+      u.display_name,
+      u.role,
+      u.executive_role,
+      s.title as preparation_title
+    FROM operational_meeting_participants p
+    JOIN users u ON u.id = p.user_id
+    LEFT JOIN operational_meeting_sections s ON s.id = p.preparation_section_id
+    WHERE p.meeting_id = ? AND p.status = 'active'
+    ORDER BY CASE WHEN p.participant_type = 'cxo' THEN 0 ELSE 1 END,
+      COALESCE(u.display_name, u.username) ASC,
+      p.id ASC
+  `).all(meetingId);
+}
+
+function createOperationalPreparationSectionForParticipant(meeting, userId, templateSectionId = null) {
+  const existing = db.prepare(`
+    SELECT id, template_section_id
+    FROM operational_meeting_sections
+    WHERE meeting_id = ? AND owner_user_id = ?
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(meeting.id, userId);
+  if (existing) return existing;
+
+  const source = templateSectionId ? db.prepare(`
+    SELECT *
+    FROM operational_meeting_template_sections
+    WHERE id = ? AND template_id = ?
+  `).get(templateSectionId, meeting.template_id) : db.prepare(`
+    SELECT *
+    FROM operational_meeting_template_sections
+    WHERE template_id = ?
+    ORDER BY sort_order ASC, id ASC
+    LIMIT 1
+  `).get(meeting.template_id);
+  if (!source) return null;
+
+  const user = db.prepare('SELECT id, username, display_name FROM users WHERE id = ?').get(userId);
+  if (!user) return null;
+  const nextSortOrder = Number(db.prepare(`
+    SELECT MAX(sort_order) as max_sort_order
+    FROM operational_meeting_sections
+    WHERE meeting_id = ?
+  `).get(meeting.id)?.max_sort_order || 0) + 10;
+  const snapshot = {
+    template_section_id: source.id,
+    title: source.title,
+    default_questions_json: source.default_questions_json,
+    default_blocks_json: source.default_blocks_json,
+    copied_at: new Date().toISOString(),
+  };
+  const result = db.prepare(`
+    INSERT INTO operational_meeting_sections (
+      meeting_id, template_section_id, section_key, title, owner_user_id, owner_type,
+      is_required, sort_order, default_questions_json, default_blocks_json,
+      editable_by_owner_only, template_snapshot_json, visibility_scope
+    ) VALUES (?, ?, ?, ?, ?, 'designated', ?, ?, ?, ?, 1, ?, 'cxo_and_owner')
+  `).run(
+    meeting.id,
+    source.id,
+    `participant_${Number(userId)}`,
+    `${user.display_name || user.username || `用户${userId}`}准备`,
+    user.id,
+    Number(source.is_required ?? 1),
+    nextSortOrder,
+    source.default_questions_json || null,
+    source.default_blocks_json || null,
+    JSON.stringify(snapshot),
+  );
+  return { id: result.lastInsertRowid, template_section_id: source.id };
+}
+
+function revokeOperationalMeetingRecordKeysForUser(meetingId, userId) {
+  const sectionIds = db.prepare(`
+    SELECT id
+    FROM operational_meeting_sections
+    WHERE meeting_id = ?
+  `).all(meetingId).map(row => Number(row.id));
+  const agendaId = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meetingId)?.id;
+  const decisionId = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meetingId)?.id;
+  const revoke = db.prepare(`
+    UPDATE crypto_record_keys
+    SET grant_status = 'revoked', revoked_at = CURRENT_TIMESTAMP
+    WHERE record_type = ? AND record_id = ? AND user_id = ?
+  `);
+  sectionIds.forEach(sectionId => revoke.run(OPERATIONAL_MEETING_SECTION_RECORD, sectionId, userId));
+  if (agendaId) revoke.run(OPERATIONAL_MEETING_AGENDA_RECORD, agendaId, userId);
+  if (decisionId) revoke.run(OPERATIONAL_MEETING_DECISION_RECORD, decisionId, userId);
+}
+
+function syncOperationalMeetingParticipants(meeting, requestedParticipants = [], actorUserId = null, includeTemplateOwners = false) {
+  const eligibleUsers = new Map(listOperationalMeetingEligibleUsers().map(user => [Number(user.id), user]));
+  const normalizedRequests = (Array.isArray(requestedParticipants) ? requestedParticipants : []).map(item => ({
+    user_id: Number(typeof item === 'object' ? item.user_id : item),
+    template_section_id: Number(typeof item === 'object' ? item.template_section_id : 0) || null,
+    can_edit_decision: Number(typeof item === 'object' ? item.can_edit_decision ?? 0 : 0),
+  })).filter(item => item.user_id);
+
+  if (includeTemplateOwners) {
+    db.prepare(`
+      SELECT DISTINCT owner_user_id as user_id
+      FROM operational_meeting_sections
+      WHERE meeting_id = ? AND owner_user_id IS NOT NULL
+    `).all(meeting.id).forEach(row => {
+      if (
+        eligibleUsers.has(Number(row.user_id))
+        && !normalizedRequests.some(item => item.user_id === Number(row.user_id))
+      ) {
+        normalizedRequests.push({ user_id: Number(row.user_id), template_section_id: null, can_edit_decision: 0 });
+      }
+    });
+  }
+
+  const invalidUserIds = normalizedRequests
+    .map(item => item.user_id)
+    .filter(userId => !eligibleUsers.has(userId));
+  if (invalidUserIds.length) {
+    return {
+      error: `以下人员尚未同时获得经营周会菜单和敏感模块权限：${[...new Set(invalidUserIds)].join(',')}`,
+      participants: [],
+    };
+  }
+
+  const selectedDesignatedIds = new Set();
+  listOperationalMeetingEligibleUsers().filter(isOperationalMeetingCxo).forEach(user => {
+    upsertOperationalMeetingParticipant({
+      meetingId: meeting.id,
+      userId: user.id,
+      participantType: 'cxo',
+      canGenerateAgenda: 1,
+      canEditDecision: 1,
+      createdBy: actorUserId,
+    });
+  });
+
+  normalizedRequests.forEach(request => {
+    const targetUser = eligibleUsers.get(request.user_id);
+    if (isOperationalMeetingCxo(targetUser)) {
+      upsertOperationalMeetingParticipant({
+        meetingId: meeting.id,
+        userId: targetUser.id,
+        participantType: 'cxo',
+        canGenerateAgenda: 1,
+        canEditDecision: 1,
+        createdBy: actorUserId,
+      });
+      return;
+    }
+    const section = createOperationalPreparationSectionForParticipant(meeting, targetUser.id, request.template_section_id);
+    if (!section) return;
+    selectedDesignatedIds.add(Number(targetUser.id));
+    upsertOperationalMeetingParticipant({
+      meetingId: meeting.id,
+      userId: targetUser.id,
+      participantType: 'designated',
+      preparationSectionId: section.id,
+      preparationTemplateId: section.template_section_id,
+      canGenerateAgenda: 0,
+      canEditDecision: request.can_edit_decision ? 1 : 0,
+      createdBy: actorUserId,
+    });
+  });
+
+  const removedUserIds = db.prepare(`
+    SELECT user_id
+    FROM operational_meeting_participants
+    WHERE meeting_id = ? AND participant_type = 'designated' AND status = 'active'
+  `).all(meeting.id)
+    .map(row => Number(row.user_id))
+    .filter(userId => !selectedDesignatedIds.has(userId));
+  removedUserIds.forEach(userId => {
+    db.prepare(`
+      UPDATE operational_meeting_participants
+      SET status = 'removed', updated_at = CURRENT_TIMESTAMP
+      WHERE meeting_id = ? AND user_id = ? AND participant_type = 'designated'
+    `).run(meeting.id, userId);
+    revokeOperationalMeetingRecordKeysForUser(meeting.id, userId);
+  });
+
+  return { error: '', participants: listOperationalMeetingParticipants(meeting.id) };
 }
 
 function operationalMeetingAgendaLooksSensitive(value) {
@@ -20339,17 +20707,17 @@ function buildFallbackOperationalMeetingAgenda(sections = []) {
   const topics = sections
     .map(item => {
       const text = sanitizeOperationalMeetingInput(item.content || item.text || '').replace(/\s+/g, ' ').trim();
-      return text ? `${item.title || '简报'}：${text.slice(0, 120)}` : '';
+      return text ? `${item.title || '准备内容'}：${text.slice(0, 120)}` : '';
     })
     .filter(Boolean)
     .slice(0, 4);
   return {
     meeting_goal: `对齐${titles}本周经营事实、关键判断和需要会上决策的问题。`,
-    weekly_overview: topics.length ? topics.join('\n') : '各负责人已提交本周简报，建议会上围绕结果、判断和风险逐项确认。',
+    weekly_overview: topics.length ? topics.join('\n') : '各负责人已提交本周准备内容，建议会上围绕结果、判断和风险逐项确认。',
     key_topics: '优先讨论各模块提出的需决策事项、跨部门协同阻塞点，以及会后需要明确负责人的动作。',
     agenda: '1. 快速确认本周关键结果\n2. 逐项讨论需决策问题\n3. 明确会后负责人和完成时间\n4. 确认下周重点动作',
     next_actions: '会后将决策事项拆成明确动作，补充负责人、截止时间和验收口径。',
-    preparation: '请各负责人会前确认简报内容准确性，准备需决策事项的背景、可选方案和推荐判断。',
+    preparation: '请各负责人会前确认准备内容准确性，准备需决策事项的背景、可选方案和推荐判断。',
   };
 }
 
@@ -20365,7 +20733,7 @@ async function callOperationalMeetingLlm(sections = []) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs || DEFAULT_AI_TIMEOUT_MS);
   const sanitizedSections = sections.map(section => ({
-    title: section.title || '未命名简报',
+    title: section.title || '未命名准备内容',
     owner: section.owner || '',
     content: sanitizeOperationalMeetingInput(section.content || section.text || ''),
   }));
@@ -20384,7 +20752,7 @@ async function callOperationalMeetingLlm(sections = []) {
           {
             role: 'system',
             content: [
-              '你是公司经营周会助手，只能基于已脱敏的简报内容生成会议提纲。',
+              '你是公司经营周会助手，只能基于已脱敏的准备内容生成会议提纲。',
               '严禁输出毛利、毛利率、利润、利润率、GM、gross profit、gross margin 等信息。',
               '严禁猜测、推导或补全被脱敏的数据。',
               '只输出 JSON，字段为 meeting_goal, weekly_overview, key_topics, agenda, next_actions, preparation。',
@@ -20569,7 +20937,18 @@ app.get('/api/operational-meeting-templates', requireOperationalMeetingAccess, (
   res.json(rows.map(serializeOperationalTemplate));
 });
 
+app.get('/api/operational-meetings/eligible-participants', requireOperationalMeetingAccess, (req, res) => {
+  if (!isOperationalMeetingCxo(req.user)) {
+    return res.status(403).json({ error: '只有 CXO 可以配置周会参与人' });
+  }
+  res.json(listOperationalMeetingEligibleUsers().map(user => ({
+    ...user,
+    participant_type: isOperationalMeetingCxo(user) ? 'cxo' : 'designated',
+  })));
+});
+
 app.get('/api/operational-meetings', requireOperationalMeetingAccess, (req, res) => {
+  const cxoIdentity = isOperationalMeetingCxo(req.user);
   const rows = db.prepare(`
     SELECT m.*,
       creator.display_name as created_by_name,
@@ -20578,12 +20957,66 @@ app.get('/api/operational-meetings', requireOperationalMeetingAccess, (req, res)
     LEFT JOIN users creator ON creator.id = m.created_by
     LEFT JOIN users updater ON updater.id = m.updated_by
     WHERE m.deleted_at IS NULL
+      ${cxoIdentity ? '' : `AND EXISTS (
+        SELECT 1
+        FROM operational_meeting_participants p
+        WHERE p.meeting_id = m.id AND p.user_id = ? AND p.status = 'active'
+      )`}
     ORDER BY date(m.week_start) DESC, m.id DESC
-  `).all();
-  res.json(rows.map(serializeOperationalMeetingRow));
+  `).all(...(cxoIdentity ? [] : [req.user.id]));
+  res.json(rows.map(row => {
+    const participant = getOperationalMeetingParticipant(row.id, req.user.id);
+    return serializeOperationalMeetingRow(row, req.user, participant);
+  }));
+});
+
+app.get('/api/operational-meetings/annual-summary', requireOperationalMeetingAccess, (req, res) => {
+  const year = String(req.query.year || new Date().getFullYear()).trim();
+  if (!/^\d{4}$/.test(year)) return res.status(400).json({ error: '年份格式不正确' });
+  const cxoIdentity = isOperationalMeetingCxo(req.user);
+  const rows = db.prepare(`
+    SELECT m.id, m.title, m.week_start, m.week_end, m.status, m.agenda_status, m.decision_status, m.updated_at
+    FROM operational_meetings m
+    WHERE m.deleted_at IS NULL
+      AND substr(m.week_start, 1, 4) = ?
+      ${cxoIdentity ? '' : `AND EXISTS (
+        SELECT 1
+        FROM operational_meeting_participants p
+        WHERE p.meeting_id = m.id AND p.user_id = ? AND p.status = 'active'
+      )`}
+    ORDER BY date(m.week_start) DESC, m.id DESC
+  `).all(...(cxoIdentity ? [year] : [year, req.user.id]));
+  const result = rows.map(meeting => {
+    const agenda = db.prepare(`
+      SELECT id, meeting_id, agenda_ciphertext, crypto_version, model_provider, model_name,
+        prompt_version, safety_scan_status, generated_by, generated_at, updated_at
+      FROM operational_meeting_agendas
+      WHERE meeting_id = ?
+    `).get(meeting.id);
+    const decision = db.prepare(`
+      SELECT id, meeting_id, decision_ciphertext, crypto_version, status, updated_at
+      FROM operational_meeting_decisions
+      WHERE meeting_id = ?
+    `).get(meeting.id);
+    return {
+      meeting,
+      agenda: agenda ? {
+        ...agenda,
+        my_record_key: getMyRecordKey(OPERATIONAL_MEETING_AGENDA_RECORD, agenda.id, req.user.id),
+      } : null,
+      decision: decision ? {
+        ...decision,
+        my_record_key: getMyRecordKey(OPERATIONAL_MEETING_DECISION_RECORD, decision.id, req.user.id),
+      } : null,
+    };
+  });
+  res.json({ year, meetings: result });
 });
 
 app.post('/api/operational-meetings', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  if (!isOperationalMeetingCxo(req.user)) {
+    return res.status(403).json({ error: '只有 CXO 可以新建经营周会' });
+  }
   const weekStart = String(req.body?.week_start || '').trim();
   const weekEnd = String(req.body?.week_end || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart) || !/^\d{4}-\d{2}-\d{2}$/.test(weekEnd)) {
@@ -20597,6 +21030,9 @@ app.post('/api/operational-meetings', requireOperationalMeetingAccess, canWrite,
   `).get(templateId);
   if (!template) return res.status(400).json({ error: '模板不存在或已停用' });
   const title = String(req.body?.title || `${weekStart} ~ ${weekEnd} 经营周会`).trim();
+  const requestedParticipants = Array.isArray(req.body?.participants)
+    ? req.body.participants
+    : (Array.isArray(req.body?.participant_user_ids) ? req.body.participant_user_ids : []);
   const createMeeting = db.transaction(() => {
     const result = db.prepare(`
       INSERT INTO operational_meetings (template_id, title, week_start, week_end, created_by, updated_by)
@@ -20611,34 +21047,93 @@ app.post('/api/operational-meetings', requireOperationalMeetingAccess, canWrite,
     `).all(template.id);
     const insertSection = db.prepare(`
       INSERT INTO operational_meeting_sections (
-        meeting_id, template_section_id, section_key, title, owner_user_id, is_required,
-        sort_order, default_questions_json, default_blocks_json, editable_by_owner_only
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        meeting_id, template_section_id, section_key, title, owner_user_id, owner_type, is_required,
+        sort_order, default_questions_json, default_blocks_json, editable_by_owner_only,
+        template_snapshot_json, visibility_scope
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'cxo_and_owner')
     `);
     sections.forEach(section => {
+      const ownerUserId = Number(section.owner_user_id || req.user.id);
+      const owner = db.prepare('SELECT id, role, executive_role FROM users WHERE id = ?').get(ownerUserId);
       insertSection.run(
         meetingId,
         section.id,
         section.section_key,
         section.title,
-        section.owner_user_id || null,
+        ownerUserId,
+        owner && isOperationalMeetingCxo(owner) ? 'cxo' : 'designated',
         Number(section.is_required || 0),
         Number(section.sort_order || 0),
         section.default_questions_json || null,
         section.default_blocks_json || null,
         Number(section.editable_by_owner_only ?? 1),
+        JSON.stringify({
+          template_section_id: section.id,
+          title: section.title,
+          default_questions_json: section.default_questions_json,
+          default_blocks_json: section.default_blocks_json,
+          copied_at: new Date().toISOString(),
+        }),
       );
     });
+    const createdMeeting = db.prepare('SELECT * FROM operational_meetings WHERE id = ?').get(meetingId);
+    const syncResult = syncOperationalMeetingParticipants(createdMeeting, requestedParticipants, req.user.id, true);
+    if (syncResult.error) throw new Error(syncResult.error);
     return meetingId;
   });
-  const id = createMeeting();
-  refreshOperationalMeetingStatuses(id);
-  res.json({ id });
+  try {
+    const id = createMeeting();
+    refreshOperationalMeetingStatuses(id);
+    res.json({ id });
+  } catch (error) {
+    res.status(400).json({ error: error.message || '经营周会创建失败' });
+  }
+});
+
+app.get('/api/operational-meetings/:id/participants', requireOperationalMeetingAccess, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  res.json({ participants: listOperationalMeetingParticipants(meeting.id) });
+});
+
+app.put('/api/operational-meetings/:id/participants', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  if (!canManageOperationalMeeting(req.user, meeting._accessParticipant)) {
+    return res.status(403).json({ error: '只有 CXO 可以配置本周参与人' });
+  }
+  const requestedParticipants = Array.isArray(req.body?.participants)
+    ? req.body.participants
+    : (Array.isArray(req.body?.participant_user_ids) ? req.body.participant_user_ids : []);
+  const previousIds = listOperationalMeetingParticipantUserIds(meeting.id);
+  let syncResult;
+  const updateParticipants = db.transaction(() => {
+    syncResult = syncOperationalMeetingParticipants(meeting, requestedParticipants, req.user.id, false);
+    if (syncResult.error) throw new Error(syncResult.error);
+  });
+  try {
+    updateParticipants();
+  } catch (error) {
+    return res.status(400).json({ error: error.message || '参与人更新失败' });
+  }
+  const nextIds = listOperationalMeetingParticipantUserIds(meeting.id);
+  const participantSetChanged = previousIds.join(',') !== nextIds.join(',');
+  const hasEncryptedMeetingContent = Boolean(
+    db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id)
+    || db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id),
+  );
+  res.json({
+    success: true,
+    participants: syncResult.participants,
+    meeting_authorized_user_ids: nextIds,
+    requires_rekey: participantSetChanged && hasEncryptedMeetingContent,
+  });
 });
 
 app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, res) => {
-  const meeting = getOperationalMeetingForAccess(req.params.id);
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  const participant = meeting._accessParticipant;
   const sections = db.prepare(`
     SELECT s.*,
       owner.display_name as owner_name,
@@ -20649,13 +21144,20 @@ app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, 
     LEFT JOIN users submitter ON submitter.id = s.submitted_by
     WHERE s.meeting_id = ?
     ORDER BY s.sort_order ASC, s.id ASC
-  `).all(meeting.id).map(section => ({
-    ...section,
-    default_questions: parseJsonSafe(section.default_questions_json, []),
-    default_blocks: parseJsonSafe(section.default_blocks_json, null),
-    my_record_key: getMyRecordKey(OPERATIONAL_MEETING_SECTION_RECORD, section.id, req.user.id),
-    can_edit: canEditOperationalSection(req.user, section) ? 1 : 0,
-  }));
+  `).all(meeting.id)
+    .filter(section => canViewOperationalPreparation(req.user, participant, section))
+    .map(section => {
+      const accessSection = { ...section, _accessParticipant: participant };
+      return {
+        ...section,
+        default_questions: parseJsonSafe(section.default_questions_json, []),
+        default_blocks: parseJsonSafe(section.default_blocks_json, null),
+        template_snapshot: parseJsonSafe(section.template_snapshot_json, null),
+        my_record_key: getMyRecordKey(OPERATIONAL_MEETING_SECTION_RECORD, section.id, req.user.id),
+        authorized_user_ids: listOperationalPreparationAuthorizedUserIds(meeting.id, section.owner_user_id),
+        can_edit: canEditOperationalSection(req.user, accessSection) ? 1 : 0,
+      };
+    });
   const agenda = db.prepare(`
     SELECT *
     FROM operational_meeting_agendas
@@ -20667,7 +21169,7 @@ app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, 
     WHERE meeting_id = ?
   `).get(meeting.id);
   res.json({
-    meeting: serializeOperationalMeetingRow(meeting),
+    meeting: serializeOperationalMeetingRow(meeting, req.user, participant),
     sections,
     agenda: agenda ? {
       ...agenda,
@@ -20677,15 +21179,25 @@ app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, 
       ...decision,
       my_record_key: getMyRecordKey(OPERATIONAL_MEETING_DECISION_RECORD, decision.id, req.user.id),
     } : null,
-    authorized_user_ids: listOperationalMeetingAuthorizedUserIds(meeting.id),
-    can_manage: canManageOperationalMeeting(req.user) ? 1 : 0,
+    participants: listOperationalMeetingParticipants(meeting.id),
+    meeting_authorized_user_ids: listOperationalMeetingParticipantUserIds(meeting.id),
+    can_view_all_preparations: isOperationalMeetingCxoForMeeting(req.user, participant) ? 1 : 0,
+    can_generate_agenda: canGenerateOperationalAgenda(req.user, participant) ? 1 : 0,
+    can_edit_decision: canEditOperationalDecision(req.user, participant) ? 1 : 0,
+    can_manage_participants: canManageOperationalMeeting(req.user, participant) ? 1 : 0,
+    can_manage: canManageOperationalMeeting(req.user, participant) ? 1 : 0,
   });
 });
 
 app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetingAccess, canWrite, (req, res) => {
-  const section = getOperationalSectionForAccess(req.params.sectionId);
-  if (!section) return res.status(404).json({ error: '填写块不存在' });
-  if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权编辑此填写块' });
+  const section = getOperationalSectionForAccess(req.params.sectionId, req.user);
+  if (!section) return res.status(404).json({ error: '准备块不存在' });
+  if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权编辑此准备块' });
+  const preparedKeys = prepareOperationalRecordKeys(
+    req.body?.record_keys || [],
+    listOperationalPreparationAuthorizedUserIds(section.meeting_id, section.owner_user_id),
+  );
+  if (preparedKeys.error) return res.status(400).json({ error: preparedKeys.error });
   const updateSection = db.transaction(() => {
     db.prepare(`
       UPDATE operational_meeting_sections
@@ -20703,7 +21215,7 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
       req.user.id,
       section.id,
     );
-    replaceRecordKeys(OPERATIONAL_MEETING_SECTION_RECORD, section.id, req.body?.record_keys || [], req.user.id);
+    replaceRecordKeys(OPERATIONAL_MEETING_SECTION_RECORD, section.id, preparedKeys.recordKeys, req.user.id);
   });
   updateSection();
   refreshOperationalMeetingStatuses(section.meeting_id);
@@ -20711,9 +21223,9 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
 });
 
 app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperationalMeetingAccess, canWrite, (req, res) => {
-  const section = getOperationalSectionForAccess(req.params.sectionId);
-  if (!section) return res.status(404).json({ error: '填写块不存在' });
-  if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权提交此填写块' });
+  const section = getOperationalSectionForAccess(req.params.sectionId, req.user);
+  if (!section) return res.status(404).json({ error: '准备块不存在' });
+  if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权提交此准备块' });
   db.prepare(`
     UPDATE operational_meeting_sections
     SET status = 'submitted',
@@ -20728,10 +21240,26 @@ app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperation
 });
 
 app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeetingAccess, canWrite, async (req, res) => {
-  const meeting = getOperationalMeetingForAccess(req.params.id);
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  if (!canGenerateOperationalAgenda(req.user, meeting._accessParticipant)) {
+    return res.status(403).json({ error: '只有 CXO 可以汇总准备内容并生成会议提纲' });
+  }
+  const preparationStats = db.prepare(`
+    SELECT
+      SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
+      SUM(CASE WHEN is_required = 1 AND status = 'submitted' THEN 1 ELSE 0 END) as submitted_required_sections
+    FROM operational_meeting_sections
+    WHERE meeting_id = ?
+  `).get(meeting.id);
+  if (
+    Number(preparationStats?.required_sections || 0) < 1
+    || Number(preparationStats?.submitted_required_sections || 0) < Number(preparationStats?.required_sections || 0)
+  ) {
+    return res.status(409).json({ error: '所有必填准备块提交后才能生成会议提纲' });
+  }
   const sections = Array.isArray(req.body?.sections) ? req.body.sections : [];
-  if (!sections.length) return res.status(400).json({ error: '缺少用于生成提纲的简报内容' });
+  if (!sections.length) return res.status(400).json({ error: '缺少用于生成提纲的准备内容' });
   const result = await callOperationalMeetingLlm(sections);
   const combined = Object.values(result.agenda || {}).join('\n');
   if (operationalMeetingAgendaLooksSensitive(combined)) {
@@ -20747,8 +21275,16 @@ app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeet
 });
 
 app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess, canWrite, (req, res) => {
-  const meeting = getOperationalMeetingForAccess(req.params.id);
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  if (!canGenerateOperationalAgenda(req.user, meeting._accessParticipant)) {
+    return res.status(403).json({ error: '只有 CXO 可以保存会议提纲' });
+  }
+  const preparedKeys = prepareOperationalRecordKeys(
+    req.body?.record_keys || [],
+    listOperationalMeetingParticipantUserIds(meeting.id),
+  );
+  if (preparedKeys.error) return res.status(400).json({ error: preparedKeys.error });
   let agendaId = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id)?.id;
   const saveAgenda = db.transaction(() => {
     if (agendaId) {
@@ -20798,7 +21334,7 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
       );
       agendaId = result.lastInsertRowid;
     }
-    replaceRecordKeys(OPERATIONAL_MEETING_AGENDA_RECORD, agendaId, req.body?.record_keys || [], req.user.id);
+    replaceRecordKeys(OPERATIONAL_MEETING_AGENDA_RECORD, agendaId, preparedKeys.recordKeys, req.user.id);
   });
   saveAgenda();
   refreshOperationalMeetingStatuses(meeting.id);
@@ -20806,8 +21342,16 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
 });
 
 app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAccess, canWrite, (req, res) => {
-  const meeting = getOperationalMeetingForAccess(req.params.id);
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  if (!canEditOperationalDecision(req.user, meeting._accessParticipant)) {
+    return res.status(403).json({ error: '无权编辑本周会议结论' });
+  }
+  const preparedKeys = prepareOperationalRecordKeys(
+    req.body?.record_keys || [],
+    listOperationalMeetingParticipantUserIds(meeting.id),
+  );
+  if (preparedKeys.error) return res.status(400).json({ error: preparedKeys.error });
   let decisionId = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id)?.id;
   const saveDecision = db.transaction(() => {
     if (decisionId) {
@@ -20844,7 +21388,7 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
       );
       decisionId = result.lastInsertRowid;
     }
-    replaceRecordKeys(OPERATIONAL_MEETING_DECISION_RECORD, decisionId, req.body?.record_keys || [], req.user.id);
+    replaceRecordKeys(OPERATIONAL_MEETING_DECISION_RECORD, decisionId, preparedKeys.recordKeys, req.user.id);
   });
   saveDecision();
   refreshOperationalMeetingStatuses(meeting.id);

@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert, Button, Card, Collapse, DatePicker, Divider, Drawer, Empty, Form, Grid,
-  Input, Modal, Progress, Select, Space, Spin, Table, Tag, Tooltip, Typography,
+  Alert, Button, Card, Checkbox, Collapse, DatePicker, Divider, Empty, Form, Grid,
+  Input, Modal, Progress, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography,
   message,
 } from 'antd';
 import {
-  CheckCircleOutlined, FileDoneOutlined, LockOutlined, PlusOutlined,
-  ReloadOutlined, RobotOutlined, SaveOutlined, SendOutlined, UnlockOutlined,
+  ArrowLeftOutlined, CalendarOutlined, CheckCircleOutlined, FileDoneOutlined,
+  LockOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SaveOutlined,
+  SendOutlined, TeamOutlined, UnlockOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { cryptoKeysApi, operationalMeetingsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { RichTextView, richTextToPlain } from '../components/RichText';
@@ -34,8 +36,8 @@ const DEFAULT_QUESTIONS = [
 
 const statusMeta = {
   draft: { color: 'default', label: '草稿' },
-  filling: { color: 'blue', label: '填写中' },
-  brief_completed: { color: 'green', label: '简报已完成' },
+  filling: { color: 'blue', label: '准备中' },
+  brief_completed: { color: 'green', label: '准备已完成' },
   agenda_generated: { color: 'purple', label: '提纲已生成' },
   completed: { color: 'cyan', label: '已开会' },
   archived: { color: 'default', label: '已归档' },
@@ -285,12 +287,15 @@ async function decryptRecordPayload(ciphertext, recordKey, privateKey) {
 export default function OperationalMeeting() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
-  const { user, canAccessSensitiveModule } = useAuth();
+  const navigate = useNavigate();
+  const { meetingId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { user, canAccessMenu, canAccessSensitiveModule, isExecutive } = useAuth();
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [meetings, setMeetings] = useState([]);
   const [templates, setTemplates] = useState([]);
-  const [selectedId, setSelectedId] = useState(null);
+  const [eligibleParticipants, setEligibleParticipants] = useState([]);
   const [detail, setDetail] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
@@ -307,11 +312,25 @@ export default function OperationalMeeting() {
   const [savingSectionId, setSavingSectionId] = useState(null);
   const [agendaLoading, setAgendaLoading] = useState(false);
   const [decisionSaving, setDecisionSaving] = useState(false);
+  const [participantOpen, setParticipantOpen] = useState(false);
+  const [participantUserIds, setParticipantUserIds] = useState([]);
+  const [participantBusy, setParticipantBusy] = useState(false);
+  const [annualLoading, setAnnualLoading] = useState(false);
+  const [annualYear, setAnnualYear] = useState(dayjs().year());
+  const [annualRows, setAnnualRows] = useState([]);
+  const [annualDrafts, setAnnualDrafts] = useState({});
+  const [annualKeyword, setAnnualKeyword] = useState('');
+  const [annualOnlyConclusion, setAnnualOnlyConclusion] = useState(false);
 
   const hasSensitiveAccess = canAccessSensitiveModule?.(MODULE_KEY);
+  const hasMenuAccess = canAccessMenu?.('/executive/operational');
+  const cxoIdentity = Boolean(isExecutive?.());
+  const isDetailView = Boolean(meetingId);
+  const listView = searchParams.get('view') === 'annual' ? 'annual' : 'records';
+  const detailTab = searchParams.get('tab') === 'meeting' ? 'meeting' : 'preparation';
   const keyHealth = useMemo(() => inspectStoredKeyInfo(keyInfo), [keyInfo]);
-  const authorizedUserIds = useMemo(() => {
-    const ids = detail?.authorized_user_ids || [];
+  const meetingAuthorizedUserIds = useMemo(() => {
+    const ids = detail?.meeting_authorized_user_ids || [];
     return [...new Set([...ids.map(Number), Number(user?.id)].filter(Boolean))];
   }, [detail, user?.id]);
 
@@ -327,18 +346,20 @@ export default function OperationalMeeting() {
   const loadMeetings = useCallback(async () => {
     setLoading(true);
     try {
-      const [meetingRows, templateRows] = await Promise.all([
+      const [meetingRows, templateRows, participantRows] = await Promise.all([
         operationalMeetingsApi.list(),
         operationalMeetingsApi.templates(),
+        cxoIdentity ? operationalMeetingsApi.eligibleParticipants() : Promise.resolve([]),
       ]);
       setMeetings(Array.isArray(meetingRows) ? meetingRows : []);
       setTemplates(Array.isArray(templateRows) ? templateRows : []);
+      setEligibleParticipants(Array.isArray(participantRows) ? participantRows : []);
     } catch (error) {
       message.error(error.response?.data?.error || '加载经营周会失败');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [cxoIdentity]);
 
   const loadDetail = useCallback(async (id) => {
     if (!id) return;
@@ -353,10 +374,31 @@ export default function OperationalMeeting() {
     }
   }, []);
 
+  const loadAnnualSummary = useCallback(async () => {
+    setAnnualLoading(true);
+    try {
+      const result = await operationalMeetingsApi.annualSummary({ year: annualYear });
+      setAnnualRows(Array.isArray(result?.meetings) ? result.meetings : []);
+    } catch (error) {
+      message.error(error.response?.data?.error || '加载年度汇总失败');
+    } finally {
+      setAnnualLoading(false);
+    }
+  }, [annualYear]);
+
   useEffect(() => {
     loadKeyInfo();
     loadMeetings();
   }, [loadKeyInfo, loadMeetings]);
+
+  useEffect(() => {
+    if (meetingId) loadDetail(meetingId);
+    else setDetail(null);
+  }, [meetingId, loadDetail]);
+
+  useEffect(() => {
+    if (!isDetailView && listView === 'annual') loadAnnualSummary();
+  }, [isDetailView, listView, loadAnnualSummary]);
 
   useEffect(() => {
     let cancelled = false;
@@ -406,16 +448,60 @@ export default function OperationalMeeting() {
     return () => { cancelled = true; };
   }, [detail, unlocked]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function hydrateAnnual() {
+      const next = {};
+      for (const row of annualRows) {
+        let agenda = null;
+        let decision = '';
+        let decryptError = false;
+        if (row.agenda?.agenda_ciphertext && unlocked?.privateKey) {
+          try {
+            agenda = await decryptRecordPayload(
+              row.agenda.agenda_ciphertext,
+              row.agenda.my_record_key,
+              unlocked.privateKey,
+            );
+          } catch {
+            decryptError = true;
+          }
+        }
+        if (row.decision?.decision_ciphertext && unlocked?.privateKey) {
+          try {
+            const payload = await decryptRecordPayload(
+              row.decision.decision_ciphertext,
+              row.decision.my_record_key,
+              unlocked.privateKey,
+            );
+            decision = payload?.text || '';
+          } catch {
+            decryptError = true;
+          }
+        }
+        next[row.meeting.id] = { agenda, decision, decryptError };
+      }
+      if (!cancelled) setAnnualDrafts(next);
+    }
+    hydrateAnnual();
+    return () => { cancelled = true; };
+  }, [annualRows, unlocked]);
+
   const openCreate = () => {
-    createForm.resetFields();
+    setCreateOpen(true);
+  };
+
+  useEffect(() => {
+    if (!createOpen) return;
     const start = dayjs().startOf('week').add(1, 'day');
     const end = start.add(6, 'day');
+    createForm.resetFields();
     createForm.setFieldsValue({
       range: [start, end],
       template_id: templates[0]?.id,
+      participant_user_ids: [],
     });
-    setCreateOpen(true);
-  };
+  }, [createForm, createOpen, templates]);
 
   const handleCreate = async () => {
     try {
@@ -425,11 +511,11 @@ export default function OperationalMeeting() {
         week_start: start.format('YYYY-MM-DD'),
         week_end: end.format('YYYY-MM-DD'),
         template_id: values.template_id,
+        participant_user_ids: values.participant_user_ids || [],
       });
       setCreateOpen(false);
       await loadMeetings();
-      setSelectedId(result.id);
-      await loadDetail(result.id);
+      navigate(`/executive/operational/${result.id}`);
       message.success('经营周会已创建');
     } catch (error) {
       message.error(error.response?.data?.error || error.message || '创建失败');
@@ -437,8 +523,7 @@ export default function OperationalMeeting() {
   };
 
   const openDetail = async (record) => {
-    setSelectedId(record.id);
-    await loadDetail(record.id);
+    navigate(`/executive/operational/${record.id}`);
   };
 
   const handleKeyAction = async () => {
@@ -554,7 +639,11 @@ export default function OperationalMeeting() {
     setSavingSectionId(section.id);
     try {
       const payload = normalizeQuestionBlocks(sectionDrafts[section.id] || section.default_blocks || { questions: section.default_questions });
-      const encrypted = await encryptPayloadForUsers(payload, authorizedUserIds, {
+      const sectionAuthorizedUserIds = [...new Set([
+        ...(section.authorized_user_ids || []).map(Number),
+        Number(user?.id),
+      ].filter(Boolean))];
+      const encrypted = await encryptPayloadForUsers(payload, sectionAuthorizedUserIds, {
         [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
       });
       await operationalMeetingsApi.updateSection(section.id, {
@@ -564,9 +653,9 @@ export default function OperationalMeeting() {
       });
       if (submitAfter) {
         await operationalMeetingsApi.submitSection(section.id);
-        message.success('填写块已提交');
+        message.success('准备块已提交');
       } else {
-        message.success('填写块已保存');
+        message.success('准备块已保存');
       }
       if (encrypted.unavailable_user_ids.length) {
         message.warning(`${encrypted.unavailable_user_ids.length} 位授权人的安全密钥尚未就绪，本次内容暂未向其加密授权`);
@@ -591,7 +680,7 @@ export default function OperationalMeeting() {
       }));
       const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, { sections });
       const agenda = result.agenda;
-      const encrypted = await encryptPayloadForUsers(agenda, authorizedUserIds, {
+      const encrypted = await encryptPayloadForUsers(agenda, meetingAuthorizedUserIds, {
         [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
       });
       await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
@@ -608,6 +697,9 @@ export default function OperationalMeeting() {
       await loadMeetings();
       await loadDetail(detail.meeting.id);
       message.success(result.runtime?.mode === 'llm' ? 'AI 提纲已生成' : '已生成规则兜底提纲');
+      if (encrypted.unavailable_user_ids.length) {
+        message.warning(`${encrypted.unavailable_user_ids.length} 位参与人的安全密钥尚未就绪，暂时无法查看本次提纲`);
+      }
     } catch (error) {
       message.error(error.response?.data?.error || error.message || '生成提纲失败');
     } finally {
@@ -619,7 +711,7 @@ export default function OperationalMeeting() {
     if (!detail?.meeting?.id || !ensureUnlocked()) return;
     setDecisionSaving(true);
     try {
-      const encrypted = await encryptPayloadForUsers({ text: decisionDraft || '' }, authorizedUserIds, {
+      const encrypted = await encryptPayloadForUsers({ text: decisionDraft || '' }, meetingAuthorizedUserIds, {
         [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
       });
       await operationalMeetingsApi.saveDecision(detail.meeting.id, {
@@ -631,10 +723,89 @@ export default function OperationalMeeting() {
       await loadMeetings();
       await loadDetail(detail.meeting.id);
       message.success('会议结论已保存');
+      if (encrypted.unavailable_user_ids.length) {
+        message.warning(`${encrypted.unavailable_user_ids.length} 位参与人的安全密钥尚未就绪，暂时无法查看本次结论`);
+      }
     } catch (error) {
       message.error(error.response?.data?.error || error.message || '保存会议结论失败');
     } finally {
       setDecisionSaving(false);
+    }
+  };
+
+  const openParticipantManager = () => {
+    setParticipantUserIds((detail?.participants || [])
+      .filter(item => item.participant_type === 'designated')
+      .map(item => Number(item.user_id)));
+    setParticipantOpen(true);
+  };
+
+  const saveParticipants = async () => {
+    if (!detail?.meeting?.id) return;
+    const hasEncryptedMeetingContent = Boolean(
+      detail.agenda?.agenda_ciphertext || detail.decision?.decision_ciphertext,
+    );
+    if (hasEncryptedMeetingContent && !ensureUnlocked()) return;
+    setParticipantBusy(true);
+    try {
+      const result = await operationalMeetingsApi.updateParticipants(detail.meeting.id, {
+        participant_user_ids: participantUserIds,
+      });
+      let rekeyIncomplete = false;
+      const recipientIds = [...new Set([
+        ...(result.meeting_authorized_user_ids || []).map(Number),
+        Number(user?.id),
+      ].filter(Boolean))];
+
+      if (result.requires_rekey && detail.agenda?.agenda_ciphertext) {
+        if (!agendaDraft) {
+          rekeyIncomplete = true;
+        } else {
+          const encryptedAgenda = await encryptPayloadForUsers(agendaDraft, recipientIds, {
+            [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
+          });
+          await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
+            agenda_ciphertext: encryptedAgenda.ciphertext,
+            crypto_version: 'v2_client',
+            record_keys: encryptedAgenda.record_keys,
+            source_hash: detail.agenda.source_hash,
+            model_provider: detail.agenda.model_provider,
+            model_name: detail.agenda.model_name,
+            prompt_version: detail.agenda.prompt_version,
+            safety_scan_status: detail.agenda.safety_scan_status || 'passed',
+          });
+          if (encryptedAgenda.unavailable_user_ids.length) rekeyIncomplete = true;
+        }
+      }
+      if (result.requires_rekey && detail.decision?.decision_ciphertext) {
+        if (!unlocked?.privateKey) {
+          rekeyIncomplete = true;
+        } else {
+          const encryptedDecision = await encryptPayloadForUsers({ text: decisionDraft || '' }, recipientIds, {
+            [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
+          });
+          await operationalMeetingsApi.saveDecision(detail.meeting.id, {
+            decision_ciphertext: encryptedDecision.ciphertext,
+            crypto_version: 'v2_client',
+            record_keys: encryptedDecision.record_keys,
+            status: detail.decision.status || 'saved',
+          });
+          if (encryptedDecision.unavailable_user_ids.length) rekeyIncomplete = true;
+        }
+      }
+
+      setParticipantOpen(false);
+      await loadDetail(detail.meeting.id);
+      await loadMeetings();
+      if (rekeyIncomplete) {
+        message.warning('参与人已更新，但部分历史会议内容需要由能正常解密的 CXO 重新保存后，新参与人才可查看');
+      } else {
+        message.success(result.requires_rekey ? '参与人及会议内容授权已更新' : '参与人已更新');
+      }
+    } catch (error) {
+      message.error(error.response?.data?.error || error.message || '参与人更新失败');
+    } finally {
+      setParticipantBusy(false);
     }
   };
 
@@ -655,7 +826,7 @@ export default function OperationalMeeting() {
       },
     },
     {
-      title: '简报进度',
+      title: '准备进度',
       key: 'progress',
       width: 180,
       render: (_, record) => {
@@ -694,8 +865,25 @@ export default function OperationalMeeting() {
   const canGenerateAgenda = useMemo(() => {
     const required = Number(detail?.meeting?.required_sections || 0);
     const submitted = Number(detail?.meeting?.submitted_required_sections || 0);
-    return required > 0 && submitted >= required;
+    return Boolean(detail?.can_generate_agenda) && required > 0 && submitted >= required;
   }, [detail]);
+
+  const filteredAnnualRows = useMemo(() => {
+    const keyword = annualKeyword.trim().toLowerCase();
+    return annualRows.filter(row => {
+      const draft = annualDrafts[row.meeting.id] || {};
+      if (annualOnlyConclusion && !String(draft.decision || '').trim()) return false;
+      if (!keyword) return true;
+      const searchable = [
+        row.meeting.week_start,
+        row.meeting.week_end,
+        row.meeting.title,
+        agendaToPlain(draft.agenda),
+        draft.decision,
+      ].join('\n').toLowerCase();
+      return searchable.includes(keyword);
+    });
+  }, [annualDrafts, annualKeyword, annualOnlyConclusion, annualRows]);
 
   const renderSection = (section) => {
     const status = sectionStatusMeta[section.status] || sectionStatusMeta.draft;
@@ -727,7 +915,7 @@ export default function OperationalMeeting() {
             />
           )}
           {lacksDecryptGrant && (
-            <Alert type="warning" showIcon message="当前账号没有此填写块的记录密钥，无法查看或覆盖原内容。" />
+            <Alert type="warning" showIcon message="当前账号没有此准备块的记录密钥，无法查看或覆盖原内容。" />
           )}
           {draft.questions.map(item => (
             <div key={item.key}>
@@ -767,139 +955,294 @@ export default function OperationalMeeting() {
     );
   };
 
-  if (!hasSensitiveAccess) {
+  if (!hasMenuAccess || !hasSensitiveAccess) {
     return (
       <Alert
         type="error"
         showIcon
-        message="无经营周会敏感信息权限"
-        description="请联系系统管理员在“通用配置 -> 敏感授权”中添加授权。"
+        message={!hasMenuAccess ? '无经营周会菜单权限' : '无经营周会敏感信息权限'}
+        description={!hasMenuAccess
+          ? '请联系系统管理员开放“目标计划 -> 经营周会”菜单。'
+          : '请联系系统管理员在“通用配置 -> 敏感授权”中添加授权。'}
       />
     );
   }
 
+  const renderKeyAction = () => (
+    unlocked?.privateKey ? (
+      <Tag icon={<UnlockOutlined />} color="green">安全密钥已解锁</Tag>
+    ) : (
+      <Button
+        icon={<LockOutlined />}
+        onClick={() => {
+          if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyReset();
+          else setKeyModalOpen(true);
+        }}
+      >
+        {keyInfo && !keyHealth.privateEnvelopeValid ? '重新设置安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
+      </Button>
+    )
+  );
+
+  const preparationPanel = detail?.meeting ? (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      {detail.sections?.length ? (
+        <Collapse defaultActiveKey={(detail.sections || []).map(item => String(item.id))}>
+          {(detail.sections || []).map(renderSection)}
+        </Collapse>
+      ) : (
+        <Empty description="暂无可查看的准备内容" />
+      )}
+    </Space>
+  ) : null;
+
+  const meetingPanel = detail?.meeting ? (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card
+        title={<Space><RobotOutlined />AI 会议提纲</Space>}
+        size="small"
+        extra={Boolean(detail.can_generate_agenda) && (
+          <Tooltip title={!canGenerateAgenda ? '所有必填准备块提交后可生成' : ''}>
+            <Button
+              type="primary"
+              icon={<RobotOutlined />}
+              loading={agendaLoading}
+              disabled={!canGenerateAgenda}
+              onClick={generateAgenda}
+            >
+              {detail.agenda ? '重新生成提纲' : '生成会议提纲'}
+            </Button>
+          </Tooltip>
+        )}
+      >
+        {agendaDraft ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <RichTextView value={agendaToPlain(agendaDraft).replace(/\n/g, '<br />')} />
+            <Alert type="success" showIcon message="提纲已加密保存，毛利和利润类敏感字段已在生成前后过滤。" />
+          </Space>
+        ) : (
+          <Empty description={detail.agenda?.agenda_ciphertext && !unlocked?.privateKey ? '提纲已加密，解锁后可查看' : '暂无会议提纲'} />
+        )}
+      </Card>
+
+      <Card
+        title={<Space><CheckCircleOutlined />会议结论</Space>}
+        size="small"
+        extra={Boolean(detail.can_edit_decision) && (
+          <Button icon={<SaveOutlined />} loading={decisionSaving} onClick={saveDecision}>保存结论</Button>
+        )}
+      >
+        <Input.TextArea
+          value={decisionDraft}
+          onChange={event => setDecisionDraft(event.target.value)}
+          placeholder="记录会议最终决策、负责人、截止时间和后续动作"
+          rows={8}
+          disabled={!detail.can_edit_decision || !unlocked?.privateKey}
+        />
+      </Card>
+    </Space>
+  ) : null;
+
   return (
     <div style={{ padding: isMobile ? 0 : 24 }}>
       <Space direction="vertical" size={16} style={{ width: '100%' }}>
-        <Card
-          title={<Space><FileDoneOutlined />经营周会</Space>}
-          extra={(
-            <Space wrap>
-              {unlocked?.privateKey ? (
-                <Tag icon={<UnlockOutlined />} color="green">安全密钥已解锁</Tag>
+        {isDetailView ? (
+          <>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <Space wrap>
+                <Tooltip title="返回周会列表">
+                  <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/executive/operational')} />
+                </Tooltip>
+                <div>
+                  <Title level={4} style={{ margin: 0 }}>经营周会</Title>
+                  <Text type="secondary">
+                    {detail?.meeting ? `${detail.meeting.week_start} ~ ${detail.meeting.week_end}` : '加载中'}
+                  </Text>
+                </div>
+              </Space>
+              <Space wrap>
+                {renderKeyAction()}
+                {Boolean(detail?.can_manage_participants) && (
+                  <Button icon={<TeamOutlined />} onClick={openParticipantManager}>参与人</Button>
+                )}
+                <Button icon={<ReloadOutlined />} onClick={() => loadDetail(meetingId)}>刷新</Button>
+              </Space>
+            </div>
+
+            <Spin spinning={detailLoading}>
+              {!detail?.meeting ? (
+                <Empty description="暂无详情" />
               ) : (
-                <Button
-                  icon={<LockOutlined />}
-                  onClick={() => {
-                    if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyReset();
-                    else setKeyModalOpen(true);
-                  }}
-                >
-                  {keyInfo && !keyHealth.privateEnvelopeValid ? '重新设置安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
-                </Button>
-              )}
-              <Button icon={<ReloadOutlined />} onClick={loadMeetings}>刷新</Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建周会</Button>
-            </Space>
-          )}
-        >
-          {!keyInfo && (
-            <Alert
-              type="warning"
-              showIcon
-              style={{ marginBottom: 16 }}
-              message="首次使用需要设置安全密码"
-              description="经营周会内容会在浏览器本地加密后保存。安全密码不会上传服务器，忘记后需要由其他已授权人员重新授权。"
-            />
-          )}
-          <Table
-            rowKey="id"
-            loading={loading}
-            columns={columns}
-            dataSource={meetings}
-            scroll={{ x: 900 }}
-            pagination={{ defaultPageSize: 20, showTotal: total => `共 ${total} 条` }}
-            onRow={record => ({ onDoubleClick: () => openDetail(record) })}
-          />
-        </Card>
-      </Space>
-
-      <Drawer
-        title={detail?.meeting ? `${detail.meeting.week_start} ~ ${detail.meeting.week_end} 经营周会` : '经营周会'}
-        open={Boolean(selectedId)}
-        width={isMobile ? '100%' : 1040}
-        onClose={() => {
-          setSelectedId(null);
-          setDetail(null);
-        }}
-        destroyOnClose
-      >
-        <Spin spinning={detailLoading}>
-          {!detail?.meeting ? (
-            <Empty description="暂无详情" />
-          ) : (
-            <Space direction="vertical" size={18} style={{ width: '100%' }}>
-              <Card size="small">
-                <Space wrap size={16}>
-                  <Tag color={(statusMeta[detail.meeting.status] || statusMeta.draft).color}>
-                    {(statusMeta[detail.meeting.status] || statusMeta.draft).label}
-                  </Tag>
-                  <Text>简报：{detail.meeting.submitted_required_sections}/{detail.meeting.required_sections}</Text>
-                  <Text>提纲：{detail.meeting.agenda_status === 'generated' ? '已生成' : '未生成'}</Text>
-                  <Text>结论：{detail.meeting.decision_status === 'saved' ? '已保存' : '未填写'}</Text>
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  {!keyInfo && (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="首次使用需要设置安全密码"
+                      description="经营周会内容会在浏览器本地加密后保存。安全密码不会上传服务器。"
+                    />
+                  )}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                    <Tag color={(statusMeta[detail.meeting.status] || statusMeta.draft).color}>
+                      {(statusMeta[detail.meeting.status] || statusMeta.draft).label}
+                    </Tag>
+                    <Text>准备：{detail.meeting.submitted_required_sections}/{detail.meeting.required_sections}</Text>
+                    <Text>提纲：{detail.meeting.agenda_status === 'generated' ? '已生成' : '未生成'}</Text>
+                    <Text>结论：{detail.meeting.decision_status === 'saved' ? '已保存' : '未填写'}</Text>
+                    {(detail.participants || []).map(item => (
+                      <Tag key={item.user_id} color={item.participant_type === 'cxo' ? 'blue' : 'default'}>
+                        {item.display_name || item.username}
+                      </Tag>
+                    ))}
+                  </div>
+                  <Tabs
+                    activeKey={detailTab}
+                    onChange={key => setSearchParams(key === 'meeting' ? { tab: 'meeting' } : {})}
+                    items={[
+                      { key: 'preparation', label: '准备', children: preparationPanel },
+                      { key: 'meeting', label: '会议', children: meetingPanel },
+                    ]}
+                  />
                 </Space>
-              </Card>
-
-              <Card title="简报填写" size="small">
-                <Collapse defaultActiveKey={(detail.sections || []).map(item => String(item.id))}>
-                  {(detail.sections || []).map(renderSection)}
-                </Collapse>
-              </Card>
-
-              <Card
-                title={<Space><RobotOutlined />AI 会议提纲</Space>}
-                size="small"
-                extra={(
-                  <Tooltip title={!canGenerateAgenda ? '所有必填简报提交后可生成' : ''}>
-                    <Button
-                      type="primary"
-                      icon={<RobotOutlined />}
-                      loading={agendaLoading}
-                      disabled={!canGenerateAgenda}
-                      onClick={generateAgenda}
-                    >
-                      生成会议提纲
-                    </Button>
-                  </Tooltip>
-                )}
-              >
-                {agendaDraft ? (
-                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                    <RichTextView value={agendaToPlain(agendaDraft).replace(/\n/g, '<br />')} />
-                    <Alert type="success" showIcon message="提纲已加密保存，毛利和利润类敏感字段已在生成前后过滤。" />
-                  </Space>
-                ) : (
-                  <Empty description={detail.agenda?.agenda_ciphertext && !unlocked?.privateKey ? '提纲已加密，解锁后可查看' : '暂无会议提纲'} />
-                )}
-              </Card>
-
-              <Card
-                title={<Space><CheckCircleOutlined />会议结论</Space>}
-                size="small"
-                extra={<Button icon={<SaveOutlined />} loading={decisionSaving} onClick={saveDecision}>保存结论</Button>}
-              >
-                <Input.TextArea
-                  value={decisionDraft}
-                  onChange={event => setDecisionDraft(event.target.value)}
-                  placeholder="记录会议最终决策、负责人、截止时间和后续动作"
-                  rows={6}
-                  disabled={!unlocked?.privateKey}
-                />
-              </Card>
+              )}
+            </Spin>
+          </>
+        ) : (
+          <Card
+            title={<Space><FileDoneOutlined />经营周会</Space>}
+            extra={(
+            <Space wrap>
+              {renderKeyAction()}
+              <Button icon={<ReloadOutlined />} onClick={loadMeetings}>刷新</Button>
+              {cxoIdentity && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建周会</Button>}
             </Space>
-          )}
-        </Spin>
-      </Drawer>
+            )}
+          >
+            {!keyInfo && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 16 }}
+                message="首次使用需要设置安全密码"
+                description="经营周会内容会在浏览器本地加密后保存。安全密码不会上传服务器，忘记后需要由其他已授权 CXO 重新授权。"
+              />
+            )}
+            <Tabs
+              activeKey={listView}
+              onChange={key => setSearchParams(key === 'annual' ? { view: 'annual' } : {})}
+              items={[
+                {
+                  key: 'records',
+                  label: '周会记录',
+                  children: (
+                    <Table
+                      rowKey="id"
+                      loading={loading}
+                      columns={columns}
+                      dataSource={meetings}
+                      scroll={{ x: 900 }}
+                      pagination={{ defaultPageSize: 20, showTotal: total => `共 ${total} 条` }}
+                      onRow={record => ({ onDoubleClick: () => openDetail(record) })}
+                    />
+                  ),
+                },
+                {
+                  key: 'annual',
+                  label: '年度汇总',
+                  children: (
+                    <Spin spinning={annualLoading}>
+                      <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <Select
+                            value={annualYear}
+                            onChange={setAnnualYear}
+                            style={{ width: 120 }}
+                            suffixIcon={<CalendarOutlined />}
+                            options={Array.from({ length: 6 }, (_, index) => dayjs().year() + 1 - index)
+                              .map(year => ({ value: year, label: `${year} 年` }))}
+                          />
+                          <Input.Search
+                            allowClear
+                            value={annualKeyword}
+                            onChange={event => setAnnualKeyword(event.target.value)}
+                            placeholder="搜索提纲或会议结论"
+                            style={{ width: isMobile ? '100%' : 280 }}
+                          />
+                          <Checkbox
+                            checked={annualOnlyConclusion}
+                            onChange={event => setAnnualOnlyConclusion(event.target.checked)}
+                          >
+                            仅看有结论
+                          </Checkbox>
+                          <Text type="secondary">共 {filteredAnnualRows.length} 周</Text>
+                        </div>
+                        {!unlocked?.privateKey && annualRows.length > 0 && (
+                          <Alert
+                            type="info"
+                            showIcon
+                            message="解锁安全密钥后可在本页查看全年提纲和会议结论"
+                            action={<Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>}
+                          />
+                        )}
+                        {filteredAnnualRows.length ? (
+                          <Collapse
+                            defaultActiveKey={filteredAnnualRows.map(row => String(row.meeting.id))}
+                            items={filteredAnnualRows.map(row => {
+                              const draft = annualDrafts[row.meeting.id] || {};
+                              const meta = statusMeta[row.meeting.status] || statusMeta.draft;
+                              return {
+                                key: String(row.meeting.id),
+                                label: (
+                                  <Space wrap>
+                                    <Text strong>{row.meeting.week_start} ~ {row.meeting.week_end}</Text>
+                                    <Tag color={meta.color}>{meta.label}</Tag>
+                                  </Space>
+                                ),
+                                extra: (
+                                  <Button
+                                    type="link"
+                                    size="small"
+                                    onClick={event => {
+                                      event.stopPropagation();
+                                      navigate(`/executive/operational/${row.meeting.id}?tab=meeting`);
+                                    }}
+                                  >
+                                    查看本周
+                                  </Button>
+                                ),
+                                children: (
+                                  <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                    <Text strong>AI 会议提纲</Text>
+                                    {draft.agenda ? (
+                                      <RichTextView value={agendaToPlain(draft.agenda).replace(/\n/g, '<br />')} />
+                                    ) : (
+                                      <Text type="secondary">{row.agenda?.agenda_ciphertext ? '内容已加密，解锁后可查看' : '未生成'}</Text>
+                                    )}
+                                    <Divider style={{ margin: '4px 0' }} />
+                                    <Text strong>会议结论</Text>
+                                    {draft.decision ? (
+                                      <div style={{ whiteSpace: 'pre-wrap' }}>{draft.decision}</div>
+                                    ) : (
+                                      <Text type="secondary">{row.decision?.decision_ciphertext ? '内容已加密，解锁后可查看' : '未填写'}</Text>
+                                    )}
+                                    {draft.decryptError && <Alert type="warning" showIcon message="当前账号缺少部分记录密钥" />}
+                                  </Space>
+                                ),
+                              };
+                            })}
+                          />
+                        ) : (
+                          <Empty description="该年度暂无可查看的会议内容" />
+                        )}
+                      </Space>
+                    </Spin>
+                  ),
+                },
+              ]}
+            />
+          </Card>
+        )}
+      </Space>
 
       <Modal
         title="新建经营周会"
@@ -920,7 +1263,60 @@ export default function OperationalMeeting() {
               placeholder="请选择模板"
             />
           </Form.Item>
+          <Form.Item label="指定参与人（可选）" name="participant_user_ids">
+            <Select
+              mode="multiple"
+              allowClear
+              options={eligibleParticipants
+                .filter(item => item.participant_type === 'designated')
+                .map(item => ({ value: Number(item.id), label: item.display_name || item.username }))}
+              placeholder="参与人只能查看自己的准备内容，可查看本周提纲和结论"
+            />
+          </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="管理本周参与人"
+        open={participantOpen}
+        onCancel={() => setParticipantOpen(false)}
+        onOk={saveParticipants}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={participantBusy}
+        destroyOnClose
+      >
+        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+          <div>
+            <Text type="secondary">CXO</Text>
+            <div style={{ marginTop: 8 }}>
+              <Space wrap>
+                {eligibleParticipants
+                  .filter(item => item.participant_type === 'cxo')
+                  .map(item => <Tag color="blue" key={item.id}>{item.display_name || item.username}</Tag>)}
+              </Space>
+            </div>
+          </div>
+          <div>
+            <Text type="secondary">指定参与人</Text>
+            <Select
+              mode="multiple"
+              allowClear
+              value={participantUserIds}
+              onChange={setParticipantUserIds}
+              style={{ width: '100%', marginTop: 8 }}
+              options={eligibleParticipants
+                .filter(item => item.participant_type === 'designated')
+                .map(item => ({ value: Number(item.id), label: item.display_name || item.username }))}
+              placeholder="选择本周指定参与人"
+            />
+          </div>
+          <Alert
+            type="info"
+            showIcon
+            message="指定参与人只能查看自己的准备内容；AI 会议提纲和会议结论对本周全部参与人共享。"
+          />
+        </Space>
       </Modal>
 
       <Modal

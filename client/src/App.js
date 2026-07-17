@@ -91,6 +91,7 @@ const getRouteTabKey = (pathname) => {
   const safePathname = getPathnameFromFullPath(pathname);
   if (PAGE_TITLE_MAP[safePathname]) return safePathname;
   if (safePathname === '/') return '/';
+  if (safePathname.startsWith('/executive/operational/')) return '/executive/operational';
 
   const firstSegment = `/${safePathname.split('/').filter(Boolean)[0] || ''}`;
   return PAGE_TITLE_MAP[firstSegment] ? firstSegment : null;
@@ -1234,6 +1235,7 @@ function AppLayout() {
             <Route path="/executive/customers" element={<PrivateRoute><ExecutiveCustomers /></PrivateRoute>} />
             <Route path="/executive/strategic" element={<PrivateRoute><StrategicMeeting /></PrivateRoute>} />
             <Route path="/executive/operational" element={<PrivateRoute><OperationalMeeting /></PrivateRoute>} />
+            <Route path="/executive/operational/:meetingId" element={<PrivateRoute><OperationalMeeting /></PrivateRoute>} />
           </Routes>
         </Content>
       </Layout>

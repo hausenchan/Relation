@@ -275,9 +275,13 @@ export const cryptoKeysApi = {
 
 export const operationalMeetingsApi = {
   templates: () => api.get('/operational-meeting-templates').then(r => r.data),
+  eligibleParticipants: () => api.get('/operational-meetings/eligible-participants').then(r => r.data),
   list: (params) => api.get('/operational-meetings', { params }).then(r => r.data),
+  annualSummary: (params) => api.get('/operational-meetings/annual-summary', { params }).then(r => r.data),
   create: (data) => api.post('/operational-meetings', data).then(r => r.data),
   get: (id) => api.get(`/operational-meetings/${id}`).then(r => r.data),
+  participants: (id) => api.get(`/operational-meetings/${id}/participants`).then(r => r.data),
+  updateParticipants: (id, data) => api.put(`/operational-meetings/${id}/participants`, data).then(r => r.data),
   updateSection: (sectionId, data) => api.put(`/operational-meeting-sections/${sectionId}`, data).then(r => r.data),
   submitSection: (sectionId) => api.post(`/operational-meeting-sections/${sectionId}/submit`).then(r => r.data),
   generateAgenda: (id, data) => api.post(`/operational-meetings/${id}/agenda/generate`, data).then(r => r.data),

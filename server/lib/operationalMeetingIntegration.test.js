@@ -1,0 +1,219 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
+const { once } = require('node:events');
+const fs = require('node:fs');
+const net = require('node:net');
+const os = require('node:os');
+const path = require('node:path');
+const bcrypt = require('bcryptjs');
+const Database = require('better-sqlite3');
+
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(error => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
+
+function waitForServer(child) {
+  return new Promise((resolve, reject) => {
+    let output = '';
+    const timeout = setTimeout(() => reject(new Error(`server start timeout\n${output}`)), 15000);
+    const onData = chunk => {
+      output += chunk.toString();
+      if (output.includes('服务器启动在')) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    };
+    child.stdout.on('data', onData);
+    child.stderr.on('data', chunk => { output += chunk.toString(); });
+    child.once('exit', code => {
+      clearTimeout(timeout);
+      reject(new Error(`server exited with ${code}\n${output}`));
+    });
+  });
+}
+
+async function request(baseUrl, route, { method = 'GET', token = '', body } = {}) {
+  const response = await fetch(`${baseUrl}${route}`, {
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const payload = await response.json();
+  return { status: response.status, payload };
+}
+
+function seedUsers(databasePath) {
+  const db = new Database(databasePath);
+  const hash = bcrypt.hashSync('test123456', 4);
+  const insertUser = db.prepare(`
+    INSERT INTO users (username, password_hash, display_name, role, executive_role, account_status)
+    VALUES (?, ?, ?, ?, ?, 'active')
+  `);
+  const ceoId = Number(insertUser.run('meeting_ceo', hash, 'Meeting CEO', 'member', 'ceo').lastInsertRowid);
+  const designatedId = Number(insertUser.run('meeting_member', hash, 'Meeting Member', 'member', null).lastInsertRowid);
+  const outsiderId = Number(insertUser.run('meeting_outsider', hash, 'Meeting Outsider', 'member', null).lastInsertRowid);
+  const insertSensitive = db.prepare(`
+    INSERT INTO sensitive_module_members (module_key, user_id, permission_level, created_by)
+    VALUES ('operational_meeting', ?, 'manage', 1)
+  `);
+  const insertMenu = db.prepare(`
+    INSERT INTO user_menu_perms (user_id, menu_key)
+    VALUES (?, '/executive/operational')
+  `);
+  [ceoId, designatedId, outsiderId].forEach(userId => {
+    insertSensitive.run(userId);
+    insertMenu.run(userId);
+  });
+  db.close();
+  return { ceoId, designatedId, outsiderId };
+}
+
+async function login(baseUrl, username, password = 'test123456') {
+  const response = await request(baseUrl, '/api/auth/login', {
+    method: 'POST',
+    body: { username, password },
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.payload));
+  return response.payload.token;
+}
+
+test('operational meeting APIs enforce preparation and meeting visibility', { timeout: 30000 }, async t => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-operational-meeting-'));
+  const databasePath = path.join(tempDir, 'data.db');
+  const port = await getFreePort();
+  const child = spawn(process.execPath, ['server/index.js'], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: 'test',
+      RELATION_DB_PATH: databasePath,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  t.after(async () => {
+    if (child.exitCode === null) {
+      child.kill('SIGTERM');
+      await Promise.race([once(child, 'exit'), new Promise(resolve => setTimeout(resolve, 2000))]);
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await waitForServer(child);
+  const users = seedUsers(databasePath);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const [ceoToken, designatedToken, outsiderToken, adminToken] = await Promise.all([
+    login(baseUrl, 'meeting_ceo'),
+    login(baseUrl, 'meeting_member'),
+    login(baseUrl, 'meeting_outsider'),
+    login(baseUrl, 'admin', 'admin123'),
+  ]);
+
+  const templates = await request(baseUrl, '/api/operational-meeting-templates', { token: ceoToken });
+  assert.equal(templates.status, 200);
+  assert.ok(templates.payload[0]?.id);
+
+  const created = await request(baseUrl, '/api/operational-meetings', {
+    method: 'POST',
+    token: ceoToken,
+    body: {
+      week_start: '2026-07-13',
+      week_end: '2026-07-19',
+      template_id: templates.payload[0].id,
+      participant_user_ids: [users.designatedId],
+    },
+  });
+  assert.equal(created.status, 200, JSON.stringify(created.payload));
+  const meetingId = Number(created.payload.id);
+
+  const [ceoList, designatedList, outsiderList, adminList] = await Promise.all([
+    request(baseUrl, '/api/operational-meetings', { token: ceoToken }),
+    request(baseUrl, '/api/operational-meetings', { token: designatedToken }),
+    request(baseUrl, '/api/operational-meetings', { token: outsiderToken }),
+    request(baseUrl, '/api/operational-meetings', { token: adminToken }),
+  ]);
+  assert.equal(ceoList.payload.length, 1);
+  assert.equal(designatedList.payload.length, 1);
+  assert.equal(outsiderList.payload.length, 0);
+  assert.equal(adminList.payload.length, 0);
+
+  const [ceoDetail, designatedDetail, outsiderDetail] = await Promise.all([
+    request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: ceoToken }),
+    request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken }),
+    request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: outsiderToken }),
+  ]);
+  assert.equal(ceoDetail.status, 200);
+  assert.ok(ceoDetail.payload.sections.length > designatedDetail.payload.sections.length);
+  assert.equal(designatedDetail.status, 200);
+  assert.equal(designatedDetail.payload.sections.length, 1);
+  assert.equal(Number(designatedDetail.payload.sections[0].owner_user_id), users.designatedId);
+  assert.equal(designatedDetail.payload.can_generate_agenda, 0);
+  assert.equal(designatedDetail.payload.can_edit_decision, 0);
+  assert.equal(outsiderDetail.status, 404);
+
+  const invalidRecordKey = await request(
+    baseUrl,
+    `/api/operational-meeting-sections/${designatedDetail.payload.sections[0].id}`,
+    {
+      method: 'PUT',
+      token: designatedToken,
+      body: {
+        content_ciphertext: 'ciphertext',
+        record_keys: [{ user_id: users.outsiderId, encrypted_dek: 'not-allowed', key_version: 1 }],
+      },
+    },
+  );
+  assert.equal(invalidRecordKey.status, 400);
+
+  const forbiddenGenerate = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda/generate`, {
+    method: 'POST',
+    token: designatedToken,
+    body: { sections: [{ title: 'own', content: 'safe' }] },
+  });
+  assert.equal(forbiddenGenerate.status, 403);
+
+  const [designatedAnnual, outsiderAnnual] = await Promise.all([
+    request(baseUrl, '/api/operational-meetings/annual-summary?year=2026', { token: designatedToken }),
+    request(baseUrl, '/api/operational-meetings/annual-summary?year=2026', { token: outsiderToken }),
+  ]);
+  assert.equal(designatedAnnual.payload.meetings.length, 1);
+  assert.equal(outsiderAnnual.payload.meetings.length, 0);
+
+  const addOutsider = await request(baseUrl, `/api/operational-meetings/${meetingId}/participants`, {
+    method: 'PUT',
+    token: ceoToken,
+    body: { participant_user_ids: [users.designatedId, users.outsiderId] },
+  });
+  assert.equal(addOutsider.status, 200, JSON.stringify(addOutsider.payload));
+  const outsiderAfterAdd = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: outsiderToken });
+  assert.equal(outsiderAfterAdd.status, 200);
+  assert.equal(outsiderAfterAdd.payload.sections.length, 1);
+  assert.equal(Number(outsiderAfterAdd.payload.sections[0].owner_user_id), users.outsiderId);
+
+  const removeDesignated = await request(baseUrl, `/api/operational-meetings/${meetingId}/participants`, {
+    method: 'PUT',
+    token: ceoToken,
+    body: { participant_user_ids: [users.outsiderId] },
+  });
+  assert.equal(removeDesignated.status, 200);
+  const designatedAfterRemove = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
+  assert.equal(designatedAfterRemove.status, 404);
+  const cxoAfterRemove = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: ceoToken });
+  const removedPreparation = cxoAfterRemove.payload.sections.find(
+    section => Number(section.owner_user_id) === users.designatedId,
+  );
+  assert.ok(removedPreparation);
+  assert.equal(removedPreparation.authorized_user_ids.includes(users.designatedId), false);
+});

@@ -29,8 +29,8 @@ describe('operational meeting key recovery', () => {
     const health = inspectStoredKeyInfo({
       public_key_jwk: JSON.stringify(publicJwk).slice(0, 255),
       encrypted_private_key_jwk: JSON.stringify({
-        salt: 'salt',
-        iv: 'iv',
+        salt: 'c2FsdC1mb3ItdGVzdA==',
+        iv: 'aXYtZm9yLXRlc3Q=',
         data: 'x'.repeat(600),
       }),
     });
