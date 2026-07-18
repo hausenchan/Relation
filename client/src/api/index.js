@@ -23,6 +23,119 @@ api.interceptors.response.use(
   }
 );
 
+function createFetchApiError(message, status = 0, data = null) {
+  const error = new Error(message || '请求失败');
+  error.response = { status, data: data || { error: message || '请求失败' } };
+  return error;
+}
+
+function handleFetchUnauthorized(status) {
+  if (status !== 401) return;
+  localStorage.removeItem('token');
+  localStorage.removeItem('user');
+  window.location.href = buildLoginPath(getBrowserPath());
+}
+
+async function readFetchError(response) {
+  const rawText = await response.text();
+  let payload = null;
+  try {
+    payload = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    payload = rawText ? { error: rawText } : null;
+  }
+  const detail = payload?.error || payload?.message || `${response.status} ${response.statusText}`;
+  return createFetchApiError(detail, response.status, payload);
+}
+
+function parseSseFrame(frame) {
+  let eventType = 'progress';
+  const dataLines = [];
+  String(frame || '').split(/\r?\n/).forEach((line) => {
+    if (line.startsWith('event:')) eventType = line.slice(6).trim() || eventType;
+    if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+  });
+  if (dataLines.length === 0) return null;
+  const rawData = dataLines.join('\n');
+  let payload;
+  try {
+    payload = JSON.parse(rawData);
+  } catch {
+    payload = { detail: rawData };
+  }
+  return {
+    ...(payload && typeof payload === 'object' ? payload : { data: payload }),
+    type: payload?.type || eventType,
+  };
+}
+
+async function consumeSseResponse(response, onEvent) {
+  let buffer = '';
+  let completedData = null;
+  let streamError = null;
+  const dispatchFrame = (frame) => {
+    const event = parseSseFrame(frame);
+    if (!event) return;
+    if (typeof onEvent === 'function') onEvent(event);
+    if (event.type === 'completed') completedData = event.data || null;
+    if (event.type === 'error') {
+      const detail = event.detail || event.label || 'Agent 任务执行失败';
+      streamError = createFetchApiError(detail, response.status || 500, { error: detail, event });
+    }
+  };
+  const drainFrames = (flush = false) => {
+    let match = buffer.match(/\r?\n\r?\n/);
+    while (match) {
+      dispatchFrame(buffer.slice(0, match.index));
+      buffer = buffer.slice(match.index + match[0].length);
+      match = buffer.match(/\r?\n\r?\n/);
+    }
+    if (flush && buffer.trim()) {
+      dispatchFrame(buffer);
+      buffer = '';
+    }
+  };
+
+  if (!response.body?.getReader) {
+    buffer = await response.text();
+    drainFrames(true);
+  } else {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      drainFrames();
+    }
+    buffer += decoder.decode();
+    drainFrames(true);
+  }
+
+  if (streamError) throw streamError;
+  if (!completedData) throw createFetchApiError('Agent 实时通道已结束，但未收到最终结果', 502);
+  return completedData;
+}
+
+async function postEventStream(path, data, { onEvent, signal } = {}) {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`/api${path}`, {
+    method: 'POST',
+    headers: {
+      Accept: 'text/event-stream',
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(data || {}),
+    signal,
+  });
+  handleFetchUnauthorized(response.status);
+  if (!response.ok) throw await readFetchError(response);
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('text/event-stream')) return response.json();
+  return consumeSseResponse(response, onEvent);
+}
+
 export const authApi = {
   login: (data) => api.post('/auth/login', data).then(r => r.data),
   me: () => api.get('/auth/me').then(r => r.data),
@@ -328,6 +441,7 @@ export const aiTrainingApi = {
   getSession: (id) => api.get(`/agents/ai-training/sessions/${id}`).then(r => r.data),
   listMessages: (id) => api.get(`/agents/ai-training/sessions/${id}/messages`).then(r => r.data),
   createMessage: (id, data) => api.post(`/agents/ai-training/sessions/${id}/messages`, data).then(r => r.data),
+  createMessageStream: (id, data, options) => postEventStream(`/agents/ai-training/sessions/${id}/messages`, data, options),
   feedbackMessage: (id, data) => api.post(`/agents/ai-training/messages/${id}/feedback`, data).then(r => r.data),
   runMessageAction: (id, data) => api.post(`/agents/ai-training/messages/${id}/actions`, data).then(r => r.data),
   listCaseCandidates: (params) => api.get('/agents/ai-training/case-candidates', { params }).then(r => r.data),

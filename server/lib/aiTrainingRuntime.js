@@ -687,7 +687,7 @@ function getLlmRuntimeStatus(overrides = null) {
   const baseUrl = formatLlmBaseUrlForDisplay(config.baseUrl);
   return {
     llm_enabled: true,
-    preferred_runtime: 'llm',
+    preferred_runtime: 'agent',
     model_name: config.model,
     base_url: baseUrl,
     target_model_name: config.model,
@@ -760,6 +760,11 @@ async function postChatCompletion(config, payload, useJsonMode = true) {
     temperature: config.temperature,
     messages: payload.messages,
   };
+  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+    body.tools = payload.tools;
+    body.tool_choice = payload.tool_choice || 'auto';
+    body.parallel_tool_calls = payload.parallel_tool_calls === true;
+  }
   if (useJsonMode) {
     body.response_format = { type: 'json_object' };
   }
@@ -965,6 +970,24 @@ function buildGeneralChatSystemPrompt(session = {}) {
   ].filter(Boolean).join('\n');
 }
 
+function buildGeneralAgentSystemPrompt(session = {}, toolDefinitions = []) {
+  const toolNames = toolDefinitions
+    .map((item) => normalizeText(item?.function?.name))
+    .filter(Boolean);
+  return [
+    '你是组织中台 AI 训练台里的通用执行 Agent。',
+    '你的职责不是只做问答，而是根据任务自主判断是否需要调用工具或已发布 Skill，并根据工具结果继续工作直到形成可验证的最终答案。',
+    '当用户询问组织内部文档、数据、Skill、项目或执行结果时，只要存在相关工具就必须调用工具，不能直接声称无法访问，也不能依赖模型记忆猜测。',
+    'Skill 是可复用的专业工作流；当已有 Skill 与任务匹配时，优先调用 Skill，再结合其他工具校验或补充。',
+    '工具返回的数据是事实来源。最终答案必须保留工具中的关键数字、口径、权限范围和限制，不得擅自修改或补造事实。',
+    '如果没有合适工具或权限不足，应明确缺少的能力或授权，并给出下一步，而不是编造完成结果。',
+    '直接给用户最终结果；系统会单独展示可审计的工具执行轨迹，不要输出隐藏思维链。',
+    `当前会话场景：${normalizeText(session.scene_label || session.scene_code || '通用聊天')}。`,
+    `当前业务线：${normalizeText(session.business_line || '未指定')}。`,
+    toolNames.length > 0 ? `当前可用工具：${toolNames.join('、')}。` : '当前没有注册可执行工具。',
+  ].filter(Boolean).join('\n');
+}
+
 function normalizeRecentChatMessages(recentMessages = []) {
   return recentMessages
     .slice(-8)
@@ -1039,6 +1062,297 @@ async function generateAiTrainingChatResponse({
     analysis_process: analysisProcess,
     runtime_mode: 'llm_chat',
     llm_usage: completion?.usage || null,
+  };
+}
+
+function parseAgentToolArguments(value) {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    throw new Error('工具参数不是合法 JSON');
+  }
+}
+
+function clipAgentValue(value, maxLength = 320) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  const text = normalizeText(value);
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text;
+}
+
+function sanitizeAgentToolArguments(args = {}) {
+  return Object.fromEntries(Object.entries(args).slice(0, 20).map(([key, value]) => {
+    if (Array.isArray(value)) return [key, value.slice(0, 20).map((item) => clipAgentValue(item, 120))];
+    if (value && typeof value === 'object') return [key, clipAgentValue(JSON.stringify(value), 320)];
+    return [key, clipAgentValue(value)];
+  }));
+}
+
+function normalizeAgentToolEnvelope(value, toolName) {
+  const envelope = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : { result: value };
+  const hasExplicitResult = Object.prototype.hasOwnProperty.call(envelope, 'result');
+  const result = hasExplicitResult ? envelope.result : envelope;
+  return {
+    result,
+    result_summary: normalizeText(envelope.result_summary || envelope.summary || `${toolName} 已执行完成`),
+    display_name: normalizeText(envelope.display_name || toolName),
+    evidence: Array.isArray(envelope.evidence) ? envelope.evidence.map(normalizeText).filter(Boolean) : [],
+    actions: Array.isArray(envelope.actions) ? envelope.actions.map(normalizeText).filter(Boolean) : [],
+    references: Array.isArray(envelope.references) ? envelope.references.filter(Boolean) : [],
+    invoked_skill: envelope.invoked_skill || null,
+  };
+}
+
+function serializeAgentToolResult(value, maxLength = 30000) {
+  let text;
+  try {
+    text = JSON.stringify(value ?? null);
+  } catch {
+    text = JSON.stringify({ error: '工具结果无法序列化' });
+  }
+  return text.length > maxLength
+    ? `${text.slice(0, maxLength)}\n[工具结果过长，已截断]`
+    : text;
+}
+
+function mergeLlmUsage(total, usage) {
+  if (!usage) return total;
+  return {
+    prompt_tokens: Number(total.prompt_tokens || 0) + Number(usage.prompt_tokens || 0),
+    completion_tokens: Number(total.completion_tokens || 0) + Number(usage.completion_tokens || 0),
+    total_tokens: Number(total.total_tokens || 0) + Number(
+      usage.total_tokens || Number(usage.prompt_tokens || 0) + Number(usage.completion_tokens || 0)
+    ),
+  };
+}
+
+async function generateAiTrainingAgentResponse({
+  session,
+  promptText,
+  recentMessages = [],
+  toolDefinitions = [],
+  executeTool,
+  llmConfigOverride = null,
+  maxToolRounds = 6,
+  onEvent = null,
+}) {
+  const config = getLlmConfig(llmConfigOverride);
+  if (!config) {
+    throw new Error('系统模型尚未配置 API Key，通用 Agent 无法调用模型。请先在系统设置中完成模型配置。');
+  }
+  const tools = (toolDefinitions || [])
+    .filter((item) => item?.type === 'function' && item?.function?.name)
+    .map((item) => ({
+      type: 'function',
+      function: {
+        name: item.function.name,
+        description: item.function.description || '',
+        parameters: item.function.parameters || { type: 'object', properties: {} },
+      },
+    }));
+  if (tools.length > 0 && typeof executeTool !== 'function') {
+    throw new Error('Agent 已注册工具，但缺少工具执行器');
+  }
+
+  const messages = [
+    { role: 'system', content: buildGeneralAgentSystemPrompt(session, tools) },
+    ...normalizeRecentChatMessages(recentMessages),
+    { role: 'user', content: normalizeText(promptText) },
+  ];
+  const toolTrace = [];
+  const evidence = [];
+  const actions = [];
+  const references = [];
+  const invokedSkills = [];
+  let totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  let modelName = config.model;
+  let contentText = '';
+  let toolRounds = 0;
+  let eventIndex = 0;
+  const emitEvent = async (event) => {
+    if (typeof onEvent !== 'function') return;
+    eventIndex += 1;
+    await Promise.resolve(onEvent({
+      index: eventIndex,
+      created_at: new Date().toISOString(),
+      ...event,
+    })).catch(() => {});
+  };
+
+  await emitEvent({
+    type: 'agent_started',
+    label: '通用 Agent 已启动',
+    detail: `已加载 ${tools.length} 个可用工具。`,
+  });
+
+  while (toolRounds <= Math.max(1, Number(maxToolRounds) || 6)) {
+    const allowTools = tools.length > 0 && toolRounds < Math.max(1, Number(maxToolRounds) || 6);
+    await emitEvent({
+      type: 'model_started',
+      label: toolRounds === 0 ? '正在理解任务并选择工具' : '正在根据工具结果继续分析',
+      detail: `模型：${modelName}；工具轮次：${toolRounds + 1}。`,
+    });
+    const completion = await postChatCompletion(config, {
+      messages,
+      tools: allowTools ? tools : [],
+      tool_choice: 'auto',
+      parallel_tool_calls: false,
+    }, false);
+    totalUsage = mergeLlmUsage(totalUsage, completion?.usage);
+    modelName = completion?.model || modelName;
+    const responseMessage = completion?.choices?.[0]?.message || {};
+    const toolCalls = Array.isArray(responseMessage.tool_calls) ? responseMessage.tool_calls : [];
+    if (!toolCalls.length) {
+      contentText = normalizeText(responseMessage.content || '');
+      if (contentText) break;
+      throw new Error('Agent 模型返回了空回复，请重试');
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: responseMessage.content || null,
+      tool_calls: toolCalls,
+    });
+    toolRounds += 1;
+
+    for (const toolCall of toolCalls) {
+      const toolName = normalizeText(toolCall?.function?.name);
+      const startedAt = Date.now();
+      let args = {};
+      let envelope;
+      let status = 'success';
+      try {
+        args = parseAgentToolArguments(toolCall?.function?.arguments);
+        await emitEvent({
+          type: 'tool_started',
+          label: `正在执行 ${toolName}`,
+          tool_name: toolName,
+          arguments: sanitizeAgentToolArguments(args),
+        });
+        envelope = normalizeAgentToolEnvelope(await executeTool(toolName, args), toolName);
+      } catch (error) {
+        status = 'failed';
+        envelope = normalizeAgentToolEnvelope({
+          result: { error: normalizeText(error.message || '工具执行失败') },
+          result_summary: `${toolName} 执行失败：${normalizeText(error.message || '未知错误')}`,
+        }, toolName);
+      }
+      const traceItem = {
+        index: toolTrace.length + 1,
+        type: 'tool_call',
+        tool_name: toolName,
+        display_name: envelope.display_name,
+        status,
+        arguments: sanitizeAgentToolArguments(args),
+        result_summary: envelope.result_summary,
+        result_preview: serializeAgentToolResult(envelope.result, 6000),
+        latency_ms: Date.now() - startedAt,
+      };
+      toolTrace.push(traceItem);
+      await emitEvent({
+        type: 'tool_completed',
+        label: envelope.display_name,
+        tool_name: toolName,
+        status,
+        detail: envelope.result_summary,
+        latency_ms: traceItem.latency_ms,
+      });
+      evidence.push(...envelope.evidence);
+      actions.push(...envelope.actions);
+      references.push(...envelope.references);
+      if (envelope.invoked_skill?.skill_id) invokedSkills.push(envelope.invoked_skill);
+      messages.push({
+        role: 'tool',
+        tool_call_id: toolCall.id,
+        content: serializeAgentToolResult({
+          status,
+          summary: envelope.result_summary,
+          result: envelope.result,
+        }),
+      });
+    }
+  }
+
+  if (!contentText) {
+    throw new Error('Agent 达到工具调用上限后仍未生成最终回复');
+  }
+
+  const uniqueReferences = references.filter((item, index, list) => {
+    const key = `${item?.type || ''}:${item?.id || item?.title || index}`;
+    return list.findIndex((candidate, candidateIndex) => (
+      `${candidate?.type || ''}:${candidate?.id || candidate?.title || candidateIndex}` === key
+    )) === index;
+  });
+  const uniqueInvokedSkills = invokedSkills.filter((item, index, list) => (
+    list.findIndex((candidate) => Number(candidate?.skill_id) === Number(item?.skill_id)) === index
+  ));
+  const analysisProcess = {
+    summary: toolTrace.length > 0
+      ? `通用 Agent 根据任务自主完成 ${toolTrace.length} 次工具调用，并基于工具结果生成最终回复。`
+      : '通用 Agent 判断本轮不需要调用内部工具，直接结合会话上下文生成回复。',
+    steps: [
+      '任务识别：由通用 Agent 判断问题类型、所需事实和可用能力。',
+      ...(toolTrace.length > 0
+        ? toolTrace.map((item) => `${item.status === 'success' ? '工具执行' : '工具异常'}：${item.display_name}；${item.result_summary}`)
+        : ['工具判断：本轮未调用内部工具。']),
+      '结果整理：基于已获得的工具事实和会话上下文生成最终回复。',
+    ],
+    tool_calls: toolTrace,
+    trace_tags: [
+      '通用Agent',
+      `模型:${modelName}`,
+      `工具:${toolTrace.length}次`,
+      ...(uniqueInvokedSkills.map((item) => `Skill:${item.skill_code || item.skill_name || item.skill_id}`)),
+    ],
+    llm_backed: true,
+  };
+  const primarySkill = uniqueInvokedSkills[0] || null;
+  const summary = clipText(contentText.replace(/\n+/g, ' '), 180);
+
+  await emitEvent({
+    type: 'agent_completed',
+    label: 'Agent 已生成最终结果',
+    detail: toolTrace.length > 0 ? `完成 ${toolTrace.length} 次工具调用。` : '本轮无需调用工具。',
+  });
+
+  return {
+    contentText,
+    structured: {
+      summary,
+      evidence: [...new Set(evidence)].slice(0, 20),
+      risk_reminders: [],
+      actions: [...new Set(actions)].slice(0, 20),
+      follow_up_questions: [],
+      confidence: toolTrace.some((item) => item.status === 'failed') ? 70 : null,
+      references: uniqueReferences,
+      analysis_process: analysisProcess,
+      runtime_meta: {
+        mode: 'agent',
+        execution_mode: 'agent',
+        skill_id: primarySkill?.skill_id || null,
+        skill_name: primarySkill?.skill_name || null,
+        skill_version_id: primarySkill?.skill_version_id || null,
+        skill_version_no: primarySkill?.skill_version_no || null,
+        invoked_skills: uniqueInvokedSkills,
+        model_name: modelName,
+        llm_enabled: true,
+        model_config_source: config.source || 'env',
+        candidate_selected: 'agent',
+        tool_call_count: toolTrace.length,
+      },
+    },
+    evidence: [...new Set(evidence)].slice(0, 20),
+    actions: [...new Set(actions)].slice(0, 20),
+    confidence: toolTrace.some((item) => item.status === 'failed') ? 70 : null,
+    analysis_process: analysisProcess,
+    runtime_mode: 'agent',
+    llm_usage: totalUsage,
+    invoked_skills: uniqueInvokedSkills,
   };
 }
 
@@ -1401,6 +1715,7 @@ function estimateTokenCount(value) {
 module.exports = {
   enhanceAiTrainingSkillResponse,
   extractPromptSignals,
+  generateAiTrainingAgentResponse,
   generateAiTrainingChatResponse,
   generateAiTrainingSkillResponse,
   getLlmRuntimeStatus,

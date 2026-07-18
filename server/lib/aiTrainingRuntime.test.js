@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   enhanceAiTrainingSkillResponse,
+  generateAiTrainingAgentResponse,
   generateAiTrainingChatResponse,
   validateAiTrainingEnhancedResponse,
 } = require('./aiTrainingRuntime');
@@ -84,6 +85,79 @@ test('general chat always calls the configured OpenAI-compatible endpoint', asyn
   assert.equal(result.structured.runtime_meta.candidate_selected, 'llm');
   assert.equal(result.contentText, '这是自由聊天模型回复。');
   assert.match(requests[0].messages.at(-1).content, /复盘摘要/);
+});
+
+test('general agent executes tool calls and returns a real tool trace', async t => {
+  const requests = [];
+  const originalFetch = global.fetch;
+  let requestIndex = 0;
+  global.fetch = async (url, options = {}) => {
+    const body = JSON.parse(options.body || '{}');
+    requests.push({ url, ...body });
+    requestIndex += 1;
+    const message = requestIndex === 1
+      ? {
+        content: null,
+        tool_calls: [{
+          id: 'call_documents_count',
+          type: 'function',
+          function: { name: 'relation_documents_count', arguments: '{}' },
+        }],
+      }
+      : { content: '当前账号在 Relation 文档中心可见 428 篇文档。' };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      text: async () => JSON.stringify({
+        model: 'test-agent-model',
+        choices: [{ message }],
+        usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
+      }),
+    };
+  };
+  t.after(() => { global.fetch = originalFetch; });
+
+  const executed = [];
+  const result = await generateAiTrainingAgentResponse({
+    session: { scene_code: 'general_chat', scene_label: '通用训练' },
+    promptText: '看看文档中心有多少篇文档',
+    recentMessages: [],
+    toolDefinitions: [{
+      type: 'function',
+      function: {
+        name: 'relation_documents_count',
+        description: '统计文档数量',
+        parameters: { type: 'object', properties: {} },
+      },
+    }],
+    executeTool: async (name, args) => {
+      executed.push({ name, args });
+      return {
+        display_name: '统计 Relation 文档中心',
+        result: { document_count: 428, permission_scope: 'current_user' },
+        result_summary: '当前账号可见范围共有 428 篇文档。',
+        evidence: ['Relation 权限过滤后的文档数量为 428 篇。'],
+      };
+    },
+    llmConfigOverride: {
+      apiKey: 'test-key',
+      baseUrl: 'https://llm.example.com/v1',
+      model: 'test-agent-model',
+      source: 'system',
+    },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].tools[0].function.name, 'relation_documents_count');
+  assert.equal(requests[1].messages.at(-1).role, 'tool');
+  assert.deepEqual(executed, [{ name: 'relation_documents_count', args: {} }]);
+  assert.equal(result.runtime_mode, 'agent');
+  assert.equal(result.structured.runtime_meta.candidate_selected, 'agent');
+  assert.equal(result.structured.runtime_meta.tool_call_count, 1);
+  assert.equal(result.analysis_process.tool_calls[0].status, 'success');
+  assert.match(result.contentText, /428/);
+  assert.match(result.evidence.join(' '), /428/);
 });
 
 test('skill review selects an enhanced result when verified facts remain unchanged', async t => {

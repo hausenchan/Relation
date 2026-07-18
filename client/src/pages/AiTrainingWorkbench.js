@@ -68,11 +68,11 @@ const SESSION_LIST_COLLAPSED_STORAGE_KEY = 'aiTraining.sessionListCollapsed';
 
 const SESSION_CREATE_INITIAL_VALUES = {
   title: undefined,
-  scene_code: 'revenue_diagnosis',
-  business_line: 'zhixiao',
-  business_side: '预算侧',
-  budget_side: 'C端',
-  role_scope: 'strategy',
+  scene_code: 'general_chat',
+  business_line: '',
+  business_side: undefined,
+  budget_side: undefined,
+  role_scope: undefined,
   visibility_scope: 'private',
   skill_id: undefined,
 };
@@ -160,6 +160,8 @@ function runtimeModeTag(mode) {
   const map = {
     llm: { color: 'green', label: 'LLM' },
     llm_chat: { color: 'green', label: '自由聊天' },
+    agent: { color: 'purple', label: '通用 Agent' },
+    agent_fallback: { color: 'gold', label: 'Agent 回退' },
     local_fact: { color: 'cyan', label: '本地事实' },
     skill_only: { color: 'blue', label: 'Skill' },
     skill_llm_hybrid: { color: 'purple', label: 'Skill + 模型' },
@@ -179,19 +181,43 @@ function runtimeSourceLabel(source) {
   return '规则模式';
 }
 
-function AssistantProcessingBubble({ promptText, skillName = '' }) {
+function connectorStatusText(connectors = {}) {
+  const parts = [];
+  if (connectors.midmax?.enabled) parts.push(`Mid-Max ${connectors.midmax.source_count || 0} 个数据源`);
+  if (connectors.gitee?.enabled) parts.push(`Gitee ${connectors.gitee.project_count || 0} 个项目`);
+  if (connectors.mcp?.enabled) parts.push(`MCP ${connectors.mcp.server_count || 0} 个服务`);
+  return parts.length > 0 ? `外部工具：${parts.join('，')}` : '外部工具尚未授权';
+}
+
+function streamEventKind(event = {}) {
+  if (event.type === 'error') return { color: '#ef4444', tag: '异常', tagColor: 'error' };
+  if (event.type === 'agent_fallback' || event.status === 'warning' || event.status === 'failed') {
+    return { color: '#f59e0b', tag: '回退', tagColor: 'warning' };
+  }
+  if (event.type?.startsWith('tool_')) return { color: '#2563eb', tag: '工具', tagColor: 'blue' };
+  if (event.type?.startsWith('skill_')) return { color: '#7c3aed', tag: 'Skill', tagColor: 'purple' };
+  if (event.type?.startsWith('model_') || event.type?.startsWith('agent_')) {
+    return { color: '#0f766e', tag: 'Agent', tagColor: 'cyan' };
+  }
+  if (event.type === 'completed') return { color: '#16a34a', tag: '完成', tagColor: 'success' };
+  return { color: '#64748b', tag: '流程', tagColor: 'default' };
+}
+
+function AssistantProcessingBubble({ promptText, skillName = '', events = [] }) {
   const hasExplicitSkill = Boolean(skillName)
     || /@[a-z][a-z0-9_-]+|(?:使用|调用|执行|用)\s*[a-z][a-z0-9_-]+/i.test(promptText || '');
-  const steps = hasExplicitSkill
+  const fallbackSteps = hasExplicitSkill
     ? ['正在识别并执行 Skill', '正在调用模型审校结果', '正在校验事实并选择最终结果']
-    : ['正在装载最近会话上下文', '正在调用系统模型', '正在检查并整理回复'];
+    : ['正在理解任务并选择可用能力', '正在匹配 Skill 和工具', '正在执行工具并校验最终结果'];
+  const visibleEvents = Array.isArray(events) ? events.slice(-16) : [];
   return (
     <div style={{ alignSelf: 'flex-start', width: '100%' }}>
       <Card size="small" bodyStyle={{ padding: 12, background: '#ffffff' }} style={{ borderColor: '#dbeafe' }}>
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <Space size={8} wrap>
             <Tag color="purple">AI</Tag>
-            <Tag color="processing">处理中</Tag>
+            <Tag color="processing">实时执行</Tag>
+            {visibleEvents.length > 0 ? <Text type="secondary">{visibleEvents.length} 条进度</Text> : null}
           </Space>
           <div style={{ padding: 10, background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 8 }}>
             <Text strong>我已收到你的问题。</Text>
@@ -199,23 +225,76 @@ function AssistantProcessingBubble({ promptText, skillName = '' }) {
               {promptText ? clipDisplayText(promptText, 90) : '正在读取当前会话上下文。'}
             </div>
           </div>
-          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-            {steps.map((step, index) => (
-              <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#64748b' }}>
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    background: index === steps.length - 1 ? '#60a5fa' : '#93c5fd',
-                    boxShadow: index === steps.length - 1 ? '0 0 0 4px rgba(96, 165, 250, 0.16)' : 'none',
-                    flex: '0 0 auto',
-                  }}
-                />
-                <Text type="secondary">{step}</Text>
-              </div>
-            ))}
-          </Space>
+          {visibleEvents.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {visibleEvents.map((event, index) => {
+                const kind = streamEventKind(event);
+                const isLatest = index === visibleEvents.length - 1 && event.type !== 'completed' && event.type !== 'error';
+                const argumentText = event.arguments && Object.keys(event.arguments).length > 0
+                  ? clipDisplayText(JSON.stringify(event.arguments), 180)
+                  : '';
+                return (
+                  <div
+                    key={`${event.type || 'progress'}-${event.index || event.created_at || index}-${index}`}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '12px minmax(0, 1fr)',
+                      gap: 8,
+                      alignItems: 'start',
+                    }}
+                  >
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        background: kind.color,
+                        boxShadow: isLatest ? `0 0 0 4px ${kind.color}22` : 'none',
+                        marginTop: 7,
+                      }}
+                    />
+                    <div style={{ minWidth: 0 }}>
+                      <Space size={6} wrap>
+                        <Tag color={kind.tagColor} style={{ marginInlineEnd: 0 }}>{kind.tag}</Tag>
+                        <Text strong={isLatest}>{event.label || event.type || '正在处理'}</Text>
+                        {event.latency_ms !== undefined ? (
+                          <Text type="secondary">{formatLatency(event.latency_ms)}</Text>
+                        ) : null}
+                      </Space>
+                      {event.detail ? (
+                        <div style={{ color: '#64748b', lineHeight: 1.65, marginTop: 2 }}>
+                          {clipDisplayText(event.detail, 220)}
+                        </div>
+                      ) : null}
+                      {argumentText ? (
+                        <div style={{ color: '#64748b', fontFamily: 'monospace', fontSize: 12, lineHeight: 1.55, marginTop: 2, overflowWrap: 'anywhere' }}>
+                          参数：{argumentText}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <Space direction="vertical" size={6} style={{ width: '100%' }}>
+              {fallbackSteps.map((step, index) => (
+                <div key={step} style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#64748b' }}>
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background: index === fallbackSteps.length - 1 ? '#60a5fa' : '#93c5fd',
+                      boxShadow: index === fallbackSteps.length - 1 ? '0 0 0 4px rgba(96, 165, 250, 0.16)' : 'none',
+                      flex: '0 0 auto',
+                    }}
+                  />
+                  <Text type="secondary">{step}</Text>
+                </div>
+              ))}
+            </Space>
+          )}
         </Space>
       </Card>
     </div>
@@ -352,6 +431,36 @@ function AssistantProcessCollapse({ item, analysisProcess }) {
                   ))}
                 </div>
               ) : null}
+              {Array.isArray(analysisProcess.tool_calls) && analysisProcess.tool_calls.length > 0 ? (
+                <div>
+                  <Text strong style={{ display: 'block', marginBottom: 8 }}>工具执行记录</Text>
+                  {analysisProcess.tool_calls.map((toolCall, index) => (
+                    <div
+                      key={`${item.id}-tool-call-${toolCall.index || index}`}
+                      style={{
+                        borderLeft: `3px solid ${toolCall.status === 'success' ? '#52c41a' : '#faad14'}`,
+                        paddingLeft: 10,
+                        marginBottom: index === analysisProcess.tool_calls.length - 1 ? 0 : 10,
+                      }}
+                    >
+                      <Space size={8} wrap>
+                        <Tag color={toolCall.status === 'success' ? 'success' : 'warning'}>
+                          {toolCall.status === 'success' ? '成功' : '异常'}
+                        </Tag>
+                        <Text strong>{toolCall.display_name || toolCall.tool_name}</Text>
+                        {toolCall.latency_ms !== null && toolCall.latency_ms !== undefined ? (
+                          <Text type="secondary">{formatLatency(toolCall.latency_ms)}</Text>
+                        ) : null}
+                      </Space>
+                      {toolCall.result_summary ? (
+                        <div style={{ color: '#475569', lineHeight: 1.8, marginTop: 4 }}>
+                          {toolCall.result_summary}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               {analysisProcess.model_error ? (
                 <Text type="warning">模型回退原因：{analysisProcess.model_error}</Text>
               ) : null}
@@ -411,7 +520,13 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
             {isAssistant && runtimeMeta?.skill_version_no ? <Tag>版本 {runtimeMeta.skill_version_no}</Tag> : null}
             {isAssistant && runtimeMeta?.candidate_selected ? (
               <Tag color={runtimeMeta.candidate_selected === 'llm_enhanced' ? 'purple' : 'blue'}>
-                {runtimeMeta.candidate_selected === 'llm_enhanced' ? '采用增强结果' : runtimeMeta.candidate_selected === 'skill' ? '采用 Skill 结果' : '采用模型结果'}
+                {runtimeMeta.candidate_selected === 'llm_enhanced'
+                  ? '采用增强结果'
+                  : runtimeMeta.candidate_selected === 'skill'
+                    ? '采用 Skill 结果'
+                    : runtimeMeta.candidate_selected === 'agent'
+                      ? '采用 Agent 结果'
+                      : '采用模型结果'}
               </Tag>
             ) : null}
             {!isUser && qualityTag(item.avg_rating ? Math.round(item.avg_rating * 20) : null)}
@@ -491,6 +606,7 @@ export default function AiTrainingWorkbench() {
   const [composeValue, setComposeValue] = useState('');
   const [sending, setSending] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState('');
+  const [pendingEvents, setPendingEvents] = useState([]);
   const [sessionListCollapsed, setSessionListCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem(SESSION_LIST_COLLAPSED_STORAGE_KEY) === '1';
@@ -814,17 +930,27 @@ export default function AiTrainingWorkbench() {
     if (!content || !selectedSessionId) return;
     setSending(true);
     setPendingPrompt(content);
+    setPendingEvents([]);
     setComposeValue('');
     try {
-      const result = await aiTrainingApi.createMessage(selectedSessionId, { content_text: content });
+      const result = await aiTrainingApi.createMessageStream(
+        selectedSessionId,
+        { content_text: content },
+        {
+          onEvent: (event) => {
+            setPendingEvents((current) => [...current, event].slice(-60));
+          },
+        },
+      );
       setMessages(result.messages || []);
       await Promise.all([loadOverview(), loadSessions(), loadCaseLibrary()]);
     } catch (error) {
       setComposeValue(content);
-      message.error(error.response?.data?.error || '发送失败');
+      message.error(error.response?.data?.error || error.message || '发送失败');
     } finally {
       setSending(false);
       setPendingPrompt('');
+      setPendingEvents([]);
     }
   };
 
@@ -1124,7 +1250,11 @@ export default function AiTrainingWorkbench() {
                             onFeedback={handleFeedback}
                             onAction={handleMessageAction}
                           />
-                          <AssistantProcessingBubble promptText={pendingPrompt} skillName={currentSessionSkillName} />
+                          <AssistantProcessingBubble
+                            promptText={pendingPrompt}
+                            skillName={currentSessionSkillName}
+                            events={pendingEvents}
+                          />
                         </>
                       ) : null}
                     </>
@@ -1137,7 +1267,7 @@ export default function AiTrainingWorkbench() {
                       <Tag color="blue">场景：{currentSession.scene_label || '通用训练'}</Tag>
                       <Tag>输出：结论 / 证据 / 动作</Tag>
                       <Tag color={currentSessionSkillName ? 'geekblue' : 'default'}>
-                        {currentSessionSkillName ? `Skill：${currentSessionSkillName}` : '自由聊天：系统模型'}
+                        {currentSessionSkillName ? `Skill：${currentSessionSkillName}` : '通用 Agent：自动选择工具与 Skill'}
                       </Tag>
                       <Tag>{currentSession.visibility_scope === 'team' ? '团队可见' : '仅自己'}</Tag>
                     </Space>
@@ -1178,7 +1308,7 @@ export default function AiTrainingWorkbench() {
                   <Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
                     {currentSession.business_line || '-'} · {currentSession.business_side || '-'} · {currentSession.scene_label || '-'}
                     <br />
-                    Skill：{currentSessionSkillName || '未绑定，普通消息使用系统模型'}
+                    Skill：{currentSessionSkillName || '未绑定，由通用 Agent 自动发现和调用'}
                     {currentSessionSkillVersion ? `（${currentSessionSkillVersion}）` : ''}
                     <br />
                     权限：{currentSession.visibility_scope === 'team' ? '团队共享' : '仅自己'}
@@ -1198,7 +1328,13 @@ export default function AiTrainingWorkbench() {
                     <br />
                     路径：{lastRuntimeMeta?.mode || runtimeStatus?.preferred_runtime || 'deterministic'}
                     {lastRuntimeMeta?.candidate_selected ? (
-                      <><br />结果：{lastRuntimeMeta.candidate_selected === 'llm_enhanced' ? '模型增强结果' : lastRuntimeMeta.candidate_selected === 'skill' ? 'Skill 原结果' : '模型结果'}</>
+                      <><br />结果：{lastRuntimeMeta.candidate_selected === 'llm_enhanced'
+                        ? '模型增强结果'
+                        : lastRuntimeMeta.candidate_selected === 'skill'
+                          ? 'Skill 原结果'
+                          : lastRuntimeMeta.candidate_selected === 'agent'
+                            ? '通用 Agent 结果'
+                            : '模型结果'}</>
                     ) : null}
                   </Paragraph>
                 </Card>
@@ -1846,27 +1982,27 @@ export default function AiTrainingWorkbench() {
           initialValues={SESSION_CREATE_INITIAL_VALUES}
         >
           <Form.Item label="会话标题" name="title">
-            <Input placeholder="例如：支小收入回撤排查模板" />
+            <Input placeholder="例如：分析一份业务数据，或处理一个日常任务" />
           </Form.Item>
           <Form.Item label="场景" name="scene_code" rules={[{ required: true, message: '请选择场景' }]}>
             <Select options={SESSION_CREATE_SCENES} />
           </Form.Item>
-          <Form.Item label="业务线" name="business_line" rules={[{ required: true, message: '请选择业务线' }]}>
-            <Select options={SESSION_CREATE_LINES} />
+          <Form.Item label="业务线（可选）" name="business_line">
+            <Select options={BUSINESS_LINE_OPTIONS} placeholder="通用任务可不限定业务线" />
           </Form.Item>
-          <Form.Item label="视角" name="business_side" rules={[{ required: true, message: '请选择视角' }]}>
-            <Select options={BUSINESS_SIDE_OPTIONS} />
+          <Form.Item label="视角（可选）" name="business_side">
+            <Select allowClear options={BUSINESS_SIDE_OPTIONS} placeholder="需要业务视角时再选择" />
           </Form.Item>
-          <Form.Item label="预算侧" name="budget_side">
-            <Select options={[{ value: 'C端', label: 'C端' }, { value: 'B端', label: 'B端' }]} />
+          <Form.Item label="预算侧（可选）" name="budget_side">
+            <Select allowClear options={[{ value: 'C端', label: 'C端' }, { value: 'B端', label: 'B端' }]} />
           </Form.Item>
-          <Form.Item label="角色" name="role_scope" rules={[{ required: true, message: '请选择角色' }]}>
-            <Select options={ROLE_SCOPE_OPTIONS} />
+          <Form.Item label="角色（可选）" name="role_scope">
+            <Select allowClear options={ROLE_SCOPE_OPTIONS} placeholder="需要岗位口径时再选择" />
           </Form.Item>
           <Form.Item label="绑定已发布 Skill" name="skill_id">
             <Select
               allowClear
-              placeholder="不指定则使用系统模型自由聊天"
+              placeholder="不指定则由通用 Agent 自动选择工具和 Skill"
               options={publishedSkillOptions}
               onChange={handleCreateSkillChange}
             />
@@ -1903,7 +2039,7 @@ export default function AiTrainingWorkbench() {
           message={runtimeStatus.status_text || (runtimeStatus.llm_enabled ? '已接入系统小模型' : '当前使用规则模式')}
           description={
             runtimeStatus.llm_enabled
-              ? `${runtimeSourceLabel(runtimeStatus.config_source)}：${runtimeStatus.model_name || '已接通'}${runtimeStatus.base_url ? ` · ${runtimeStatus.base_url}` : ''}。未命中 Skill 时也会优先走模型分析。`
+              ? `${runtimeSourceLabel(runtimeStatus.config_source)}：${runtimeStatus.model_name || '已接通'}${runtimeStatus.base_url ? ` · ${runtimeStatus.base_url}` : ''}。未显式指定 Skill 时进入通用 Agent，由模型自主选择工具和已发布 Skill。${connectorStatusText(runtimeStatus.connectors)}。`
               : `${runtimeStatus.setup_hint || '当前未配置系统模型，训练台会先走规则模式。'} 目标模型：${runtimeStatus.target_model_name || runtimeStatus.model_name || 'gpt-5.5'}。`
           }
           action={user?.role === 'admin' ? (

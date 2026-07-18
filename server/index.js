@@ -31,9 +31,12 @@ const {
   syncBundledAiSuggestionSeeds,
   syncDistillationAiSuggestionFeed,
 } = require('./lib/aiSuggestionStore');
+const { createAiTrainingExternalConnectorRuntime } = require('./lib/aiTrainingConnectors');
+const { createAiTrainingEventStream } = require('./lib/aiTrainingEventStream');
 const {
   enhanceAiTrainingSkillResponse,
   estimateTokenCount,
+  generateAiTrainingAgentResponse,
   generateAiTrainingChatResponse,
   generateAiTrainingSkillResponse,
   getLlmRuntimeStatus,
@@ -12749,6 +12752,335 @@ function getAiTrainingRecentMessagesForRuntime(sessionId, limit = 6) {
     });
 }
 
+async function executeAiTrainingSkillRuntimeBundle({
+  runtimeSession,
+  runtimeBundle,
+  contentText,
+  recentMessages,
+  llmConfigOverride,
+}) {
+  const suggestionFeed = getCurrentAiSuggestionFeed(db, runtimeSession.business_line || null);
+  const matchedSuggestions = selectRelevantSuggestions(
+    suggestionFeed,
+    runtimeSession,
+    contentText,
+    { limit: 3 },
+  );
+  let skillResponse = null;
+  if (isZhixiaoMvpSkillBinding(runtimeBundle)) {
+    skillResponse = buildZhixiaoAppRevenueRuntimeResponse({
+      session: runtimeSession,
+      skill: runtimeBundle.skill,
+      version: runtimeBundle.version,
+      promptText: contentText,
+    });
+    if (!skillResponse) {
+      skillResponse = buildZhixiaoBusinessGrowthRuntimeResponse({
+        session: runtimeSession,
+        skill: runtimeBundle.skill,
+        version: runtimeBundle.version,
+        promptText: contentText,
+      });
+    }
+  }
+  if (!skillResponse) {
+    skillResponse = await generateAiTrainingSkillResponse({
+      session: runtimeSession,
+      skill: runtimeBundle.skill,
+      version: runtimeBundle.version,
+      promptText: contentText,
+      matchedSuggestions,
+      examples: runtimeBundle.examples || [],
+      recentMessages,
+      llmConfigOverride,
+      forceDeterministic: true,
+    });
+  }
+  return enhanceAiTrainingSkillResponse({
+    session: runtimeSession,
+    skill: runtimeBundle.skill,
+    version: runtimeBundle.version,
+    promptText: contentText,
+    skillResponse,
+    recentMessages,
+    llmConfigOverride,
+  });
+}
+
+const AI_TRAINING_AGENT_TOOL_DEFINITIONS = [
+  {
+    type: 'function',
+    function: {
+      name: 'relation_documents_count',
+      description: '统计当前登录员工有权限看到的 Relation 文档中心文档数量。用户询问文档总数、某业务域文档数量时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          domain: { type: 'string', description: '可选，限定文档业务域。' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'relation_documents_search',
+      description: '按标题、摘要、标签和正文搜索当前员工有权限查看的 Relation 文档。需要查找组织内部需求、策略、PRD、SOP 或业务知识时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '搜索关键词或短语。' },
+          limit: { type: 'integer', minimum: 1, maximum: 20, description: '返回数量，默认 8。' },
+        },
+        required: ['query'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'relation_document_read',
+      description: '读取当前员工有权限查看的某篇 Relation 文档正文。通常先搜索，再按文档 ID 读取。',
+      parameters: {
+        type: 'object',
+        properties: {
+          document_id: { type: 'integer', description: 'Relation 文档 ID。' },
+        },
+        required: ['document_id'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'relation_skills_list',
+      description: '查看当前员工可调用的已发布 Skill。需要判断组织是否已经沉淀某类专业能力时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          keyword: { type: 'string', description: '可选，按 Skill 名称、描述或来源搜索。' },
+          limit: { type: 'integer', minimum: 1, maximum: 30, description: '返回数量，默认 20。' },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'relation_skill_run',
+      description: '调用一个已发布 Skill 完成专业任务。用户显式指定 Skill，或已有 Skill 与任务高度匹配时使用。',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_code: { type: 'string', description: 'Skill Code，例如 zhixiao_dashboard_analysis。' },
+          task: { type: 'string', description: '交给 Skill 执行的完整任务。' },
+        },
+        required: ['skill_code', 'task'],
+        additionalProperties: false,
+      },
+    },
+  },
+];
+
+function buildAiTrainingAgentToolRuntime({
+  user,
+  runtimeSession,
+  recentMessages,
+  llmConfigOverride,
+  originalPrompt,
+}) {
+  const externalConnectors = createAiTrainingExternalConnectorRuntime({ user });
+  const externalToolNames = new Set(externalConnectors.definitions.map(item => item?.function?.name).filter(Boolean));
+  return {
+    definitions: [...AI_TRAINING_AGENT_TOOL_DEFINITIONS, ...externalConnectors.definitions],
+    execute: async (toolName, args = {}) => {
+      if (externalToolNames.has(toolName)) {
+        return externalConnectors.execute(toolName, args);
+      }
+      if (toolName === 'relation_documents_count') {
+        const visibility = buildDocumentVisibilityFilter(user, 'd');
+        let sql = `
+          SELECT COUNT(*) as document_count,
+            COUNT(DISTINCT d.domain) as domain_count,
+            COUNT(DISTINCT d.folder_id) as occupied_folder_count
+          FROM documents d
+          WHERE COALESCE(d.is_deleted, 0) = 0
+          ${visibility.sql}
+        `;
+        const params = [...visibility.params];
+        const domain = String(args.domain || '').trim();
+        if (domain) {
+          sql += ' AND d.domain = ?';
+          params.push(domain);
+        }
+        const row = db.prepare(sql).get(...params) || {};
+        const result = {
+          document_count: Number(row.document_count || 0),
+          domain_count: Number(row.domain_count || 0),
+          occupied_folder_count: Number(row.occupied_folder_count || 0),
+          domain: domain || null,
+          permission_scope: 'current_user',
+          source: 'relation_primary_database',
+          counted_at: new Date().toISOString(),
+        };
+        return {
+          display_name: '统计 Relation 文档中心',
+          result,
+          result_summary: `${domain ? `${domain} 业务域` : '当前账号可见范围'}共有 ${result.document_count} 篇文档。`,
+          evidence: [`Relation 权限过滤后的文档数量为 ${result.document_count} 篇。`],
+          references: [{ id: 'relation_documents', title: 'Relation 文档中心', type: 'document_collection' }],
+        };
+      }
+
+      if (toolName === 'relation_documents_search') {
+        const query = String(args.query || '').trim();
+        if (!query) throw new Error('搜索关键词不能为空');
+        const limit = Math.min(Math.max(Number(args.limit) || 8, 1), 20);
+        const visibility = buildDocumentVisibilityFilter(user, 'd');
+        const keyword = `%${escapeSqlLikeTerm(query)}%`;
+        const rows = db.prepare(`
+          SELECT d.id, d.title, d.summary, d.domain, d.doc_type, d.folder_id, d.updated_at,
+            f.name as folder_name
+          FROM documents d
+          LEFT JOIN document_folders f ON f.id = d.folder_id
+          WHERE COALESCE(d.is_deleted, 0) = 0
+            ${visibility.sql}
+            AND (
+              d.title LIKE ? ESCAPE '!'
+              OR d.summary LIKE ? ESCAPE '!'
+              OR d.tags LIKE ? ESCAPE '!'
+              OR d.content_text LIKE ? ESCAPE '!'
+            )
+          ORDER BY d.updated_at DESC, d.id DESC
+          LIMIT ?
+        `).all(...visibility.params, keyword, keyword, keyword, keyword, limit).map((row) => ({
+          id: Number(row.id),
+          title: row.title || '',
+          summary: clipAiTrainingText(row.summary || '', 280),
+          domain: row.domain || '',
+          doc_type: row.doc_type || '',
+          folder_id: row.folder_id ? Number(row.folder_id) : null,
+          folder_name: row.folder_name || '',
+          updated_at: row.updated_at,
+          url: `/documents?doc=${row.id}`,
+        }));
+        return {
+          display_name: '搜索 Relation 文档',
+          result: { query, count: rows.length, documents: rows },
+          result_summary: `搜索“${query}”命中 ${rows.length} 篇当前账号可见文档。`,
+          evidence: rows.slice(0, 5).map((row) => `文档 #${row.id}《${row.title}》`),
+          references: rows.map((row) => ({ id: row.id, title: row.title, type: 'document', url: row.url })),
+        };
+      }
+
+      if (toolName === 'relation_document_read') {
+        const documentId = Number(args.document_id);
+        if (!documentId) throw new Error('文档 ID 不合法');
+        const row = getVisibleDocument(documentId, user);
+        if (!row) throw new Error('文档不存在或当前账号无权查看');
+        const document = serializeDocument(row, { user, assumeVisible: true });
+        const contentText = clipAiTrainingText(document.content_text || '', 16000);
+        const result = {
+          id: Number(document.id),
+          title: document.title || '',
+          summary: document.summary || '',
+          domain: document.domain || '',
+          doc_type: document.doc_type || '',
+          folder_id: document.folder_id ? Number(document.folder_id) : null,
+          folder_name: document.folder_name || '',
+          content_text: contentText,
+          content_truncated: String(document.content_text || '').length > contentText.length,
+          updated_at: document.updated_at,
+          url: `/documents?doc=${document.id}`,
+          permission_scope: 'current_user',
+        };
+        return {
+          display_name: '读取 Relation 文档',
+          result,
+          result_summary: `已读取文档 #${document.id}《${document.title}》${result.content_truncated ? '，正文已按上下文上限截断' : ''}。`,
+          evidence: [`文档 #${document.id}《${document.title}》，更新时间 ${document.updated_at || '未知'}。`],
+          references: [{ id: document.id, title: document.title, type: 'document', url: result.url }],
+        };
+      }
+
+      if (toolName === 'relation_skills_list') {
+        const keyword = String(args.keyword || '').trim();
+        const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 30);
+        const skills = listAiTrainingSkillsForUser(user, {
+          status: 'published',
+          keyword,
+          limit,
+        }).filter((skill) => skill.publish_version_id).map((skill) => ({
+          skill_id: Number(skill.id),
+          skill_code: skill.skill_code,
+          name: skill.name,
+          description: skill.description || '',
+          business_line: skill.business_line || '',
+          scene_code: skill.scene_code || '',
+          version_id: Number(skill.publish_version_id),
+          version_no: skill.latest_version_no || '',
+        }));
+        return {
+          display_name: '查看已发布 Skill',
+          result: { keyword: keyword || null, count: skills.length, skills },
+          result_summary: `${keyword ? `搜索“${keyword}”` : '当前账号'}可调用 ${skills.length} 个已发布 Skill。`,
+          evidence: skills.slice(0, 8).map((skill) => `${skill.skill_code}：${skill.name}`),
+          references: skills.map((skill) => ({ id: skill.skill_id, title: skill.name, type: 'skill' })),
+        };
+      }
+
+      if (toolName === 'relation_skill_run') {
+        const requestedCode = normalizeAiTrainingSkillInvocationAlias(args.skill_code);
+        const task = String(args.task || originalPrompt || '').trim();
+        if (!requestedCode) throw new Error('Skill Code 不能为空');
+        if (!task) throw new Error('Skill 任务不能为空');
+        const candidate = listAiTrainingPublishedSkillCandidatesForUser(user, { limit: 200 })
+          .find((skill) => normalizeAiTrainingSkillInvocationAlias(skill.skill_code) === requestedCode);
+        if (!candidate) throw new Error(`Skill ${args.skill_code} 不存在、未发布或当前账号无权调用`);
+        const bundle = getAiTrainingRuntimeSkillBundle(candidate.id, candidate.publish_version_id);
+        if (!bundle?.version) throw new Error(`Skill ${candidate.skill_code} 缺少可执行的已发布版本`);
+        const skillResult = await executeAiTrainingSkillRuntimeBundle({
+          runtimeSession,
+          runtimeBundle: bundle,
+          contentText: task,
+          recentMessages,
+          llmConfigOverride,
+        });
+        const invokedSkill = {
+          skill_id: Number(bundle.skill.id),
+          skill_code: bundle.skill.skill_code,
+          skill_name: bundle.skill.name,
+          skill_version_id: Number(bundle.version.id),
+          skill_version_no: bundle.version.version_no,
+          runtime_mode: skillResult.runtime_mode,
+        };
+        return {
+          display_name: `执行 Skill：${bundle.skill.name}`,
+          result: {
+            skill: invokedSkill,
+            content_text: skillResult.contentText,
+            structured: skillResult.structured,
+          },
+          result_summary: `已执行 ${bundle.skill.name}（${bundle.version.version_no}），运行模式 ${skillResult.runtime_mode}。`,
+          evidence: skillResult.evidence || [],
+          actions: skillResult.actions || [],
+          references: [
+            { id: bundle.skill.id, title: bundle.skill.name, type: 'skill' },
+            ...(skillResult.structured?.references || []),
+          ],
+          invoked_skill: invokedSkill,
+        };
+      }
+
+      throw new Error(`未注册的 Agent 工具：${toolName}`);
+    },
+  };
+}
+
 function buildAiTrainingHookRunDrafts({ promptText, binding, runtimeResponse }) {
   if (!binding?.hooks?.length) return [];
   const promptSignals = runtimeResponse?.prompt_signals || {};
@@ -14037,10 +14369,10 @@ app.post('/api/agents/ai-training/sessions', canWrite, (req, res) => {
     title,
     scene_code = 'general_chat',
     scene_label,
-    business_line = 'zhixiao',
-    business_side = '预算侧',
-    budget_side = 'C端',
-    role_scope = 'operation',
+    business_line = '',
+    business_side = '',
+    budget_side = '',
+    role_scope = '',
     visibility_scope = 'private',
     skill_id = null,
   } = req.body || {};
@@ -14149,6 +14481,7 @@ app.get('/api/agents/ai-training/sessions/:id/messages', (req, res) => {
 });
 
 app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, res) => {
+  let eventStream = null;
   try {
     const visibility = buildAiTrainingVisibilityFilter(req.user, 'ats');
     const sessionRow = db.prepare(`
@@ -14163,6 +14496,13 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
     }
     const contentText = String(req.body?.content_text || '').trim();
     if (!contentText) return res.status(400).json({ error: '消息内容不能为空' });
+    eventStream = createAiTrainingEventStream(req, res);
+    eventStream.send({
+      type: 'request_received',
+      label: '已收到训练任务',
+      detail: clipAiTrainingText(contentText, 120),
+      created_at: new Date().toISOString(),
+    });
 
     const session = normalizeAiTrainingSessionRow(sessionRow);
     let skillBinding = resolveAiTrainingSkillBindingFromPrompt(contentText, req.user);
@@ -14172,27 +14512,12 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
       try {
         skillBinding = resolveAiTrainingSkillBindingForSession(session, req.user, session.skill_id);
       } catch (error) {
-        return res.status(400).json({ error: error.message || '会话绑定的 Skill 当前不可用' });
+        throw new Error(error.message || '会话绑定的 Skill 当前不可用');
       }
     }
     const runtimeBundle = skillBinding || null;
     const recentMessages = getAiTrainingRecentMessagesForRuntime(session.id, 6);
     const llmConfigOverride = getSystemAiModelConfig();
-    const suggestionFeed = runtimeBundle
-      ? getCurrentAiSuggestionFeed(db, session.business_line || null)
-      : { suggestions: [] };
-    const matchedSuggestions = runtimeBundle
-      ? selectRelevantSuggestions(
-        suggestionFeed,
-        {
-          ...session,
-          scene_label: session.scene_label || getAiTrainingSceneLabel(session.scene_code),
-        },
-        contentText,
-        { limit: 3 },
-      )
-      : [];
-
     const runtimeSession = {
       ...session,
       scene_label: session.scene_label || getAiTrainingSceneLabel(session.scene_code),
@@ -14200,60 +14525,104 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
     const runtimeStartedAt = Date.now();
     let runtimeResponse;
     if (!runtimeBundle) {
-      runtimeResponse = await generateAiTrainingChatResponse({
-        session: runtimeSession,
-        promptText: contentText,
+      eventStream.send({
+        type: 'route_selected',
+        label: '进入通用 Agent',
+        detail: '未显式绑定 Skill，由 Agent 自主选择工具和已发布 Skill。',
+        created_at: new Date().toISOString(),
+      });
+      const agentTools = buildAiTrainingAgentToolRuntime({
+        user: req.user,
+        runtimeSession,
+        recentMessages,
+        llmConfigOverride,
+        originalPrompt: contentText,
+      });
+      try {
+        runtimeResponse = await generateAiTrainingAgentResponse({
+          session: runtimeSession,
+          promptText: contentText,
+          recentMessages,
+          toolDefinitions: agentTools.definitions,
+          executeTool: agentTools.execute,
+          llmConfigOverride,
+          onEvent: eventStream.send,
+        });
+      } catch (agentError) {
+        eventStream.send({
+          type: 'agent_fallback',
+          label: 'Agent 工具链路回退',
+          detail: clipAiTrainingText(agentError.message || '未知错误', 260),
+          status: 'warning',
+          created_at: new Date().toISOString(),
+        });
+        console.warn('通用 Agent 工具链路回退为普通模型聊天:', agentError.message || agentError);
+        const fallbackResponse = await generateAiTrainingChatResponse({
+          session: runtimeSession,
+          promptText: contentText,
+          recentMessages,
+          llmConfigOverride,
+        });
+        const fallbackProcess = {
+          ...(fallbackResponse.analysis_process || {}),
+          summary: '通用 Agent 工具链路本轮不可用，已回退为普通模型聊天，回复中不包含内部工具执行结果。',
+          steps: [
+            '路由判断：进入通用 Agent。',
+            `工具链路异常：${clipAiTrainingText(agentError.message || '未知错误', 260)}`,
+            ...(fallbackResponse.analysis_process?.steps || []),
+          ],
+          trace_tags: [...(fallbackResponse.analysis_process?.trace_tags || []), 'Agent回退'],
+          model_error: String(agentError.message || 'agent_runtime_failed'),
+        };
+        runtimeResponse = {
+          ...fallbackResponse,
+          structured: {
+            ...(fallbackResponse.structured || {}),
+            analysis_process: fallbackProcess,
+            runtime_meta: {
+              ...(fallbackResponse.structured?.runtime_meta || {}),
+              mode: 'agent_fallback',
+              execution_mode: 'agent_fallback',
+            },
+          },
+          analysis_process: fallbackProcess,
+          runtime_mode: 'agent_fallback',
+          model_error: String(agentError.message || 'agent_runtime_failed'),
+        };
+      }
+    } else {
+      eventStream.send({
+        type: 'skill_started',
+        label: `正在执行 Skill：${runtimeBundle.skill?.name || runtimeBundle.skill?.skill_code}`,
+        detail: `版本 ${runtimeBundle.version?.version_no || '-'}`,
+        skill_code: runtimeBundle.skill?.skill_code || null,
+        created_at: new Date().toISOString(),
+      });
+      runtimeResponse = await executeAiTrainingSkillRuntimeBundle({
+        runtimeSession,
+        runtimeBundle,
+        contentText,
         recentMessages,
         llmConfigOverride,
       });
-    } else {
-      let skillResponse = null;
-      if (isZhixiaoMvpSkillBinding(runtimeBundle)) {
-        skillResponse = buildZhixiaoAppRevenueRuntimeResponse({
-          session: runtimeSession,
-          skill: runtimeBundle.skill,
-          version: runtimeBundle.version,
-          promptText: contentText,
-        });
-        if (!skillResponse) {
-          skillResponse = buildZhixiaoBusinessGrowthRuntimeResponse({
-            session: runtimeSession,
-            skill: runtimeBundle.skill,
-            version: runtimeBundle.version,
-            promptText: contentText,
-          });
-        }
-      }
-      if (!skillResponse) {
-        skillResponse = await generateAiTrainingSkillResponse({
-          session: runtimeSession,
-          skill: runtimeBundle.skill,
-          version: runtimeBundle.version,
-          promptText: contentText,
-          matchedSuggestions,
-          examples: runtimeBundle.examples || [],
-          recentMessages,
-          llmConfigOverride,
-          forceDeterministic: true,
-        });
-      }
-      runtimeResponse = await enhanceAiTrainingSkillResponse({
-        session: runtimeSession,
-        skill: runtimeBundle.skill,
-        version: runtimeBundle.version,
-        promptText: contentText,
-        skillResponse,
-        recentMessages,
-        llmConfigOverride,
+      eventStream.send({
+        type: 'skill_completed',
+        label: `Skill 已完成：${runtimeBundle.skill?.name || runtimeBundle.skill?.skill_code}`,
+        detail: `运行模式 ${runtimeResponse.runtime_mode || 'skill_runtime'}`,
+        skill_code: runtimeBundle.skill?.skill_code || null,
+        created_at: new Date().toISOString(),
       });
     }
     const runtimeLatencyMs = Date.now() - runtimeStartedAt;
+    const primaryAgentSkill = runtimeResponse?.invoked_skills?.[0] || null;
+    const effectiveSkillId = runtimeBundle?.skill?.id || primaryAgentSkill?.skill_id || null;
+    const effectiveSkillVersionId = runtimeBundle?.version?.id || primaryAgentSkill?.skill_version_id || null;
     const tokenIn = Number(
       runtimeResponse?.llm_usage?.prompt_tokens
         || estimateTokenCount([
           runtimeBundle?.version?.system_prompt || '',
           contentText,
-          JSON.stringify(matchedSuggestions || []),
+          JSON.stringify(runtimeResponse?.analysis_process?.tool_calls || []),
         ].join('\n')),
     );
     const tokenOut = Number(
@@ -14265,12 +14634,19 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
       binding: runtimeBundle,
       runtimeResponse,
     });
-    const sourceKind = runtimeResponse?.runtime_mode === 'llm_chat'
-      ? 'llm'
+    const sourceKind = ['agent', 'agent_fallback'].includes(runtimeResponse?.runtime_mode)
+      ? 'agent_runtime'
       : runtimeBundle?.skill?.id
         ? 'skill_runtime'
-        : 'session_runtime';
+        : runtimeResponse?.runtime_mode === 'llm_chat'
+          ? 'llm'
+          : 'session_runtime';
 
+    eventStream.send({
+      type: 'persist_started',
+      label: '正在保存会话、工具轨迹和 Skill 使用记录',
+      created_at: new Date().toISOString(),
+    });
     const transaction = db.transaction(() => {
       const userEnc = encryptRow('ai_training_messages', {
         content_text: contentText,
@@ -14291,8 +14667,8 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
         userEnc.structured_json || null,
         userEnc.evidence_json || null,
         userEnc.actions_json || null,
-        runtimeBundle?.skill?.id || null,
-        runtimeBundle?.version?.id || null,
+        effectiveSkillId,
+        effectiveSkillVersionId,
         req.user.id,
       );
 
@@ -14318,8 +14694,8 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
         assistantEnc.evidence_json || null,
         assistantEnc.actions_json || null,
         sourceKind,
-        runtimeBundle?.skill?.id || null,
-        runtimeBundle?.version?.id || null,
+        effectiveSkillId,
+        effectiveSkillVersionId,
         tokenIn,
         tokenOut,
         runtimeLatencyMs,
@@ -14373,6 +14749,15 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
           runtimeBundle.version?.id || null,
           session.business_line || null,
         );
+      } else if (Array.isArray(runtimeResponse?.invoked_skills)) {
+        runtimeResponse.invoked_skills.forEach((invokedSkill) => {
+          if (!invokedSkill?.skill_id) return;
+          refreshAiTrainingSkillUsageStats(
+            invokedSkill.skill_id,
+            invokedSkill.skill_version_id || null,
+            session.business_line || null,
+          );
+        });
       }
       return {
         user_message_id: Number(userResult.lastInsertRowid),
@@ -14381,12 +14766,33 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
     });
 
     const result = transaction();
-    res.json({
+    const responsePayload = {
       ...result,
       messages: listAiTrainingMessages(session.id, req.user.id),
-    });
+    };
+    if (eventStream.enabled) {
+      eventStream.send({
+        type: 'completed',
+        label: 'Agent 任务已完成',
+        created_at: new Date().toISOString(),
+        data: responsePayload,
+      });
+      eventStream.end();
+      return;
+    }
+    res.json(responsePayload);
   } catch (error) {
     console.error('AI 训练会话消息生成失败:', error);
+    if (eventStream?.enabled) {
+      eventStream.send({
+        type: 'error',
+        label: 'Agent 任务执行失败',
+        detail: error.message || 'AI 回复生成失败',
+        created_at: new Date().toISOString(),
+      });
+      eventStream.end();
+      return;
+    }
     res.status(500).json({ error: error.message || 'AI 回复生成失败' });
   }
 });
@@ -14843,7 +15249,11 @@ app.get('/api/agents/ai-training/stats', (req, res) => {
 
 app.get('/api/agents/ai-training/runtime-status', (req, res) => {
   try {
-    res.json(getLlmRuntimeStatus(getSystemAiModelConfig()));
+    const connectors = createAiTrainingExternalConnectorRuntime({ user: req.user });
+    res.json({
+      ...getLlmRuntimeStatus(getSystemAiModelConfig()),
+      connectors: connectors.status,
+    });
   } catch (error) {
     console.error('加载 AI 训练运行状态失败:', error);
     res.status(500).json({ error: '加载 AI 训练运行状态失败' });
