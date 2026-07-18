@@ -1,14 +1,9 @@
-export function getPreparationEditorState(section, hasUnlockedPrivateKey) {
+export function getPreparationEditorState(section) {
   const canEdit = Boolean(section?.can_edit);
-  const hasEncryptedContent = Boolean(section?.content_ciphertext);
-  const lacksDecryptGrant = Boolean(hasEncryptedContent && !section?.my_record_key);
-  const needsUnlockForExistingContent = Boolean(hasEncryptedContent && !hasUnlockedPrivateKey);
 
   return {
     canEdit,
-    lacksDecryptGrant,
-    needsUnlockForExistingContent,
-    readOnly: !canEdit || lacksDecryptGrant || needsUnlockForExistingContent,
+    readOnly: !canEdit,
   };
 }
 

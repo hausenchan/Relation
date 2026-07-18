@@ -6,12 +6,11 @@ import {
 } from 'antd';
 import {
   ArrowLeftOutlined, CalendarOutlined, CheckCircleOutlined, FileDoneOutlined,
-  LockOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SaveOutlined,
-  TeamOutlined, UnlockOutlined,
+  PlusOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, TeamOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { cryptoKeysApi, operationalMeetingsApi } from '../api';
+import { operationalMeetingsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { richTextToPlain } from '../components/RichText';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
@@ -22,12 +21,6 @@ import {
   normalizeDocumentBodyValue,
   sanitizeDocumentBodyInlineHtml,
 } from '../utils/documentBodyBlocks';
-import {
-  inspectStoredKeyInfo,
-  parseEncryptedPrivateKeyEnvelope,
-  parseRsaPublicJwk,
-  publicJwkFromPrivateJwk,
-} from '../utils/operationalMeetingCrypto';
 import {
   getDefaultPreparationSectionKeys,
   getPreparationEditorState,
@@ -132,204 +125,6 @@ function getDocumentBodySignature(value) {
   return JSON.stringify(normalizeDocumentBodyValue(value));
 }
 
-function bufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return window.btoa(binary);
-}
-
-function base64ToBuffer(value) {
-  const binary = window.atob(value || '');
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-function randomBase64(byteLength = 16) {
-  const bytes = new Uint8Array(byteLength);
-  window.crypto.getRandomValues(bytes);
-  return bufferToBase64(bytes.buffer);
-}
-
-async function derivePasswordKey(password, saltBase64, iterations = 210000) {
-  const encoder = new TextEncoder();
-  const passwordKey = await window.crypto.subtle.importKey(
-    'raw',
-    encoder.encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey'],
-  );
-  return window.crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: base64ToBuffer(saltBase64),
-      iterations,
-      hash: 'SHA-256',
-    },
-    passwordKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt'],
-  );
-}
-
-async function createUserKeyBundle(password) {
-  const keyPair = await window.crypto.subtle.generateKey(
-    {
-      name: 'RSA-OAEP',
-      modulusLength: 2048,
-      publicExponent: new Uint8Array([1, 0, 1]),
-      hash: 'SHA-256',
-    },
-    true,
-    ['encrypt', 'decrypt'],
-  );
-  const publicJwk = await window.crypto.subtle.exportKey('jwk', keyPair.publicKey);
-  const privateJwk = await window.crypto.subtle.exportKey('jwk', keyPair.privateKey);
-  const salt = randomBase64(16);
-  const iv = randomBase64(12);
-  const iterations = 210000;
-  const wrappingKey = await derivePasswordKey(password, salt, iterations);
-  const encryptedPrivate = await window.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: base64ToBuffer(iv) },
-    wrappingKey,
-    new TextEncoder().encode(JSON.stringify(privateJwk)),
-  );
-  return {
-    public_key_jwk: JSON.stringify(publicJwk),
-    encrypted_private_key_jwk: JSON.stringify({
-      alg: 'AES-GCM',
-      kdf: 'PBKDF2-SHA256',
-      salt,
-      iv,
-      iterations,
-      data: bufferToBase64(encryptedPrivate),
-    }),
-    privateKey: keyPair.privateKey,
-    publicKeyJwk: publicJwk,
-  };
-}
-
-async function unlockPrivateKey(keyInfo, password) {
-  const encrypted = parseEncryptedPrivateKeyEnvelope(keyInfo.encrypted_private_key_jwk);
-  const wrappingKey = await derivePasswordKey(password, encrypted.salt, Number(encrypted.iterations || 210000));
-  let decrypted;
-  try {
-    decrypted = await window.crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: base64ToBuffer(encrypted.iv) },
-      wrappingKey,
-      base64ToBuffer(encrypted.data),
-    );
-  } catch {
-    throw new Error('安全密码不正确，或私钥数据已经损坏');
-  }
-  let privateJwk;
-  try {
-    privateJwk = JSON.parse(new TextDecoder().decode(decrypted));
-  } catch {
-    throw new Error('安全密码不正确，或私钥数据已经损坏');
-  }
-  const publicKeyJwk = publicJwkFromPrivateJwk(privateJwk);
-  const privateKey = await window.crypto.subtle.importKey(
-    'jwk',
-    privateJwk,
-    { name: 'RSA-OAEP', hash: 'SHA-256' },
-    false,
-    ['decrypt'],
-  );
-  return { privateKey, publicKeyJwk };
-}
-
-async function encryptPayloadForUsers(payload, userIds, localPublicKeys = {}) {
-  const publicKeys = await cryptoKeysApi.publicKeys(userIds);
-  const requestedUserIds = [...new Set((userIds || []).map(Number).filter(Boolean))];
-  const candidates = new Map((Array.isArray(publicKeys) ? publicKeys : []).map(row => [Number(row.user_id), row]));
-  Object.entries(localPublicKeys || {}).forEach(([userId, publicKeyJwk]) => {
-    const localKey = publicKeyJwk?.jwk ? publicKeyJwk : { jwk: publicKeyJwk, key_version: 1 };
-    if (Number(userId) && localKey.jwk) {
-      candidates.set(Number(userId), {
-        user_id: Number(userId),
-        public_key_jwk: localKey.jwk,
-        key_version: Number(localKey.key_version || 1),
-      });
-    }
-  });
-  const encoder = new TextEncoder();
-  const aesKey = await window.crypto.subtle.generateKey(
-    { name: 'AES-GCM', length: 256 },
-    true,
-    ['encrypt', 'decrypt'],
-  );
-  const iv = randomBase64(12);
-  const encryptedPayload = await window.crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: base64ToBuffer(iv) },
-    aesKey,
-    encoder.encode(JSON.stringify(payload)),
-  );
-  const rawDek = await window.crypto.subtle.exportKey('raw', aesKey);
-  const recordKeys = [];
-  for (const row of candidates.values()) {
-    try {
-      const publicKey = await window.crypto.subtle.importKey(
-        'jwk',
-        parseRsaPublicJwk(row.public_key_jwk),
-        { name: 'RSA-OAEP', hash: 'SHA-256' },
-        false,
-        ['encrypt'],
-      );
-      const encryptedDek = await window.crypto.subtle.encrypt({ name: 'RSA-OAEP' }, publicKey, rawDek);
-      recordKeys.push({
-        user_id: Number(row.user_id),
-        encrypted_dek: bufferToBase64(encryptedDek),
-        key_version: Number(row.key_version || 1),
-      });
-    } catch {
-      // An unavailable recipient must not expose a low-level JSON/Web Crypto error or block the author.
-    }
-  }
-  if (!recordKeys.length) {
-    throw new Error('当前账号的安全密钥不可用，请先解锁或修复安全密钥');
-  }
-  const encryptedUserIds = new Set(recordKeys.map(item => Number(item.user_id)));
-  return {
-    ciphertext: JSON.stringify({
-      alg: 'A256GCM',
-      iv,
-      data: bufferToBase64(encryptedPayload),
-    }),
-    record_keys: recordKeys,
-    unavailable_user_ids: requestedUserIds.filter(id => !encryptedUserIds.has(id)),
-  };
-}
-
-async function decryptRecordPayload(ciphertext, recordKey, privateKey) {
-  if (!ciphertext) return null;
-  if (!recordKey?.encrypted_dek || !privateKey) throw new Error('当前账号缺少此记录的解密授权');
-  const packed = JSON.parse(ciphertext);
-  const rawDek = await window.crypto.subtle.decrypt(
-    { name: 'RSA-OAEP' },
-    privateKey,
-    base64ToBuffer(recordKey.encrypted_dek),
-  );
-  const aesKey = await window.crypto.subtle.importKey(
-    'raw',
-    rawDek,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['decrypt'],
-  );
-  const decrypted = await window.crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: base64ToBuffer(packed.iv) },
-    aesKey,
-    base64ToBuffer(packed.data),
-  );
-  return JSON.parse(new TextDecoder().decode(decrypted));
-}
-
 export default function OperationalMeeting() {
   const screens = Grid.useBreakpoint();
   const isMobile = !screens.md;
@@ -345,14 +140,6 @@ export default function OperationalMeeting() {
   const [detail, setDetail] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
-  const [keyInfo, setKeyInfo] = useState(null);
-  const [keyInfoLoaded, setKeyInfoLoaded] = useState(false);
-  const [unlocked, setUnlocked] = useState(null);
-  const [keyModalOpen, setKeyModalOpen] = useState(false);
-  const [keyPassword, setKeyPassword] = useState('');
-  const [keyPasswordConfirm, setKeyPasswordConfirm] = useState('');
-  const [keyBusy, setKeyBusy] = useState(false);
-  const [keyRepairMode, setKeyRepairMode] = useState(false);
   const [sectionDrafts, setSectionDrafts] = useState({});
   const [agendaDraft, setAgendaDraft] = useState(null);
   const [decisionDraft, setDecisionDraft] = useState(() => normalizeOperationalDecisionContent(''));
@@ -388,7 +175,6 @@ export default function OperationalMeeting() {
   const decisionDirtyRef = useRef(false);
   const agendaAutoSaveTimerRef = useRef(null);
   const decisionAutoSaveTimerRef = useRef(null);
-  const firstSecurityPromptRef = useRef(false);
 
   const hasSensitiveAccess = canAccessSensitiveModule?.(MODULE_KEY);
   const hasMenuAccess = canAccessMenu?.('/executive/operational');
@@ -396,11 +182,6 @@ export default function OperationalMeeting() {
   const isDetailView = Boolean(meetingId);
   const listView = searchParams.get('view') === 'annual' ? 'annual' : 'records';
   const detailTab = searchParams.get('tab') === 'meeting' ? 'meeting' : 'preparation';
-  const keyHealth = useMemo(() => inspectStoredKeyInfo(keyInfo), [keyInfo]);
-  const meetingAuthorizedUserIds = useMemo(() => {
-    const ids = detail?.meeting_authorized_user_ids || [];
-    return [...new Set([...ids.map(Number), Number(user?.id)].filter(Boolean))];
-  }, [detail, user?.id]);
 
   const updateSectionSaveState = useCallback((sectionId, patch) => {
     setSectionSaveStates((prev) => {
@@ -418,17 +199,6 @@ export default function OperationalMeeting() {
       sectionLocalStatusesRef.current = next;
       return next;
     });
-  }, []);
-
-  const loadKeyInfo = useCallback(async () => {
-    try {
-      const data = await cryptoKeysApi.getUserKey();
-      setKeyInfo(data || null);
-    } catch (error) {
-      message.error(error.response?.data?.error || '加载安全密钥失败');
-    } finally {
-      setKeyInfoLoaded(true);
-    }
   }, []);
 
   const loadMeetings = useCallback(async () => {
@@ -475,19 +245,8 @@ export default function OperationalMeeting() {
   }, [annualYear]);
 
   useEffect(() => {
-    loadKeyInfo();
     loadMeetings();
-  }, [loadKeyInfo, loadMeetings]);
-
-  useEffect(() => {
-    if (!keyInfoLoaded || keyInfo || firstSecurityPromptRef.current) return;
-    if (!hasMenuAccess || !hasSensitiveAccess) return;
-    firstSecurityPromptRef.current = true;
-    setKeyPassword('');
-    setKeyPasswordConfirm('');
-    setKeyRepairMode(false);
-    setKeyModalOpen(true);
-  }, [hasMenuAccess, hasSensitiveAccess, keyInfo, keyInfoLoaded]);
+  }, [loadMeetings]);
 
   useEffect(() => {
     if (meetingId) loadDetail(meetingId);
@@ -512,31 +271,26 @@ export default function OperationalMeeting() {
           && sectionDraftsRef.current[section.id];
         if (hasPendingLocalDraft) {
           nextSections[section.id] = sectionDraftsRef.current[section.id];
-        } else if (section.content_ciphertext && unlocked?.privateKey) {
-          try {
-            nextSections[section.id] = normalizeOperationalPreparationContent(await decryptRecordPayload(
-              section.content_ciphertext,
-              section.my_record_key,
-              unlocked.privateKey,
-            ), section.default_questions);
-          } catch {
-            nextSections[section.id] = fallback;
-          }
+        } else if (section.content) {
+          nextSections[section.id] = normalizeOperationalPreparationContent(
+            section.content,
+            section.default_questions,
+          );
         } else {
           nextSections[section.id] = fallback;
         }
         nextSavedSignatures[section.id] = hasPendingLocalDraft
           ? (sectionLastSavedSignatureRef.current[section.id] || '')
-          : (section.content_ciphertext
+          : (section.content
             ? getOperationalPreparationSignature(nextSections[section.id], section.default_questions)
             : '');
         nextSaveStates[section.id] = hasPendingLocalDraft
           ? {
               ...(sectionSaveStatesRef.current[section.id] || {}),
-              phase: unlocked?.privateKey ? 'dirty' : 'unlock_required',
+              phase: 'dirty',
             }
           : {
-              phase: section.content_ciphertext ? 'saved' : 'idle',
+              phase: section.content ? 'saved' : 'idle',
               savedAt: section.updated_at || null,
             };
         nextLocalStatuses[section.id] = hasPendingLocalDraft
@@ -546,27 +300,8 @@ export default function OperationalMeeting() {
               submittedAt: section.submitted_at || null,
             };
       }
-      let nextAgenda = null;
-      if (detail.agenda?.agenda_ciphertext && unlocked?.privateKey) {
-        try {
-          nextAgenda = normalizeOperationalAgendaContent(await decryptRecordPayload(
-            detail.agenda.agenda_ciphertext,
-            detail.agenda.my_record_key,
-            unlocked.privateKey,
-          ));
-        } catch {
-          nextAgenda = null;
-        }
-      }
-      let nextDecision = normalizeOperationalDecisionContent('');
-      if (detail.decision?.decision_ciphertext && unlocked?.privateKey) {
-        try {
-          const decrypted = await decryptRecordPayload(detail.decision.decision_ciphertext, detail.decision.my_record_key, unlocked.privateKey);
-          nextDecision = normalizeOperationalDecisionContent(decrypted);
-        } catch {
-          nextDecision = normalizeOperationalDecisionContent('');
-        }
-      }
+      const nextAgenda = normalizeOperationalAgendaContent(detail.agenda?.agenda_content);
+      const nextDecision = normalizeOperationalDecisionContent(detail.decision?.decision_content || '');
       if (!cancelled) {
         const preservedDirtySectionIds = new Set(dirtySectionIdsRef.current);
         sectionDraftsRef.current = nextSections;
@@ -580,57 +315,34 @@ export default function OperationalMeeting() {
         agendaDraftRef.current = nextAgenda;
         decisionDraftRef.current = nextDecision;
         agendaLastSavedSignatureRef.current = nextAgenda ? getDocumentBodySignature(nextAgenda) : '';
-        decisionLastSavedSignatureRef.current = detail.decision?.decision_ciphertext ? getDocumentBodySignature(nextDecision) : '';
+        decisionLastSavedSignatureRef.current = detail.decision?.decision_content ? getDocumentBodySignature(nextDecision) : '';
         agendaDirtyRef.current = false;
         decisionDirtyRef.current = false;
         setAgendaDraft(nextAgenda);
         setDecisionDraft(nextDecision);
-        setAgendaSaveState({ phase: detail.agenda?.agenda_ciphertext ? 'saved' : 'idle', savedAt: detail.agenda?.updated_at || detail.agenda?.generated_at || null });
-        setDecisionSaveState({ phase: detail.decision?.decision_ciphertext ? 'saved' : 'idle', savedAt: detail.decision?.updated_at || null });
+        setAgendaSaveState({ phase: detail.agenda?.agenda_content ? 'saved' : 'idle', savedAt: detail.agenda?.updated_at || detail.agenda?.generated_at || null });
+        setDecisionSaveState({ phase: detail.decision?.decision_content ? 'saved' : 'idle', savedAt: detail.decision?.updated_at || null });
       }
     }
     hydrate();
     return () => { cancelled = true; };
-  }, [detail, unlocked]);
+  }, [detail]);
 
   useEffect(() => {
     let cancelled = false;
-    async function hydrateAnnual() {
+    function hydrateAnnual() {
       const next = {};
       for (const row of annualRows) {
-        let agenda = null;
-        let decision = null;
-        let decryptError = false;
-        if (row.agenda?.agenda_ciphertext && unlocked?.privateKey) {
-          try {
-            agenda = normalizeOperationalAgendaContent(await decryptRecordPayload(
-              row.agenda.agenda_ciphertext,
-              row.agenda.my_record_key,
-              unlocked.privateKey,
-            ));
-          } catch {
-            decryptError = true;
-          }
-        }
-        if (row.decision?.decision_ciphertext && unlocked?.privateKey) {
-          try {
-            const payload = await decryptRecordPayload(
-              row.decision.decision_ciphertext,
-              row.decision.my_record_key,
-              unlocked.privateKey,
-            );
-            decision = normalizeOperationalDecisionContent(payload);
-          } catch {
-            decryptError = true;
-          }
-        }
-        next[row.meeting.id] = { agenda, decision, decryptError };
+        next[row.meeting.id] = {
+          agenda: normalizeOperationalAgendaContent(row.agenda?.agenda_content),
+          decision: normalizeOperationalDecisionContent(row.decision?.decision_content || ''),
+        };
       }
       if (!cancelled) setAnnualDrafts(next);
     }
     hydrateAnnual();
     return () => { cancelled = true; };
-  }, [annualRows, unlocked]);
+  }, [annualRows]);
 
   const openCreate = () => {
     setCreateOpen(true);
@@ -671,100 +383,6 @@ export default function OperationalMeeting() {
     navigate(`/executive/operational/${record.id}`);
   };
 
-  const handleKeyAction = async () => {
-    const creatingKey = !keyInfo || keyRepairMode;
-    if (!keyPassword || keyPassword.length < 8) {
-      message.warning('安全密码至少 8 位');
-      return;
-    }
-    if (creatingKey && keyPassword !== keyPasswordConfirm) {
-      message.warning('两次安全密码不一致');
-      return;
-    }
-    setKeyBusy(true);
-    try {
-      if (keyInfo && !keyRepairMode) {
-        const unlockedKey = await unlockPrivateKey(keyInfo, keyPassword);
-        let repaired = false;
-        try {
-          const storedPublicKey = parseRsaPublicJwk(keyInfo.public_key_jwk);
-          repaired = storedPublicKey.n !== unlockedKey.publicKeyJwk.n || storedPublicKey.e !== unlockedKey.publicKeyJwk.e;
-        } catch {
-          repaired = true;
-        }
-        if (repaired) {
-          await cryptoKeysApi.saveUserKey({
-            public_key_jwk: JSON.stringify(unlockedKey.publicKeyJwk),
-            encrypted_private_key_jwk: keyInfo.encrypted_private_key_jwk,
-            kdf_algorithm: keyInfo.kdf_algorithm || 'PBKDF2-SHA256',
-            kdf_params_json: keyInfo.kdf_params_json || null,
-            key_version: Number(keyInfo.key_version || 1),
-          });
-          await loadKeyInfo();
-        }
-        setUnlocked({
-          privateKey: unlockedKey.privateKey,
-          publicKeyJwk: unlockedKey.publicKeyJwk,
-          keyVersion: Number(keyInfo.key_version || 1),
-        });
-        message.success(repaired ? '安全密钥已解锁，损坏的公钥已自动修复' : '安全密钥已解锁');
-      } else {
-        const bundle = await createUserKeyBundle(keyPassword);
-        const keyVersion = keyInfo ? Number(keyInfo.key_version || 1) + 1 : 1;
-        await cryptoKeysApi.saveUserKey({
-          public_key_jwk: bundle.public_key_jwk,
-          encrypted_private_key_jwk: bundle.encrypted_private_key_jwk,
-          kdf_algorithm: 'PBKDF2-SHA256',
-          key_version: keyVersion,
-        });
-        setUnlocked({
-          privateKey: bundle.privateKey,
-          publicKeyJwk: bundle.publicKeyJwk,
-          keyVersion,
-        });
-        await loadKeyInfo();
-        message.success(keyRepairMode ? '安全密钥已修复并解锁' : '安全密钥已创建并解锁');
-      }
-      setKeyPassword('');
-      setKeyPasswordConfirm('');
-      setKeyRepairMode(false);
-      setKeyModalOpen(false);
-    } catch (error) {
-      message.error(error.message || '安全密钥处理失败，请确认密码正确');
-    } finally {
-      setKeyBusy(false);
-    }
-  };
-
-  const openKeyRepair = () => {
-    Modal.confirm({
-      title: '检测到安全密钥需要修复',
-      content: '你之前已经设置过安全密钥，但系统检测到旧版本保存的数据不完整，当前无法正常解锁。修复会生成一套新密钥，你可以继续使用原安全密码，也可以设置新密码。少数仅由旧密钥授权的历史内容，可能需要其他已授权 CXO 打开并重新保存后才能恢复访问。',
-      okText: '开始修复',
-      cancelText: '取消',
-      okButtonProps: { danger: true },
-      onOk: () => {
-        setKeyRepairMode(true);
-        setKeyPassword('');
-        setKeyPasswordConfirm('');
-        setKeyModalOpen(true);
-      },
-    });
-  };
-
-  const ensureUnlocked = () => {
-    if (!window.crypto?.subtle) {
-      message.error('当前浏览器不支持 Web Crypto，无法处理加密内容');
-      return false;
-    }
-    if (!unlocked?.privateKey) {
-      if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyRepair();
-      else setKeyModalOpen(true);
-      return false;
-    }
-    return true;
-  };
-
   const updateDirtySection = useCallback((sectionId, dirty) => {
     const next = new Set(dirtySectionIdsRef.current);
     if (dirty) next.add(Number(sectionId));
@@ -785,7 +403,7 @@ export default function OperationalMeeting() {
     sectionDraftsRef.current = { ...sectionDraftsRef.current, [sectionId]: next };
     setSectionDrafts(prev => ({ ...prev, [sectionId]: next }));
     updateDirtySection(sectionId, true);
-    updateSectionSaveState(sectionId, { phase: unlocked?.privateKey ? 'dirty' : 'unlock_required' });
+    updateSectionSaveState(sectionId, { phase: 'dirty' });
 
     const submissionChanged = getOperationalPreparationSubmissionSignature(previous, section.default_questions)
       !== getOperationalPreparationSubmissionSignature(next, section.default_questions);
@@ -816,25 +434,11 @@ export default function OperationalMeeting() {
       return true;
     }
 
-    if (!unlocked?.privateKey) {
-      updateSectionSaveState(normalizedSectionId, { phase: 'unlock_required' });
-      return false;
-    }
-
     const savePromise = (async () => {
       updateSectionSaveState(normalizedSectionId, { phase: 'saving' });
       try {
-        const sectionAuthorizedUserIds = [...new Set([
-          ...(section.authorized_user_ids || []).map(Number),
-          Number(user?.id),
-        ].filter(Boolean))];
-        const encrypted = await encryptPayloadForUsers(payload, sectionAuthorizedUserIds, {
-          [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
-        });
         await operationalMeetingsApi.updateSection(normalizedSectionId, {
-          content_ciphertext: encrypted.ciphertext,
-          crypto_version: 'v2_client',
-          record_keys: encrypted.record_keys,
+          content: payload,
         });
         sectionLastSavedSignatureRef.current[normalizedSectionId] = signature;
         const latest = sectionDraftsRef.current[normalizedSectionId] || payload;
@@ -844,7 +448,6 @@ export default function OperationalMeeting() {
         updateSectionSaveState(normalizedSectionId, () => ({
           phase: isCurrent ? 'saved' : 'dirty',
           savedAt: new Date().toISOString(),
-          unavailableUserCount: encrypted.unavailable_user_ids.length,
         }));
         return true;
       } catch (error) {
@@ -865,7 +468,7 @@ export default function OperationalMeeting() {
         delete sectionPendingSaveRef.current[normalizedSectionId];
       }
     }
-  }, [detail?.sections, unlocked, updateDirtySection, updateSectionSaveState, user?.id]);
+  }, [detail?.sections, updateDirtySection, updateSectionSaveState]);
 
   persistSectionRef.current = persistSection;
 
@@ -903,7 +506,6 @@ export default function OperationalMeeting() {
   }, []);
 
   const submitSection = async (section) => {
-    if (!ensureUnlocked()) return;
     const sectionId = Number(section.id);
     const payload = normalizeOperationalPreparationContent(
       sectionDraftsRef.current[sectionId] || section.default_blocks,
@@ -930,10 +532,6 @@ export default function OperationalMeeting() {
       updateSectionLocalStatus(sectionId, { status: 'submitted', submittedAt });
       await Promise.all([loadMeetings(), loadDetail(section.meeting_id)]);
       message.success('已标记提交，会议提纲将使用当前版本');
-      const unavailableUserCount = Number(sectionSaveStatesRef.current[sectionId]?.unavailableUserCount || 0);
-      if (unavailableUserCount) {
-        message.warning(`${unavailableUserCount} 位授权人的安全密钥尚未就绪，暂时无法查看本次内容`);
-      }
     } catch (error) {
       message.error(error.response?.data?.error || error.message || '标记提交失败');
     } finally {
@@ -942,7 +540,7 @@ export default function OperationalMeeting() {
   };
 
   const generateAgenda = async () => {
-    if (!detail?.meeting?.id || !ensureUnlocked()) return;
+    if (!detail?.meeting?.id) return;
     setAgendaLoading(true);
     try {
       const sections = (detail.sections || []).map(section => ({
@@ -952,13 +550,8 @@ export default function OperationalMeeting() {
       }));
       const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, { sections });
       const agenda = normalizeOperationalAgendaContent(result.agenda);
-      const encrypted = await encryptPayloadForUsers(agenda, meetingAuthorizedUserIds, {
-        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
-      });
       await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
-        agenda_ciphertext: encrypted.ciphertext,
-        crypto_version: 'v2_client',
-        record_keys: encrypted.record_keys,
+        agenda,
         source_hash: result.source_hash,
         model_provider: result.runtime?.provider || 'rule',
         model_name: result.runtime?.model_name || '',
@@ -969,13 +562,10 @@ export default function OperationalMeeting() {
       agendaLastSavedSignatureRef.current = getDocumentBodySignature(agenda);
       agendaDirtyRef.current = false;
       setAgendaDraft(agenda);
-      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString(), unavailableUserCount: encrypted.unavailable_user_ids.length });
+      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString() });
       await loadMeetings();
       await loadDetail(detail.meeting.id);
       message.success(result.runtime?.mode === 'llm' ? 'AI 提纲已生成' : '已生成规则兜底提纲');
-      if (encrypted.unavailable_user_ids.length) {
-        message.warning(`${encrypted.unavailable_user_ids.length} 位参与人的安全密钥尚未就绪，暂时无法查看本次提纲`);
-      }
     } catch (error) {
       message.error(error.response?.data?.error || error.message || '生成提纲失败');
     } finally {
@@ -988,7 +578,7 @@ export default function OperationalMeeting() {
     agendaDraftRef.current = next;
     agendaDirtyRef.current = true;
     setAgendaDraft(next);
-    setAgendaSaveState(prev => ({ ...prev, phase: unlocked?.privateKey ? 'dirty' : 'unlock_required' }));
+    setAgendaSaveState(prev => ({ ...prev, phase: 'dirty' }));
   };
 
   const patchDecisionContent = (content) => {
@@ -996,7 +586,7 @@ export default function OperationalMeeting() {
     decisionDraftRef.current = next;
     decisionDirtyRef.current = true;
     setDecisionDraft(next);
-    setDecisionSaveState(prev => ({ ...prev, phase: unlocked?.privateKey ? 'dirty' : 'unlock_required' }));
+    setDecisionSaveState(prev => ({ ...prev, phase: 'dirty' }));
   };
 
   const saveAgenda = async ({ silent = false } = {}) => {
@@ -1009,19 +599,10 @@ export default function OperationalMeeting() {
       setAgendaSaveState(prev => ({ ...prev, phase: 'saved' }));
       return true;
     }
-    if (!ensureUnlocked()) {
-      setAgendaSaveState(prev => ({ ...prev, phase: 'unlock_required' }));
-      return false;
-    }
     setAgendaSaveState(prev => ({ ...prev, phase: 'saving' }));
     try {
-      const encrypted = await encryptPayloadForUsers(payload, meetingAuthorizedUserIds, {
-        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
-      });
       await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
-        agenda_ciphertext: encrypted.ciphertext,
-        crypto_version: 'v2_client',
-        record_keys: encrypted.record_keys,
+        agenda: payload,
         source_hash: detail.agenda?.source_hash || null,
         model_provider: detail.agenda?.model_provider || 'edited',
         model_name: detail.agenda?.model_name || '',
@@ -1030,12 +611,9 @@ export default function OperationalMeeting() {
       });
       agendaLastSavedSignatureRef.current = signature;
       agendaDirtyRef.current = false;
-      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString(), unavailableUserCount: encrypted.unavailable_user_ids.length });
+      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString() });
       await loadMeetings();
       if (!silent) message.success('会议提纲已保存');
-      if (encrypted.unavailable_user_ids.length && !silent) {
-        message.warning(`${encrypted.unavailable_user_ids.length} 位参与人的安全密钥尚未就绪，暂时无法查看本次提纲`);
-      }
       return true;
     } catch (error) {
       setAgendaSaveState(prev => ({ ...prev, phase: 'error', error: error.response?.data?.error || error.message || '保存会议提纲失败' }));
@@ -1045,7 +623,7 @@ export default function OperationalMeeting() {
   };
 
   const saveDecision = async ({ silent = false } = {}) => {
-    if (!detail?.meeting?.id || !ensureUnlocked()) return;
+    if (!detail?.meeting?.id) return false;
     const payload = normalizeOperationalDecisionContent(decisionDraftRef.current);
     const signature = getDocumentBodySignature(payload);
     if (signature === decisionLastSavedSignatureRef.current) {
@@ -1055,23 +633,15 @@ export default function OperationalMeeting() {
     }
     setDecisionSaveState(prev => ({ ...prev, phase: 'saving' }));
     try {
-      const encrypted = await encryptPayloadForUsers(payload, meetingAuthorizedUserIds, {
-        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
-      });
       await operationalMeetingsApi.saveDecision(detail.meeting.id, {
-        decision_ciphertext: encrypted.ciphertext,
-        crypto_version: 'v2_client',
-        record_keys: encrypted.record_keys,
+        decision: payload,
         status: documentBodyHasContent(payload) ? 'saved' : 'draft',
       });
       decisionLastSavedSignatureRef.current = signature;
       decisionDirtyRef.current = false;
-      setDecisionSaveState({ phase: 'saved', savedAt: new Date().toISOString(), unavailableUserCount: encrypted.unavailable_user_ids.length });
+      setDecisionSaveState({ phase: 'saved', savedAt: new Date().toISOString() });
       await loadMeetings();
       if (!silent) message.success('会议结论已保存');
-      if (encrypted.unavailable_user_ids.length && !silent) {
-        message.warning(`${encrypted.unavailable_user_ids.length} 位参与人的安全密钥尚未就绪，暂时无法查看本次结论`);
-      }
       return true;
     } catch (error) {
       setDecisionSaveState(prev => ({ ...prev, phase: 'error', error: error.response?.data?.error || error.message || '保存会议结论失败' }));
@@ -1084,31 +654,23 @@ export default function OperationalMeeting() {
     if (agendaAutoSaveTimerRef.current) window.clearTimeout(agendaAutoSaveTimerRef.current);
     if (!agendaDirtyRef.current || !agendaDraft) return undefined;
     agendaAutoSaveTimerRef.current = window.setTimeout(() => {
-      if (!unlocked?.privateKey) {
-        setAgendaSaveState(prev => ({ ...prev, phase: 'unlock_required' }));
-        return;
-      }
       saveAgenda({ silent: true });
     }, MEETING_CONTENT_AUTO_SAVE_DELAY);
     return () => {
       if (agendaAutoSaveTimerRef.current) window.clearTimeout(agendaAutoSaveTimerRef.current);
     };
-  }, [agendaDraft, unlocked?.privateKey]);
+  }, [agendaDraft]);
 
   useEffect(() => {
     if (decisionAutoSaveTimerRef.current) window.clearTimeout(decisionAutoSaveTimerRef.current);
     if (!decisionDirtyRef.current) return undefined;
     decisionAutoSaveTimerRef.current = window.setTimeout(() => {
-      if (!unlocked?.privateKey) {
-        setDecisionSaveState(prev => ({ ...prev, phase: 'unlock_required' }));
-        return;
-      }
       saveDecision({ silent: true });
     }, MEETING_CONTENT_AUTO_SAVE_DELAY);
     return () => {
       if (decisionAutoSaveTimerRef.current) window.clearTimeout(decisionAutoSaveTimerRef.current);
     };
-  }, [decisionDraft, unlocked?.privateKey]);
+  }, [decisionDraft]);
 
   const openParticipantManager = () => {
     setParticipantUserIds((detail?.participants || [])
@@ -1119,66 +681,15 @@ export default function OperationalMeeting() {
 
   const saveParticipants = async () => {
     if (!detail?.meeting?.id) return;
-    const hasEncryptedMeetingContent = Boolean(
-      detail.agenda?.agenda_ciphertext || detail.decision?.decision_ciphertext,
-    );
-    if (hasEncryptedMeetingContent && !ensureUnlocked()) return;
     setParticipantBusy(true);
     try {
-      const result = await operationalMeetingsApi.updateParticipants(detail.meeting.id, {
+      await operationalMeetingsApi.updateParticipants(detail.meeting.id, {
         participant_user_ids: participantUserIds,
       });
-      let rekeyIncomplete = false;
-      const recipientIds = [...new Set([
-        ...(result.meeting_authorized_user_ids || []).map(Number),
-        Number(user?.id),
-      ].filter(Boolean))];
-
-      if (result.requires_rekey && detail.agenda?.agenda_ciphertext) {
-        if (!agendaDraft) {
-          rekeyIncomplete = true;
-        } else {
-          const encryptedAgenda = await encryptPayloadForUsers(agendaDraft, recipientIds, {
-            [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
-          });
-          await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
-            agenda_ciphertext: encryptedAgenda.ciphertext,
-            crypto_version: 'v2_client',
-            record_keys: encryptedAgenda.record_keys,
-            source_hash: detail.agenda.source_hash,
-            model_provider: detail.agenda.model_provider,
-            model_name: detail.agenda.model_name,
-            prompt_version: detail.agenda.prompt_version,
-            safety_scan_status: detail.agenda.safety_scan_status || 'passed',
-          });
-          if (encryptedAgenda.unavailable_user_ids.length) rekeyIncomplete = true;
-        }
-      }
-      if (result.requires_rekey && detail.decision?.decision_ciphertext) {
-        if (!unlocked?.privateKey) {
-          rekeyIncomplete = true;
-        } else {
-          const encryptedDecision = await encryptPayloadForUsers(normalizeOperationalDecisionContent(decisionDraft), recipientIds, {
-            [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
-          });
-          await operationalMeetingsApi.saveDecision(detail.meeting.id, {
-            decision_ciphertext: encryptedDecision.ciphertext,
-            crypto_version: 'v2_client',
-            record_keys: encryptedDecision.record_keys,
-            status: detail.decision.status || 'saved',
-          });
-          if (encryptedDecision.unavailable_user_ids.length) rekeyIncomplete = true;
-        }
-      }
-
       setParticipantOpen(false);
       await loadDetail(detail.meeting.id);
       await loadMeetings();
-      if (rekeyIncomplete) {
-        message.warning('参与人已更新，但部分历史会议内容需要由能正常解密的 CXO 重新保存后，新参与人才可查看');
-      } else {
-        message.success(result.requires_rekey ? '参与人及会议内容授权已更新' : '参与人已更新');
-      }
+      message.success('参与人已更新');
     } catch (error) {
       message.error(error.response?.data?.error || error.message || '参与人更新失败');
     } finally {
@@ -1281,17 +792,11 @@ export default function OperationalMeeting() {
       section.default_questions,
     );
     const isOwnPreparation = Number(section.owner_user_id) === Number(user?.id);
-    const {
-      canEdit,
-      lacksDecryptGrant,
-      needsUnlockForExistingContent,
-      readOnly,
-    } = getPreparationEditorState(section, Boolean(unlocked?.privateKey));
+    const { canEdit, readOnly } = getPreparationEditorState(section);
     const saveStatusLabel = (() => {
       if (saveState.phase === 'dirty') return { text: '待自动保存', color: '#8c8c8c' };
       if (saveState.phase === 'saving') return { text: '自动保存中...', color: '#1677ff' };
       if (saveState.phase === 'error') return { text: '自动保存失败', color: '#cf1322' };
-      if (saveState.phase === 'unlock_required') return { text: '解锁后自动保存', color: '#d46b08' };
       if (saveState.phase === 'saved') {
         return {
           text: saveState.savedAt ? `已自动保存 ${dayjs(saveState.savedAt).format('HH:mm')}` : '已自动保存',
@@ -1365,22 +870,10 @@ export default function OperationalMeeting() {
                 : '当前账号没有此准备块的编辑权限。'}
             />
           )}
-          {canEdit && needsUnlockForExistingContent && (
-            <Alert
-              type="info"
-              showIcon
-              message="内容已加密"
-              description="请使用页面右上角的安全密码入口解锁后查看和编辑。"
-            />
-          )}
-          {lacksDecryptGrant && (
-            <Alert type="warning" showIcon message="当前账号没有此准备块的记录密钥，无法查看或覆盖原内容。" />
-          )}
           <DocumentBodyEditor
             value={draft}
             onChange={value => patchPreparationContent(section, value)}
             onSave={async () => {
-              if (!ensureUnlocked()) return false;
               const saved = await persistSection(section.id, { showError: true });
               if (saved) message.success('准备内容已保存');
               return saved;
@@ -1407,22 +900,6 @@ export default function OperationalMeeting() {
     );
   }
 
-  const renderKeyAction = () => (
-    unlocked?.privateKey ? (
-      <Tag icon={<UnlockOutlined />} color="green">安全密码已解锁</Tag>
-    ) : (
-      <Button
-        icon={<LockOutlined />}
-        onClick={() => {
-          if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyRepair();
-          else setKeyModalOpen(true);
-        }}
-      >
-        {keyInfo && !keyHealth.privateEnvelopeValid ? '修复安全密码' : (keyInfo ? '解锁安全密码' : '设置安全密码')}
-      </Button>
-    )
-  );
-
   const preparationPanel = detail?.meeting ? (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {detail.sections?.length ? (
@@ -1444,7 +921,6 @@ export default function OperationalMeeting() {
       dirty: { text: '待自动保存', color: '#8c8c8c' },
       saving: { text: '自动保存中...', color: '#1677ff' },
       error: { text: state.error || '自动保存失败', color: '#cf1322' },
-      unlock_required: { text: '解锁后自动保存', color: '#d46b08' },
       saved: {
         text: state.savedAt ? `已自动保存 ${dayjs(state.savedAt).format('HH:mm')}` : '已自动保存',
         color: '#389e0d',
@@ -1511,12 +987,12 @@ export default function OperationalMeeting() {
               onSave={() => saveAgenda({ silent: false })}
               minHeight={360}
               placeholder="编辑会议提纲"
-              readOnly={!detail.can_generate_agenda || !unlocked?.privateKey}
+              readOnly={!detail.can_generate_agenda}
             />
-            <Alert type="success" showIcon message="提纲已加密保存，毛利和利润类敏感字段已在生成前后过滤。" />
+            <Alert type="success" showIcon message="毛利和利润类敏感字段已在生成前后过滤。" />
           </Space>
         ) : (
-          <Empty description={detail.agenda?.agenda_ciphertext && !unlocked?.privateKey ? '提纲已加密，解锁后可查看' : '暂无会议提纲'} />
+          <Empty description="暂无会议提纲" />
         )}
       </Card>
 
@@ -1545,7 +1021,7 @@ export default function OperationalMeeting() {
           onSave={() => saveDecision({ silent: false })}
           placeholder="记录会议最终决策、负责人、截止时间和后续动作"
           minHeight={280}
-          readOnly={!detail.can_edit_decision || !unlocked?.privateKey}
+          readOnly={!detail.can_edit_decision}
         />
       </Card>
     </Space>
@@ -1569,7 +1045,6 @@ export default function OperationalMeeting() {
                 </div>
               </Space>
               <Space wrap>
-                {renderKeyAction()}
                 {Boolean(detail?.can_manage_participants) && (
                   <Button icon={<TeamOutlined />} onClick={openParticipantManager}>参与人</Button>
                 )}
@@ -1582,22 +1057,6 @@ export default function OperationalMeeting() {
                 <Empty description="暂无详情" />
               ) : (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  {keyInfoLoaded && !keyInfo && (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      message="首次使用需要设置安全密码"
-                      description="请在页面右上角设置安全密码。经营周会内容会在浏览器本地加密后保存，安全密码不会上传服务器。"
-                    />
-                  )}
-                  {keyInfo && !unlocked?.privateKey && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="安全内容当前已锁定"
-                      description="请使用页面右上角的“解锁安全密码”查看加密内容；未加密的新内容可先编辑，解锁后会自动保存。"
-                    />
-                  )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                     <Tag color={(statusMeta[detail.meeting.status] || statusMeta.draft).color}>
                       {(statusMeta[detail.meeting.status] || statusMeta.draft).label}
@@ -1628,21 +1087,11 @@ export default function OperationalMeeting() {
             title={<Space><FileDoneOutlined />经营周会</Space>}
             extra={(
             <Space wrap>
-              {renderKeyAction()}
               <Button icon={<ReloadOutlined />} onClick={loadMeetings}>刷新</Button>
               {cxoIdentity && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建周会</Button>}
             </Space>
             )}
           >
-            {keyInfoLoaded && !keyInfo && (
-              <Alert
-                type="warning"
-                showIcon
-                style={{ marginBottom: 16 }}
-                message="首次使用需要设置安全密码"
-                description="请在页面右上角设置安全密码。安全密码不会上传服务器，忘记后需要由其他已授权 CXO 重新授权。"
-              />
-            )}
             <Tabs
               activeKey={listView}
               onChange={key => setSearchParams(key === 'annual' ? { view: 'annual' } : {})}
@@ -1692,14 +1141,6 @@ export default function OperationalMeeting() {
                           </Checkbox>
                           <Text type="secondary">共 {filteredAnnualRows.length} 周</Text>
                         </div>
-                        {!unlocked?.privateKey && annualRows.length > 0 && (
-                          <Alert
-                            type="info"
-                            showIcon
-                            message="解锁安全密码后可在本页查看全年提纲和会议结论"
-                            description="请使用页面右上角的安全密码入口。"
-                          />
-                        )}
                         {filteredAnnualRows.length ? (
                           <Collapse
                             defaultActiveKey={filteredAnnualRows.map(row => String(row.meeting.id))}
@@ -1737,7 +1178,7 @@ export default function OperationalMeeting() {
                                         placeholder="暂无会议提纲"
                                       />
                                     ) : (
-                                      <Text type="secondary">{row.agenda?.agenda_ciphertext ? '内容已加密，解锁后可查看' : '未生成'}</Text>
+                                      <Text type="secondary">未生成</Text>
                                     )}
                                     <Divider style={{ margin: '4px 0' }} />
                                     <Text strong>会议结论</Text>
@@ -1749,9 +1190,8 @@ export default function OperationalMeeting() {
                                         placeholder="暂无会议结论"
                                       />
                                     ) : (
-                                      <Text type="secondary">{row.decision?.decision_ciphertext ? '内容已加密，解锁后可查看' : '未填写'}</Text>
+                                      <Text type="secondary">未填写</Text>
                                     )}
-                                    {draft.decryptError && <Alert type="warning" showIcon message="当前账号缺少部分记录密钥" />}
                                   </Space>
                                 ),
                               };
@@ -1845,44 +1285,6 @@ export default function OperationalMeeting() {
         </Space>
       </Modal>
 
-      <Modal
-        title={keyRepairMode ? '修复安全密码' : (keyInfo ? '解锁安全密码' : '设置安全密码')}
-        open={keyModalOpen}
-        onCancel={() => {
-          setKeyModalOpen(false);
-          setKeyPassword('');
-          setKeyPasswordConfirm('');
-          setKeyRepairMode(false);
-        }}
-        onOk={handleKeyAction}
-        okText={keyRepairMode ? '完成修复' : (keyInfo ? '解锁' : '创建')}
-        cancelText="取消"
-        confirmLoading={keyBusy}
-        destroyOnClose
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            message="安全密码不会上传服务器"
-            description="它只用于在浏览器里解开你的私钥。服务器和运维拿不到明文私钥。"
-          />
-          <Input.Password
-            value={keyPassword}
-            onChange={event => setKeyPassword(event.target.value)}
-            placeholder="请输入安全密码，至少 8 位"
-            autoComplete={keyInfo && !keyRepairMode ? 'current-password' : 'new-password'}
-          />
-          {(!keyInfo || keyRepairMode) && (
-            <Input.Password
-              value={keyPasswordConfirm}
-              onChange={event => setKeyPasswordConfirm(event.target.value)}
-              placeholder="再次输入安全密码"
-              autoComplete="new-password"
-            />
-          )}
-        </Space>
-      </Modal>
     </div>
   );
 }

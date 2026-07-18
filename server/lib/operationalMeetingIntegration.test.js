@@ -181,6 +181,10 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(outsiderDetail.status, 404);
 
   const designatedSectionId = designatedDetail.payload.sections[0].id;
+  const preparationContent = {
+    format: 'relation_document_body_v1',
+    blocks: [{ id: 'prep-1', type: 'paragraph', content: '本周准备内容', meta: {} }],
+  };
   const cxoEditsDesignatedPreparation = await request(
     baseUrl,
     `/api/operational-meeting-sections/${designatedSectionId}`,
@@ -188,13 +192,15 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
       method: 'PUT',
       token: ceoToken,
       body: {
-        content_ciphertext: 'cxo-edited-designated-preparation',
-        crypto_version: 'v2_client',
-        record_keys: [],
+        content: preparationContent,
       },
     },
   );
   assert.equal(cxoEditsDesignatedPreparation.status, 200, JSON.stringify(cxoEditsDesignatedPreparation.payload));
+  const preparationAfterEdit = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
+  assert.deepEqual(preparationAfterEdit.payload.sections[0].content, preparationContent);
+  assert.equal(preparationAfterEdit.payload.sections[0].content_ciphertext, undefined);
+  assert.equal(preparationAfterEdit.payload.sections[0].my_record_key, undefined);
 
   const submitPreparation = await request(
     baseUrl,
@@ -213,9 +219,10 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
       method: 'PUT',
       token: designatedToken,
       body: {
-        content_ciphertext: 'edited-after-submit',
-        crypto_version: 'v2_client',
-        record_keys: [],
+        content: {
+          ...preparationContent,
+          blocks: [{ id: 'prep-2', type: 'paragraph', content: '提交后重新编辑', meta: {} }],
+        },
       },
     },
   );
@@ -224,19 +231,18 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(editedDetail.payload.sections[0].status, 'draft');
   assert.equal(editedDetail.payload.sections[0].submitted_at, null);
 
-  const invalidRecordKey = await request(
+  const invalidPreparationContent = await request(
     baseUrl,
     `/api/operational-meeting-sections/${designatedSectionId}`,
     {
       method: 'PUT',
       token: designatedToken,
       body: {
-        content_ciphertext: 'ciphertext',
-        record_keys: [{ user_id: users.outsiderId, encrypted_dek: 'not-allowed', key_version: 1 }],
+        content: 'not-an-object',
       },
     },
   );
-  assert.equal(invalidRecordKey.status, 400);
+  assert.equal(invalidPreparationContent.status, 400);
 
   const forbiddenGenerate = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda/generate`, {
     method: 'POST',
@@ -253,12 +259,48 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(earlyGenerate.status, 200, JSON.stringify(earlyGenerate.payload));
   assert.ok(earlyGenerate.payload.agenda?.meeting_goal);
 
+  const agendaContent = {
+    format: 'relation_document_body_v1',
+    blocks: [{ id: 'agenda-1', type: 'paragraph', content: '本次会议提纲', meta: {} }],
+  };
+  const saveAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
+    method: 'PUT',
+    token: ceoToken,
+    body: {
+      agenda: agendaContent,
+      source_hash: earlyGenerate.payload.source_hash,
+      model_provider: 'rule',
+      prompt_version: earlyGenerate.payload.prompt_version,
+      safety_scan_status: 'passed',
+    },
+  });
+  assert.equal(saveAgenda.status, 200, JSON.stringify(saveAgenda.payload));
+
+  const decisionContent = {
+    format: 'relation_document_body_v1',
+    blocks: [{ id: 'decision-1', type: 'paragraph', content: '本周会议结论', meta: {} }],
+  };
+  const saveDecision = await request(baseUrl, `/api/operational-meetings/${meetingId}/decision`, {
+    method: 'PUT',
+    token: ceoToken,
+    body: { decision: decisionContent, status: 'saved' },
+  });
+  assert.equal(saveDecision.status, 200, JSON.stringify(saveDecision.payload));
+
+  const meetingContentDetail = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
+  assert.deepEqual(meetingContentDetail.payload.agenda.agenda_content, agendaContent);
+  assert.deepEqual(meetingContentDetail.payload.decision.decision_content, decisionContent);
+  assert.equal(meetingContentDetail.payload.agenda.agenda_ciphertext, undefined);
+  assert.equal(meetingContentDetail.payload.decision.decision_ciphertext, undefined);
+
   const [designatedAnnual, outsiderAnnual] = await Promise.all([
     request(baseUrl, '/api/operational-meetings/annual-summary?year=2026', { token: designatedToken }),
     request(baseUrl, '/api/operational-meetings/annual-summary?year=2026', { token: outsiderToken }),
   ]);
   assert.equal(designatedAnnual.payload.meetings.length, 1);
   assert.equal(outsiderAnnual.payload.meetings.length, 0);
+  assert.deepEqual(designatedAnnual.payload.meetings[0].agenda.agenda_content, agendaContent);
+  assert.deepEqual(designatedAnnual.payload.meetings[0].decision.decision_content, decisionContent);
 
   const addOutsider = await request(baseUrl, `/api/operational-meetings/${meetingId}/participants`, {
     method: 'PUT',
@@ -266,10 +308,13 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     body: { participant_user_ids: [users.designatedId, users.outsiderId] },
   });
   assert.equal(addOutsider.status, 200, JSON.stringify(addOutsider.payload));
+  assert.equal(addOutsider.payload.requires_rekey, undefined);
   const outsiderAfterAdd = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: outsiderToken });
   assert.equal(outsiderAfterAdd.status, 200);
   assert.equal(outsiderAfterAdd.payload.sections.length, 1);
   assert.equal(Number(outsiderAfterAdd.payload.sections[0].owner_user_id), users.outsiderId);
+  assert.deepEqual(outsiderAfterAdd.payload.agenda.agenda_content, agendaContent);
+  assert.deepEqual(outsiderAfterAdd.payload.decision.decision_content, decisionContent);
 
   const removeDesignated = await request(baseUrl, `/api/operational-meetings/${meetingId}/participants`, {
     method: 'PUT',
@@ -284,5 +329,5 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     section => Number(section.owner_user_id) === users.designatedId,
   );
   assert.ok(removedPreparation);
-  assert.equal(removedPreparation.authorized_user_ids.includes(users.designatedId), false);
+  assert.equal(removedPreparation.authorized_user_ids, undefined);
 });

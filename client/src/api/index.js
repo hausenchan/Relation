@@ -380,12 +380,6 @@ export const systemSettingsApi = {
   saveSensitiveModuleMembers: (moduleKey, data) => api.put(`/admin/sensitive-modules/${moduleKey}/members`, data).then(r => r.data),
 };
 
-export const cryptoKeysApi = {
-  getUserKey: () => api.get('/crypto/user-key').then(r => r.data),
-  saveUserKey: (data) => api.put('/crypto/user-key', data).then(r => r.data),
-  publicKeys: (userIds) => api.get('/crypto/public-keys', { params: { user_ids: (userIds || []).join(',') } }).then(r => r.data),
-};
-
 export const operationalMeetingsApi = {
   templates: () => api.get('/operational-meeting-templates').then(r => r.data),
   eligibleParticipants: () => api.get('/operational-meetings/eligible-participants').then(r => r.data),

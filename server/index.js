@@ -53,7 +53,6 @@ const {
   canViewPreparation: canViewOperationalPreparation,
   isMeetingCxo: isOperationalMeetingCxoForMeeting,
   isOperationalMeetingCxo,
-  normalizeRecordKeyRecipients,
 } = require('./lib/operationalMeetingPolicy');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
@@ -2910,7 +2909,7 @@ if (executiveReportCols.length > 0) {
   addExecutiveReportColumn('updated_at', 'DATETIME');
 }
 
-// =========== 经营周会模块（模板驱动 + 客户端加密）===========
+// =========== 经营周会模块（模板驱动 + 权限控制）===========
 db.exec(`
   CREATE TABLE IF NOT EXISTS operational_meeting_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3034,6 +3033,9 @@ db.exec(`
 addColumnIfMissing('operational_meeting_sections', 'owner_type', "TEXT DEFAULT 'cxo'");
 addColumnIfMissing('operational_meeting_sections', 'template_snapshot_json', 'TEXT DEFAULT NULL');
 addColumnIfMissing('operational_meeting_sections', 'visibility_scope', "TEXT DEFAULT 'cxo_and_owner'");
+addColumnIfMissing('operational_meeting_sections', 'content_json', 'TEXT DEFAULT NULL');
+addColumnIfMissing('operational_meeting_agendas', 'agenda_json', 'TEXT DEFAULT NULL');
+addColumnIfMissing('operational_meeting_decisions', 'decision_json', 'TEXT DEFAULT NULL');
 
 createIndexesIfColumnsExist('sensitive_module_members', [
   { name: 'idx_sensitive_module_members_user', columnsSql: 'user_id', columns: ['user_id'] },
@@ -20675,6 +20677,45 @@ const OPERATIONAL_MEETING_SECTION_RECORD = 'operational_meeting_section';
 const OPERATIONAL_MEETING_AGENDA_RECORD = 'operational_meeting_agenda';
 const OPERATIONAL_MEETING_DECISION_RECORD = 'operational_meeting_decision';
 const OPERATIONAL_MEETING_PROMPT_VERSION = 'operational-meeting-agenda-v1';
+const OPERATIONAL_MEETING_CONTENT_LIMIT = 2 * 1024 * 1024;
+
+function stringifyOperationalMeetingContent(value, fieldLabel) {
+  if (value == null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${fieldLabel}格式不正确`);
+  }
+  const serialized = JSON.stringify(value);
+  if (Buffer.byteLength(serialized, 'utf8') > OPERATIONAL_MEETING_CONTENT_LIMIT) {
+    throw new Error(`${fieldLabel}内容过大`);
+  }
+  return serialized;
+}
+
+function serializeOperationalAgenda(row) {
+  if (!row) return null;
+  const publicRow = { ...row };
+  delete publicRow.agenda_json;
+  delete publicRow.agenda_ciphertext;
+  delete publicRow.agenda_text_ciphertext;
+  delete publicRow.crypto_version;
+  return {
+    ...publicRow,
+    agenda_content: parseJsonSafe(row.agenda_json, null),
+  };
+}
+
+function serializeOperationalDecision(row) {
+  if (!row) return null;
+  const publicRow = { ...row };
+  delete publicRow.decision_json;
+  delete publicRow.decision_ciphertext;
+  delete publicRow.decision_text_ciphertext;
+  delete publicRow.crypto_version;
+  return {
+    ...publicRow,
+    decision_content: parseJsonSafe(row.decision_json, null),
+  };
+}
 
 function isPrivilegedIdentity(user) {
   return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role)));
@@ -20870,87 +20911,6 @@ function parseJsonSafe(value, fallback = null) {
   }
 }
 
-function parseOperationalRsaPublicJwk(value) {
-  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-  if (
-    !parsed
-    || typeof parsed !== 'object'
-    || parsed.kty !== 'RSA'
-    || typeof parsed.n !== 'string'
-    || parsed.n.length < 300
-    || typeof parsed.e !== 'string'
-    || !parsed.e
-  ) {
-    throw new Error('RSA public key is incomplete');
-  }
-  return parsed;
-}
-
-function parseOperationalPrivateKeyEnvelope(value) {
-  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-  if (
-    !parsed
-    || typeof parsed !== 'object'
-    || typeof parsed.salt !== 'string'
-    || parsed.salt.length < 16
-    || typeof parsed.iv !== 'string'
-    || parsed.iv.length < 12
-    || typeof parsed.data !== 'string'
-    || parsed.data.length < 32
-  ) {
-    throw new Error('Encrypted private key is incomplete');
-  }
-  return parsed;
-}
-
-function getMyRecordKey(recordType, recordId, userId) {
-  return db.prepare(`
-    SELECT user_id, encrypted_dek, key_version, grant_status
-    FROM crypto_record_keys
-    WHERE record_type = ?
-      AND record_id = ?
-      AND user_id = ?
-      AND grant_status = 'active'
-  `).get(recordType, recordId, userId) || null;
-}
-
-function prepareOperationalRecordKeys(recordKeys, allowedUserIds) {
-  const normalized = normalizeRecordKeyRecipients(recordKeys, allowedUserIds);
-  if (normalized.rejectedUserIds.length) {
-    return {
-      error: `记录密钥包含未授权接收人：${normalized.rejectedUserIds.join(',')}`,
-      recordKeys: [],
-    };
-  }
-  return { error: '', recordKeys: normalized.recordKeys };
-}
-
-function replaceRecordKeys(recordType, recordId, normalizedKeys = [], actorUserId = null) {
-
-  db.prepare(`
-    UPDATE crypto_record_keys
-    SET grant_status = 'revoked',
-        revoked_at = CURRENT_TIMESTAMP
-    WHERE record_type = ? AND record_id = ?
-  `).run(recordType, recordId);
-
-  const upsert = db.prepare(`
-    INSERT INTO crypto_record_keys (
-      record_type, record_id, user_id, encrypted_dek, key_version, grant_status, granted_by, created_at, revoked_at
-    ) VALUES (?, ?, ?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, NULL)
-    ON CONFLICT(record_type, record_id, user_id)
-    DO UPDATE SET
-      encrypted_dek = excluded.encrypted_dek,
-      key_version = excluded.key_version,
-      grant_status = 'active',
-      granted_by = excluded.granted_by,
-      revoked_at = NULL
-  `);
-  normalizedKeys.forEach(item => {
-    upsert.run(recordType, recordId, item.user_id, item.encrypted_dek, item.key_version, actorUserId);
-  });
-}
-
 backfillOperationalMeetingParticipants();
 
 function serializeOperationalTemplate(row) {
@@ -21014,8 +20974,19 @@ function refreshOperationalMeetingStatuses(meetingId) {
     FROM operational_meeting_sections
     WHERE meeting_id = ?
   `).get(id);
-  const agenda = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(id);
-  const decision = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(id);
+  const agenda = db.prepare(`
+    SELECT id
+    FROM operational_meeting_agendas
+    WHERE meeting_id = ?
+      AND (agenda_json IS NOT NULL OR agenda_ciphertext IS NOT NULL)
+  `).get(id);
+  const decision = db.prepare(`
+    SELECT id
+    FROM operational_meeting_decisions
+    WHERE meeting_id = ?
+      AND status = 'saved'
+      AND (decision_json IS NOT NULL OR decision_ciphertext IS NOT NULL)
+  `).get(id);
   const required = Number(stats?.required_sections || 0);
   const submitted = Number(stats?.submitted_required_sections || 0);
   const briefStatus = required > 0 && submitted >= required ? 'completed' : (submitted > 0 ? 'filling' : 'draft');
@@ -21368,88 +21339,6 @@ async function callOperationalMeetingLlm(sections = []) {
   }
 }
 
-app.get('/api/crypto/user-key', (req, res) => {
-  const row = db.prepare(`
-    SELECT user_id, public_key_jwk, encrypted_private_key_jwk, kdf_algorithm, kdf_params_json, key_version, status, updated_at
-    FROM crypto_user_keys
-    WHERE user_id = ?
-  `).get(req.user.id);
-  if (!row) return res.json(null);
-  let publicKeyValid = false;
-  let privateKeyEnvelopeValid = false;
-  try {
-    parseOperationalRsaPublicJwk(row.public_key_jwk);
-    publicKeyValid = true;
-  } catch {}
-  try {
-    parseOperationalPrivateKeyEnvelope(row.encrypted_private_key_jwk);
-    privateKeyEnvelopeValid = true;
-  } catch {}
-  res.json({
-    ...row,
-    public_key_valid: publicKeyValid ? 1 : 0,
-    private_key_envelope_valid: privateKeyEnvelopeValid ? 1 : 0,
-  });
-});
-
-app.put('/api/crypto/user-key', (req, res) => {
-  const publicKey = String(req.body?.public_key_jwk || '').trim();
-  const encryptedPrivateKey = String(req.body?.encrypted_private_key_jwk || '').trim();
-  if (!publicKey || !encryptedPrivateKey) return res.status(400).json({ error: '缺少公钥或加密私钥' });
-  try {
-    parseOperationalRsaPublicJwk(publicKey);
-    parseOperationalPrivateKeyEnvelope(encryptedPrivateKey);
-  } catch {
-    return res.status(400).json({ error: '密钥数据不完整，请重新生成后再保存' });
-  }
-  const keyVersion = Number(req.body?.key_version || 1);
-  db.prepare(`
-    INSERT INTO crypto_user_keys (
-      user_id, public_key_jwk, encrypted_private_key_jwk, kdf_algorithm, kdf_params_json, key_version, status
-    ) VALUES (?, ?, ?, ?, ?, ?, 'active')
-    ON CONFLICT(user_id)
-    DO UPDATE SET
-      public_key_jwk = excluded.public_key_jwk,
-      encrypted_private_key_jwk = excluded.encrypted_private_key_jwk,
-      kdf_algorithm = excluded.kdf_algorithm,
-      kdf_params_json = excluded.kdf_params_json,
-      key_version = excluded.key_version,
-      status = 'active',
-      updated_at = CURRENT_TIMESTAMP
-  `).run(
-    req.user.id,
-    publicKey,
-    encryptedPrivateKey,
-    String(req.body?.kdf_algorithm || 'PBKDF2-SHA256'),
-    req.body?.kdf_params_json ? String(req.body.kdf_params_json) : null,
-    keyVersion,
-  );
-  res.json({ success: true });
-});
-
-app.get('/api/crypto/public-keys', (req, res) => {
-  const ids = String(req.query.user_ids || '')
-    .split(',')
-    .map(item => Number(item))
-    .filter(Boolean);
-  const uniqueIds = [...new Set(ids)];
-  if (!uniqueIds.length) return res.json([]);
-  const rows = db.prepare(`
-    SELECT user_id, public_key_jwk, key_version, status
-    FROM crypto_user_keys
-    WHERE status = 'active'
-      AND user_id IN (${uniqueIds.map(() => '?').join(',')})
-  `).all(...uniqueIds);
-  res.json(rows.filter(row => {
-    try {
-      parseOperationalRsaPublicJwk(row.public_key_jwk);
-      return true;
-    } catch {
-      return false;
-    }
-  }));
-});
-
 app.get('/api/admin/sensitive-modules', auth, systemAdminOnly, (req, res) => {
   const modules = db.prepare(`
     SELECT sm.*,
@@ -21555,26 +21444,20 @@ app.get('/api/operational-meetings/annual-summary', requireOperationalMeetingAcc
   `).all(...(cxoIdentity ? [year] : [year, req.user.id]));
   const result = rows.map(meeting => {
     const agenda = db.prepare(`
-      SELECT id, meeting_id, agenda_ciphertext, crypto_version, model_provider, model_name,
+      SELECT id, meeting_id, agenda_json, agenda_ciphertext, crypto_version, model_provider, model_name,
         prompt_version, safety_scan_status, generated_by, generated_at, updated_at
       FROM operational_meeting_agendas
       WHERE meeting_id = ?
     `).get(meeting.id);
     const decision = db.prepare(`
-      SELECT id, meeting_id, decision_ciphertext, crypto_version, status, updated_at
+      SELECT id, meeting_id, decision_json, decision_ciphertext, crypto_version, status, updated_at
       FROM operational_meeting_decisions
       WHERE meeting_id = ?
     `).get(meeting.id);
     return {
       meeting,
-      agenda: agenda ? {
-        ...agenda,
-        my_record_key: getMyRecordKey(OPERATIONAL_MEETING_AGENDA_RECORD, agenda.id, req.user.id),
-      } : null,
-      decision: decision ? {
-        ...decision,
-        my_record_key: getMyRecordKey(OPERATIONAL_MEETING_DECISION_RECORD, decision.id, req.user.id),
-      } : null,
+      agenda: serializeOperationalAgenda(agenda),
+      decision: serializeOperationalDecision(decision),
     };
   });
   res.json({ year, meetings: result });
@@ -21672,7 +21555,6 @@ app.put('/api/operational-meetings/:id/participants', requireOperationalMeetingA
   const requestedParticipants = Array.isArray(req.body?.participants)
     ? req.body.participants
     : (Array.isArray(req.body?.participant_user_ids) ? req.body.participant_user_ids : []);
-  const previousIds = listOperationalMeetingParticipantUserIds(meeting.id);
   let syncResult;
   const updateParticipants = db.transaction(() => {
     syncResult = syncOperationalMeetingParticipants(meeting, requestedParticipants, req.user.id, false);
@@ -21684,16 +21566,10 @@ app.put('/api/operational-meetings/:id/participants', requireOperationalMeetingA
     return res.status(400).json({ error: error.message || '参与人更新失败' });
   }
   const nextIds = listOperationalMeetingParticipantUserIds(meeting.id);
-  const participantSetChanged = previousIds.join(',') !== nextIds.join(',');
-  const hasEncryptedMeetingContent = Boolean(
-    db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id)
-    || db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id),
-  );
   res.json({
     success: true,
     participants: syncResult.participants,
     meeting_authorized_user_ids: nextIds,
-    requires_rekey: participantSetChanged && hasEncryptedMeetingContent,
   });
 });
 
@@ -21715,13 +21591,17 @@ app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, 
     .filter(section => canViewOperationalPreparation(req.user, participant, section))
     .map(section => {
       const accessSection = { ...section, _accessParticipant: participant };
+      const publicSection = { ...section };
+      delete publicSection.content_json;
+      delete publicSection.content_ciphertext;
+      delete publicSection.content_text_ciphertext;
+      delete publicSection.crypto_version;
       return {
-        ...section,
+        ...publicSection,
+        content: parseJsonSafe(section.content_json, null),
         default_questions: parseJsonSafe(section.default_questions_json, []),
         default_blocks: parseJsonSafe(section.default_blocks_json, null),
         template_snapshot: parseJsonSafe(section.template_snapshot_json, null),
-        my_record_key: getMyRecordKey(OPERATIONAL_MEETING_SECTION_RECORD, section.id, req.user.id),
-        authorized_user_ids: listOperationalPreparationAuthorizedUserIds(meeting.id, section.owner_user_id),
         can_edit: canEditOperationalSection(req.user, accessSection) ? 1 : 0,
       };
     });
@@ -21738,14 +21618,8 @@ app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, 
   res.json({
     meeting: serializeOperationalMeetingRow(meeting, req.user, participant),
     sections,
-    agenda: agenda ? {
-      ...agenda,
-      my_record_key: getMyRecordKey(OPERATIONAL_MEETING_AGENDA_RECORD, agenda.id, req.user.id),
-    } : null,
-    decision: decision ? {
-      ...decision,
-      my_record_key: getMyRecordKey(OPERATIONAL_MEETING_DECISION_RECORD, decision.id, req.user.id),
-    } : null,
+    agenda: serializeOperationalAgenda(agenda),
+    decision: serializeOperationalDecision(decision),
     participants: listOperationalMeetingParticipants(meeting.id),
     meeting_authorized_user_ids: listOperationalMeetingParticipantUserIds(meeting.id),
     can_view_all_preparations: isOperationalMeetingCxoForMeeting(req.user, participant) ? 1 : 0,
@@ -21760,33 +21634,23 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
   const section = getOperationalSectionForAccess(req.params.sectionId, req.user);
   if (!section) return res.status(404).json({ error: '准备块不存在' });
   if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权编辑此准备块' });
-  const preparedKeys = prepareOperationalRecordKeys(
-    req.body?.record_keys || [],
-    listOperationalPreparationAuthorizedUserIds(section.meeting_id, section.owner_user_id),
-  );
-  if (preparedKeys.error) return res.status(400).json({ error: preparedKeys.error });
-  const updateSection = db.transaction(() => {
-    db.prepare(`
-      UPDATE operational_meeting_sections
-      SET content_ciphertext = ?,
-          content_text_ciphertext = ?,
-          crypto_version = ?,
-          status = CASE WHEN status = 'locked' THEN status ELSE 'draft' END,
-          submitted_by = CASE WHEN status = 'locked' THEN submitted_by ELSE NULL END,
-          submitted_at = CASE WHEN status = 'locked' THEN submitted_at ELSE NULL END,
-          updated_by = ?,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(
-      req.body?.content_ciphertext || null,
-      req.body?.content_text_ciphertext || null,
-      req.body?.crypto_version || 'v2_client',
-      req.user.id,
-      section.id,
-    );
-    replaceRecordKeys(OPERATIONAL_MEETING_SECTION_RECORD, section.id, preparedKeys.recordKeys, req.user.id);
-  });
-  updateSection();
+  let contentJson;
+  try {
+    contentJson = stringifyOperationalMeetingContent(req.body?.content, '准备内容');
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  db.prepare(`
+    UPDATE operational_meeting_sections
+    SET content_json = ?,
+        crypto_version = 'none',
+        status = CASE WHEN status = 'locked' THEN status ELSE 'draft' END,
+        submitted_by = CASE WHEN status = 'locked' THEN submitted_by ELSE NULL END,
+        submitted_at = CASE WHEN status = 'locked' THEN submitted_at ELSE NULL END,
+        updated_by = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(contentJson, req.user.id, section.id);
   refreshOperationalMeetingStatuses(section.meeting_id);
   res.json({ success: true });
 });
@@ -21836,63 +21700,55 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
   if (!canGenerateOperationalAgenda(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '只有 CXO 可以保存会议提纲' });
   }
-  const preparedKeys = prepareOperationalRecordKeys(
-    req.body?.record_keys || [],
-    listOperationalMeetingParticipantUserIds(meeting.id),
-  );
-  if (preparedKeys.error) return res.status(400).json({ error: preparedKeys.error });
+  let agendaJson;
+  try {
+    agendaJson = stringifyOperationalMeetingContent(req.body?.agenda, '会议提纲');
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
   let agendaId = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id)?.id;
-  const saveAgenda = db.transaction(() => {
-    if (agendaId) {
-      db.prepare(`
-        UPDATE operational_meeting_agendas
-        SET agenda_ciphertext = ?,
-            agenda_text_ciphertext = ?,
-            crypto_version = ?,
-            source_hash = ?,
-            model_provider = ?,
-            model_name = ?,
-            prompt_version = ?,
-            safety_scan_status = ?,
-            generated_by = ?,
-            generated_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
-        req.body?.agenda_ciphertext || null,
-        req.body?.agenda_text_ciphertext || null,
-        req.body?.crypto_version || 'v2_client',
-        req.body?.source_hash || null,
-        req.body?.model_provider || null,
-        req.body?.model_name || null,
-        req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
-        req.body?.safety_scan_status || 'passed',
-        req.user.id,
-        agendaId,
-      );
-    } else {
-      const result = db.prepare(`
-        INSERT INTO operational_meeting_agendas (
-          meeting_id, agenda_ciphertext, agenda_text_ciphertext, crypto_version, source_hash,
-          model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `).run(
-        meeting.id,
-        req.body?.agenda_ciphertext || null,
-        req.body?.agenda_text_ciphertext || null,
-        req.body?.crypto_version || 'v2_client',
-        req.body?.source_hash || null,
-        req.body?.model_provider || null,
-        req.body?.model_name || null,
-        req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
-        req.body?.safety_scan_status || 'passed',
-        req.user.id,
-      );
-      agendaId = result.lastInsertRowid;
-    }
-    replaceRecordKeys(OPERATIONAL_MEETING_AGENDA_RECORD, agendaId, preparedKeys.recordKeys, req.user.id);
-  });
-  saveAgenda();
+  if (agendaId) {
+    db.prepare(`
+      UPDATE operational_meeting_agendas
+      SET agenda_json = ?,
+          crypto_version = 'none',
+          source_hash = ?,
+          model_provider = ?,
+          model_name = ?,
+          prompt_version = ?,
+          safety_scan_status = ?,
+          generated_by = ?,
+          generated_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      agendaJson,
+      req.body?.source_hash || null,
+      req.body?.model_provider || null,
+      req.body?.model_name || null,
+      req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
+      req.body?.safety_scan_status || 'passed',
+      req.user.id,
+      agendaId,
+    );
+  } else {
+    const result = db.prepare(`
+      INSERT INTO operational_meeting_agendas (
+        meeting_id, agenda_json, crypto_version, source_hash,
+        model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at
+      ) VALUES (?, ?, 'none', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      meeting.id,
+      agendaJson,
+      req.body?.source_hash || null,
+      req.body?.model_provider || null,
+      req.body?.model_name || null,
+      req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
+      req.body?.safety_scan_status || 'passed',
+      req.user.id,
+    );
+    agendaId = result.lastInsertRowid;
+  }
   refreshOperationalMeetingStatuses(meeting.id);
   res.json({ success: true, id: agendaId });
 });
@@ -21903,50 +21759,37 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
   if (!canEditOperationalDecision(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '无权编辑本周会议结论' });
   }
-  const preparedKeys = prepareOperationalRecordKeys(
-    req.body?.record_keys || [],
-    listOperationalMeetingParticipantUserIds(meeting.id),
-  );
-  if (preparedKeys.error) return res.status(400).json({ error: preparedKeys.error });
+  let decisionJson;
+  try {
+    decisionJson = stringifyOperationalMeetingContent(req.body?.decision, '会议结论');
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
   let decisionId = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id)?.id;
-  const saveDecision = db.transaction(() => {
-    if (decisionId) {
-      db.prepare(`
-        UPDATE operational_meeting_decisions
-        SET decision_ciphertext = ?,
-            decision_text_ciphertext = ?,
-            crypto_version = ?,
-            status = ?,
-            updated_by = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
-        req.body?.decision_ciphertext || null,
-        req.body?.decision_text_ciphertext || null,
-        req.body?.crypto_version || 'v2_client',
-        req.body?.status || 'saved',
-        req.user.id,
-        decisionId,
-      );
-    } else {
-      const result = db.prepare(`
-        INSERT INTO operational_meeting_decisions (
-          meeting_id, decision_ciphertext, decision_text_ciphertext, crypto_version, status, created_by, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        meeting.id,
-        req.body?.decision_ciphertext || null,
-        req.body?.decision_text_ciphertext || null,
-        req.body?.crypto_version || 'v2_client',
-        req.body?.status || 'saved',
-        req.user.id,
-        req.user.id,
-      );
-      decisionId = result.lastInsertRowid;
-    }
-    replaceRecordKeys(OPERATIONAL_MEETING_DECISION_RECORD, decisionId, preparedKeys.recordKeys, req.user.id);
-  });
-  saveDecision();
+  if (decisionId) {
+    db.prepare(`
+      UPDATE operational_meeting_decisions
+      SET decision_json = ?,
+          crypto_version = 'none',
+          status = ?,
+          updated_by = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(decisionJson, req.body?.status || 'saved', req.user.id, decisionId);
+  } else {
+    const result = db.prepare(`
+      INSERT INTO operational_meeting_decisions (
+        meeting_id, decision_json, crypto_version, status, created_by, updated_by
+      ) VALUES (?, ?, 'none', ?, ?, ?)
+    `).run(
+      meeting.id,
+      decisionJson,
+      req.body?.status || 'saved',
+      req.user.id,
+      req.user.id,
+    );
+    decisionId = result.lastInsertRowid;
+  }
   refreshOperationalMeetingStatuses(meeting.id);
   res.json({ success: true, id: decisionId });
 });

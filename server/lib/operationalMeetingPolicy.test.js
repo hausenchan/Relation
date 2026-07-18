@@ -6,7 +6,6 @@ const {
   canGenerateAgenda,
   canViewMeeting,
   canViewPreparation,
-  normalizeRecordKeyRecipients,
 } = require('./operationalMeetingPolicy');
 
 const cxo = { id: 1, role: 'member', executive_role: 'ceo' };
@@ -47,15 +46,4 @@ test('CXO can edit any preparation while non-CXO users remain owner-only', () =>
   assert.equal(canEditPreparation(other, null, section), false);
   assert.equal(canEditPreparation(designated, designatedParticipant, { owner_user_id: 2 }), true);
   assert.equal(canEditPreparation(designated, designatedParticipant, section), false);
-});
-
-test('record key recipients outside the allowed set are rejected', () => {
-  const result = normalizeRecordKeyRecipients([
-    { user_id: 1, encrypted_dek: 'cxo-key', key_version: 1 },
-    { user_id: 2, encrypted_dek: 'owner-key', key_version: 2 },
-    { user_id: 3, encrypted_dek: 'unexpected-key', key_version: 1 },
-  ], [1, 2]);
-
-  assert.deepEqual(result.recordKeys.map(item => item.user_id), [1, 2]);
-  assert.deepEqual(result.rejectedUserIds, [3]);
 });

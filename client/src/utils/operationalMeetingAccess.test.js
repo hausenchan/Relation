@@ -4,29 +4,15 @@ import {
 } from './operationalMeetingAccess';
 
 describe('operational meeting preparation access', () => {
-  test('allows an editable empty section before the security key is unlocked', () => {
-    expect(getPreparationEditorState({ can_edit: 1, content_ciphertext: null }, false)).toEqual({
+  test('allows a preparation section when the API grants edit permission', () => {
+    expect(getPreparationEditorState({ can_edit: 1 })).toEqual({
       canEdit: true,
-      lacksDecryptGrant: false,
-      needsUnlockForExistingContent: false,
       readOnly: false,
     });
   });
 
   test('keeps another owner section read-only', () => {
-    expect(getPreparationEditorState({ can_edit: 0, content_ciphertext: null }, true).readOnly).toBe(true);
-  });
-
-  test('requires unlock and a record key for existing encrypted content', () => {
-    const state = getPreparationEditorState({
-      can_edit: 1,
-      content_ciphertext: 'encrypted',
-      my_record_key: null,
-    }, false);
-
-    expect(state.readOnly).toBe(true);
-    expect(state.needsUnlockForExistingContent).toBe(true);
-    expect(state.lacksDecryptGrant).toBe(true);
+    expect(getPreparationEditorState({ can_edit: 0 }).readOnly).toBe(true);
   });
 
   test('opens the current user editable preparation section by default', () => {

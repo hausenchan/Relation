@@ -42,32 +42,6 @@ function canEditDecision(user, participant) {
   return isActiveParticipant(participant) && Number(participant.can_edit_decision || 0) === 1;
 }
 
-function normalizeRecordKeyRecipients(recordKeys = [], allowedUserIds = []) {
-  const allowed = new Set((allowedUserIds || []).map(Number).filter(Boolean));
-  const normalized = [];
-  const rejectedUserIds = [];
-
-  (Array.isArray(recordKeys) ? recordKeys : []).forEach(item => {
-    const userId = Number(item?.user_id);
-    const encryptedDek = String(item?.encrypted_dek || '').trim();
-    if (!userId || !encryptedDek) return;
-    if (!allowed.has(userId)) {
-      rejectedUserIds.push(userId);
-      return;
-    }
-    normalized.push({
-      user_id: userId,
-      encrypted_dek: encryptedDek,
-      key_version: Number(item?.key_version || 1),
-    });
-  });
-
-  return {
-    recordKeys: normalized,
-    rejectedUserIds: [...new Set(rejectedUserIds)].sort((a, b) => a - b),
-  };
-}
-
 module.exports = {
   CXO_ROLES,
   canEditDecision,
@@ -78,5 +52,4 @@ module.exports = {
   isActiveParticipant,
   isMeetingCxo,
   isOperationalMeetingCxo,
-  normalizeRecordKeyRecipients,
 };
