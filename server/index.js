@@ -13,6 +13,7 @@ const NetworkCaptureManager = require('./lib/networkCapture');
 const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
 const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
+const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
 const {
   decodeOssKey,
   deleteOssObjectByPath,
@@ -6963,6 +6964,16 @@ function normalizeDocumentShares(shares) {
   return rows;
 }
 
+function getDefaultDocumentShares() {
+  const users = db.prepare(`
+    SELECT id, role, executive_role, account_status
+    FROM users
+    WHERE COALESCE(account_status, 'active') = 'active'
+    ORDER BY id ASC
+  `).all();
+  return buildDefaultDocumentShares(users);
+}
+
 function getDocumentShareKey(share) {
   return `${share.target_type}:${share.target_id || ''}:${share.target_key || ''}`;
 }
@@ -7182,7 +7193,8 @@ function createDocumentRecord(body, user) {
       user.id,
       user.id
     );
-    if (Array.isArray(body.shares)) replaceDocumentShares(result.lastInsertRowid, body.shares, user.id);
+    const shares = Array.isArray(body.shares) ? body.shares : getDefaultDocumentShares();
+    replaceDocumentShares(result.lastInsertRowid, shares, user.id);
     return result.lastInsertRowid;
   });
   return createDoc();

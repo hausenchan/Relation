@@ -73,6 +73,11 @@ import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import {
+  getDefaultDocumentCxoUsers,
+  updateDefaultDocumentShareUsers,
+  updateExplicitDocumentShareUsers,
+} from '../utils/documentDefaultShares';
+import {
   buildCollapsedDocumentBlockIds,
   buildDocumentBlockGuideMap,
   buildDocumentNumberedListValues,
@@ -3474,6 +3479,15 @@ export default function Documents() {
     })),
     [folders, folderPathMap]
   );
+  const defaultDocumentCxoUsers = useMemo(() => getDefaultDocumentCxoUsers(users), [users]);
+  const defaultDocumentCxoUserIds = useMemo(
+    () => defaultDocumentCxoUsers.map(user => Number(user.id)).filter(Boolean),
+    [defaultDocumentCxoUsers]
+  );
+  const defaultDocumentCxoUserIdSet = useMemo(
+    () => new Set(defaultDocumentCxoUserIds),
+    [defaultDocumentCxoUserIds]
+  );
 
   const bulkFolderSelectionMap = useMemo(
     () => buildFolderDocumentSelectionMap(folders, bulkShareDocuments),
@@ -3835,6 +3849,7 @@ export default function Documents() {
     ]);
     setTeams(teamRows);
     setUsers(userRows);
+    return { teamRows, userRows };
   };
 
   const buildDocumentQueryParams = ({ includeFolder = true, favoriteOnly = false } = {}) => {
@@ -4571,15 +4586,30 @@ export default function Documents() {
     };
   };
 
-  const openCreate = () => {
+  const openCreate = async () => {
+    let shareUsers = users;
+    if (!shareUsers.length) {
+      try {
+        const shareOptions = await loadShareOptions();
+        shareUsers = shareOptions.userRows;
+      } catch (err) {
+        message.warning('默认共享人加载失败，创建时将由系统自动应用');
+      }
+    }
     const folderDefaults = getDocumentFolderFormDefaults();
     setEditingPropertyDoc(null);
     createForm.resetFields();
-    createForm.setFieldsValue({
+    const initialValues = {
       title: '新页面',
       icon_key: defaultDocumentIconFormValue,
       ...folderDefaults,
-    });
+    };
+    if (shareUsers.length) {
+      initialValues.default_share_user_ids = getDefaultDocumentCxoUsers(shareUsers)
+        .map(user => Number(user.id))
+        .filter(Boolean);
+    }
+    createForm.setFieldsValue(initialValues);
     setCreateOpen(true);
   };
 
@@ -4794,20 +4824,21 @@ export default function Documents() {
   const handleCreate = async () => {
     try {
       const values = await createForm.validateFields();
-      const folderId = normalizeDocumentFolderSelectValue(values.folder_id) || null;
+      const { default_share_user_ids: defaultShareUserIds, ...documentValues } = values;
+      const folderId = normalizeDocumentFolderSelectValue(documentValues.folder_id) || null;
       if (editingPropertyDoc?.id) {
         setPropertySaving(true);
         const wasActiveDoc = isActiveDocumentId(editingPropertyDoc.id);
-        const title = values.title || '未命名文档';
+        const title = documentValues.title || '未命名文档';
         const blocks = wasActiveDoc ? editorBlocks : contentToBlocks(editingPropertyDoc.content);
         const payload = {
           ...buildDocumentSavePayload(title, blocks),
-          ...values,
+          ...documentValues,
           title,
-          project_group_id: values.project_group_id || null,
+          project_group_id: documentValues.project_group_id || null,
           folder_id: folderId,
           current_version: editingPropertyDoc.current_version || 'V1.0',
-          icon_key: normalizeDocumentIconFormValue(values.icon_key),
+          icon_key: normalizeDocumentIconFormValue(documentValues.icon_key),
         };
         const updated = await documentsApi.update(editingPropertyDoc.id, payload);
         lastSavedSignatureRef.current[editingPropertyDoc.id] = getDocumentSaveSignature(payload.title, blocks);
@@ -4842,12 +4873,15 @@ export default function Documents() {
         return;
       }
       const doc = await documentsApi.create({
-        ...values,
-        project_group_id: values.project_group_id || null,
+        ...documentValues,
+        project_group_id: documentValues.project_group_id || null,
         folder_id: folderId,
         content: { blocks: [] },
-        icon_key: normalizeDocumentIconFormValue(values.icon_key),
+        icon_key: normalizeDocumentIconFormValue(documentValues.icon_key),
         content_text: '',
+        ...(Array.isArray(defaultShareUserIds) ? {
+          shares: defaultShareUserIds.map(id => ({ target_type: 'user', target_id: Number(id) })),
+        } : {}),
       });
       message.success(`已创建 ${doc.document_no}`);
       setCreateOpen(false);
@@ -8613,6 +8647,12 @@ export default function Documents() {
   } = {}) => {
     const isBulk = mode === 'bulk';
     const accessUsers = isBulk ? [] : (selectedDoc?.access_summary?.users || []);
+    const selectedDefaultUserIds = (draft.user_ids || [])
+      .map(Number)
+      .filter(id => defaultDocumentCxoUserIdSet.has(id));
+    const selectedExplicitUserIds = (draft.user_ids || [])
+      .map(Number)
+      .filter(id => !defaultDocumentCxoUserIdSet.has(id));
     return (
       <Spin spinning={loading}>
         <Space direction="vertical" size={14} style={{ width: '100%' }}>
@@ -8626,7 +8666,6 @@ export default function Documents() {
               ) : (
                 <Space size={8} wrap>
                   <Tag color="cyan">{selectedDoc?.access_summary?.label || '仅自己'}</Tag>
-                  <Text type="secondary">新建文档默认仅创建人可访问；超级管理员可查看所有文档权限。已被共享且可编辑该文档的成员，也可以继续追加共享范围。</Text>
                 </Space>
               )}
               {accessUsers.length > 0 && (
@@ -8657,6 +8696,27 @@ export default function Documents() {
               )}
             </Space>
           </div>
+        <div>
+          <Text strong>默认共享人</Text>
+          <Select
+            mode="multiple"
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择默认共享人"
+            value={selectedDefaultUserIds}
+            onChange={value => setDraft(prev => updateDefaultDocumentShareUsers(
+              prev,
+              defaultDocumentCxoUserIds,
+              value
+            ))}
+            options={defaultDocumentCxoUsers.map(item => ({
+              value: Number(item.id),
+              label: item.display_name || item.username,
+            }))}
+            style={{ width: '100%', marginTop: 8 }}
+          />
+        </div>
         <div>
           <Text strong>项目组</Text>
           <Select
@@ -8711,10 +8771,14 @@ export default function Documents() {
             showSearch
             optionFilterProp="label"
             placeholder="选择个人"
-            value={draft.user_ids}
-            onChange={value => setDraft(prev => ({ ...prev, user_ids: value }))}
-            options={users.map(item => ({
-              value: item.id,
+            value={selectedExplicitUserIds}
+            onChange={value => setDraft(prev => updateExplicitDocumentShareUsers(
+              prev,
+              defaultDocumentCxoUserIds,
+              value
+            ))}
+            options={users.filter(item => !defaultDocumentCxoUserIdSet.has(Number(item.id))).map(item => ({
+              value: Number(item.id),
               label: item.display_name || item.username,
             }))}
             style={{ width: '100%', marginTop: 8 }}
@@ -8735,9 +8799,16 @@ export default function Documents() {
           })}
           {(draft.user_ids || []).map(id => {
             const item = users.find(user => Number(user.id) === Number(id));
-            return <Tag key={`user-${id}`} icon={<UserOutlined />} color="orange">{item?.display_name || item?.username || `用户 ${id}`}</Tag>;
+            const isDefaultUser = defaultDocumentCxoUserIdSet.has(Number(id));
+            return (
+              <Tag key={`user-${id}`} icon={<UserOutlined />} color={isDefaultUser ? 'purple' : 'orange'}>
+                {item?.display_name || item?.username || `用户 ${id}`}
+              </Tag>
+            );
           })}
-          {draftToShares(draft).length === 0 && <Text type="secondary">尚未追加共享对象</Text>}
+          {draftToShares(draft).length === 0 && (
+            <Text type="secondary">{isBulk ? '尚未追加共享对象' : '仅创建人可访问'}</Text>
+          )}
         </Space>
         </Space>
       </Spin>
@@ -15162,6 +15233,21 @@ export default function Documents() {
           <Form.Item name="doc_type" label="文档类型">
             <Select options={docTypeOptions} />
           </Form.Item>
+          {!editingPropertyDoc && (
+            <Form.Item name="default_share_user_ids" label="默认共享人">
+              <Select
+                mode="multiple"
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择默认共享人"
+                options={defaultDocumentCxoUsers.map(item => ({
+                  value: Number(item.id),
+                  label: item.display_name || item.username,
+                }))}
+              />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
 
