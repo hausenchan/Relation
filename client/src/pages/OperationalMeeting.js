@@ -863,10 +863,8 @@ export default function OperationalMeeting() {
   ];
 
   const canGenerateAgenda = useMemo(() => {
-    const required = Number(detail?.meeting?.required_sections || 0);
-    const submitted = Number(detail?.meeting?.submitted_required_sections || 0);
-    return Boolean(detail?.can_generate_agenda) && required > 0 && submitted >= required;
-  }, [detail]);
+    return Boolean(detail?.can_generate_agenda);
+  }, [detail?.can_generate_agenda]);
 
   const filteredAnnualRows = useMemo(() => {
     const keyword = annualKeyword.trim().toLowerCase();
@@ -1002,17 +1000,15 @@ export default function OperationalMeeting() {
         title={<Space><RobotOutlined />AI 会议提纲</Space>}
         size="small"
         extra={Boolean(detail.can_generate_agenda) && (
-          <Tooltip title={!canGenerateAgenda ? '所有必填准备块提交后可生成' : ''}>
-            <Button
-              type="primary"
-              icon={<RobotOutlined />}
-              loading={agendaLoading}
-              disabled={!canGenerateAgenda}
-              onClick={generateAgenda}
-            >
-              {detail.agenda ? '重新生成提纲' : '生成会议提纲'}
-            </Button>
-          </Tooltip>
+          <Button
+            type="primary"
+            icon={<RobotOutlined />}
+            loading={agendaLoading}
+            disabled={!canGenerateAgenda}
+            onClick={generateAgenda}
+          >
+            {detail.agenda ? '重新生成提纲' : '生成会议提纲'}
+          </Button>
         )}
       >
         {agendaDraft ? (

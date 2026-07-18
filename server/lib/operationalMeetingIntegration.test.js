@@ -184,6 +184,14 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   });
   assert.equal(forbiddenGenerate.status, 403);
 
+  const earlyGenerate = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda/generate`, {
+    method: 'POST',
+    token: ceoToken,
+    body: { sections: [{ title: '当前准备内容', content: '仅部分负责人完成填写' }] },
+  });
+  assert.equal(earlyGenerate.status, 200, JSON.stringify(earlyGenerate.payload));
+  assert.ok(earlyGenerate.payload.agenda?.meeting_goal);
+
   const [designatedAnnual, outsiderAnnual] = await Promise.all([
     request(baseUrl, '/api/operational-meetings/annual-summary?year=2026', { token: designatedToken }),
     request(baseUrl, '/api/operational-meetings/annual-summary?year=2026', { token: outsiderToken }),

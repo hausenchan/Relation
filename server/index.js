@@ -20713,7 +20713,7 @@ function buildFallbackOperationalMeetingAgenda(sections = []) {
     .slice(0, 4);
   return {
     meeting_goal: `对齐${titles}本周经营事实、关键判断和需要会上决策的问题。`,
-    weekly_overview: topics.length ? topics.join('\n') : '各负责人已提交本周准备内容，建议会上围绕结果、判断和风险逐项确认。',
+    weekly_overview: topics.length ? topics.join('\n') : '当前已填写内容较少，建议会上按各业务模块逐项补充本周结果、判断和风险。',
     key_topics: '优先讨论各模块提出的需决策事项、跨部门协同阻塞点，以及会后需要明确负责人的动作。',
     agenda: '1. 快速确认本周关键结果\n2. 逐项讨论需决策问题\n3. 明确会后负责人和完成时间\n4. 确认下周重点动作',
     next_actions: '会后将决策事项拆成明确动作，补充负责人、截止时间和验收口径。',
@@ -21244,19 +21244,6 @@ app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeet
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
   if (!canGenerateOperationalAgenda(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '只有 CXO 可以汇总准备内容并生成会议提纲' });
-  }
-  const preparationStats = db.prepare(`
-    SELECT
-      SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
-      SUM(CASE WHEN is_required = 1 AND status = 'submitted' THEN 1 ELSE 0 END) as submitted_required_sections
-    FROM operational_meeting_sections
-    WHERE meeting_id = ?
-  `).get(meeting.id);
-  if (
-    Number(preparationStats?.required_sections || 0) < 1
-    || Number(preparationStats?.submitted_required_sections || 0) < Number(preparationStats?.required_sections || 0)
-  ) {
-    return res.status(409).json({ error: '所有必填准备块提交后才能生成会议提纲' });
   }
   const sections = Array.isArray(req.body?.sections) ? req.body.sections : [];
   if (!sections.length) return res.status(400).json({ error: '缺少用于生成提纲的准备内容' });
