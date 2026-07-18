@@ -15,7 +15,6 @@ import { cryptoKeysApi, operationalMeetingsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { RichTextView, richTextToPlain } from '../components/RichText';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
-import { documentBodyToPlain } from '../utils/documentBodyBlocks';
 import {
   inspectStoredKeyInfo,
   parseEncryptedPrivateKeyEnvelope,
@@ -26,18 +25,15 @@ import {
   getDefaultPreparationSectionKeys,
   getPreparationEditorState,
 } from '../utils/operationalMeetingAccess';
+import {
+  normalizeOperationalPreparationContent,
+  operationalPreparationToPlain,
+} from '../utils/operationalMeetingPreparation';
 
 const { RangePicker } = DatePicker;
 const { Text, Title } = Typography;
 
 const MODULE_KEY = 'operational_meeting';
-const DEFAULT_QUESTIONS = [
-  { key: 'weekly_result', title: '本周核心结果' },
-  { key: 'key_judgment', title: '一个最重要的判断' },
-  { key: 'decision_needed', title: '需要会上决策的问题' },
-  { key: 'next_action', title: '下周建议动作' },
-];
-
 const statusMeta = {
   draft: { color: 'default', label: '草稿' },
   filling: { color: 'blue', label: '准备中' },
@@ -53,23 +49,8 @@ const sectionStatusMeta = {
   locked: { color: 'gold', label: '已锁定' },
 };
 
-function normalizeQuestionBlocks(value) {
-  const source = value?.questions || value || [];
-  const list = Array.isArray(source) && source.length ? source : DEFAULT_QUESTIONS;
-  return {
-    questions: list.map((item, index) => ({
-      key: item.key || `q_${index + 1}`,
-      title: item.title || DEFAULT_QUESTIONS[index]?.title || `问题 ${index + 1}`,
-      content: item.content || '',
-    })),
-  };
-}
-
 function blocksToPlain(blocks) {
-  return normalizeQuestionBlocks(blocks).questions
-    .map(item => `${item.title}\n${documentBodyToPlain(item.content, richTextToPlain)}`.trim())
-    .filter(Boolean)
-    .join('\n\n');
+  return operationalPreparationToPlain(blocks, richTextToPlain);
 }
 
 function sanitizeForAi(value) {
@@ -410,14 +391,14 @@ export default function OperationalMeeting() {
       if (!detail) return;
       const nextSections = {};
       for (const section of detail.sections || []) {
-        const fallback = normalizeQuestionBlocks(section.default_blocks || { questions: section.default_questions });
+        const fallback = normalizeOperationalPreparationContent(section.default_blocks, section.default_questions);
         if (section.content_ciphertext && unlocked?.privateKey) {
           try {
-            nextSections[section.id] = normalizeQuestionBlocks(await decryptRecordPayload(
+            nextSections[section.id] = normalizeOperationalPreparationContent(await decryptRecordPayload(
               section.content_ciphertext,
               section.my_record_key,
               unlocked.privateKey,
-            ));
+            ), section.default_questions);
           } catch {
             nextSections[section.id] = fallback;
           }
@@ -624,25 +605,21 @@ export default function OperationalMeeting() {
     return true;
   };
 
-  const patchQuestionContent = (sectionId, questionKey, content) => {
-    setSectionDrafts(prev => {
-      const base = normalizeQuestionBlocks(prev[sectionId]);
-      return {
-        ...prev,
-        [sectionId]: {
-          questions: base.questions.map(item => (
-            item.key === questionKey ? { ...item, content } : item
-          )),
-        },
-      };
-    });
+  const patchPreparationContent = (sectionId, content) => {
+    setSectionDrafts(prev => ({
+      ...prev,
+      [sectionId]: normalizeOperationalPreparationContent(content),
+    }));
   };
 
   const saveSection = async (section, submitAfter = false) => {
     if (!ensureUnlocked()) return;
     setSavingSectionId(section.id);
     try {
-      const payload = normalizeQuestionBlocks(sectionDrafts[section.id] || section.default_blocks || { questions: section.default_questions });
+      const payload = normalizeOperationalPreparationContent(
+        sectionDrafts[section.id] || section.default_blocks,
+        section.default_questions,
+      );
       const sectionAuthorizedUserIds = [...new Set([
         ...(section.authorized_user_ids || []).map(Number),
         Number(user?.id),
@@ -889,7 +866,10 @@ export default function OperationalMeeting() {
 
   const renderSection = (section) => {
     const status = sectionStatusMeta[section.status] || sectionStatusMeta.draft;
-    const draft = normalizeQuestionBlocks(sectionDrafts[section.id] || section.default_blocks || { questions: section.default_questions });
+    const draft = normalizeOperationalPreparationContent(
+      sectionDrafts[section.id] || section.default_blocks,
+      section.default_questions,
+    );
     const isOwnPreparation = Number(section.owner_user_id) === Number(user?.id);
     const {
       canEdit,
@@ -904,7 +884,6 @@ export default function OperationalMeeting() {
           <Space wrap>
             <Text strong>{section.title}</Text>
             <Tag color={status.color}>{status.label}</Tag>
-            {section.owner_name && <Tag>{section.owner_name}</Tag>}
             <Tag color={canEdit ? 'blue' : 'default'}>
               {isOwnPreparation ? '我的准备' : (canEdit ? '可编辑' : '仅查看')}
             </Tag>
@@ -948,20 +927,13 @@ export default function OperationalMeeting() {
           {lacksDecryptGrant && (
             <Alert type="warning" showIcon message="当前账号没有此准备块的记录密钥，无法查看或覆盖原内容。" />
           )}
-          {draft.questions.map(item => (
-            <div key={item.key}>
-              <Text strong>{item.title}</Text>
-              <div style={{ marginTop: 8 }}>
-                <DocumentBodyEditor
-                  value={item.content || ''}
-                  onChange={value => patchQuestionContent(section.id, item.key, value)}
-                  minHeight={96}
-                  placeholder={`填写${item.title}`}
-                  readOnly={readOnly}
-                />
-              </div>
-            </div>
-          ))}
+          <DocumentBodyEditor
+            value={draft}
+            onChange={value => patchPreparationContent(section.id, value)}
+            minHeight={280}
+            placeholder="填写本周准备内容"
+            readOnly={readOnly}
+          />
           {canEdit && (
             <Space wrap>
               <Button
@@ -1018,7 +990,11 @@ export default function OperationalMeeting() {
   const preparationPanel = detail?.meeting ? (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {detail.sections?.length ? (
-        <Collapse defaultActiveKey={getDefaultPreparationSectionKeys(detail.sections)}>
+        <Collapse
+          ghost
+          defaultActiveKey={getDefaultPreparationSectionKeys(detail.sections)}
+          style={{ background: 'transparent' }}
+        >
           {(detail.sections || []).map(renderSection)}
         </Collapse>
       ) : (

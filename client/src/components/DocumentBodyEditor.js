@@ -15,52 +15,73 @@ import {
   UnderlineOutlined,
   UpOutlined,
 } from '@ant-design/icons';
-import DOMPurify from 'dompurify';
 import {
   createDocumentBodyBlock,
+  documentBodyInlineHtmlToPlain,
   DOCUMENT_BODY_BLOCK_TYPES,
   normalizeDocumentBodyValue,
+  parseDocumentBodyClipboard,
+  sanitizeDocumentBodyInlineHtml,
 } from '../utils/documentBodyBlocks';
 
-const INLINE_TAGS = ['strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del', 'span', 'mark', 'br'];
-const INLINE_ATTRS = ['style'];
 const COLOR_OPTIONS = ['#1f2937', '#d4380d', '#1677ff', '#389e0d'];
 const BACKGROUND_OPTIONS = ['#fff1b8', '#d6e4ff', '#d9f7be', '#ffd6e7'];
 
-function sanitizeInlineHtml(value) {
-  return DOMPurify.sanitize(String(value || ''), {
-    ALLOWED_TAGS: INLINE_TAGS,
-    ALLOWED_ATTR: INLINE_ATTRS,
-    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'style', 'img', 'video', 'audio', 'a'],
-    FORBID_ATTR: ['onerror', 'onclick', 'onload', 'onmouseover', 'onfocus', 'href', 'src'],
+function formatAlphaNumber(value) {
+  let number = Math.max(1, Number(value) || 1);
+  let text = '';
+  while (number > 0) {
+    number -= 1;
+    text = String.fromCharCode(97 + (number % 26)) + text;
+    number = Math.floor(number / 26);
+  }
+  return text;
+}
+
+function formatRomanNumber(value) {
+  const pairs = [
+    [1000, 'm'], [900, 'cm'], [500, 'd'], [400, 'cd'], [100, 'c'], [90, 'xc'],
+    [50, 'l'], [40, 'xl'], [10, 'x'], [9, 'ix'], [5, 'v'], [4, 'iv'], [1, 'i'],
+  ];
+  let number = Math.max(1, Math.min(3999, Number(value) || 1));
+  let text = '';
+  pairs.forEach(([amount, roman]) => {
+    while (number >= amount) {
+      text += roman;
+      number -= amount;
+    }
   });
+  return text;
 }
 
-function inlineHtmlToPlain(value) {
-  if (!value) return '';
-  if (typeof document === 'undefined') return String(value).replace(/<[^>]+>/g, '');
-  const div = document.createElement('div');
-  div.innerHTML = sanitizeInlineHtml(value);
-  return (div.textContent || '').replace(/\u00a0/g, ' ');
+function formatNumberedMarker(value, indent) {
+  const mode = Math.max(0, Number(indent) || 0) % 3;
+  if (mode === 1) return `${formatAlphaNumber(value)}.`;
+  if (mode === 2) return `${formatRomanNumber(value)}.`;
+  return `${Math.max(1, Number(value) || 1)}.`;
 }
 
-function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onActivate, onEnter, onBackspace }) {
+function getBulletMarker(indent) {
+  return ['•', '◦', '◆'][Math.max(0, Number(indent) || 0) % 3];
+}
+
+function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onActivate, onEnter, onBackspace, onPaste }) {
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const composingRef = useRef(false);
-  const localHtmlRef = useRef(sanitizeInlineHtml(value));
+  const localHtmlRef = useRef(sanitizeDocumentBodyInlineHtml(value));
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
     if (!editor || composingRef.current) return;
-    const html = sanitizeInlineHtml(value);
+    const html = sanitizeDocumentBodyInlineHtml(value);
     if (focusedRef.current && html === localHtmlRef.current) return;
     if (editor.innerHTML !== html) editor.innerHTML = html;
     localHtmlRef.current = html;
   }, [value]);
 
   const emitChange = () => {
-    const html = sanitizeInlineHtml(editorRef.current?.innerHTML || '');
+    const html = sanitizeDocumentBodyInlineHtml(editorRef.current?.innerHTML || '');
     localHtmlRef.current = html;
     onChange?.(html);
   };
@@ -69,7 +90,7 @@ function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onAc
 
   return (
     <div style={{ position: 'relative', width: '100%', minWidth: 0 }}>
-      {!inlineHtmlToPlain(value).trim() && placeholder && (
+      {!documentBodyInlineHtmlToPlain(value).trim() && placeholder && (
         <span aria-hidden="true" style={{ position: 'absolute', inset: '0 auto auto 0', color: '#9ca3af', pointerEvents: 'none', ...style }}>
           {placeholder}
         </span>
@@ -99,11 +120,12 @@ function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onAc
         }}
         onMouseUp={activate}
         onKeyUp={activate}
+        onPaste={onPaste}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey && !composingRef.current) {
             event.preventDefault();
             onEnter?.();
-          } else if (event.key === 'Backspace' && !inlineHtmlToPlain(editorRef.current?.innerHTML).trim()) {
+          } else if (event.key === 'Backspace' && !documentBodyInlineHtmlToPlain(editorRef.current?.innerHTML).trim()) {
             onBackspace?.(event);
           }
         }}
@@ -140,6 +162,42 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
     block.id === id ? { ...block, meta: { ...(block.meta || {}), ...patch } } : block
   )));
 
+  const insertPastedBlocks = (targetBlockId, pastedBlocks) => {
+    if (!pastedBlocks.length) return;
+    const targetIndex = blocks.findIndex(block => block.id === targetBlockId);
+    const insertIndex = targetIndex >= 0 ? targetIndex : blocks.length - 1;
+    const targetBlock = blocks[insertIndex];
+    const targetIsEmpty = targetBlock
+      && targetBlock.type !== 'divider'
+      && targetBlock.type !== 'table-simple'
+      && !documentBodyInlineHtmlToPlain(targetBlock.content).trim()
+      && !documentBodyInlineHtmlToPlain(targetBlock.meta?.body).trim();
+    const replacesTemplatePrompt = Boolean(
+      targetBlock?.meta?.template_question_key
+      && documentBodyInlineHtmlToPlain(pastedBlocks[0]?.content).trim()
+        === documentBodyInlineHtmlToPlain(targetBlock.content).trim(),
+    );
+    const nextBlocks = [...blocks];
+    if (targetIsEmpty || replacesTemplatePrompt) nextBlocks.splice(insertIndex, 1, ...pastedBlocks);
+    else nextBlocks.splice(insertIndex + 1, 0, ...pastedBlocks);
+    emitBlocks(nextBlocks);
+    setActiveBlockId(pastedBlocks[0]?.id || null);
+  };
+
+  const handleBlockPaste = (event, blockId) => {
+    if (readOnly || !event.clipboardData) return;
+    const html = event.clipboardData.getData('text/html') || '';
+    const text = event.clipboardData.getData('text/plain') || '';
+    const parsed = parseDocumentBodyClipboard(html, text);
+    const hasStructuralHtml = /<(?:p|div|h[1-6]|ol|ul|li|table|tr|br)\b/i.test(html);
+    const hasStructuredBlocks = parsed.blocks.length > 1
+      || parsed.blocks.some(item => item.type !== 'paragraph' || Number(item.meta?.indent || 0) > 0);
+    if (!parsed.blocks.length || (!hasStructuralHtml && !hasStructuredBlocks)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    insertPastedBlocks(blockId, parsed.blocks);
+  };
+
   const rememberSelection = (blockId, editor) => {
     setActiveBlockId(blockId);
     activeEditorRef.current = editor;
@@ -162,8 +220,8 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
     activeEditorRef.current?.dispatchEvent(new Event('input', { bubbles: true }));
   };
 
-  const insertBlock = (type = 'paragraph', afterId = blocks[blocks.length - 1]?.id) => {
-    const nextBlock = createDocumentBodyBlock(type);
+  const insertBlock = (type = 'paragraph', afterId = blocks[blocks.length - 1]?.id, extra = {}) => {
+    const nextBlock = createDocumentBodyBlock(type, '', extra);
     const index = blocks.findIndex(block => block.id === afterId);
     const nextBlocks = [...blocks];
     nextBlocks.splice(index >= 0 ? index + 1 : nextBlocks.length, 0, nextBlock);
@@ -198,12 +256,17 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
       readOnly,
       onChange: content => patchBlock(block.id, { content }),
       onActivate: editor => rememberSelection(block.id, editor),
-      onEnter: () => insertBlock(['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'paragraph', block.id),
+      onEnter: () => insertBlock(
+        ['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'paragraph',
+        block.id,
+        ['bullet', 'numbered', 'todo'].includes(block.type) ? { meta: { indent } } : {},
+      ),
       onBackspace: event => {
         if (blocks.length <= 1) return;
         event.preventDefault();
         removeBlock(block.id);
       },
+      onPaste: event => handleBlockPaste(event, block.id),
       style: {
         fontSize: headingLevel ? [0, 28, 23, 19, 16][headingLevel] : 15,
         fontWeight: headingLevel ? 700 : 400,
@@ -293,10 +356,18 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
       );
     }
     if (block.type === 'bullet' || block.type === 'numbered') {
-      const number = blocks.slice(0, index + 1).filter(item => item.type === 'numbered' && Number(item.meta?.indent || 0) === indent).length;
+      let number = 0;
+      for (let cursor = index; cursor >= 0; cursor -= 1) {
+        const candidate = blocks[cursor];
+        const candidateIndent = Math.max(0, Math.min(6, Number(candidate.meta?.indent || 0)));
+        if (cursor < index && candidateIndent < indent) break;
+        if (candidate.type === 'numbered' && candidateIndent === indent) number += 1;
+      }
       return (
         <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', paddingLeft: indent * 24 }}>
-          <span style={{ width: 22, minWidth: 22, paddingTop: 4, textAlign: 'right', color: '#374151' }}>{block.type === 'numbered' ? `${number}.` : '•'}</span>
+          <span style={{ width: 22, minWidth: 22, paddingTop: 4, textAlign: 'right', color: '#374151' }}>
+            {block.type === 'numbered' ? formatNumberedMarker(number, indent) : getBulletMarker(indent)}
+          </span>
           <InlineBlockEditor {...commonProps} placeholder={block.type === 'numbered' ? '数字列表项' : '列表项'} />
         </div>
       );
@@ -304,7 +375,11 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
     if (block.type === 'quote') {
       return <div style={{ borderLeft: '3px solid #94a3b8', paddingLeft: 12 }}><InlineBlockEditor {...commonProps} placeholder="引述文字" /></div>;
     }
-    return <InlineBlockEditor {...commonProps} />;
+    return (
+      <div style={{ paddingLeft: indent * 24 }}>
+        <InlineBlockEditor {...commonProps} />
+      </div>
+    );
   };
 
   return (

@@ -124,6 +124,15 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   const templates = await request(baseUrl, '/api/operational-meeting-templates', { token: ceoToken });
   assert.equal(templates.status, 200);
   assert.ok(templates.payload[0]?.id);
+  assert.deepEqual(
+    templates.payload[0].sections[0].default_blocks.blocks.map(block => ({ type: block.type, content: block.content })),
+    [
+      { type: 'numbered', content: '本周核心结果' },
+      { type: 'numbered', content: '一个最重要的判断' },
+      { type: 'numbered', content: '需要会上决策的问题' },
+      { type: 'numbered', content: '下周建议动作' },
+    ],
+  );
 
   const created = await request(baseUrl, '/api/operational-meetings', {
     method: 'POST',

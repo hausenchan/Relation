@@ -3070,6 +3070,49 @@ function resolveOperationalMeetingOwnerId(candidates = []) {
   return null;
 }
 
+const DEFAULT_OPERATIONAL_MEETING_QUESTIONS = [
+  { key: 'weekly_result', title: '本周核心结果' },
+  { key: 'key_judgment', title: '一个最重要的判断' },
+  { key: 'decision_needed', title: '需要会上决策的问题' },
+  { key: 'next_action', title: '下周建议动作' },
+];
+
+function buildOperationalMeetingPreparationBlocks(questions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS) {
+  const source = Array.isArray(questions) && questions.length ? questions : DEFAULT_OPERATIONAL_MEETING_QUESTIONS;
+  return {
+    format: 'relation_document_blocks_v1',
+    blocks: source.map((question, index) => ({
+      id: `template_${question.key || index + 1}`,
+      type: 'numbered',
+      content: question.title || `问题 ${index + 1}`,
+      checked: false,
+      meta: {
+        indent: 0,
+        template_question_key: question.key || `q_${index + 1}`,
+      },
+    })),
+  };
+}
+
+function upgradeOperationalMeetingTemplateBlocks(templateId) {
+  const rows = db.prepare(`
+    SELECT id, default_questions_json, default_blocks_json
+    FROM operational_meeting_template_sections
+    WHERE template_id = ?
+  `).all(templateId);
+  const update = db.prepare(`
+    UPDATE operational_meeting_template_sections
+    SET default_blocks_json = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  rows.forEach((row) => {
+    const current = parseJsonSafe(row.default_blocks_json, null);
+    if (Array.isArray(current?.blocks) && current.blocks.length) return;
+    const questions = parseJsonSafe(row.default_questions_json, DEFAULT_OPERATIONAL_MEETING_QUESTIONS);
+    update.run(JSON.stringify(buildOperationalMeetingPreparationBlocks(questions)), row.id);
+  });
+}
+
 function seedDefaultOperationalMeetingTemplate() {
   const existing = db.prepare(`
     SELECT id
@@ -3080,19 +3123,18 @@ function seedDefaultOperationalMeetingTemplate() {
     ORDER BY id ASC
     LIMIT 1
   `).get();
-  if (existing?.id) return existing.id;
+  if (existing?.id) {
+    upgradeOperationalMeetingTemplateBlocks(existing.id);
+    return existing.id;
+  }
 
   const result = db.prepare(`
     INSERT INTO operational_meeting_templates (name, module_key, is_default, status)
     VALUES ('经营周会默认模板', 'operational_meeting', 1, 'active')
   `).run();
   const templateId = result.lastInsertRowid;
-  const defaultQuestions = [
-    { key: 'weekly_result', title: '本周核心结果' },
-    { key: 'key_judgment', title: '一个最重要的判断' },
-    { key: 'decision_needed', title: '需要会上决策的问题' },
-    { key: 'next_action', title: '下周建议动作' },
-  ];
+  const defaultQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS;
+  const defaultBlocks = buildOperationalMeetingPreparationBlocks(defaultQuestions);
   const sectionSeeds = [
     { key: 'overseas_project', title: '海外项目组（陈锦标）', owner: ['陈锦标'], order: 10 },
     { key: 'domestic_project', title: '国内项目组（陈豪赞）', owner: ['陈豪赞', 'chenhaozan'], order: 20 },
@@ -3114,7 +3156,7 @@ function seedDefaultOperationalMeetingTemplate() {
       ownerId,
       section.order,
       JSON.stringify(defaultQuestions),
-      JSON.stringify({ questions: defaultQuestions.map(item => ({ ...item, content: '' })) }),
+      JSON.stringify(defaultBlocks),
     );
   });
   return templateId;
