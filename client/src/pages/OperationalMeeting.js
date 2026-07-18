@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Button, Card, Checkbox, Collapse, DatePicker, Divider, Empty, Form, Grid,
   Input, Modal, Progress, Select, Space, Spin, Table, Tabs, Tag, Tooltip, Typography,
@@ -7,14 +7,21 @@ import {
 import {
   ArrowLeftOutlined, CalendarOutlined, CheckCircleOutlined, FileDoneOutlined,
   LockOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SaveOutlined,
-  SendOutlined, TeamOutlined, UnlockOutlined,
+  TeamOutlined, UnlockOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { cryptoKeysApi, operationalMeetingsApi } from '../api';
 import { useAuth } from '../AuthContext';
-import { RichTextView, richTextToPlain } from '../components/RichText';
+import { richTextToPlain } from '../components/RichText';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
+import {
+  createDocumentBodyBlock,
+  documentBodyHasContent,
+  documentBodyToPlain,
+  normalizeDocumentBodyValue,
+  sanitizeDocumentBodyInlineHtml,
+} from '../utils/documentBodyBlocks';
 import {
   inspectStoredKeyInfo,
   parseEncryptedPrivateKeyEnvelope,
@@ -26,7 +33,10 @@ import {
   getPreparationEditorState,
 } from '../utils/operationalMeetingAccess';
 import {
+  getOperationalPreparationSignature,
+  getOperationalPreparationSubmissionSignature,
   normalizeOperationalPreparationContent,
+  operationalPreparationHasAnswers,
   operationalPreparationToPlain,
 } from '../utils/operationalMeetingPreparation';
 
@@ -34,6 +44,17 @@ const { RangePicker } = DatePicker;
 const { Text, Title } = Typography;
 
 const MODULE_KEY = 'operational_meeting';
+const SECTION_AUTO_SAVE_DELAY = 3000;
+const SECTION_AUTO_SAVE_INTERVAL = 30000;
+const MEETING_CONTENT_AUTO_SAVE_DELAY = 3000;
+const OPERATIONAL_AGENDA_FIELDS = [
+  ['meeting_goal', '一、本次会议目标'],
+  ['weekly_overview', '二、本周经营总览'],
+  ['key_topics', '三、本次重点讨论和决策议题'],
+  ['agenda', '四、建议会议议程'],
+  ['next_actions', '五、下周动作建议'],
+  ['preparation', '六、请大家会前准备'],
+];
 const statusMeta = {
   draft: { color: 'default', label: '草稿' },
   filling: { color: 'blue', label: '准备中' },
@@ -61,6 +82,7 @@ function sanitizeForAi(value) {
 
 function agendaToPlain(agenda) {
   if (!agenda) return '';
+  if (agenda?.blocks) return documentBodyToPlain(normalizeDocumentBodyValue(agenda), richTextToPlain);
   return [
     `一、本次会议目标\n${agenda.meeting_goal || ''}`,
     `二、本周经营总览\n${agenda.weekly_overview || ''}`,
@@ -69,6 +91,45 @@ function agendaToPlain(agenda) {
     `五、下周动作建议\n${agenda.next_actions || ''}`,
     `六、请大家会前准备\n${agenda.preparation || ''}`,
   ].join('\n\n');
+}
+
+function textToDocumentBlocks(text, type = 'paragraph', extra = {}) {
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n').filter(line => line.trim());
+  return lines.length
+    ? lines.map(line => createDocumentBodyBlock(type, sanitizeDocumentBodyInlineHtml(line.trim()), extra))
+    : [createDocumentBodyBlock('paragraph', '')];
+}
+
+function agendaObjectToDocumentBody(agenda) {
+  const blocks = [];
+  OPERATIONAL_AGENDA_FIELDS.forEach(([key, title]) => {
+    blocks.push(createDocumentBodyBlock('heading3', title));
+    textToDocumentBlocks(agenda?.[key] || '').forEach(block => blocks.push(block));
+  });
+  return normalizeDocumentBodyValue({ blocks });
+}
+
+function normalizeOperationalAgendaContent(value) {
+  if (!value) return null;
+  if (value?.blocks) return normalizeDocumentBodyValue(value);
+  if (typeof value === 'string') return normalizeDocumentBodyValue(value);
+  return agendaObjectToDocumentBody(value);
+}
+
+function normalizeOperationalDecisionContent(value) {
+  if (value?.blocks) return normalizeDocumentBodyValue(value);
+  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, 'text')) {
+    return normalizeDocumentBodyValue(value.text || '');
+  }
+  return normalizeDocumentBodyValue(value || '');
+}
+
+function meetingContentToPlain(value) {
+  return documentBodyToPlain(normalizeDocumentBodyValue(value), richTextToPlain);
+}
+
+function getDocumentBodySignature(value) {
+  return JSON.stringify(normalizeDocumentBodyValue(value));
 }
 
 function bufferToBase64(buffer) {
@@ -285,6 +346,7 @@ export default function OperationalMeeting() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm();
   const [keyInfo, setKeyInfo] = useState(null);
+  const [keyInfoLoaded, setKeyInfoLoaded] = useState(false);
   const [unlocked, setUnlocked] = useState(null);
   const [keyModalOpen, setKeyModalOpen] = useState(false);
   const [keyPassword, setKeyPassword] = useState('');
@@ -293,10 +355,14 @@ export default function OperationalMeeting() {
   const [keyRepairMode, setKeyRepairMode] = useState(false);
   const [sectionDrafts, setSectionDrafts] = useState({});
   const [agendaDraft, setAgendaDraft] = useState(null);
-  const [decisionDraft, setDecisionDraft] = useState('');
-  const [savingSectionId, setSavingSectionId] = useState(null);
+  const [decisionDraft, setDecisionDraft] = useState(() => normalizeOperationalDecisionContent(''));
+  const [sectionSaveStates, setSectionSaveStates] = useState({});
+  const [sectionLocalStatuses, setSectionLocalStatuses] = useState({});
+  const [dirtySectionIds, setDirtySectionIds] = useState([]);
+  const [submittingSectionId, setSubmittingSectionId] = useState(null);
   const [agendaLoading, setAgendaLoading] = useState(false);
-  const [decisionSaving, setDecisionSaving] = useState(false);
+  const [agendaSaveState, setAgendaSaveState] = useState({ phase: 'idle', savedAt: null });
+  const [decisionSaveState, setDecisionSaveState] = useState({ phase: 'idle', savedAt: null });
   const [participantOpen, setParticipantOpen] = useState(false);
   const [participantUserIds, setParticipantUserIds] = useState([]);
   const [participantBusy, setParticipantBusy] = useState(false);
@@ -306,6 +372,23 @@ export default function OperationalMeeting() {
   const [annualDrafts, setAnnualDrafts] = useState({});
   const [annualKeyword, setAnnualKeyword] = useState('');
   const [annualOnlyConclusion, setAnnualOnlyConclusion] = useState(false);
+  const sectionDraftsRef = useRef({});
+  const dirtySectionIdsRef = useRef(new Set());
+  const sectionLastSavedSignatureRef = useRef({});
+  const sectionPendingSaveRef = useRef({});
+  const sectionAutoSaveTimerRef = useRef(null);
+  const persistSectionRef = useRef(null);
+  const sectionSaveStatesRef = useRef({});
+  const sectionLocalStatusesRef = useRef({});
+  const agendaDraftRef = useRef(null);
+  const decisionDraftRef = useRef(normalizeOperationalDecisionContent(''));
+  const agendaLastSavedSignatureRef = useRef('');
+  const decisionLastSavedSignatureRef = useRef('');
+  const agendaDirtyRef = useRef(false);
+  const decisionDirtyRef = useRef(false);
+  const agendaAutoSaveTimerRef = useRef(null);
+  const decisionAutoSaveTimerRef = useRef(null);
+  const firstSecurityPromptRef = useRef(false);
 
   const hasSensitiveAccess = canAccessSensitiveModule?.(MODULE_KEY);
   const hasMenuAccess = canAccessMenu?.('/executive/operational');
@@ -319,12 +402,32 @@ export default function OperationalMeeting() {
     return [...new Set([...ids.map(Number), Number(user?.id)].filter(Boolean))];
   }, [detail, user?.id]);
 
+  const updateSectionSaveState = useCallback((sectionId, patch) => {
+    setSectionSaveStates((prev) => {
+      const previous = prev[sectionId] || {};
+      const nextValue = typeof patch === 'function' ? patch(previous) : { ...previous, ...patch };
+      const next = { ...prev, [sectionId]: nextValue };
+      sectionSaveStatesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const updateSectionLocalStatus = useCallback((sectionId, status) => {
+    setSectionLocalStatuses((prev) => {
+      const next = { ...prev, [sectionId]: status };
+      sectionLocalStatusesRef.current = next;
+      return next;
+    });
+  }, []);
+
   const loadKeyInfo = useCallback(async () => {
     try {
       const data = await cryptoKeysApi.getUserKey();
       setKeyInfo(data || null);
     } catch (error) {
       message.error(error.response?.data?.error || '加载安全密钥失败');
+    } finally {
+      setKeyInfoLoaded(true);
     }
   }, []);
 
@@ -377,6 +480,16 @@ export default function OperationalMeeting() {
   }, [loadKeyInfo, loadMeetings]);
 
   useEffect(() => {
+    if (!keyInfoLoaded || keyInfo || firstSecurityPromptRef.current) return;
+    if (!hasMenuAccess || !hasSensitiveAccess) return;
+    firstSecurityPromptRef.current = true;
+    setKeyPassword('');
+    setKeyPasswordConfirm('');
+    setKeyRepairMode(false);
+    setKeyModalOpen(true);
+  }, [hasMenuAccess, hasSensitiveAccess, keyInfo, keyInfoLoaded]);
+
+  useEffect(() => {
     if (meetingId) loadDetail(meetingId);
     else setDetail(null);
   }, [meetingId, loadDetail]);
@@ -390,9 +503,16 @@ export default function OperationalMeeting() {
     async function hydrate() {
       if (!detail) return;
       const nextSections = {};
+      const nextSavedSignatures = {};
+      const nextSaveStates = {};
+      const nextLocalStatuses = {};
       for (const section of detail.sections || []) {
         const fallback = normalizeOperationalPreparationContent(section.default_blocks, section.default_questions);
-        if (section.content_ciphertext && unlocked?.privateKey) {
+        const hasPendingLocalDraft = dirtySectionIdsRef.current.has(Number(section.id))
+          && sectionDraftsRef.current[section.id];
+        if (hasPendingLocalDraft) {
+          nextSections[section.id] = sectionDraftsRef.current[section.id];
+        } else if (section.content_ciphertext && unlocked?.privateKey) {
           try {
             nextSections[section.id] = normalizeOperationalPreparationContent(await decryptRecordPayload(
               section.content_ciphertext,
@@ -405,28 +525,68 @@ export default function OperationalMeeting() {
         } else {
           nextSections[section.id] = fallback;
         }
+        nextSavedSignatures[section.id] = hasPendingLocalDraft
+          ? (sectionLastSavedSignatureRef.current[section.id] || '')
+          : (section.content_ciphertext
+            ? getOperationalPreparationSignature(nextSections[section.id], section.default_questions)
+            : '');
+        nextSaveStates[section.id] = hasPendingLocalDraft
+          ? {
+              ...(sectionSaveStatesRef.current[section.id] || {}),
+              phase: unlocked?.privateKey ? 'dirty' : 'unlock_required',
+            }
+          : {
+              phase: section.content_ciphertext ? 'saved' : 'idle',
+              savedAt: section.updated_at || null,
+            };
+        nextLocalStatuses[section.id] = hasPendingLocalDraft
+          ? (sectionLocalStatusesRef.current[section.id] || { status: 'draft', submittedAt: null })
+          : {
+              status: section.status || 'draft',
+              submittedAt: section.submitted_at || null,
+            };
       }
       let nextAgenda = null;
       if (detail.agenda?.agenda_ciphertext && unlocked?.privateKey) {
         try {
-          nextAgenda = await decryptRecordPayload(detail.agenda.agenda_ciphertext, detail.agenda.my_record_key, unlocked.privateKey);
+          nextAgenda = normalizeOperationalAgendaContent(await decryptRecordPayload(
+            detail.agenda.agenda_ciphertext,
+            detail.agenda.my_record_key,
+            unlocked.privateKey,
+          ));
         } catch {
           nextAgenda = null;
         }
       }
-      let nextDecision = '';
+      let nextDecision = normalizeOperationalDecisionContent('');
       if (detail.decision?.decision_ciphertext && unlocked?.privateKey) {
         try {
           const decrypted = await decryptRecordPayload(detail.decision.decision_ciphertext, detail.decision.my_record_key, unlocked.privateKey);
-          nextDecision = decrypted?.text || '';
+          nextDecision = normalizeOperationalDecisionContent(decrypted);
         } catch {
-          nextDecision = '';
+          nextDecision = normalizeOperationalDecisionContent('');
         }
       }
       if (!cancelled) {
+        const preservedDirtySectionIds = new Set(dirtySectionIdsRef.current);
+        sectionDraftsRef.current = nextSections;
+        sectionLastSavedSignatureRef.current = nextSavedSignatures;
+        sectionSaveStatesRef.current = nextSaveStates;
+        sectionLocalStatusesRef.current = nextLocalStatuses;
         setSectionDrafts(nextSections);
+        setDirtySectionIds([...preservedDirtySectionIds]);
+        setSectionSaveStates(nextSaveStates);
+        setSectionLocalStatuses(nextLocalStatuses);
+        agendaDraftRef.current = nextAgenda;
+        decisionDraftRef.current = nextDecision;
+        agendaLastSavedSignatureRef.current = nextAgenda ? getDocumentBodySignature(nextAgenda) : '';
+        decisionLastSavedSignatureRef.current = detail.decision?.decision_ciphertext ? getDocumentBodySignature(nextDecision) : '';
+        agendaDirtyRef.current = false;
+        decisionDirtyRef.current = false;
         setAgendaDraft(nextAgenda);
         setDecisionDraft(nextDecision);
+        setAgendaSaveState({ phase: detail.agenda?.agenda_ciphertext ? 'saved' : 'idle', savedAt: detail.agenda?.updated_at || detail.agenda?.generated_at || null });
+        setDecisionSaveState({ phase: detail.decision?.decision_ciphertext ? 'saved' : 'idle', savedAt: detail.decision?.updated_at || null });
       }
     }
     hydrate();
@@ -439,15 +599,15 @@ export default function OperationalMeeting() {
       const next = {};
       for (const row of annualRows) {
         let agenda = null;
-        let decision = '';
+        let decision = null;
         let decryptError = false;
         if (row.agenda?.agenda_ciphertext && unlocked?.privateKey) {
           try {
-            agenda = await decryptRecordPayload(
+            agenda = normalizeOperationalAgendaContent(await decryptRecordPayload(
               row.agenda.agenda_ciphertext,
               row.agenda.my_record_key,
               unlocked.privateKey,
-            );
+            ));
           } catch {
             decryptError = true;
           }
@@ -459,7 +619,7 @@ export default function OperationalMeeting() {
               row.decision.my_record_key,
               unlocked.privateKey,
             );
-            decision = payload?.text || '';
+            decision = normalizeOperationalDecisionContent(payload);
           } catch {
             decryptError = true;
           }
@@ -605,48 +765,179 @@ export default function OperationalMeeting() {
     return true;
   };
 
-  const patchPreparationContent = (sectionId, content) => {
-    setSectionDrafts(prev => ({
-      ...prev,
-      [sectionId]: normalizeOperationalPreparationContent(content),
-    }));
+  const updateDirtySection = useCallback((sectionId, dirty) => {
+    const next = new Set(dirtySectionIdsRef.current);
+    if (dirty) next.add(Number(sectionId));
+    else next.delete(Number(sectionId));
+    dirtySectionIdsRef.current = next;
+    setDirtySectionIds([...next]);
+  }, []);
+
+  const patchPreparationContent = (section, content) => {
+    const sectionId = Number(section.id);
+    const previous = sectionDraftsRef.current[sectionId]
+      || normalizeOperationalPreparationContent(section.default_blocks, section.default_questions);
+    const next = normalizeOperationalPreparationContent(content, section.default_questions);
+    const previousSignature = getOperationalPreparationSignature(previous, section.default_questions);
+    const nextSignature = getOperationalPreparationSignature(next, section.default_questions);
+    if (previousSignature === nextSignature) return;
+
+    sectionDraftsRef.current = { ...sectionDraftsRef.current, [sectionId]: next };
+    setSectionDrafts(prev => ({ ...prev, [sectionId]: next }));
+    updateDirtySection(sectionId, true);
+    updateSectionSaveState(sectionId, { phase: unlocked?.privateKey ? 'dirty' : 'unlock_required' });
+
+    const submissionChanged = getOperationalPreparationSubmissionSignature(previous, section.default_questions)
+      !== getOperationalPreparationSubmissionSignature(next, section.default_questions);
+    if (submissionChanged) {
+      updateSectionLocalStatus(sectionId, { status: 'draft', submittedAt: null });
+    }
   };
 
-  const saveSection = async (section, submitAfter = false) => {
-    if (!ensureUnlocked()) return;
-    setSavingSectionId(section.id);
+  const persistSection = useCallback(async (sectionId, { showError = false } = {}) => {
+    const normalizedSectionId = Number(sectionId);
+    const section = (detail?.sections || []).find(item => Number(item.id) === normalizedSectionId);
+    if (!section) return false;
+
+    const pending = sectionPendingSaveRef.current[normalizedSectionId];
+    if (pending) {
+      await pending.catch(() => null);
+      return persistSectionRef.current?.(normalizedSectionId, { showError }) || false;
+    }
+
+    const payload = normalizeOperationalPreparationContent(
+      sectionDraftsRef.current[normalizedSectionId] || section.default_blocks,
+      section.default_questions,
+    );
+    const signature = getOperationalPreparationSignature(payload, section.default_questions);
+    if (sectionLastSavedSignatureRef.current[normalizedSectionId] === signature) {
+      updateDirtySection(normalizedSectionId, false);
+      updateSectionSaveState(normalizedSectionId, { phase: 'saved' });
+      return true;
+    }
+
+    if (!unlocked?.privateKey) {
+      updateSectionSaveState(normalizedSectionId, { phase: 'unlock_required' });
+      return false;
+    }
+
+    const savePromise = (async () => {
+      updateSectionSaveState(normalizedSectionId, { phase: 'saving' });
+      try {
+        const sectionAuthorizedUserIds = [...new Set([
+          ...(section.authorized_user_ids || []).map(Number),
+          Number(user?.id),
+        ].filter(Boolean))];
+        const encrypted = await encryptPayloadForUsers(payload, sectionAuthorizedUserIds, {
+          [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
+        });
+        await operationalMeetingsApi.updateSection(normalizedSectionId, {
+          content_ciphertext: encrypted.ciphertext,
+          crypto_version: 'v2_client',
+          record_keys: encrypted.record_keys,
+        });
+        sectionLastSavedSignatureRef.current[normalizedSectionId] = signature;
+        const latest = sectionDraftsRef.current[normalizedSectionId] || payload;
+        const latestSignature = getOperationalPreparationSignature(latest, section.default_questions);
+        const isCurrent = latestSignature === signature;
+        updateDirtySection(normalizedSectionId, !isCurrent);
+        updateSectionSaveState(normalizedSectionId, () => ({
+          phase: isCurrent ? 'saved' : 'dirty',
+          savedAt: new Date().toISOString(),
+          unavailableUserCount: encrypted.unavailable_user_ids.length,
+        }));
+        return true;
+      } catch (error) {
+        updateSectionSaveState(normalizedSectionId, {
+          phase: 'error',
+          error: error.response?.data?.error || error.message || '自动保存失败',
+        });
+        if (showError) message.error(error.response?.data?.error || error.message || '自动保存失败');
+        return false;
+      }
+    })();
+
+    sectionPendingSaveRef.current[normalizedSectionId] = savePromise;
     try {
-      const payload = normalizeOperationalPreparationContent(
-        sectionDrafts[section.id] || section.default_blocks,
-        section.default_questions,
-      );
-      const sectionAuthorizedUserIds = [...new Set([
-        ...(section.authorized_user_ids || []).map(Number),
-        Number(user?.id),
-      ].filter(Boolean))];
-      const encrypted = await encryptPayloadForUsers(payload, sectionAuthorizedUserIds, {
-        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
-      });
-      await operationalMeetingsApi.updateSection(section.id, {
-        content_ciphertext: encrypted.ciphertext,
-        crypto_version: 'v2_client',
-        record_keys: encrypted.record_keys,
-      });
-      if (submitAfter) {
-        await operationalMeetingsApi.submitSection(section.id);
-        message.success('准备块已提交');
-      } else {
-        message.success('准备块已保存');
-      }
-      if (encrypted.unavailable_user_ids.length) {
-        message.warning(`${encrypted.unavailable_user_ids.length} 位授权人的安全密钥尚未就绪，本次内容暂未向其加密授权`);
-      }
-      await loadMeetings();
-      await loadDetail(section.meeting_id);
-    } catch (error) {
-      message.error(error.response?.data?.error || error.message || '保存失败');
+      return await savePromise;
     } finally {
-      setSavingSectionId(null);
+      if (sectionPendingSaveRef.current[normalizedSectionId] === savePromise) {
+        delete sectionPendingSaveRef.current[normalizedSectionId];
+      }
+    }
+  }, [detail?.sections, unlocked, updateDirtySection, updateSectionSaveState, user?.id]);
+
+  persistSectionRef.current = persistSection;
+
+  useEffect(() => {
+    if (sectionAutoSaveTimerRef.current) window.clearTimeout(sectionAutoSaveTimerRef.current);
+    if (!dirtySectionIds.length) return undefined;
+    sectionAutoSaveTimerRef.current = window.setTimeout(() => {
+      dirtySectionIds.forEach(sectionId => {
+        persistSectionRef.current?.(sectionId).catch(() => {});
+      });
+    }, SECTION_AUTO_SAVE_DELAY);
+    return () => {
+      if (sectionAutoSaveTimerRef.current) window.clearTimeout(sectionAutoSaveTimerRef.current);
+    };
+  }, [dirtySectionIds, sectionDrafts, persistSection]);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      dirtySectionIdsRef.current.forEach(sectionId => {
+        persistSectionRef.current?.(sectionId).catch(() => {});
+      });
+    }, SECTION_AUTO_SAVE_INTERVAL);
+    const flushOnHide = () => {
+      if (document.visibilityState !== 'hidden') return;
+      dirtySectionIdsRef.current.forEach(sectionId => {
+        persistSectionRef.current?.(sectionId).catch(() => {});
+      });
+    };
+    document.addEventListener('visibilitychange', flushOnHide);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', flushOnHide);
+      if (sectionAutoSaveTimerRef.current) window.clearTimeout(sectionAutoSaveTimerRef.current);
+    };
+  }, []);
+
+  const submitSection = async (section) => {
+    if (!ensureUnlocked()) return;
+    const sectionId = Number(section.id);
+    const payload = normalizeOperationalPreparationContent(
+      sectionDraftsRef.current[sectionId] || section.default_blocks,
+      section.default_questions,
+    );
+    if (!operationalPreparationHasAnswers(payload, section.default_questions)) {
+      message.warning('请先填写准备内容，再标记已提交');
+      return;
+    }
+
+    setSubmittingSectionId(sectionId);
+    try {
+      let saved = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        saved = await persistSection(sectionId, { showError: true });
+        if (!saved || !dirtySectionIdsRef.current.has(sectionId)) break;
+      }
+      if (!saved || dirtySectionIdsRef.current.has(sectionId)) {
+        message.warning('最新内容仍在保存，请稍后再标记提交');
+        return;
+      }
+      await operationalMeetingsApi.submitSection(sectionId);
+      const submittedAt = new Date().toISOString();
+      updateSectionLocalStatus(sectionId, { status: 'submitted', submittedAt });
+      await Promise.all([loadMeetings(), loadDetail(section.meeting_id)]);
+      message.success('已标记提交，会议提纲将使用当前版本');
+      const unavailableUserCount = Number(sectionSaveStatesRef.current[sectionId]?.unavailableUserCount || 0);
+      if (unavailableUserCount) {
+        message.warning(`${unavailableUserCount} 位授权人的安全密钥尚未就绪，暂时无法查看本次内容`);
+      }
+    } catch (error) {
+      message.error(error.response?.data?.error || error.message || '标记提交失败');
+    } finally {
+      setSubmittingSectionId(null);
     }
   };
 
@@ -660,7 +951,7 @@ export default function OperationalMeeting() {
         content: sanitizeForAi(blocksToPlain(sectionDrafts[section.id])),
       }));
       const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, { sections });
-      const agenda = result.agenda;
+      const agenda = normalizeOperationalAgendaContent(result.agenda);
       const encrypted = await encryptPayloadForUsers(agenda, meetingAuthorizedUserIds, {
         [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
       });
@@ -674,7 +965,11 @@ export default function OperationalMeeting() {
         prompt_version: result.prompt_version,
         safety_scan_status: 'passed',
       });
+      agendaDraftRef.current = agenda;
+      agendaLastSavedSignatureRef.current = getDocumentBodySignature(agenda);
+      agendaDirtyRef.current = false;
       setAgendaDraft(agenda);
+      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString(), unavailableUserCount: encrypted.unavailable_user_ids.length });
       await loadMeetings();
       await loadDetail(detail.meeting.id);
       message.success(result.runtime?.mode === 'llm' ? 'AI 提纲已生成' : '已生成规则兜底提纲');
@@ -688,31 +983,132 @@ export default function OperationalMeeting() {
     }
   };
 
-  const saveDecision = async () => {
-    if (!detail?.meeting?.id || !ensureUnlocked()) return;
-    setDecisionSaving(true);
+  const patchAgendaContent = (content) => {
+    const next = normalizeOperationalAgendaContent(content);
+    agendaDraftRef.current = next;
+    agendaDirtyRef.current = true;
+    setAgendaDraft(next);
+    setAgendaSaveState(prev => ({ ...prev, phase: unlocked?.privateKey ? 'dirty' : 'unlock_required' }));
+  };
+
+  const patchDecisionContent = (content) => {
+    const next = normalizeOperationalDecisionContent(content);
+    decisionDraftRef.current = next;
+    decisionDirtyRef.current = true;
+    setDecisionDraft(next);
+    setDecisionSaveState(prev => ({ ...prev, phase: unlocked?.privateKey ? 'dirty' : 'unlock_required' }));
+  };
+
+  const saveAgenda = async ({ silent = false } = {}) => {
+    if (!detail?.meeting?.id) return false;
+    const payload = normalizeOperationalAgendaContent(agendaDraftRef.current);
+    if (!payload) return false;
+    const signature = getDocumentBodySignature(payload);
+    if (signature === agendaLastSavedSignatureRef.current) {
+      agendaDirtyRef.current = false;
+      setAgendaSaveState(prev => ({ ...prev, phase: 'saved' }));
+      return true;
+    }
+    if (!ensureUnlocked()) {
+      setAgendaSaveState(prev => ({ ...prev, phase: 'unlock_required' }));
+      return false;
+    }
+    setAgendaSaveState(prev => ({ ...prev, phase: 'saving' }));
     try {
-      const encrypted = await encryptPayloadForUsers({ text: decisionDraft || '' }, meetingAuthorizedUserIds, {
+      const encrypted = await encryptPayloadForUsers(payload, meetingAuthorizedUserIds, {
+        [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
+      });
+      await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
+        agenda_ciphertext: encrypted.ciphertext,
+        crypto_version: 'v2_client',
+        record_keys: encrypted.record_keys,
+        source_hash: detail.agenda?.source_hash || null,
+        model_provider: detail.agenda?.model_provider || 'edited',
+        model_name: detail.agenda?.model_name || '',
+        prompt_version: detail.agenda?.prompt_version || '',
+        safety_scan_status: detail.agenda?.safety_scan_status || 'passed',
+      });
+      agendaLastSavedSignatureRef.current = signature;
+      agendaDirtyRef.current = false;
+      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString(), unavailableUserCount: encrypted.unavailable_user_ids.length });
+      await loadMeetings();
+      if (!silent) message.success('会议提纲已保存');
+      if (encrypted.unavailable_user_ids.length && !silent) {
+        message.warning(`${encrypted.unavailable_user_ids.length} 位参与人的安全密钥尚未就绪，暂时无法查看本次提纲`);
+      }
+      return true;
+    } catch (error) {
+      setAgendaSaveState(prev => ({ ...prev, phase: 'error', error: error.response?.data?.error || error.message || '保存会议提纲失败' }));
+      if (!silent) message.error(error.response?.data?.error || error.message || '保存会议提纲失败');
+      return false;
+    }
+  };
+
+  const saveDecision = async ({ silent = false } = {}) => {
+    if (!detail?.meeting?.id || !ensureUnlocked()) return;
+    const payload = normalizeOperationalDecisionContent(decisionDraftRef.current);
+    const signature = getDocumentBodySignature(payload);
+    if (signature === decisionLastSavedSignatureRef.current) {
+      decisionDirtyRef.current = false;
+      setDecisionSaveState(prev => ({ ...prev, phase: 'saved' }));
+      return true;
+    }
+    setDecisionSaveState(prev => ({ ...prev, phase: 'saving' }));
+    try {
+      const encrypted = await encryptPayloadForUsers(payload, meetingAuthorizedUserIds, {
         [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
       });
       await operationalMeetingsApi.saveDecision(detail.meeting.id, {
         decision_ciphertext: encrypted.ciphertext,
         crypto_version: 'v2_client',
         record_keys: encrypted.record_keys,
-        status: decisionDraft?.trim() ? 'saved' : 'draft',
+        status: documentBodyHasContent(payload) ? 'saved' : 'draft',
       });
+      decisionLastSavedSignatureRef.current = signature;
+      decisionDirtyRef.current = false;
+      setDecisionSaveState({ phase: 'saved', savedAt: new Date().toISOString(), unavailableUserCount: encrypted.unavailable_user_ids.length });
       await loadMeetings();
-      await loadDetail(detail.meeting.id);
-      message.success('会议结论已保存');
-      if (encrypted.unavailable_user_ids.length) {
+      if (!silent) message.success('会议结论已保存');
+      if (encrypted.unavailable_user_ids.length && !silent) {
         message.warning(`${encrypted.unavailable_user_ids.length} 位参与人的安全密钥尚未就绪，暂时无法查看本次结论`);
       }
+      return true;
     } catch (error) {
-      message.error(error.response?.data?.error || error.message || '保存会议结论失败');
-    } finally {
-      setDecisionSaving(false);
+      setDecisionSaveState(prev => ({ ...prev, phase: 'error', error: error.response?.data?.error || error.message || '保存会议结论失败' }));
+      if (!silent) message.error(error.response?.data?.error || error.message || '保存会议结论失败');
+      return false;
     }
   };
+
+  useEffect(() => {
+    if (agendaAutoSaveTimerRef.current) window.clearTimeout(agendaAutoSaveTimerRef.current);
+    if (!agendaDirtyRef.current || !agendaDraft) return undefined;
+    agendaAutoSaveTimerRef.current = window.setTimeout(() => {
+      if (!unlocked?.privateKey) {
+        setAgendaSaveState(prev => ({ ...prev, phase: 'unlock_required' }));
+        return;
+      }
+      saveAgenda({ silent: true });
+    }, MEETING_CONTENT_AUTO_SAVE_DELAY);
+    return () => {
+      if (agendaAutoSaveTimerRef.current) window.clearTimeout(agendaAutoSaveTimerRef.current);
+    };
+  }, [agendaDraft, unlocked?.privateKey]);
+
+  useEffect(() => {
+    if (decisionAutoSaveTimerRef.current) window.clearTimeout(decisionAutoSaveTimerRef.current);
+    if (!decisionDirtyRef.current) return undefined;
+    decisionAutoSaveTimerRef.current = window.setTimeout(() => {
+      if (!unlocked?.privateKey) {
+        setDecisionSaveState(prev => ({ ...prev, phase: 'unlock_required' }));
+        return;
+      }
+      saveDecision({ silent: true });
+    }, MEETING_CONTENT_AUTO_SAVE_DELAY);
+    return () => {
+      if (decisionAutoSaveTimerRef.current) window.clearTimeout(decisionAutoSaveTimerRef.current);
+    };
+  }, [decisionDraft, unlocked?.privateKey]);
 
   const openParticipantManager = () => {
     setParticipantUserIds((detail?.participants || [])
@@ -762,7 +1158,7 @@ export default function OperationalMeeting() {
         if (!unlocked?.privateKey) {
           rekeyIncomplete = true;
         } else {
-          const encryptedDecision = await encryptPayloadForUsers({ text: decisionDraft || '' }, recipientIds, {
+          const encryptedDecision = await encryptPayloadForUsers(normalizeOperationalDecisionContent(decisionDraft), recipientIds, {
             [user?.id]: { jwk: unlocked?.publicKeyJwk, key_version: unlocked?.keyVersion },
           });
           await operationalMeetingsApi.saveDecision(detail.meeting.id, {
@@ -847,25 +1243,39 @@ export default function OperationalMeeting() {
     return Boolean(detail?.can_generate_agenda);
   }, [detail?.can_generate_agenda]);
 
+  const preparationSubmissionStats = useMemo(() => {
+    const requiredSections = (detail?.sections || []).filter(section => Number(section.is_required ?? 1) === 1);
+    const submitted = requiredSections.filter((section) => {
+      const localStatus = sectionLocalStatuses[section.id]?.status || section.status;
+      return localStatus === 'submitted' || localStatus === 'locked';
+    }).length;
+    return { required: requiredSections.length, submitted };
+  }, [detail?.sections, sectionLocalStatuses]);
+
   const filteredAnnualRows = useMemo(() => {
     const keyword = annualKeyword.trim().toLowerCase();
     return annualRows.filter(row => {
       const draft = annualDrafts[row.meeting.id] || {};
-      if (annualOnlyConclusion && !String(draft.decision || '').trim()) return false;
+      if (annualOnlyConclusion && !meetingContentToPlain(draft.decision).trim()) return false;
       if (!keyword) return true;
       const searchable = [
         row.meeting.week_start,
         row.meeting.week_end,
         row.meeting.title,
         agendaToPlain(draft.agenda),
-        draft.decision,
+        meetingContentToPlain(draft.decision),
       ].join('\n').toLowerCase();
       return searchable.includes(keyword);
     });
   }, [annualDrafts, annualKeyword, annualOnlyConclusion, annualRows]);
 
   const renderSection = (section) => {
-    const status = sectionStatusMeta[section.status] || sectionStatusMeta.draft;
+    const localStatus = sectionLocalStatuses[section.id] || {
+      status: section.status || 'draft',
+      submittedAt: section.submitted_at || null,
+    };
+    const status = sectionStatusMeta[localStatus.status] || sectionStatusMeta.draft;
+    const saveState = sectionSaveStates[section.id] || { phase: 'idle', savedAt: null };
     const draft = normalizeOperationalPreparationContent(
       sectionDrafts[section.id] || section.default_blocks,
       section.default_questions,
@@ -877,17 +1287,70 @@ export default function OperationalMeeting() {
       needsUnlockForExistingContent,
       readOnly,
     } = getPreparationEditorState(section, Boolean(unlocked?.privateKey));
+    const saveStatusLabel = (() => {
+      if (saveState.phase === 'dirty') return { text: '待自动保存', color: '#8c8c8c' };
+      if (saveState.phase === 'saving') return { text: '自动保存中...', color: '#1677ff' };
+      if (saveState.phase === 'error') return { text: '自动保存失败', color: '#cf1322' };
+      if (saveState.phase === 'unlock_required') return { text: '解锁后自动保存', color: '#d46b08' };
+      if (saveState.phase === 'saved') {
+        return {
+          text: saveState.savedAt ? `已自动保存 ${dayjs(saveState.savedAt).format('HH:mm')}` : '已自动保存',
+          color: '#389e0d',
+        };
+      }
+      return { text: '自动保存已开启', color: '#8c8c8c' };
+    })();
     return (
       <Collapse.Panel
         key={String(section.id)}
         header={(
           <Space wrap>
             <Text strong>{section.title}</Text>
-            <Tag color={status.color}>{status.label}</Tag>
             <Tag color={canEdit ? 'blue' : 'default'}>
               {isOwnPreparation ? '我的准备' : (canEdit ? '可编辑' : '仅查看')}
             </Tag>
-            {section.submitted_at && <Text type="secondary">{dayjs(section.submitted_at).format('MM-DD HH:mm')}</Text>}
+          </Space>
+        )}
+        extra={(
+          <Space
+            wrap
+            size={6}
+            onClick={event => event.stopPropagation()}
+            onMouseDown={event => event.stopPropagation()}
+          >
+            {canEdit && (
+              <Text style={{ fontSize: 12, color: saveStatusLabel.color }}>
+                <SaveOutlined style={{ marginRight: 4 }} />
+                {saveStatusLabel.text}
+              </Text>
+            )}
+            {saveState.phase === 'error' && canEdit && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => persistSection(section.id, { showError: true })}
+                style={{ paddingInline: 2 }}
+              >
+                重试
+              </Button>
+            )}
+            <Tag color={status.color} style={{ marginInlineEnd: 0 }}>
+              {status.label}
+              {localStatus.status === 'submitted' && localStatus.submittedAt
+                ? ` · ${dayjs(localStatus.submittedAt).format('MM-DD HH:mm')}`
+                : ''}
+            </Tag>
+            {canEdit && localStatus.status !== 'submitted' && localStatus.status !== 'locked' && (
+              <Button
+                type="primary"
+                size="small"
+                icon={<CheckCircleOutlined />}
+                loading={submittingSectionId === Number(section.id)}
+                onClick={() => submitSection(section)}
+              >
+                标记已提交
+              </Button>
+            )}
           </Space>
         )}
       >
@@ -902,26 +1365,12 @@ export default function OperationalMeeting() {
                 : '当前账号没有此准备块的编辑权限。'}
             />
           )}
-          {canEdit && !section.content_ciphertext && !unlocked?.privateKey && (
-            <Alert
-              type="info"
-              showIcon
-              message="可以先填写内容"
-              description="保存或提交前需要解锁安全密钥；解锁不会清空当前已填写的内容。"
-              action={keyInfo && !keyHealth.privateEnvelopeValid
-                ? <Button size="small" onClick={openKeyRepair}>修复密钥</Button>
-                : <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>}
-            />
-          )}
           {canEdit && needsUnlockForExistingContent && (
             <Alert
               type="info"
               showIcon
               message="内容已加密"
-              description="解锁安全密钥后可查看和编辑。"
-              action={keyInfo && !keyHealth.privateEnvelopeValid
-                ? <Button size="small" onClick={openKeyRepair}>修复密钥</Button>
-                : <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>}
+              description="请使用页面右上角的安全密码入口解锁后查看和编辑。"
             />
           )}
           {lacksDecryptGrant && (
@@ -929,30 +1378,17 @@ export default function OperationalMeeting() {
           )}
           <DocumentBodyEditor
             value={draft}
-            onChange={value => patchPreparationContent(section.id, value)}
+            onChange={value => patchPreparationContent(section, value)}
+            onSave={async () => {
+              if (!ensureUnlocked()) return false;
+              const saved = await persistSection(section.id, { showError: true });
+              if (saved) message.success('准备内容已保存');
+              return saved;
+            }}
             minHeight={280}
             placeholder="填写本周准备内容"
             readOnly={readOnly}
           />
-          {canEdit && (
-            <Space wrap>
-              <Button
-                icon={<SaveOutlined />}
-                loading={savingSectionId === section.id}
-                onClick={() => saveSection(section, false)}
-              >
-                保存
-              </Button>
-              <Button
-                type="primary"
-                icon={<SendOutlined />}
-                loading={savingSectionId === section.id}
-                onClick={() => saveSection(section, true)}
-              >
-                保存并提交
-              </Button>
-            </Space>
-          )}
         </Space>
       </Collapse.Panel>
     );
@@ -973,7 +1409,7 @@ export default function OperationalMeeting() {
 
   const renderKeyAction = () => (
     unlocked?.privateKey ? (
-      <Tag icon={<UnlockOutlined />} color="green">安全密钥已解锁</Tag>
+      <Tag icon={<UnlockOutlined />} color="green">安全密码已解锁</Tag>
     ) : (
       <Button
         icon={<LockOutlined />}
@@ -982,7 +1418,7 @@ export default function OperationalMeeting() {
           else setKeyModalOpen(true);
         }}
       >
-        {keyInfo && !keyHealth.privateEnvelopeValid ? '修复安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
+        {keyInfo && !keyHealth.privateEnvelopeValid ? '修复安全密码' : (keyInfo ? '解锁安全密码' : '设置安全密码')}
       </Button>
     )
   );
@@ -1003,26 +1439,80 @@ export default function OperationalMeeting() {
     </Space>
   ) : null;
 
+  const renderMeetingSaveStatus = (state, emptyText = '编辑后自动保存') => {
+    const meta = {
+      dirty: { text: '待自动保存', color: '#8c8c8c' },
+      saving: { text: '自动保存中...', color: '#1677ff' },
+      error: { text: state.error || '自动保存失败', color: '#cf1322' },
+      unlock_required: { text: '解锁后自动保存', color: '#d46b08' },
+      saved: {
+        text: state.savedAt ? `已自动保存 ${dayjs(state.savedAt).format('HH:mm')}` : '已自动保存',
+        color: '#389e0d',
+      },
+    }[state.phase] || { text: emptyText, color: '#8c8c8c' };
+    return (
+      <Text style={{ fontSize: 12, color: meta.color }}>
+        <SaveOutlined style={{ marginRight: 4 }} />
+        {meta.text}
+      </Text>
+    );
+  };
+
   const meetingPanel = detail?.meeting ? (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       <Card
-        title={<Space><RobotOutlined />AI 会议提纲</Space>}
+        title={(
+          <Space wrap>
+            <RobotOutlined />
+            AI 会议提纲
+            {preparationSubmissionStats.required > 0 && (
+              <Tag color={preparationSubmissionStats.submitted >= preparationSubmissionStats.required ? 'green' : 'gold'}>
+                准备 {preparationSubmissionStats.submitted}/{preparationSubmissionStats.required} 已提交
+              </Tag>
+            )}
+          </Space>
+        )}
         size="small"
-        extra={Boolean(detail.can_generate_agenda) && (
-          <Button
-            type="primary"
-            icon={<RobotOutlined />}
-            loading={agendaLoading}
-            disabled={!canGenerateAgenda}
-            onClick={generateAgenda}
-          >
-            {detail.agenda ? '重新生成提纲' : '生成会议提纲'}
-          </Button>
+        extra={(
+          <Space wrap>
+            {agendaDraft && Boolean(detail.can_generate_agenda) && renderMeetingSaveStatus(agendaSaveState)}
+            {agendaSaveState.phase === 'error' && Boolean(detail.can_generate_agenda) && (
+              <Button size="small" onClick={() => saveAgenda({ silent: false })}>重试</Button>
+            )}
+            {Boolean(detail.can_generate_agenda) && (
+              <Button
+                icon={<SaveOutlined />}
+                loading={agendaSaveState.phase === 'saving'}
+                disabled={!agendaDraft}
+                onClick={() => saveAgenda({ silent: false })}
+              >
+                保存提纲
+              </Button>
+            )}
+            {Boolean(detail.can_generate_agenda) && (
+              <Button
+                type="primary"
+                icon={<RobotOutlined />}
+                loading={agendaLoading}
+                disabled={!canGenerateAgenda}
+                onClick={generateAgenda}
+              >
+                {detail.agenda ? '重新生成提纲' : '生成会议提纲'}
+              </Button>
+            )}
+          </Space>
         )}
       >
         {agendaDraft ? (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <RichTextView value={agendaToPlain(agendaDraft).replace(/\n/g, '<br />')} />
+            <DocumentBodyEditor
+              value={agendaDraft}
+              onChange={patchAgendaContent}
+              onSave={() => saveAgenda({ silent: false })}
+              minHeight={360}
+              placeholder="编辑会议提纲"
+              readOnly={!detail.can_generate_agenda || !unlocked?.privateKey}
+            />
             <Alert type="success" showIcon message="提纲已加密保存，毛利和利润类敏感字段已在生成前后过滤。" />
           </Space>
         ) : (
@@ -1034,15 +1524,28 @@ export default function OperationalMeeting() {
         title={<Space><CheckCircleOutlined />会议结论</Space>}
         size="small"
         extra={Boolean(detail.can_edit_decision) && (
-          <Button icon={<SaveOutlined />} loading={decisionSaving} onClick={saveDecision}>保存结论</Button>
+          <Space wrap>
+            {renderMeetingSaveStatus(decisionSaveState)}
+            {decisionSaveState.phase === 'error' && (
+              <Button size="small" onClick={() => saveDecision({ silent: false })}>重试</Button>
+            )}
+            <Button
+              icon={<SaveOutlined />}
+              loading={decisionSaveState.phase === 'saving'}
+              onClick={() => saveDecision({ silent: false })}
+            >
+              保存结论
+            </Button>
+          </Space>
         )}
       >
-        <Input.TextArea
+        <DocumentBodyEditor
           value={decisionDraft}
-          onChange={event => setDecisionDraft(event.target.value)}
+          onChange={patchDecisionContent}
+          onSave={() => saveDecision({ silent: false })}
           placeholder="记录会议最终决策、负责人、截止时间和后续动作"
-          rows={8}
-          disabled={!detail.can_edit_decision || !unlocked?.privateKey}
+          minHeight={280}
+          readOnly={!detail.can_edit_decision || !unlocked?.privateKey}
         />
       </Card>
     </Space>
@@ -1079,12 +1582,20 @@ export default function OperationalMeeting() {
                 <Empty description="暂无详情" />
               ) : (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  {!keyInfo && (
+                  {keyInfoLoaded && !keyInfo && (
                     <Alert
                       type="warning"
                       showIcon
                       message="首次使用需要设置安全密码"
-                      description="经营周会内容会在浏览器本地加密后保存。安全密码不会上传服务器。"
+                      description="请在页面右上角设置安全密码。经营周会内容会在浏览器本地加密后保存，安全密码不会上传服务器。"
+                    />
+                  )}
+                  {keyInfo && !unlocked?.privateKey && (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="安全内容当前已锁定"
+                      description="请使用页面右上角的“解锁安全密码”查看加密内容；未加密的新内容可先编辑，解锁后会自动保存。"
                     />
                   )}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -1123,13 +1634,13 @@ export default function OperationalMeeting() {
             </Space>
             )}
           >
-            {!keyInfo && (
+            {keyInfoLoaded && !keyInfo && (
               <Alert
                 type="warning"
                 showIcon
                 style={{ marginBottom: 16 }}
                 message="首次使用需要设置安全密码"
-                description="经营周会内容会在浏览器本地加密后保存。安全密码不会上传服务器，忘记后需要由其他已授权 CXO 重新授权。"
+                description="请在页面右上角设置安全密码。安全密码不会上传服务器，忘记后需要由其他已授权 CXO 重新授权。"
               />
             )}
             <Tabs
@@ -1185,8 +1696,8 @@ export default function OperationalMeeting() {
                           <Alert
                             type="info"
                             showIcon
-                            message="解锁安全密钥后可在本页查看全年提纲和会议结论"
-                            action={<Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>}
+                            message="解锁安全密码后可在本页查看全年提纲和会议结论"
+                            description="请使用页面右上角的安全密码入口。"
                           />
                         )}
                         {filteredAnnualRows.length ? (
@@ -1219,14 +1730,24 @@ export default function OperationalMeeting() {
                                   <Space direction="vertical" size={12} style={{ width: '100%' }}>
                                     <Text strong>AI 会议提纲</Text>
                                     {draft.agenda ? (
-                                      <RichTextView value={agendaToPlain(draft.agenda).replace(/\n/g, '<br />')} />
+                                      <DocumentBodyEditor
+                                        value={draft.agenda}
+                                        readOnly
+                                        minHeight={120}
+                                        placeholder="暂无会议提纲"
+                                      />
                                     ) : (
                                       <Text type="secondary">{row.agenda?.agenda_ciphertext ? '内容已加密，解锁后可查看' : '未生成'}</Text>
                                     )}
                                     <Divider style={{ margin: '4px 0' }} />
                                     <Text strong>会议结论</Text>
-                                    {draft.decision ? (
-                                      <div style={{ whiteSpace: 'pre-wrap' }}>{draft.decision}</div>
+                                    {meetingContentToPlain(draft.decision).trim() ? (
+                                      <DocumentBodyEditor
+                                        value={draft.decision}
+                                        readOnly
+                                        minHeight={100}
+                                        placeholder="暂无会议结论"
+                                      />
                                     ) : (
                                       <Text type="secondary">{row.decision?.decision_ciphertext ? '内容已加密，解锁后可查看' : '未填写'}</Text>
                                     )}
@@ -1325,7 +1846,7 @@ export default function OperationalMeeting() {
       </Modal>
 
       <Modal
-        title={keyRepairMode ? '修复安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
+        title={keyRepairMode ? '修复安全密码' : (keyInfo ? '解锁安全密码' : '设置安全密码')}
         open={keyModalOpen}
         onCancel={() => {
           setKeyModalOpen(false);
