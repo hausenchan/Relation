@@ -196,6 +196,34 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   );
   assert.equal(cxoEditsDesignatedPreparation.status, 200, JSON.stringify(cxoEditsDesignatedPreparation.payload));
 
+  const submitPreparation = await request(
+    baseUrl,
+    `/api/operational-meeting-sections/${designatedSectionId}/submit`,
+    { method: 'POST', token: designatedToken },
+  );
+  assert.equal(submitPreparation.status, 200, JSON.stringify(submitPreparation.payload));
+  const submittedDetail = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
+  assert.equal(submittedDetail.payload.sections[0].status, 'submitted');
+  assert.ok(submittedDetail.payload.sections[0].submitted_at);
+
+  const editSubmittedPreparation = await request(
+    baseUrl,
+    `/api/operational-meeting-sections/${designatedSectionId}`,
+    {
+      method: 'PUT',
+      token: designatedToken,
+      body: {
+        content_ciphertext: 'edited-after-submit',
+        crypto_version: 'v2_client',
+        record_keys: [],
+      },
+    },
+  );
+  assert.equal(editSubmittedPreparation.status, 200, JSON.stringify(editSubmittedPreparation.payload));
+  const editedDetail = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
+  assert.equal(editedDetail.payload.sections[0].status, 'draft');
+  assert.equal(editedDetail.payload.sections[0].submitted_at, null);
+
   const invalidRecordKey = await request(
     baseUrl,
     `/api/operational-meeting-sections/${designatedSectionId}`,

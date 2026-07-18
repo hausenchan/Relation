@@ -21771,7 +21771,9 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
       SET content_ciphertext = ?,
           content_text_ciphertext = ?,
           crypto_version = ?,
-          status = CASE WHEN status = 'submitted' THEN status ELSE 'draft' END,
+          status = CASE WHEN status = 'locked' THEN status ELSE 'draft' END,
+          submitted_by = CASE WHEN status = 'locked' THEN submitted_by ELSE NULL END,
+          submitted_at = CASE WHEN status = 'locked' THEN submitted_at ELSE NULL END,
           updated_by = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?

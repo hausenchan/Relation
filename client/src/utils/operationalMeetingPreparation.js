@@ -174,3 +174,36 @@ export function normalizeOperationalPreparationContent(value, fallbackQuestions 
 export function operationalPreparationToPlain(value, htmlToPlain) {
   return documentBodyToPlain(normalizeOperationalPreparationContent(value), htmlToPlain);
 }
+
+export function getOperationalPreparationSignature(value, fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS) {
+  return JSON.stringify(normalizeOperationalPreparationContent(value, fallbackQuestions));
+}
+
+export function getOperationalPreparationSubmissionSignature(value, fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS) {
+  const normalized = normalizeOperationalPreparationContent(value, fallbackQuestions);
+  return JSON.stringify({
+    ...normalized,
+    blocks: normalized.blocks.map((block) => {
+      const { collapsed, ...meta } = block.meta || {};
+      return { ...block, meta };
+    }),
+  });
+}
+
+export function operationalPreparationHasAnswers(value, fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS) {
+  const questions = Array.isArray(fallbackQuestions) && fallbackQuestions.length
+    ? fallbackQuestions
+    : DEFAULT_OPERATIONAL_MEETING_QUESTIONS;
+  const questionTitles = new Set(questions.map(question => String(question.title || '').trim()).filter(Boolean));
+  const normalized = normalizeOperationalPreparationContent(value, questions);
+  return normalized.blocks.some((block) => {
+    if (block?.meta?.template_question_key) return false;
+    const text = documentBodyInlineHtmlToPlain(block?.content || '').trim();
+    if (
+      Number(block?.meta?.indent || 0) === 0
+      && ['numbered', 'fold-list'].includes(block?.type)
+      && questionTitles.has(text)
+    ) return false;
+    return documentBodyHasContent({ blocks: [block] });
+  });
+}
