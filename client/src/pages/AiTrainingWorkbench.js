@@ -159,7 +159,11 @@ function formatScorePercent(value) {
 function runtimeModeTag(mode) {
   const map = {
     llm: { color: 'green', label: 'LLM' },
+    llm_chat: { color: 'green', label: '自由聊天' },
     local_fact: { color: 'cyan', label: '本地事实' },
+    skill_only: { color: 'blue', label: 'Skill' },
+    skill_llm_hybrid: { color: 'purple', label: 'Skill + 模型' },
+    skill_llm_fallback: { color: 'gold', label: 'Skill 回退' },
     deterministic: { color: 'blue', label: '规则模式' },
     deterministic_fallback: { color: 'gold', label: '模型回退' },
   };
@@ -175,12 +179,12 @@ function runtimeSourceLabel(source) {
   return '规则模式';
 }
 
-function AssistantProcessingBubble({ promptText }) {
-  const steps = [
-    '已理解问题口径',
-    '正在匹配 Skill 与本地事实',
-    '正在整理正式结果',
-  ];
+function AssistantProcessingBubble({ promptText, skillName = '' }) {
+  const hasExplicitSkill = Boolean(skillName)
+    || /@[a-z][a-z0-9_-]+|(?:使用|调用|执行|用)\s*[a-z][a-z0-9_-]+/i.test(promptText || '');
+  const steps = hasExplicitSkill
+    ? ['正在识别并执行 Skill', '正在调用模型审校结果', '正在校验事实并选择最终结果']
+    : ['正在装载最近会话上下文', '正在调用系统模型', '正在检查并整理回复'];
   return (
     <div style={{ alignSelf: 'flex-start', width: '100%' }}>
       <Card size="small" bodyStyle={{ padding: 12, background: '#ffffff' }} style={{ borderColor: '#dbeafe' }}>
@@ -351,6 +355,23 @@ function AssistantProcessCollapse({ item, analysisProcess }) {
               {analysisProcess.model_error ? (
                 <Text type="warning">模型回退原因：{analysisProcess.model_error}</Text>
               ) : null}
+              {analysisProcess.validation ? (
+                <Alert
+                  type={analysisProcess.validation.passed ? 'success' : 'warning'}
+                  showIcon
+                  message={analysisProcess.validation.passed ? '事实校验通过' : '事实校验未通过'}
+                  description={analysisProcess.validation.issues?.join('；') || `已检查 ${analysisProcess.validation.checked_number_count || 0} 个数字`}
+                />
+              ) : null}
+              {Array.isArray(analysisProcess.review_notes) && analysisProcess.review_notes.length > 0 ? (
+                <div>
+                  {analysisProcess.review_notes.map((note, index) => (
+                    <div key={`${item.id}-review-note-${index}`} style={{ color: '#475569', lineHeight: 1.8 }}>
+                      审校 {index + 1}. {note}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </Space>
           ),
         },
@@ -388,6 +409,11 @@ function ChatBubble({ item, writable, onFeedback, onAction }) {
             {isAssistant && runtimeMeta?.model_name ? <Tag color="green">{runtimeMeta.model_name}</Tag> : null}
             {isAssistant && runtimeMeta?.skill_name ? <Tag color="geekblue">{runtimeMeta.skill_name}</Tag> : null}
             {isAssistant && runtimeMeta?.skill_version_no ? <Tag>版本 {runtimeMeta.skill_version_no}</Tag> : null}
+            {isAssistant && runtimeMeta?.candidate_selected ? (
+              <Tag color={runtimeMeta.candidate_selected === 'llm_enhanced' ? 'purple' : 'blue'}>
+                {runtimeMeta.candidate_selected === 'llm_enhanced' ? '采用增强结果' : runtimeMeta.candidate_selected === 'skill' ? '采用 Skill 结果' : '采用模型结果'}
+              </Tag>
+            ) : null}
             {!isUser && qualityTag(item.avg_rating ? Math.round(item.avg_rating * 20) : null)}
           </Space>
 
@@ -1098,7 +1124,7 @@ export default function AiTrainingWorkbench() {
                             onFeedback={handleFeedback}
                             onAction={handleMessageAction}
                           />
-                          <AssistantProcessingBubble promptText={pendingPrompt} />
+                          <AssistantProcessingBubble promptText={pendingPrompt} skillName={currentSessionSkillName} />
                         </>
                       ) : null}
                     </>
@@ -1111,7 +1137,7 @@ export default function AiTrainingWorkbench() {
                       <Tag color="blue">场景：{currentSession.scene_label || '通用训练'}</Tag>
                       <Tag>输出：结论 / 证据 / 动作</Tag>
                       <Tag color={currentSessionSkillName ? 'geekblue' : 'default'}>
-                        {currentSessionSkillName ? `Skill：${currentSessionSkillName}` : 'Skill：系统自动匹配'}
+                        {currentSessionSkillName ? `Skill：${currentSessionSkillName}` : '自由聊天：系统模型'}
                       </Tag>
                       <Tag>{currentSession.visibility_scope === 'team' ? '团队可见' : '仅自己'}</Tag>
                     </Space>
@@ -1119,7 +1145,7 @@ export default function AiTrainingWorkbench() {
                       rows={4}
                       value={composeValue}
                       onChange={(event) => setComposeValue(event.target.value)}
-                      placeholder="输入你要训练 AI 的提问方式、判断口径或复盘模板。"
+                      placeholder="输入消息，或使用 @skill-code 指定 Skill。"
                     />
                     <Space wrap>
                       <Button onClick={() => setActiveDraftByScene(currentSession.scene_code)}>插入推荐提问</Button>
@@ -1152,7 +1178,7 @@ export default function AiTrainingWorkbench() {
                   <Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
                     {currentSession.business_line || '-'} · {currentSession.business_side || '-'} · {currentSession.scene_label || '-'}
                     <br />
-                    Skill：{currentSessionSkillName || '暂未绑定，发送消息时系统会优先自动匹配'}
+                    Skill：{currentSessionSkillName || '未绑定，普通消息使用系统模型'}
                     {currentSessionSkillVersion ? `（${currentSessionSkillVersion}）` : ''}
                     <br />
                     权限：{currentSession.visibility_scope === 'team' ? '团队共享' : '仅自己'}
@@ -1171,6 +1197,9 @@ export default function AiTrainingWorkbench() {
                         : `目标模型：${runtimeStatus?.target_model_name || runtimeStatus?.model_name || 'gpt-5.5'}（缺少 API Key）`}
                     <br />
                     路径：{lastRuntimeMeta?.mode || runtimeStatus?.preferred_runtime || 'deterministic'}
+                    {lastRuntimeMeta?.candidate_selected ? (
+                      <><br />结果：{lastRuntimeMeta.candidate_selected === 'llm_enhanced' ? '模型增强结果' : lastRuntimeMeta.candidate_selected === 'skill' ? 'Skill 原结果' : '模型结果'}</>
+                    ) : null}
                   </Paragraph>
                 </Card>
 
@@ -1837,7 +1866,7 @@ export default function AiTrainingWorkbench() {
           <Form.Item label="绑定已发布 Skill" name="skill_id">
             <Select
               allowClear
-              placeholder="不指定则由系统自动匹配"
+              placeholder="不指定则使用系统模型自由聊天"
               options={publishedSkillOptions}
               onChange={handleCreateSkillChange}
             />

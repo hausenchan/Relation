@@ -823,6 +823,7 @@ async function generateAiTrainingSkillResponse({
   examples,
   recentMessages,
   llmConfigOverride = null,
+  forceDeterministic = false,
 }) {
   const promptSignals = extractPromptSignals(promptText, session);
   const followUpQuestions = buildFollowUpQuestions(version, session, promptSignals, matchedSuggestions);
@@ -836,7 +837,7 @@ async function generateAiTrainingSkillResponse({
     promptSignals,
     followUpQuestions,
   });
-  const config = getLlmConfig(llmConfigOverride);
+  const config = forceDeterministic ? null : getLlmConfig(llmConfigOverride);
   if (!config) {
     const runtimeMeta = {
       ...(baseResponse.structured.runtime_meta || {}),
@@ -953,6 +954,378 @@ async function generateAiTrainingSkillResponse({
   }
 }
 
+function buildGeneralChatSystemPrompt(session = {}) {
+  return [
+    '你是组织中台 AI 训练台里的通用助手。',
+    '用户未指定 Skill 时，请像通用 ChatGPT 助手一样直接、自然、完整地回答。',
+    '可以处理业务、产品、技术、写作、分析和日常问题，不要强行套用固定业务模板。',
+    '当事实或数据不足时明确说明限制，不要编造内部数据、文档内容或执行结果。',
+    `当前会话场景：${normalizeText(session.scene_label || session.scene_code || '通用聊天')}。`,
+    `当前业务线：${normalizeText(session.business_line || '未指定')}。`,
+  ].filter(Boolean).join('\n');
+}
+
+function normalizeRecentChatMessages(recentMessages = []) {
+  return recentMessages
+    .slice(-8)
+    .map((item) => ({
+      role: item?.role === 'assistant' ? 'assistant' : 'user',
+      content: normalizeText(item?.content || item?.content_text || ''),
+    }))
+    .filter((item) => item.content);
+}
+
+async function generateAiTrainingChatResponse({
+  session,
+  promptText,
+  recentMessages = [],
+  llmConfigOverride = null,
+}) {
+  const config = getLlmConfig(llmConfigOverride);
+  if (!config) {
+    throw new Error('系统模型尚未配置 API Key，通用聊天无法调用 ChatGPT/OpenAI 兼容接口。请先在系统设置中完成模型配置。');
+  }
+
+  const messages = [
+    { role: 'system', content: buildGeneralChatSystemPrompt(session) },
+    ...normalizeRecentChatMessages(recentMessages),
+    { role: 'user', content: normalizeText(promptText) },
+  ];
+  const completion = await postChatCompletion(config, { messages }, false);
+  const contentText = normalizeText(completion?.choices?.[0]?.message?.content || '');
+  if (!contentText) throw new Error('模型接口返回了空回复，请重试');
+
+  const modelName = completion?.model || config.model;
+  const analysisProcess = {
+    summary: '本轮未指定 Skill，已按自由聊天模式调用系统模型，并结合最近会话上下文生成回复。',
+    steps: [
+      '路由判断：未检测到已绑定或显式指定的 Skill。',
+      `上下文装载：携带 ${normalizeRecentChatMessages(recentMessages).length} 条最近消息。`,
+      `模型调用：通过 ${formatLlmBaseUrlForDisplay(config.baseUrl)} 调用 ${modelName}。`,
+      '结果检查：确认模型返回非空内容后生成最终回复。',
+    ],
+    trace_tags: ['自由聊天', `模型:${modelName}`, `上下文:${normalizeRecentChatMessages(recentMessages).length}条`],
+    llm_backed: true,
+  };
+  const summary = clipText(contentText.replace(/\n+/g, ' '), 160);
+
+  return {
+    contentText,
+    structured: {
+      summary,
+      evidence: [],
+      risk_reminders: [],
+      actions: [],
+      follow_up_questions: [],
+      confidence: null,
+      references: [],
+      analysis_process: analysisProcess,
+      runtime_meta: {
+        mode: 'llm_chat',
+        execution_mode: 'chat',
+        skill_id: null,
+        skill_name: null,
+        skill_version_id: null,
+        skill_version_no: null,
+        model_name: modelName,
+        llm_enabled: true,
+        model_config_source: config.source || 'env',
+        candidate_selected: 'llm',
+      },
+    },
+    evidence: [],
+    actions: [],
+    confidence: null,
+    analysis_process: analysisProcess,
+    runtime_mode: 'llm_chat',
+    llm_usage: completion?.usage || null,
+  };
+}
+
+function extractSignificantNumbers(value) {
+  const matches = String(value || '').match(/[-+]?\d[\d,]*(?:\.\d+)?\s*(?:%|万|亿)?/g) || [];
+  return matches.map((raw) => {
+    const normalizedRaw = raw.trim();
+    const isPercent = normalizedRaw.endsWith('%');
+    const unit = normalizedRaw.endsWith('亿') ? '亿' : normalizedRaw.endsWith('万') ? '万' : '';
+    const multiplier = unit === '亿' ? 100000000 : unit === '万' ? 10000 : 1;
+    const numeric = Number(normalizedRaw.replace(/,/g, '').replace(/[%万亿]$/, '').trim()) * multiplier;
+    return { raw: normalizedRaw, numeric, isPercent };
+  }).filter((item) => {
+    if (!Number.isFinite(item.numeric)) return false;
+    if (item.isPercent) return true;
+    return Math.abs(item.numeric) >= 20 || String(item.raw).includes('.');
+  });
+}
+
+function numbersAreEquivalent(left, right) {
+  if (left.isPercent !== right.isPercent) return false;
+  const tolerance = Math.max(0.02, Math.abs(left.numeric) * 0.001);
+  return Math.abs(left.numeric - right.numeric) <= tolerance;
+}
+
+function validateAiTrainingEnhancedResponse({ baseResponse, promptText, enhancedText }) {
+  const trustedText = [
+    promptText,
+    baseResponse?.contentText,
+    JSON.stringify(baseResponse?.structured?.data_total || {}),
+    JSON.stringify(baseResponse?.structured?.data_preview || []),
+    ...(baseResponse?.evidence || []),
+  ].join('\n');
+  const trustedNumbers = extractSignificantNumbers(trustedText);
+  const enhancedNumbers = extractSignificantNumbers(enhancedText);
+  const unverifiedNumbers = enhancedNumbers.filter((candidate) => (
+    !trustedNumbers.some((trusted) => numbersAreEquivalent(candidate, trusted))
+  ));
+  const issues = [];
+  if (!normalizeText(enhancedText)) issues.push('模型增强结果为空');
+  if (unverifiedNumbers.length > 0) {
+    issues.push(`模型增强结果包含未验证数字：${unverifiedNumbers.slice(0, 5).map((item) => item.raw).join('、')}`);
+  }
+  return {
+    passed: issues.length === 0,
+    issues,
+    trusted_number_count: trustedNumbers.length,
+    checked_number_count: enhancedNumbers.length,
+  };
+}
+
+function scoreAiTrainingCandidate(structured = {}, contentText = '') {
+  const evidenceCount = Array.isArray(structured.evidence) ? structured.evidence.length : 0;
+  const actionCount = Array.isArray(structured.actions) ? structured.actions.length : 0;
+  const riskCount = Array.isArray(structured.risk_reminders) ? structured.risk_reminders.length : 0;
+  const lengthScore = Math.min(12, Math.round(normalizeText(contentText).length / 120));
+  return Math.min(99, 48 + Math.min(evidenceCount, 4) * 6 + Math.min(actionCount, 4) * 6 + Math.min(riskCount, 3) * 3 + lengthScore);
+}
+
+function buildSkillReviewSystemPrompt(skill, version) {
+  return [
+    '你是业务 Skill 输出审校器。你的任务是增强表达、补全归因和提高可执行性，不是重新编造事实。',
+    'Skill 输出、数据预览和证据中的日期、金额、比例、订单量等数值属于已验证事实，必须保持一致。',
+    '不得引入输入和 Skill 结果中不存在的业务数字、应用、媒体、广告位或文档结论。',
+    '请严格输出 JSON 对象，不要输出额外解释。',
+    'JSON 字段：final_answer, summary, evidence, risk_reminders, actions, confidence, review_notes。',
+    'evidence、risk_reminders、actions、review_notes 必须是字符串数组。',
+    `当前 Skill：${normalizeText(skill?.name || skill?.skill_code || '未命名 Skill')}。`,
+    normalizeText(version?.system_prompt || ''),
+    normalizeText(version?.guardrails_text || ''),
+  ].filter(Boolean).join('\n');
+}
+
+async function enhanceAiTrainingSkillResponse({
+  session,
+  skill,
+  version,
+  promptText,
+  skillResponse,
+  recentMessages = [],
+  llmConfigOverride = null,
+}) {
+  const config = getLlmConfig(llmConfigOverride);
+  const baseStructured = skillResponse?.structured || {};
+  const baseRuntimeMeta = baseStructured.runtime_meta || {};
+  const baseScore = scoreAiTrainingCandidate(baseStructured, skillResponse?.contentText || '');
+  const baseSteps = Array.isArray(skillResponse?.analysis_process?.steps)
+    ? skillResponse.analysis_process.steps
+    : [];
+
+  if (!config) {
+    const analysisProcess = {
+      ...(skillResponse?.analysis_process || {}),
+      summary: '已完成 Skill 执行，但系统模型未配置，当前保留 Skill 原结果。',
+      steps: [
+        ...baseSteps,
+        '模型审校：系统模型缺少 API Key，未执行 ChatGPT/OpenAI 兼容接口审校。',
+        '结果选择：保留通过 Skill 生成的原始结果。',
+      ],
+      trace_tags: [...(skillResponse?.analysis_process?.trace_tags || []), '模型未配置', '采用Skill结果'],
+      model_error: 'missing_llm_api_key',
+      llm_backed: false,
+    };
+    return {
+      ...skillResponse,
+      structured: {
+        ...baseStructured,
+        analysis_process: analysisProcess,
+        runtime_meta: {
+          ...baseRuntimeMeta,
+          mode: 'skill_only',
+          execution_mode: 'skill',
+          candidate_selected: 'skill',
+          candidate_scores: { skill: baseScore, enhanced: null },
+          llm_enabled: false,
+        },
+      },
+      analysis_process: analysisProcess,
+      runtime_mode: 'skill_only',
+      llm_usage: null,
+      model_error: 'missing_llm_api_key',
+    };
+  }
+
+  const messages = [
+    { role: 'system', content: buildSkillReviewSystemPrompt(skill, version) },
+    {
+      role: 'user',
+      content: JSON.stringify({
+        session: {
+          scene_code: session?.scene_code || null,
+          business_line: session?.business_line || null,
+          role_scope: session?.role_scope || null,
+        },
+        user_prompt: promptText,
+        skill: {
+          code: skill?.skill_code || null,
+          name: skill?.name || null,
+          version_no: version?.version_no || null,
+        },
+        verified_skill_result: {
+          content_text: skillResponse?.contentText || '',
+          summary: baseStructured.summary || '',
+          evidence: baseStructured.evidence || skillResponse?.evidence || [],
+          risk_reminders: baseStructured.risk_reminders || [],
+          actions: baseStructured.actions || skillResponse?.actions || [],
+          data_preview: baseStructured.data_preview || [],
+          data_total: baseStructured.data_total || null,
+          references: baseStructured.references || [],
+        },
+        recent_messages: normalizeRecentChatMessages(recentMessages).slice(-4),
+      }, null, 2),
+    },
+  ];
+
+  try {
+    let completion;
+    try {
+      completion = await postChatCompletion(config, { messages }, true);
+    } catch {
+      completion = await postChatCompletion(config, { messages }, false);
+    }
+    const modelName = completion?.model || config.model;
+    const content = normalizeText(completion?.choices?.[0]?.message?.content || '');
+    const payload = tryParseJsonPayload(content);
+    if (!payload || !normalizeText(payload.final_answer)) {
+      throw new Error('skill_review_response_not_json');
+    }
+
+    const enhancedStructured = {
+      ...baseStructured,
+      summary: normalizeText(payload.summary || baseStructured.summary || payload.final_answer),
+      evidence: Array.isArray(payload.evidence) && payload.evidence.length > 0
+        ? payload.evidence.map(normalizeText).filter(Boolean)
+        : (baseStructured.evidence || skillResponse?.evidence || []),
+      risk_reminders: Array.isArray(payload.risk_reminders)
+        ? payload.risk_reminders.map(normalizeText).filter(Boolean)
+        : (baseStructured.risk_reminders || []),
+      actions: Array.isArray(payload.actions) && payload.actions.length > 0
+        ? payload.actions.map(normalizeText).filter(Boolean)
+        : (baseStructured.actions || skillResponse?.actions || []),
+      confidence: Math.max(0, Math.min(100, Number(payload.confidence || baseStructured.confidence || skillResponse?.confidence || 0))),
+    };
+    const enhancedText = normalizeText(payload.final_answer);
+    const validation = validateAiTrainingEnhancedResponse({
+      baseResponse: skillResponse,
+      promptText,
+      enhancedText: [
+        enhancedText,
+        enhancedStructured.summary,
+        ...(enhancedStructured.evidence || []),
+        ...(enhancedStructured.risk_reminders || []),
+        ...(enhancedStructured.actions || []),
+      ].join('\n'),
+    });
+    const enhancedScore = validation.passed ? scoreAiTrainingCandidate(enhancedStructured, enhancedText) : 0;
+    const useEnhanced = validation.passed && enhancedScore >= Math.max(60, baseScore - 5);
+    const selected = useEnhanced ? 'llm_enhanced' : 'skill';
+    const selectedStructured = useEnhanced ? enhancedStructured : baseStructured;
+    const selectedText = useEnhanced ? enhancedText : skillResponse.contentText;
+    const analysisProcess = {
+      ...(skillResponse?.analysis_process || {}),
+      summary: useEnhanced
+        ? '已完成 Skill 执行、模型审校和事实校验，最终采用模型增强结果。'
+        : '已完成 Skill 执行和模型审校；增强结果未通过择优条件，最终保留 Skill 原结果。',
+      steps: [
+        ...baseSteps,
+        `模型审校：通过 ${formatLlmBaseUrlForDisplay(config.baseUrl)} 调用 ${modelName}，基于 Skill 事实补强表达与动作。`,
+        `事实校验：核对 ${validation.checked_number_count} 个增强结果数字，${validation.passed ? '未发现新增未验证数字' : validation.issues.join('；')}。`,
+        `候选评分：Skill ${baseScore} 分，模型增强 ${enhancedScore} 分。`,
+        `结果选择：${useEnhanced ? '采用模型增强结果' : '保留 Skill 原结果'}。`,
+      ],
+      trace_tags: [
+        ...(skillResponse?.analysis_process?.trace_tags || []),
+        `模型审校:${modelName}`,
+        validation.passed ? '事实校验通过' : '事实校验未通过',
+        useEnhanced ? '采用增强结果' : '采用Skill结果',
+      ],
+      review_notes: Array.isArray(payload.review_notes) ? payload.review_notes.map(normalizeText).filter(Boolean) : [],
+      validation,
+      llm_backed: true,
+    };
+
+    return {
+      ...skillResponse,
+      contentText: selectedText,
+      structured: {
+        ...selectedStructured,
+        analysis_process: analysisProcess,
+        runtime_meta: {
+          ...baseRuntimeMeta,
+          mode: useEnhanced ? 'skill_llm_hybrid' : 'skill_llm_fallback',
+          execution_mode: 'skill',
+          model_name: modelName,
+          llm_enabled: true,
+          model_config_source: config.source || 'env',
+          candidate_selected: selected,
+          candidate_scores: { skill: baseScore, enhanced: enhancedScore },
+          validation_passed: validation.passed,
+        },
+      },
+      evidence: selectedStructured.evidence || skillResponse.evidence || [],
+      actions: selectedStructured.actions || skillResponse.actions || [],
+      confidence: selectedStructured.confidence || skillResponse.confidence || null,
+      analysis_process: analysisProcess,
+      runtime_mode: useEnhanced ? 'skill_llm_hybrid' : 'skill_llm_fallback',
+      llm_usage: completion?.usage || null,
+      model_error: validation.passed ? null : validation.issues.join('；'),
+    };
+  } catch (error) {
+    const analysisProcess = {
+      ...(skillResponse?.analysis_process || {}),
+      summary: 'Skill 已执行完成，但模型审校失败，当前保留 Skill 原结果。',
+      steps: [
+        ...baseSteps,
+        `模型审校失败：${normalizeText(error.message || '未知错误')}。`,
+        '结果选择：保留 Skill 原结果，避免审校异常影响已验证事实。',
+      ],
+      trace_tags: [...(skillResponse?.analysis_process?.trace_tags || []), '模型审校回退', '采用Skill结果'],
+      model_error: normalizeText(error.message || 'skill_review_failed'),
+      llm_backed: false,
+    };
+    return {
+      ...skillResponse,
+      structured: {
+        ...baseStructured,
+        analysis_process: analysisProcess,
+        runtime_meta: {
+          ...baseRuntimeMeta,
+          mode: 'skill_llm_fallback',
+          execution_mode: 'skill',
+          model_name: config.model,
+          llm_enabled: true,
+          model_config_source: config.source || 'env',
+          candidate_selected: 'skill',
+          candidate_scores: { skill: baseScore, enhanced: null },
+          validation_passed: false,
+        },
+      },
+      analysis_process: analysisProcess,
+      runtime_mode: 'skill_llm_fallback',
+      llm_usage: null,
+      model_error: normalizeText(error.message || 'skill_review_failed'),
+    };
+  }
+}
+
 function computeKeywordOverlapScore(sourceText, targetText) {
   const sourceKeywords = buildKeywordSet(sourceText);
   const targetKeywords = buildKeywordSet(targetText);
@@ -1026,7 +1399,9 @@ function estimateTokenCount(value) {
 }
 
 module.exports = {
+  enhanceAiTrainingSkillResponse,
   extractPromptSignals,
+  generateAiTrainingChatResponse,
   generateAiTrainingSkillResponse,
   getLlmRuntimeStatus,
   inferSectionTitles,
@@ -1034,4 +1409,5 @@ module.exports = {
   scoreAiTrainingEvalOutput,
   testLlmConnection,
   estimateTokenCount,
+  validateAiTrainingEnhancedResponse,
 };

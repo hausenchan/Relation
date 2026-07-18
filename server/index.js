@@ -32,7 +32,9 @@ const {
   syncDistillationAiSuggestionFeed,
 } = require('./lib/aiSuggestionStore');
 const {
+  enhanceAiTrainingSkillResponse,
   estimateTokenCount,
+  generateAiTrainingChatResponse,
   generateAiTrainingSkillResponse,
   getLlmRuntimeStatus,
   inferSectionTitles,
@@ -11295,16 +11297,41 @@ function buildAiTrainingVisibilityFilter(user, alias = 'ats') {
   };
 }
 
+function buildAiTrainingSkillVisibilityFilter(user, alias = 'sk') {
+  const ids = getAiTrainingVisibleUserIds(user);
+  if (ids === null) return { sql: '', params: [] };
+  const prefix = alias ? `${alias}.` : '';
+  const placeholders = ids.map(() => '?').join(',');
+  return {
+    sql: ` AND (${prefix}visibility_scope = 'team' OR ${prefix}owner_user_id IN (${placeholders}))`,
+    params: ids,
+  };
+}
+
 function normalizeAiTrainingSessionRow(row) {
   const base = decryptRow('ai_training_sessions', row);
+  const extraJson = parseJsonSafe(base?.extra_json, null);
+  const legacyAutoBinding = extraJson?.skill_binding_source === 'auto_match';
+  const contextSnapshot = parseJsonSafe(base?.context_snapshot_json, null);
+  const normalizedContextSnapshot = legacyAutoBinding && contextSnapshot
+    ? {
+      ...contextSnapshot,
+      skill_id: null,
+      skill_version_id: null,
+      skill_name: null,
+    }
+    : contextSnapshot;
   return {
     ...base,
-    skill_id: base?.skill_id ? Number(base.skill_id) : null,
-    skill_version_id: base?.skill_version_id ? Number(base.skill_version_id) : null,
+    skill_id: legacyAutoBinding ? null : (base?.skill_id ? Number(base.skill_id) : null),
+    skill_version_id: legacyAutoBinding ? null : (base?.skill_version_id ? Number(base.skill_version_id) : null),
+    skill_name: legacyAutoBinding ? null : (base?.skill_name || null),
+    skill_version_no: legacyAutoBinding ? null : (base?.skill_version_no || null),
+    skill_version_label: legacyAutoBinding ? null : (base?.skill_version_label || null),
     quality_score: base?.quality_score === null || base?.quality_score === undefined ? null : Number(base.quality_score),
     last_score: base?.last_score === null || base?.last_score === undefined ? null : Number(base.last_score),
-    context_snapshot_json: parseJsonSafe(base?.context_snapshot_json, null),
-    extra_json: parseJsonSafe(base?.extra_json, null),
+    context_snapshot_json: normalizedContextSnapshot,
+    extra_json: extraJson,
     message_count: Number(base?.message_count || 0),
   };
 }
@@ -12003,7 +12030,7 @@ function buildAiTrainingSkillDraftFromCase(caseItem) {
 }
 
 function getAiTrainingSkillDetailForUser(skillId, user) {
-  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(user, 'sk');
   const skillRow = db.prepare(`
     SELECT
       sk.*,
@@ -12292,7 +12319,7 @@ function createAiTrainingSkillDraftFromCaseRow(caseRow, actorUserId) {
 
 function listAiTrainingSkillsForUser(user, query = {}) {
   const { status, scene_code, business_line, keyword, limit = 100 } = query;
-  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(user, 'sk');
   let sql = `
     SELECT
       sk.*,
@@ -12363,7 +12390,7 @@ function listAiTrainingSkillsForUser(user, query = {}) {
 
 function listAiTrainingEvalRunsForUser(user, query = {}) {
   const { status, limit = 50 } = query;
-  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(user, 'sk');
   let sql = `
     SELECT
       er.*,
@@ -12385,10 +12412,6 @@ function listAiTrainingEvalRunsForUser(user, query = {}) {
   sql += ' ORDER BY er.started_at DESC, er.id DESC LIMIT ?';
   params.push(Math.min(Number(limit) || 50, 200));
   return db.prepare(sql).all(...params).map(normalizeAiTrainingEvalRunRow);
-}
-
-function normalizeAiTrainingMatchValue(value) {
-  return String(value || '').trim().toLowerCase();
 }
 
 function getAiTrainingRuntimeSkillBundle(skillId, versionId = null) {
@@ -12454,7 +12477,7 @@ function getAiTrainingRuntimeSkillBundle(skillId, versionId = null) {
 
 function listAiTrainingPublishedSkillCandidatesForUser(user, filters = {}) {
   const { skillId = null, scene_code = '', business_line = '', limit = 80 } = filters;
-  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(user, 'sk');
   let sql = `
     SELECT
       sk.*,
@@ -12493,109 +12516,80 @@ function listAiTrainingPublishedSkillCandidatesForUser(user, filters = {}) {
   return db.prepare(sql).all(...params).map(normalizeAiTrainingSkillRow);
 }
 
-function scoreAiTrainingSkillMatch(sessionLike, skill) {
-  if (!skill) return -1;
-  let score = 0;
-  const sceneCode = normalizeAiTrainingMatchValue(sessionLike?.scene_code);
-  const businessLine = normalizeAiTrainingMatchValue(sessionLike?.business_line);
-  const businessSide = normalizeAiTrainingMatchValue(sessionLike?.business_side);
-  const budgetSide = normalizeAiTrainingMatchValue(sessionLike?.budget_side);
-  const roleScope = normalizeAiTrainingMatchValue(sessionLike?.role_scope);
-
-  if (sceneCode && normalizeAiTrainingMatchValue(skill.scene_code) === sceneCode) score += 82;
-  else if (normalizeAiTrainingMatchValue(skill.scene_code) === 'general_chat') score += 18;
-
-  if (businessLine && normalizeAiTrainingMatchValue(skill.business_line) === businessLine) score += 42;
-  else if (!normalizeAiTrainingMatchValue(skill.business_line)) score += 8;
-
-  if (businessSide && normalizeAiTrainingMatchValue(skill.business_side) === businessSide) score += 16;
-  if (budgetSide && normalizeAiTrainingMatchValue(skill.budget_side) === budgetSide) score += 12;
-  if (roleScope && normalizeAiTrainingMatchValue(skill.role_scope) === roleScope) score += 22;
-
-  score += Math.min(12, Math.round(Number(skill.call_count || 0) / 5));
-  if (skill.publish_version_id) score += 10;
-  return score;
+function escapeAiTrainingRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function resolveAiTrainingSkillBindingForSession(sessionLike, user, explicitSkillId = null) {
-  if (explicitSkillId) {
-    const targetSkill = listAiTrainingPublishedSkillCandidatesForUser(user, { skillId: explicitSkillId, limit: 1 })[0];
-    if (!targetSkill) {
-      throw new Error('选中的 Skill 不存在，或暂未发布');
-    }
-    const bundle = getAiTrainingRuntimeSkillBundle(targetSkill.id, targetSkill.publish_version_id);
-    if (!bundle?.version) {
-      throw new Error('选中的 Skill 缺少可运行的已发布版本');
-    }
-    return {
-      ...bundle,
-      auto_matched: false,
-      match_score: 999,
-    };
-  }
+function normalizeAiTrainingSkillInvocationAlias(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-');
+}
 
-  const candidates = listAiTrainingPublishedSkillCandidatesForUser(user, {
-    scene_code: sessionLike?.scene_code,
-    business_line: sessionLike?.business_line,
-    limit: 80,
-  });
-  if (!candidates.length) return null;
+function findAiTrainingSkillInvocationIndex(promptText, skill) {
+  const raw = String(promptText || '');
+  const normalized = raw.toLowerCase();
+  const skillCode = normalizeAiTrainingSkillInvocationAlias(skill?.skill_code);
+  const skillCodePattern = skillCode
+    .split('-')
+    .map(escapeAiTrainingRegex)
+    .join('[-_]');
+  const codePattern = skillCode
+    ? new RegExp(`(?:@|使用\\s*|调用\\s*|执行\\s*|用\\s*)?${skillCodePattern}`, 'i')
+    : null;
+  const codeMatch = codePattern ? normalized.match(codePattern) : null;
+  const codeIndex = codeMatch?.index ?? -1;
 
-  const scoredCandidates = candidates
-    .map((skill) => ({ skill, match_score: scoreAiTrainingSkillMatch(sessionLike, skill) }))
-    .sort((a, b) => b.match_score - a.match_score);
-  const best = scoredCandidates[0];
-  if (!best?.skill || Number(best.match_score || 0) < 70) {
-    return null;
-  }
+  const skillName = String(skill?.name || '').trim();
+  const namePattern = skillName
+    ? new RegExp(`(?:@|使用\\s*|调用\\s*|执行\\s*|用\\s*)${escapeAiTrainingRegex(skillName)}`, 'i')
+    : null;
+  const nameMatch = namePattern ? raw.match(namePattern) : null;
+  const nameIndex = nameMatch?.index ?? -1;
 
-  const bundle = getAiTrainingRuntimeSkillBundle(best.skill.id, best.skill.publish_version_id);
+  if (codeIndex < 0) return nameIndex;
+  if (nameIndex < 0) return codeIndex;
+  return Math.min(codeIndex, nameIndex);
+}
+
+function resolveAiTrainingSkillBindingFromPrompt(promptText, user) {
+  const candidates = listAiTrainingPublishedSkillCandidatesForUser(user, { limit: 200 });
+  const matched = candidates
+    .map((skill) => ({ skill, index: findAiTrainingSkillInvocationIndex(promptText, skill) }))
+    .filter((item) => item.index >= 0)
+    .sort((left, right) => left.index - right.index)[0];
+  if (!matched?.skill) return null;
+  const bundle = getAiTrainingRuntimeSkillBundle(matched.skill.id, matched.skill.publish_version_id);
   if (!bundle?.version) return null;
   return {
     ...bundle,
-    auto_matched: true,
-    match_score: best.match_score,
+    auto_matched: false,
+    invocation_source: 'message',
+    invocation_index: matched.index,
+    match_score: 999,
   };
 }
 
-function buildAiTrainingFallbackSkillBundle(sessionLike) {
-  const sceneLabel = sessionLike?.scene_label || getAiTrainingSceneLabel(sessionLike?.scene_code);
-  const businessLine = sessionLike?.business_line || '当前业务线';
+function isZhixiaoMvpSkillBinding(binding) {
+  return ['zhixiao_dashboard_analysis', 'zhixiao_ad_ops_strategy']
+    .includes(String(binding?.skill?.skill_code || '').trim());
+}
+
+function resolveAiTrainingSkillBindingForSession(sessionLike, user, explicitSkillId = null) {
+  if (!explicitSkillId) return null;
+  const targetSkill = listAiTrainingPublishedSkillCandidatesForUser(user, { skillId: explicitSkillId, limit: 1 })[0];
+  if (!targetSkill) {
+    throw new Error('选中的 Skill 不存在，或暂未发布');
+  }
+  const bundle = getAiTrainingRuntimeSkillBundle(targetSkill.id, targetSkill.publish_version_id);
+  if (!bundle?.version) {
+    throw new Error('选中的 Skill 缺少可运行的已发布版本');
+  }
   return {
-    skill: {
-      id: null,
-      name: `${sceneLabel} 系统分析助手`,
-      scene_code: sessionLike?.scene_code || 'general_chat',
-      business_line: sessionLike?.business_line || null,
-      business_side: sessionLike?.business_side || null,
-      budget_side: sessionLike?.budget_side || null,
-      role_scope: sessionLike?.role_scope || null,
-    },
-    version: {
-      id: null,
-      version_no: 'system-default',
-      version_label: '系统默认模板',
-      system_prompt: [
-        `你是一个聚焦 ${sceneLabel} 的业务分析助手。`,
-        `业务线：${businessLine}。`,
-        '输出必须结构化，至少包含：结论摘要、核心证据、风险提醒、下一步建议。',
-      ].join('\n'),
-      input_schema_json: {
-        required_fields: ['业务对象', '时间范围', '角色视角'],
-        optional_fields: ['对照窗口', '补充背景'],
-      },
-      output_schema_json: {
-        sections: ['结论摘要', '核心证据', '风险提醒', '下一步建议'],
-        style: 'bullet_list',
-      },
-      reasoning_steps_text: '1. 统一口径；2. 抽证据；3. 给结论；4. 落动作。',
-      output_template_text: '结论摘要\n- \n\n核心证据\n- \n\n风险提醒\n- \n\n下一步建议\n- ',
-      guardrails_text: '禁止只给结论不写证据；时间范围缺失时优先追问。',
-    },
-    hooks: [],
-    examples: [],
+    ...bundle,
     auto_matched: false,
-    match_score: 0,
+    match_score: 999,
   };
 }
 
@@ -13535,7 +13529,7 @@ function buildAiTrainingStatsForUser(user) {
     skill_count: Number(row.skill_count || 0),
   }));
 
-  const visibility = buildAiTrainingVisibilityFilter(user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(user, 'sk');
   const skillRanking = db.prepare(`
     SELECT
       sk.id,
@@ -13937,14 +13931,16 @@ app.post('/api/agents/ai-training/sessions', canWrite, (req, res) => {
     scene_label: scene_label || getAiTrainingSceneLabel(scene_code),
   };
   let skillBinding = null;
-  try {
-    skillBinding = resolveAiTrainingSkillBindingForSession(contextSnapshot, req.user, skill_id || null);
-  } catch (error) {
-    return res.status(400).json({ error: error.message || 'Skill 绑定失败' });
+  if (skill_id) {
+    try {
+      skillBinding = resolveAiTrainingSkillBindingForSession(contextSnapshot, req.user, skill_id);
+    } catch (error) {
+      return res.status(400).json({ error: error.message || 'Skill 绑定失败' });
+    }
   }
   const extraJson = {
     skill_binding_source: skillBinding?.skill?.id
-      ? (skillBinding.auto_matched ? 'auto_match' : 'manual_select')
+      ? 'manual_select'
       : 'unbound',
     skill_match_score: skillBinding?.match_score || 0,
   };
@@ -14046,58 +14042,84 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
     if (!contentText) return res.status(400).json({ error: '消息内容不能为空' });
 
     const session = normalizeAiTrainingSessionRow(sessionRow);
-    let skillBinding = null;
-    if (session.skill_id) {
+    let skillBinding = resolveAiTrainingSkillBindingFromPrompt(contentText, req.user);
+    const sessionSkillWasExplicit = session.skill_id
+      && session.extra_json?.skill_binding_source !== 'auto_match';
+    if (!skillBinding && sessionSkillWasExplicit) {
       try {
         skillBinding = resolveAiTrainingSkillBindingForSession(session, req.user, session.skill_id);
       } catch (error) {
-        skillBinding = null;
+        return res.status(400).json({ error: error.message || '会话绑定的 Skill 当前不可用' });
       }
     }
-    if (!skillBinding) {
-      skillBinding = resolveAiTrainingSkillBindingForSession(session, req.user, null);
-    }
-    const runtimeBundle = skillBinding || buildAiTrainingFallbackSkillBundle(session);
+    const runtimeBundle = skillBinding || null;
     const recentMessages = getAiTrainingRecentMessagesForRuntime(session.id, 6);
-    const suggestionFeed = getCurrentAiSuggestionFeed(db, session.business_line || null);
     const llmConfigOverride = getSystemAiModelConfig();
-    const matchedSuggestions = selectRelevantSuggestions(
-      suggestionFeed,
-      {
-        ...session,
-        scene_label: session.scene_label || getAiTrainingSceneLabel(session.scene_code),
-      },
-      contentText,
-      { limit: 3 },
-    );
+    const suggestionFeed = runtimeBundle
+      ? getCurrentAiSuggestionFeed(db, session.business_line || null)
+      : { suggestions: [] };
+    const matchedSuggestions = runtimeBundle
+      ? selectRelevantSuggestions(
+        suggestionFeed,
+        {
+          ...session,
+          scene_label: session.scene_label || getAiTrainingSceneLabel(session.scene_code),
+        },
+        contentText,
+        { limit: 3 },
+      )
+      : [];
 
     const runtimeSession = {
       ...session,
       scene_label: session.scene_label || getAiTrainingSceneLabel(session.scene_code),
     };
     const runtimeStartedAt = Date.now();
-    let runtimeResponse = buildZhixiaoAppRevenueRuntimeResponse({
-      session: runtimeSession,
-      skill: runtimeBundle.skill,
-      version: runtimeBundle.version,
-      promptText: contentText,
-    });
-    if (!runtimeResponse) {
-      runtimeResponse = buildZhixiaoBusinessGrowthRuntimeResponse({
+    let runtimeResponse;
+    if (!runtimeBundle) {
+      runtimeResponse = await generateAiTrainingChatResponse({
         session: runtimeSession,
-        skill: runtimeBundle.skill,
-        version: runtimeBundle.version,
         promptText: contentText,
+        recentMessages,
+        llmConfigOverride,
       });
-    }
-    if (!runtimeResponse) {
-      runtimeResponse = await generateAiTrainingSkillResponse({
+    } else {
+      let skillResponse = null;
+      if (isZhixiaoMvpSkillBinding(runtimeBundle)) {
+        skillResponse = buildZhixiaoAppRevenueRuntimeResponse({
+          session: runtimeSession,
+          skill: runtimeBundle.skill,
+          version: runtimeBundle.version,
+          promptText: contentText,
+        });
+        if (!skillResponse) {
+          skillResponse = buildZhixiaoBusinessGrowthRuntimeResponse({
+            session: runtimeSession,
+            skill: runtimeBundle.skill,
+            version: runtimeBundle.version,
+            promptText: contentText,
+          });
+        }
+      }
+      if (!skillResponse) {
+        skillResponse = await generateAiTrainingSkillResponse({
+          session: runtimeSession,
+          skill: runtimeBundle.skill,
+          version: runtimeBundle.version,
+          promptText: contentText,
+          matchedSuggestions,
+          examples: runtimeBundle.examples || [],
+          recentMessages,
+          llmConfigOverride,
+          forceDeterministic: true,
+        });
+      }
+      runtimeResponse = await enhanceAiTrainingSkillResponse({
         session: runtimeSession,
         skill: runtimeBundle.skill,
         version: runtimeBundle.version,
         promptText: contentText,
-        matchedSuggestions,
-        examples: runtimeBundle.examples || [],
+        skillResponse,
         recentMessages,
         llmConfigOverride,
       });
@@ -14120,11 +14142,11 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
       binding: runtimeBundle,
       runtimeResponse,
     });
-    const sourceKind = runtimeResponse?.runtime_mode === 'local_fact'
-      ? 'local_fact'
+    const sourceKind = runtimeResponse?.runtime_mode === 'llm_chat'
+      ? 'llm'
       : runtimeBundle?.skill?.id
-      ? (runtimeResponse?.runtime_mode === 'llm' ? 'llm' : 'skill_runtime')
-      : 'session_runtime';
+        ? 'skill_runtime'
+        : 'session_runtime';
 
     const transaction = db.transaction(() => {
       const userEnc = encryptRow('ai_training_messages', {
@@ -14181,8 +14203,12 @@ app.post('/api/agents/ai-training/sessions/:id/messages', canWrite, async (req, 
         req.user.id,
       );
 
-      const shouldSyncSkill = Number(session.skill_id || 0) !== Number(runtimeBundle?.skill?.id || 0)
-        || Number(session.skill_version_id || 0) !== Number(runtimeBundle?.version?.id || 0);
+      const shouldSyncSkill = Boolean(
+        session.skill_id
+        && runtimeBundle?.skill?.id
+        && Number(session.skill_id) === Number(runtimeBundle.skill.id)
+        && Number(session.skill_version_id || 0) !== Number(runtimeBundle?.version?.id || 0)
+      );
       if (shouldSyncSkill) {
         syncAiTrainingSessionSkillBinding(session.id, runtimeBundle);
       }
@@ -14539,7 +14565,7 @@ app.get('/api/agents/ai-training/skills/:id', (req, res) => {
 });
 
 app.post('/api/agents/ai-training/skills/:id/versions/copy', canWrite, (req, res) => {
-  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(req.user, 'sk');
   const skillRow = db.prepare(`
     SELECT *
     FROM ai_training_skills sk
@@ -14571,7 +14597,7 @@ app.put('/api/agents/ai-training/skill-versions/:id', canWrite, (req, res) => {
   const skillRow = db.prepare('SELECT * FROM ai_training_skills WHERE id = ?').get(versionRow.skill_id);
   if (!skillRow) return res.status(404).json({ error: 'Skill 不存在' });
 
-  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(req.user, 'sk');
   const visibleSkillRow = db.prepare(`
     SELECT *
     FROM ai_training_skills sk
@@ -14594,7 +14620,7 @@ app.put('/api/agents/ai-training/skill-versions/:id', canWrite, (req, res) => {
 
 app.post('/api/agents/ai-training/skills/:id/evaluate', canWrite, async (req, res) => {
   try {
-    const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+    const visibility = buildAiTrainingSkillVisibilityFilter(req.user, 'sk');
     const skillRow = db.prepare(`
       SELECT *
       FROM ai_training_skills sk
@@ -14629,7 +14655,7 @@ app.post('/api/agents/ai-training/skills/:id/evaluate', canWrite, async (req, re
 });
 
 app.post('/api/agents/ai-training/skills/:id/publish', canWrite, (req, res) => {
-  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(req.user, 'sk');
   const skillRow = db.prepare(`
     SELECT *
     FROM ai_training_skills sk
@@ -14651,7 +14677,7 @@ app.post('/api/agents/ai-training/skills/:id/publish', canWrite, (req, res) => {
 });
 
 app.post('/api/agents/ai-training/skills/:id/rollback', canWrite, (req, res) => {
-  const visibility = buildAiTrainingVisibilityFilter(req.user, 'sk');
+  const visibility = buildAiTrainingSkillVisibilityFilter(req.user, 'sk');
   const skillRow = db.prepare(`
     SELECT *
     FROM ai_training_skills sk
