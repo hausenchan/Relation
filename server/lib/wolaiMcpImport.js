@@ -565,7 +565,7 @@ function applyInlineMarks(html, marks) {
   if (hasInlineMark(marks, /underline|下划线/i)) output = `<u>${output}</u>`;
   if (hasInlineMark(marks, /strike|strikethrough|delete|删除线/i)) output = `<s>${output}</s>`;
   if (hasInlineMark(marks, /code|代码/i)) output = `<code>${output}</code>`;
-  const color = pickInlineColor(marks, ['color', 'textColor', 'text_color']);
+  const color = pickInlineColor(marks, ['color', 'textColor', 'text_color', 'frontColor', 'front_color']);
   const backgroundColor = pickInlineColor(marks, [
     'backgroundColor', 'background_color', 'backColor', 'back_color', 'bgColor', 'bg_color',
   ]);
@@ -599,6 +599,8 @@ function pickInlineMarkSource(value = {}, annotations = null) {
     color: value.color,
     textColor: value.textColor,
     text_color: value.text_color,
+    frontColor: value.frontColor,
+    front_color: value.front_color,
     backgroundColor: value.backgroundColor,
     background_color: value.background_color,
     backColor: value.backColor,
@@ -792,7 +794,7 @@ function isEnumListTypeHint(value = '') {
 }
 
 function isBulletListTypeHint(value = '') {
-  return /bullet|unordered|(^|\s)ul($|\s)|无序列表|项目列表/.test(String(value || '').toLowerCase());
+  return /bullet|bull[_\s-]*list|bulllist|unordered|(^|\s)ul($|\s)|无序列表|项目列表/.test(String(value || '').toLowerCase());
 }
 
 function hasFoldFlag(node = {}) {
@@ -4476,6 +4478,7 @@ module.exports = {
   extractWolaiPageId,
   __test: {
     buildWolaiChildTarget,
+    cleanImportedBlocks,
     getWolaiExpansionQueueIds,
     getNodeHtml,
     normalizeRecoveredWolaiParentRecords,
