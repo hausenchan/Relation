@@ -749,6 +749,13 @@ function addColumnIfMissing(table, column, definition) {
   }
 }
 
+function ensureMysqlLongTextColumn(table, column, nullability = 'NOT NULL') {
+  if (!Database.isMysql()) return;
+  const info = db.prepare(`PRAGMA table_info(${table})`).all().find(item => item.name === column);
+  if (!info || /^longtext$/i.test(String(info.type || ''))) return;
+  db.exec(`ALTER TABLE ${table} MODIFY COLUMN ${column} LONGTEXT ${nullability}`);
+}
+
 function createIndexIfColumnExists(table, column, indexName, columnsSql) {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
   if (cols.length > 0 && cols.includes(column)) {
@@ -895,6 +902,12 @@ db.exec(`
     UNIQUE(record_type, record_id, user_id)
   );
 `);
+
+// Older MySQL compatibility versions stored these envelopes as VARCHAR(255),
+// which truncates RSA JWKs and encrypted record keys.
+ensureMysqlLongTextColumn('crypto_user_keys', 'public_key_jwk');
+ensureMysqlLongTextColumn('crypto_user_keys', 'encrypted_private_key_jwk');
+ensureMysqlLongTextColumn('crypto_record_keys', 'encrypted_dek');
 
 // 初始化默认管理员账号（admin / admin123）
 const adminExists = db.prepare("SELECT id FROM users WHERE username = 'admin'").get();
@@ -20128,10 +20141,6 @@ function hasSensitiveModuleAccess(user, moduleKey) {
   return Boolean(user?.id && getSensitiveModuleMember(user.id, moduleKey));
 }
 
-function getSensitiveModulePermission(user, moduleKey) {
-  return getSensitiveModuleMember(user?.id, moduleKey)?.permission_level || '';
-}
-
 function requireOperationalMeetingAccess(req, res, next) {
   if (!hasMenuAccess(req.user, OPERATIONAL_MEETING_MENU_KEY)) {
     return res.status(403).json({ error: '无经营周会菜单权限' });
@@ -20501,7 +20510,6 @@ function canEditOperationalSection(user, section) {
     user,
     section._accessParticipant || null,
     section,
-    getSensitiveModulePermission(user, OPERATIONAL_MEETING_MODULE_KEY),
   );
 }
 

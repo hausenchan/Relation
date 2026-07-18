@@ -22,6 +22,10 @@ import {
   parseRsaPublicJwk,
   publicJwkFromPrivateJwk,
 } from '../utils/operationalMeetingCrypto';
+import {
+  getDefaultPreparationSectionKeys,
+  getPreparationEditorState,
+} from '../utils/operationalMeetingAccess';
 
 const { RangePicker } = DatePicker;
 const { Text, Title } = Typography;
@@ -246,7 +250,7 @@ async function encryptPayloadForUsers(payload, userIds, localPublicKeys = {}) {
     }
   }
   if (!recordKeys.length) {
-    throw new Error('当前账号的安全密钥不可用，请先解锁或重新设置安全密钥');
+    throw new Error('当前账号的安全密钥不可用，请先解锁或修复安全密钥');
   }
   const encryptedUserIds = new Set(recordKeys.map(item => Number(item.user_id)));
   return {
@@ -305,7 +309,7 @@ export default function OperationalMeeting() {
   const [keyPassword, setKeyPassword] = useState('');
   const [keyPasswordConfirm, setKeyPasswordConfirm] = useState('');
   const [keyBusy, setKeyBusy] = useState(false);
-  const [keyResetMode, setKeyResetMode] = useState(false);
+  const [keyRepairMode, setKeyRepairMode] = useState(false);
   const [sectionDrafts, setSectionDrafts] = useState({});
   const [agendaDraft, setAgendaDraft] = useState(null);
   const [decisionDraft, setDecisionDraft] = useState('');
@@ -527,7 +531,7 @@ export default function OperationalMeeting() {
   };
 
   const handleKeyAction = async () => {
-    const creatingKey = !keyInfo || keyResetMode;
+    const creatingKey = !keyInfo || keyRepairMode;
     if (!keyPassword || keyPassword.length < 8) {
       message.warning('安全密码至少 8 位');
       return;
@@ -538,7 +542,7 @@ export default function OperationalMeeting() {
     }
     setKeyBusy(true);
     try {
-      if (keyInfo && !keyResetMode) {
+      if (keyInfo && !keyRepairMode) {
         const unlockedKey = await unlockPrivateKey(keyInfo, keyPassword);
         let repaired = false;
         try {
@@ -578,11 +582,11 @@ export default function OperationalMeeting() {
           keyVersion,
         });
         await loadKeyInfo();
-        message.success(keyResetMode ? '安全密钥已重新设置并解锁' : '安全密钥已创建并解锁');
+        message.success(keyRepairMode ? '安全密钥已修复并解锁' : '安全密钥已创建并解锁');
       }
       setKeyPassword('');
       setKeyPasswordConfirm('');
-      setKeyResetMode(false);
+      setKeyRepairMode(false);
       setKeyModalOpen(false);
     } catch (error) {
       message.error(error.message || '安全密钥处理失败，请确认密码正确');
@@ -591,15 +595,15 @@ export default function OperationalMeeting() {
     }
   };
 
-  const openKeyReset = () => {
+  const openKeyRepair = () => {
     Modal.confirm({
-      title: '确认重新设置安全密钥？',
-      content: '重新设置后，使用旧密钥加密且未重新授权的历史内容可能无法解密。仅在加密私钥确实损坏时使用。',
-      okText: '继续重置',
+      title: '检测到安全密钥需要修复',
+      content: '你之前已经设置过安全密钥，但系统检测到旧版本保存的数据不完整，当前无法正常解锁。修复会生成一套新密钥，你可以继续使用原安全密码，也可以设置新密码。少数仅由旧密钥授权的历史内容，可能需要其他已授权 CXO 打开并重新保存后才能恢复访问。',
+      okText: '开始修复',
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: () => {
-        setKeyResetMode(true);
+        setKeyRepairMode(true);
         setKeyPassword('');
         setKeyPasswordConfirm('');
         setKeyModalOpen(true);
@@ -613,7 +617,7 @@ export default function OperationalMeeting() {
       return false;
     }
     if (!unlocked?.privateKey) {
-      if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyReset();
+      if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyRepair();
       else setKeyModalOpen(true);
       return false;
     }
@@ -886,8 +890,13 @@ export default function OperationalMeeting() {
   const renderSection = (section) => {
     const status = sectionStatusMeta[section.status] || sectionStatusMeta.draft;
     const draft = normalizeQuestionBlocks(sectionDrafts[section.id] || section.default_blocks || { questions: section.default_questions });
-    const lacksDecryptGrant = Boolean(section.content_ciphertext && !section.my_record_key);
-    const disabled = !section.can_edit || !unlocked?.privateKey || lacksDecryptGrant;
+    const isOwnPreparation = Number(section.owner_user_id) === Number(user?.id);
+    const {
+      canEdit,
+      lacksDecryptGrant,
+      needsUnlockForExistingContent,
+      readOnly,
+    } = getPreparationEditorState(section, Boolean(unlocked?.privateKey));
     return (
       <Collapse.Panel
         key={String(section.id)}
@@ -896,19 +905,43 @@ export default function OperationalMeeting() {
             <Text strong>{section.title}</Text>
             <Tag color={status.color}>{status.label}</Tag>
             {section.owner_name && <Tag>{section.owner_name}</Tag>}
+            <Tag color={canEdit ? 'blue' : 'default'}>
+              {isOwnPreparation ? '我的准备' : (canEdit ? '可编辑' : '仅查看')}
+            </Tag>
             {section.submitted_at && <Text type="secondary">{dayjs(section.submitted_at).format('MM-DD HH:mm')}</Text>}
           </Space>
         )}
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          {section.content_ciphertext && !unlocked?.privateKey && (
+          {!canEdit && (
+            <Alert
+              type="info"
+              showIcon
+              message="当前准备块为只读"
+              description={section.owner_name
+                ? `当前登录账号“${user?.display_name || user?.username || '-'}”正在查看“${section.owner_name}”负责的准备内容。CXO 可以编辑全部准备块，其他参与人仅可编辑自己的准备块。`
+                : '当前账号没有此准备块的编辑权限。'}
+            />
+          )}
+          {canEdit && !section.content_ciphertext && !unlocked?.privateKey && (
+            <Alert
+              type="info"
+              showIcon
+              message="可以先填写内容"
+              description="保存或提交前需要解锁安全密钥；解锁不会清空当前已填写的内容。"
+              action={keyInfo && !keyHealth.privateEnvelopeValid
+                ? <Button size="small" onClick={openKeyRepair}>修复密钥</Button>
+                : <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>}
+            />
+          )}
+          {canEdit && needsUnlockForExistingContent && (
             <Alert
               type="info"
               showIcon
               message="内容已加密"
               description="解锁安全密钥后可查看和编辑。"
               action={keyInfo && !keyHealth.privateEnvelopeValid
-                ? <Button size="small" onClick={openKeyReset}>重新设置</Button>
+                ? <Button size="small" onClick={openKeyRepair}>修复密钥</Button>
                 : <Button size="small" onClick={() => setKeyModalOpen(true)}>解锁</Button>}
             />
           )}
@@ -924,30 +957,30 @@ export default function OperationalMeeting() {
                   onChange={value => patchQuestionContent(section.id, item.key, value)}
                   minHeight={96}
                   placeholder={`填写${item.title}`}
-                  readOnly={disabled}
+                  readOnly={readOnly}
                 />
               </div>
             </div>
           ))}
-          <Space wrap>
-            <Button
-              icon={<SaveOutlined />}
-              loading={savingSectionId === section.id}
-              disabled={!section.can_edit}
-              onClick={() => saveSection(section, false)}
-            >
-              保存
-            </Button>
-            <Button
-              type="primary"
-              icon={<SendOutlined />}
-              loading={savingSectionId === section.id}
-              disabled={!section.can_edit}
-              onClick={() => saveSection(section, true)}
-            >
-              保存并提交
-            </Button>
-          </Space>
+          {canEdit && (
+            <Space wrap>
+              <Button
+                icon={<SaveOutlined />}
+                loading={savingSectionId === section.id}
+                onClick={() => saveSection(section, false)}
+              >
+                保存
+              </Button>
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                loading={savingSectionId === section.id}
+                onClick={() => saveSection(section, true)}
+              >
+                保存并提交
+              </Button>
+            </Space>
+          )}
         </Space>
       </Collapse.Panel>
     );
@@ -973,11 +1006,11 @@ export default function OperationalMeeting() {
       <Button
         icon={<LockOutlined />}
         onClick={() => {
-          if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyReset();
+          if (keyInfo && !keyHealth.privateEnvelopeValid) openKeyRepair();
           else setKeyModalOpen(true);
         }}
       >
-        {keyInfo && !keyHealth.privateEnvelopeValid ? '重新设置安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
+        {keyInfo && !keyHealth.privateEnvelopeValid ? '修复安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
       </Button>
     )
   );
@@ -985,7 +1018,7 @@ export default function OperationalMeeting() {
   const preparationPanel = detail?.meeting ? (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {detail.sections?.length ? (
-        <Collapse defaultActiveKey={(detail.sections || []).map(item => String(item.id))}>
+        <Collapse defaultActiveKey={getDefaultPreparationSectionKeys(detail.sections)}>
           {(detail.sections || []).map(renderSection)}
         </Collapse>
       ) : (
@@ -1316,16 +1349,16 @@ export default function OperationalMeeting() {
       </Modal>
 
       <Modal
-        title={keyInfo && !keyResetMode ? '解锁安全密钥' : '设置安全密码'}
+        title={keyRepairMode ? '修复安全密钥' : (keyInfo ? '解锁安全密钥' : '设置安全密钥')}
         open={keyModalOpen}
         onCancel={() => {
           setKeyModalOpen(false);
           setKeyPassword('');
           setKeyPasswordConfirm('');
-          setKeyResetMode(false);
+          setKeyRepairMode(false);
         }}
         onOk={handleKeyAction}
-        okText={keyInfo && !keyResetMode ? '解锁' : '创建'}
+        okText={keyRepairMode ? '完成修复' : (keyInfo ? '解锁' : '创建')}
         cancelText="取消"
         confirmLoading={keyBusy}
         destroyOnClose
@@ -1341,9 +1374,9 @@ export default function OperationalMeeting() {
             value={keyPassword}
             onChange={event => setKeyPassword(event.target.value)}
             placeholder="请输入安全密码，至少 8 位"
-            autoComplete={keyInfo && !keyResetMode ? 'current-password' : 'new-password'}
+            autoComplete={keyInfo && !keyRepairMode ? 'current-password' : 'new-password'}
           />
-          {(!keyInfo || keyResetMode) && (
+          {(!keyInfo || keyRepairMode) && (
             <Input.Password
               value={keyPasswordConfirm}
               onChange={event => setKeyPasswordConfirm(event.target.value)}

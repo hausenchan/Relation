@@ -175,7 +175,7 @@ function getColumnNameFromDefinition(definition) {
 }
 
 function isLikelyLongTextColumn(columnName) {
-  return /json|payload|content|summary|detail|description|notes?|remark|message|prompt|response|schema|html|markdown|attachment|business|skills|background|reason|analysis|observation|transcript|raw|config|error|text|body/i
+  return /json|jwk|encrypted_dek|payload|content|summary|detail|description|notes?|remark|message|prompt|response|schema|html|markdown|attachment|business|skills|background|reason|analysis|observation|transcript|raw|config|error|text|body/i
     .test(String(columnName || ''));
 }
 
@@ -505,5 +505,9 @@ function Database(filename, options) {
 }
 
 Database.isMysql = isMysqlDialect;
+Database.mysqlCompat = {
+  columnDefinitionToMysql,
+  isLikelyLongTextColumn,
+};
 
 module.exports = Database;

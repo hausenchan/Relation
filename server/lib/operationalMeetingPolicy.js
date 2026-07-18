@@ -25,10 +25,10 @@ function canViewPreparation(user, participant, section) {
     || Number(section.owner_user_id) === Number(user.id);
 }
 
-function canEditPreparation(user, participant, section, permissionLevel = '') {
+function canEditPreparation(user, participant, section) {
   if (!canViewPreparation(user, participant, section)) return false;
   if (Number(section.owner_user_id) === Number(user.id)) return true;
-  return isMeetingCxo(user, participant) && permissionLevel === 'edit_all';
+  return isMeetingCxo(user, participant);
 }
 
 function canGenerateAgenda(user, participant) {

@@ -41,11 +41,12 @@ test('designated participants can share meeting content but cannot generate the 
   assert.equal(canGenerateAgenda(cxo, null), true);
 });
 
-test('viewing all preparation does not grant CXO edit access without edit_all', () => {
+test('CXO can edit any preparation while non-CXO users remain owner-only', () => {
   const section = { owner_user_id: 3 };
-  assert.equal(canEditPreparation(cxo, null, section, 'manage'), false);
-  assert.equal(canEditPreparation(cxo, null, section, 'edit_all'), true);
-  assert.equal(canEditPreparation(other, null, section, 'edit_all'), false);
+  assert.equal(canEditPreparation(cxo, null, section), true);
+  assert.equal(canEditPreparation(other, null, section), false);
+  assert.equal(canEditPreparation(designated, designatedParticipant, { owner_user_id: 2 }), true);
+  assert.equal(canEditPreparation(designated, designatedParticipant, section), false);
 });
 
 test('record key recipients outside the allowed set are rejected', () => {

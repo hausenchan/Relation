@@ -95,7 +95,7 @@ function sqliteDefaultToMysql(defaultValue, mysqlType) {
 }
 
 function isLikelyLongTextColumn(columnName) {
-  return /json|payload|content|summary|detail|description|notes?|remark|message|prompt|response|schema|html|markdown|attachment|business|skills|background|reason|analysis|observation|transcript|raw|config|error|text|body/i
+  return /json|jwk|encrypted_dek|payload|content|summary|detail|description|notes?|remark|message|prompt|response|schema|html|markdown|attachment|business|skills|background|reason|analysis|observation|transcript|raw|config|error|text|body/i
     .test(String(columnName || ''));
 }
 

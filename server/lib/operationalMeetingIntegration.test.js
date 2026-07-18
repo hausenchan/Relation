@@ -163,9 +163,25 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(designatedDetail.payload.can_edit_decision, 0);
   assert.equal(outsiderDetail.status, 404);
 
+  const designatedSectionId = designatedDetail.payload.sections[0].id;
+  const cxoEditsDesignatedPreparation = await request(
+    baseUrl,
+    `/api/operational-meeting-sections/${designatedSectionId}`,
+    {
+      method: 'PUT',
+      token: ceoToken,
+      body: {
+        content_ciphertext: 'cxo-edited-designated-preparation',
+        crypto_version: 'v2_client',
+        record_keys: [],
+      },
+    },
+  );
+  assert.equal(cxoEditsDesignatedPreparation.status, 200, JSON.stringify(cxoEditsDesignatedPreparation.payload));
+
   const invalidRecordKey = await request(
     baseUrl,
-    `/api/operational-meeting-sections/${designatedDetail.payload.sections[0].id}`,
+    `/api/operational-meeting-sections/${designatedSectionId}`,
     {
       method: 'PUT',
       token: designatedToken,
