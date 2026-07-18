@@ -1,18 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Table, Button, Space, Modal, Form, Input, DatePicker, message, Drawer, Select, Tag, Grid, List, Typography } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, FilterOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useAuth } from '../AuthContext';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
-import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
+import DocumentBodyEditor from '../components/DocumentBodyEditor';
+import {
+  getWeeklyReportDraftSignature,
+  normalizeWeeklyReportContent,
+  serializeWeeklyReportContent,
+  weeklyReportContentHasValue,
+  weeklyReportContentToPlain,
+} from '../utils/weeklyReportContent';
 
 dayjs.extend(isoWeek);
 
-const { TextArea } = Input;
 const { Option } = Select;
 const { RangePicker } = DatePicker;
 const { useBreakpoint } = Grid;
+const WEEKLY_REPORT_AUTO_SAVE_DELAY = 1500;
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 const isAdmin = (role) => ADMIN_ROLES.has(role);
@@ -55,7 +62,14 @@ export default function WeeklyReports() {
   const [filterDrawerVisible, setFilterDrawerVisible] = useState(false);
   const [drawerVisible, setDrawerVisible] = useState(false);
   const [selectedReport, setSelectedReport] = useState(null);
+  const [editingReportId, setEditingReportId] = useState(null);
+  const [reportSaveState, setReportSaveState] = useState({ phase: 'idle', savedAt: null, error: '' });
   const [form] = Form.useForm();
+  const reportAutoSaveTimerRef = useRef(null);
+  const reportPendingSaveRef = useRef(null);
+  const reportLastSavedSignatureRef = useRef('');
+  const reportAutoSaveReadyRef = useRef(false);
+  const persistWeeklyReportRef = useRef(null);
 
   // 筛选
   const [filters, setFilters] = useState({
@@ -66,6 +80,18 @@ export default function WeeklyReports() {
   useEffect(() => {
     fetchReports();
   }, [filters]);
+
+  useEffect(() => {
+    const flushOnHide = () => {
+      if (document.visibilityState !== 'hidden' || !modalVisible) return;
+      persistWeeklyReportRef.current?.({ silent: true }).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', flushOnHide);
+    return () => {
+      document.removeEventListener('visibilitychange', flushOnHide);
+      if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
+    };
+  }, [modalVisible]);
 
   const fetchReports = async () => {
     setLoading(true);
@@ -99,25 +125,38 @@ export default function WeeklyReports() {
     }
   };
 
-  const handleAdd = () => {
+  const getEditorInitialValues = (record = null) => {
     const thisMonday = dayjs().startOf('isoWeek');
     const thisSunday = dayjs().endOf('isoWeek');
+    return {
+      user_id: record?.user_id || currentUser?.id,
+      week_range: record
+        ? [dayjs(record.week_start), dayjs(record.week_end)]
+        : [thisMonday, thisSunday],
+      completed: normalizeWeeklyReportContent(record?.completed || ''),
+      next_week_plan: normalizeWeeklyReportContent(record?.next_week_plan || ''),
+      risks: normalizeWeeklyReportContent(record?.risks || ''),
+    };
+  };
 
+  const openReportEditor = (record = null) => {
+    const initialValues = getEditorInitialValues(record);
+    reportAutoSaveReadyRef.current = false;
+    if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
     form.resetFields();
-    form.setFieldsValue({
-      user_id: currentUser?.id,
-      week_range: [thisMonday, thisSunday],
-    });
+    form.setFieldsValue(initialValues);
+    setEditingReportId(record?.id || null);
+    reportLastSavedSignatureRef.current = record ? getWeeklyReportDraftSignature(initialValues) : '';
+    setReportSaveState(record
+      ? { phase: 'saved', savedAt: record.updated_at || record.created_at || null, error: '' }
+      : { phase: 'idle', savedAt: null, error: '' });
     setModalVisible(true);
+    reportAutoSaveReadyRef.current = true;
   };
 
-  const handleEdit = (record) => {
-    form.setFieldsValue({
-      ...record,
-      week_range: [dayjs(record.week_start), dayjs(record.week_end)],
-    });
-    setModalVisible(true);
-  };
+  const handleAdd = () => openReportEditor();
+
+  const handleEdit = (record) => openReportEditor(record);
 
   const handleDelete = (id) => {
     Modal.confirm({
@@ -138,33 +177,99 @@ export default function WeeklyReports() {
     });
   };
 
-  const handleSubmit = async () => {
+  const persistWeeklyReport = async ({ silent = true, validate = false } = {}) => {
+    if (!modalVisible && !reportAutoSaveReadyRef.current) return false;
+    if (reportPendingSaveRef.current) {
+      await reportPendingSaveRef.current.catch(() => null);
+      return persistWeeklyReportRef.current?.({ silent, validate }) || false;
+    }
+
     try {
-      const values = await form.validateFields();
+      const values = validate ? await form.validateFields() : form.getFieldsValue(true);
+      if (!values.user_id || !Array.isArray(values.week_range) || !values.week_range[0] || !values.week_range[1]) return false;
+      const signature = getWeeklyReportDraftSignature(values);
+      if (signature === reportLastSavedSignatureRef.current) {
+        setReportSaveState(prev => ({ ...prev, phase: 'saved', error: '' }));
+        return true;
+      }
       const payload = {
         user_id: values.user_id,
         week_start: values.week_range[0].format('YYYY-MM-DD'),
         week_end: values.week_range[1].format('YYYY-MM-DD'),
-        completed: values.completed,
-        next_week_plan: values.next_week_plan,
-        risks: values.risks,
+        completed: serializeWeeklyReportContent(values.completed),
+        next_week_plan: serializeWeeklyReportContent(values.next_week_plan),
+        risks: serializeWeeklyReportContent(values.risks),
       };
 
-      await fetch('/api/weekly-reports', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${localStorage.getItem('token')}`,
-        },
-        body: JSON.stringify(payload),
-      });
-
-      message.success('保存成功');
-      setModalVisible(false);
-      fetchReports();
+      const savePromise = (async () => {
+        setReportSaveState(prev => ({ ...prev, phase: 'saving', error: '' }));
+        const res = await fetch('/api/weekly-reports', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${localStorage.getItem('token')}`,
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(await getErrorMessage(res, '保存失败'));
+        const result = await res.json();
+        reportLastSavedSignatureRef.current = signature;
+        setEditingReportId(result.id || editingReportId || null);
+        const latestSignature = getWeeklyReportDraftSignature(form.getFieldsValue(true));
+        setReportSaveState({
+          phase: latestSignature === signature ? 'saved' : 'dirty',
+          savedAt: new Date().toISOString(),
+          error: '',
+        });
+        await fetchReports();
+        return true;
+      })();
+      reportPendingSaveRef.current = savePromise;
+      try {
+        const saved = await savePromise;
+        if (saved && !silent) message.success('周报已保存');
+        return saved;
+      } finally {
+        if (reportPendingSaveRef.current === savePromise) reportPendingSaveRef.current = null;
+      }
     } catch (err) {
-      message.error('操作失败');
+      const errorText = err.message || '保存失败';
+      setReportSaveState(prev => ({ ...prev, phase: 'error', error: errorText }));
+      if (!silent) message.error(errorText);
+      return false;
     }
+  };
+
+  persistWeeklyReportRef.current = persistWeeklyReport;
+
+  const scheduleWeeklyReportAutoSave = () => {
+    if (!reportAutoSaveReadyRef.current) return;
+    if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
+    setReportSaveState(prev => ({ ...prev, phase: 'dirty', error: '' }));
+    reportAutoSaveTimerRef.current = window.setTimeout(() => {
+      persistWeeklyReportRef.current?.({ silent: true }).catch(() => {});
+    }, WEEKLY_REPORT_AUTO_SAVE_DELAY);
+  };
+
+  const handleSubmit = async () => {
+    const saved = await persistWeeklyReport({ silent: false, validate: true });
+    if (!saved) return;
+    reportAutoSaveReadyRef.current = false;
+    setModalVisible(false);
+  };
+
+  const closeReportEditor = async () => {
+    if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
+    if (reportPendingSaveRef.current || ['dirty', 'error'].includes(reportSaveState.phase)) {
+      const saved = await persistWeeklyReport({ silent: true });
+      if (!saved) {
+        message.error('周报尚未保存，请重试后再关闭');
+        return;
+      }
+    }
+    reportAutoSaveReadyRef.current = false;
+    setModalVisible(false);
+    await fetchReports();
   };
 
   const showDetail = (record) => {
@@ -231,7 +336,7 @@ export default function WeeklyReports() {
       key: 'completed',
       width: 200,
       ellipsis: true,
-      render: (val) => richTextToPlain(val) || '-',
+      render: (val) => weeklyReportContentToPlain(val) || '-',
     },
     {
       title: '下周计划',
@@ -239,7 +344,7 @@ export default function WeeklyReports() {
       key: 'next_week_plan',
       width: 200,
       ellipsis: true,
-      render: (val) => richTextToPlain(val) || '-',
+      render: (val) => weeklyReportContentToPlain(val) || '-',
     },
     {
       title: '风险',
@@ -247,7 +352,7 @@ export default function WeeklyReports() {
       key: 'risks',
       width: 150,
       ellipsis: true,
-      render: (val) => richTextToPlain(val) || '-',
+      render: (val) => weeklyReportContentToPlain(val) || '-',
     },
     {
       title: '操作',
@@ -309,14 +414,14 @@ export default function WeeklyReports() {
           </Typography.Text>
 
           <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-            本周完成：{richTextToPlain(record.completed) || '-'}
+            本周完成：{weeklyReportContentToPlain(record.completed) || '-'}
           </Typography.Paragraph>
           <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-            下周计划：{richTextToPlain(record.next_week_plan) || '-'}
+            下周计划：{weeklyReportContentToPlain(record.next_week_plan) || '-'}
           </Typography.Paragraph>
-          {record.risks && (
+          {weeklyReportContentHasValue(record.risks) && (
             <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-              风险与问题：{richTextToPlain(record.risks)}
+              风险与问题：{weeklyReportContentToPlain(record.risks)}
             </Typography.Paragraph>
           )}
 
@@ -501,6 +606,22 @@ export default function WeeklyReports() {
       </Select>
     </Space>
   );
+  const reportSaveMeta = {
+    idle: { color: 'default', text: '尚未保存' },
+    dirty: { color: 'default', text: '待自动保存' },
+    saving: { color: 'processing', text: '自动保存中' },
+    saved: {
+      color: 'success',
+      text: reportSaveState.savedAt ? `已自动保存 ${dayjs(reportSaveState.savedAt).format('HH:mm:ss')}` : '已保存',
+    },
+    error: { color: 'error', text: '自动保存失败' },
+  }[reportSaveState.phase] || { color: 'default', text: '尚未保存' };
+  const weeklyEditorStyle = {
+    minHeight: 220,
+    border: '1px solid #e5e7eb',
+    borderRadius: 8,
+    padding: '12px 10px 16px',
+  };
 
   return (
     <div style={{ padding: isMobile ? 12 : 24 }}>
@@ -548,31 +669,69 @@ export default function WeeklyReports() {
       )}
 
       <Modal
-        title="周报"
+        title={(
+          <Space size={8} wrap>
+            <span>{editingReportId ? '编辑周报' : '写周报'}</span>
+            <Tag color={reportSaveMeta.color} style={{ marginInlineEnd: 0 }}>{reportSaveMeta.text}</Tag>
+            {reportSaveState.phase === 'error' && (
+              <Button type="link" size="small" onClick={() => persistWeeklyReport({ silent: false })}>重试</Button>
+            )}
+          </Space>
+        )}
         open={modalVisible}
-        onCancel={() => setModalVisible(false)}
+        onCancel={closeReportEditor}
         onOk={handleSubmit}
-        width={isMobile ? '100%' : 700}
-        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
-        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
-        okText="保存"
-        cancelText="取消"
+        confirmLoading={reportSaveState.phase === 'saving'}
+        width={isMobile ? '100%' : 'min(1120px, 92vw)'}
+        style={isMobile
+          ? { top: 0, maxWidth: '100%', paddingBottom: 0 }
+          : { top: 24, paddingBottom: 24 }}
+        styles={{ body: { maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' } }}
+        okText="完成"
+        cancelText="关闭"
       >
-        <Form form={form} layout="vertical">
+        <Form form={form} layout="vertical" onValuesChange={scheduleWeeklyReportAutoSave}>
           <Form.Item name="user_id" label="用户" hidden>
             <Input />
           </Form.Item>
           <Form.Item name="week_range" label="周期" rules={[{ required: true, message: '请选择周期' }]}>
             <RangePicker style={{ width: '100%' }} />
           </Form.Item>
-          <Form.Item name="completed" label="本周完成" rules={[{ required: true, message: '请填写本周完成内容' }]} valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="本周完成的主要工作..." minHeight={140} enableTables />
+          <Form.Item
+            name="completed"
+            label="本周完成"
+            valuePropName="value"
+            trigger="onChange"
+            rules={[{ validator: (_, value) => weeklyReportContentHasValue(value) ? Promise.resolve() : Promise.reject(new Error('请填写本周完成内容')) }]}
+          >
+            <DocumentBodyEditor
+              placeholder="本周完成的主要工作"
+              minHeight={220}
+              style={weeklyEditorStyle}
+              onSave={() => persistWeeklyReport({ silent: false })}
+            />
           </Form.Item>
-          <Form.Item name="next_week_plan" label="下周计划" rules={[{ required: true, message: '请填写下周计划' }]} valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="下周计划的主要工作..." minHeight={140} enableTables />
+          <Form.Item
+            name="next_week_plan"
+            label="下周计划"
+            valuePropName="value"
+            trigger="onChange"
+            rules={[{ validator: (_, value) => weeklyReportContentHasValue(value) ? Promise.resolve() : Promise.reject(new Error('请填写下周计划')) }]}
+          >
+            <DocumentBodyEditor
+              placeholder="下周计划的主要工作"
+              minHeight={220}
+              style={weeklyEditorStyle}
+              onSave={() => persistWeeklyReport({ silent: false })}
+            />
           </Form.Item>
           <Form.Item name="risks" label="风险与问题" valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="遇到的风险、问题或需要协调的事项..." minHeight={120} enableTables />
+            <DocumentBodyEditor
+              placeholder="遇到的风险、问题或需要协调的事项"
+              minHeight={180}
+              style={{ ...weeklyEditorStyle, minHeight: 180 }}
+              onSave={() => persistWeeklyReport({ silent: false })}
+            />
           </Form.Item>
         </Form>
       </Modal>
@@ -629,36 +788,38 @@ export default function WeeklyReports() {
       <Drawer
         title="周报详情"
         placement="right"
-        width={isMobile ? '100%' : 600}
+        width={isMobile ? '100%' : '66.6667vw'}
         open={drawerVisible}
         onClose={() => setDrawerVisible(false)}
-        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
+        styles={{ body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto', padding: isMobile ? 16 : '20px 32px 40px' } }}
       >
         {selectedReport && (
-          <div>
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>姓名</div>
-              <div style={{ fontSize: 15 }}>{selectedReport.user_name}</div>
+          <div style={{ maxWidth: 1180, margin: '0 auto' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(120px, 0.7fr) minmax(120px, 0.7fr) minmax(280px, 1.8fr)', gap: 20, paddingBottom: 20, marginBottom: 28, borderBottom: '1px solid #eef0f2' }}>
+              <div>
+                <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>姓名</div>
+                <div style={{ fontSize: 15, fontWeight: 600 }}>{selectedReport.user_name}</div>
+              </div>
+              <div>
+                <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>部门</div>
+                <div style={{ fontSize: 15 }}>{getDepartmentLabel(selectedReport.department)}</div>
+              </div>
+              <div>
+                <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>周期</div>
+                <div style={{ fontSize: 15 }}>{selectedReport.week_start} ~ {selectedReport.week_end}</div>
+              </div>
+            </div>
+            <div style={{ marginBottom: 36 }}>
+              <div style={{ color: '#64748b', fontSize: 14, fontWeight: 700, marginBottom: 12 }}>本周完成</div>
+              <DocumentBodyEditor value={normalizeWeeklyReportContent(selectedReport.completed)} readOnly minHeight={80} />
+            </div>
+            <div style={{ marginBottom: 36 }}>
+              <div style={{ color: '#64748b', fontSize: 14, fontWeight: 700, marginBottom: 12 }}>下周计划</div>
+              <DocumentBodyEditor value={normalizeWeeklyReportContent(selectedReport.next_week_plan)} readOnly minHeight={80} />
             </div>
             <div style={{ marginBottom: 24 }}>
-              <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>部门</div>
-              <div style={{ fontSize: 15 }}>{getDepartmentLabel(selectedReport.department)}</div>
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>周期</div>
-              <div style={{ fontSize: 15 }}>{selectedReport.week_start} ~ {selectedReport.week_end}</div>
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>本周完成</div>
-              <RichTextView value={selectedReport.completed} />
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>下周计划</div>
-              <RichTextView value={selectedReport.next_week_plan} />
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <div style={{ color: '#999', fontSize: 13, marginBottom: 4 }}>风险与问题</div>
-              <RichTextView value={selectedReport.risks} />
+              <div style={{ color: '#64748b', fontSize: 14, fontWeight: 700, marginBottom: 12 }}>风险与问题</div>
+              <DocumentBodyEditor value={normalizeWeeklyReportContent(selectedReport.risks)} readOnly minHeight={60} />
             </div>
           </div>
         )}

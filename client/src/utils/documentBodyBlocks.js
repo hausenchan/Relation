@@ -128,20 +128,69 @@ function getClipboardListIndent(element) {
   const explicitIndent = Number(
     element?.getAttribute?.('data-indent')
     || element?.getAttribute?.('data-list-level')
-    || element?.getAttribute?.('data-level'),
+    || element?.getAttribute?.('data-level')
+    || element?.getAttribute?.('data-depth')
+    || element?.getAttribute?.('aria-level'),
   );
+  const typeValue = String(element?.closest?.('ol')?.getAttribute?.('type') || '').toLowerCase();
+  const orderedTypeIndent = typeValue === 'a' ? 1 : (typeValue === 'i' ? 2 : 0);
+  let visualIndent = 0;
+  let cursor = element;
+  while (cursor) {
+    const hint = [
+      cursor.getAttribute?.('data-list-level'),
+      cursor.getAttribute?.('data-level'),
+      cursor.getAttribute?.('data-depth'),
+      cursor.getAttribute?.('aria-level'),
+      cursor.getAttribute?.('class'),
+    ].map(value => String(value || '')).join(' ');
+    const levelMatch = hint.match(/(?:indent|level|depth)[-_\s:]*(\d+)/i);
+    if (levelMatch) visualIndent = Math.max(visualIndent, Math.max(0, Number(levelMatch[1]) - 1));
+    const style = String(cursor.getAttribute?.('style') || '');
+    const pixels = [...style.matchAll(/(?:margin-left|padding-left|text-indent)\s*:\s*([0-9.]+)px/ig)]
+      .map(match => Number(match[1]))
+      .filter(Number.isFinite);
+    if (pixels.length) visualIndent = Math.max(visualIndent, Math.round(Math.max(...pixels) / 28));
+    cursor = cursor.parentElement;
+  }
   return Math.max(0, Math.min(6, Math.max(
     listIndent,
     wolaiIndent,
+    orderedTypeIndent,
+    visualIndent,
     Number.isFinite(explicitIndent) ? explicitIndent : 0,
   )));
 }
 
+function normalizeClipboardInlineHtml(value = '') {
+  const sanitized = sanitizeDocumentBodyInlineHtml(value);
+  if (!sanitized || typeof document === 'undefined') {
+    return sanitized.replace(/[\t\r\n ]+/g, ' ').trim();
+  }
+  const container = document.createElement('div');
+  container.innerHTML = sanitized;
+  const normalizeNode = (node) => {
+    Array.from(node.childNodes || []).forEach((child) => {
+      if (child.nodeType === 3) {
+        child.nodeValue = String(child.nodeValue || '').replace(/[\t\r\n ]+/g, ' ');
+        return;
+      }
+      normalizeNode(child);
+    });
+  };
+  normalizeNode(container);
+  const first = container.firstChild;
+  const last = container.lastChild;
+  if (first?.nodeType === 3) first.nodeValue = String(first.nodeValue || '').replace(/^\s+/, '');
+  if (last?.nodeType === 3) last.nodeValue = String(last.nodeValue || '').replace(/\s+$/, '');
+  return container.innerHTML.trim();
+}
+
 function getClipboardBlockContent(element) {
   const clone = element.cloneNode(true);
-  clone.querySelectorAll('ol,ul,table').forEach(node => node.remove());
+  clone.querySelectorAll('ol,ul,table,[data-type="subnode"],[data-role="subnode"]').forEach(node => node.remove());
   const ownStyle = sanitizeInlineStyle(element.getAttribute?.('style') || '');
-  const content = sanitizeDocumentBodyInlineHtml(clone.innerHTML || clone.textContent || '');
+  const content = normalizeClipboardInlineHtml(clone.innerHTML || clone.textContent || '');
   return ownStyle && content ? `<span style="${ownStyle}">${content}</span>` : content;
 }
 
@@ -176,6 +225,14 @@ function inferTextListType(value = '') {
   if (/^(?:\d+|[a-zA-Z]|[ivxlcdmIVXLCDM]+)[.)、]\s+/.test(text)) return 'numbered';
   if (/^[-*•◦▪]\s+/.test(text)) return 'bullet';
   return '';
+}
+
+function inferOrderedMarkerIndent(value = '') {
+  const marker = String(value || '').trim().match(/^(\d+|[a-zA-Z]+)[.)、]\s+/)?.[1] || '';
+  if (!marker) return 0;
+  if (/^\d+$/.test(marker)) return 0;
+  if (/^[ivxlcdm]+$/i.test(marker) && (marker.length > 1 || /^[ivx]$/i.test(marker))) return 2;
+  return 1;
 }
 
 function stripLeadingTextListMarker(content = '', type = '') {
@@ -218,7 +275,8 @@ function parseClipboardHtml(html = '') {
     ],
     ALLOWED_ATTR: [
       'style', 'class', 'type', 'start', 'colspan', 'rowspan', 'color', 'face', 'size', 'placeholder',
-      'data-type', 'data-block-type', 'data-list', 'data-indent', 'data-list-level', 'data-level',
+      'data-type', 'data-role', 'data-block-type', 'data-list', 'data-indent', 'data-list-level', 'data-level',
+      'data-depth', 'aria-level',
       ...INLINE_ATTRS,
     ],
     FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'img', 'video', 'audio'],
@@ -246,7 +304,12 @@ function parseClipboardHtml(html = '') {
       }
     }
     blocks.push(createDocumentBodyBlock(type, content, {
-      meta: ['bullet', 'numbered'].includes(type) ? { indent: getClipboardListIndent(element) } : {},
+      meta: ['bullet', 'numbered'].includes(type) ? {
+        indent: Math.max(
+          getClipboardListIndent(element),
+          type === 'numbered' ? inferOrderedMarkerIndent(documentBodyInlineHtmlToPlain(content)) : 0,
+        ),
+      } : {},
     }));
   });
   return blocks;
@@ -257,26 +320,88 @@ function parseClipboardPlainText(text = '') {
   String(text || '').replace(/\r\n?/g, '\n').split('\n').forEach((line) => {
     if (!line.trim()) return;
     const leading = line.match(/^\s*/)?.[0] || '';
-    const indent = Math.max(0, Math.min(6, leading.replace(/\t/g, '  ').length >= 2
+    const whitespaceIndent = Math.max(0, Math.min(6, leading.replace(/\t/g, '  ').length >= 2
       ? Math.floor(leading.replace(/\t/g, '  ').length / 2)
       : 0));
     const trimmed = line.trim();
-    const numbered = trimmed.match(/^(?:\d+|[a-zA-Z]|[ivxlcdmIVXLCDM]+)[.)、]\s+(.+)$/);
+    const numbered = trimmed.match(/^(\d+|[a-zA-Z]+)[.)、]\s+(.+)$/);
     const bullet = trimmed.match(/^[-*•◦▪]\s+(.+)$/);
-    if (numbered) blocks.push(createDocumentBodyBlock('numbered', sanitizeDocumentBodyInlineHtml(numbered[1]), { meta: { indent } }));
-    else if (bullet) blocks.push(createDocumentBodyBlock('bullet', sanitizeDocumentBodyInlineHtml(bullet[1]), { meta: { indent } }));
-    else blocks.push(createDocumentBodyBlock('paragraph', sanitizeDocumentBodyInlineHtml(trimmed), { meta: indent ? { indent, hierarchy: 'list' } : {} }));
+    if (numbered) {
+      const indent = Math.max(whitespaceIndent, inferOrderedMarkerIndent(trimmed));
+      blocks.push(createDocumentBodyBlock('numbered', sanitizeDocumentBodyInlineHtml(numbered[2]), { meta: { indent } }));
+    } else if (bullet) {
+      blocks.push(createDocumentBodyBlock('bullet', sanitizeDocumentBodyInlineHtml(bullet[1]), { meta: { indent: whitespaceIndent } }));
+    } else {
+      blocks.push(createDocumentBodyBlock('paragraph', sanitizeDocumentBodyInlineHtml(trimmed), {
+        meta: whitespaceIndent ? { indent: whitespaceIndent, hierarchy: 'list' } : {},
+      }));
+    }
   });
   return blocks;
 }
 
+function normalizeClipboardComparisonText(value = '') {
+  return documentBodyInlineHtmlToPlain(value).replace(/\s+/g, '').trim();
+}
+
+function mergeClipboardBlockHierarchy(htmlBlocks, textBlocks) {
+  if (!htmlBlocks.length) return textBlocks;
+  if (!textBlocks.length || htmlBlocks.length !== textBlocks.length) return htmlBlocks;
+  const aligned = htmlBlocks.every((block, index) => {
+    const htmlText = normalizeClipboardComparisonText(block.content);
+    const textText = normalizeClipboardComparisonText(textBlocks[index]?.content);
+    return htmlText === textText || htmlText.includes(textText) || textText.includes(htmlText);
+  });
+  if (!aligned) return htmlBlocks;
+  return htmlBlocks.map((block, index) => {
+    const textBlock = textBlocks[index];
+    const htmlIndent = Number(block.meta?.indent || 0);
+    const textIndent = Number(textBlock.meta?.indent || 0);
+    const type = block.type === 'paragraph' && ['numbered', 'bullet'].includes(textBlock.type)
+      ? textBlock.type
+      : block.type;
+    return {
+      ...block,
+      type,
+      meta: ['numbered', 'bullet'].includes(type) || Math.max(htmlIndent, textIndent) > 0
+        ? { ...(block.meta || {}), indent: Math.max(htmlIndent, textIndent), hierarchy: 'list' }
+        : { ...(block.meta || {}) },
+    };
+  });
+}
+
 export function parseDocumentBodyClipboard(html = '', text = '') {
   const htmlBlocks = parseClipboardHtml(html);
-  const blocks = htmlBlocks.length ? htmlBlocks : parseClipboardPlainText(text);
+  const textBlocks = parseClipboardPlainText(text);
+  const blocks = mergeClipboardBlockHierarchy(htmlBlocks, textBlocks);
   return {
     format: DOCUMENT_BODY_FORMAT,
     blocks,
   };
+}
+
+export function rebaseDocumentBodyClipboardBlocks(blocks = [], targetIndent = 0) {
+  const source = Array.isArray(blocks) ? blocks : [];
+  const hierarchyBlocks = source.filter(block => (
+    ['numbered', 'bullet', 'fold-list'].includes(block?.type)
+    || Number(block?.meta?.indent || 0) > 0
+  ));
+  if (!hierarchyBlocks.length) return source;
+  const minimumIndent = Math.min(...hierarchyBlocks.map(block => Math.max(0, Number(block.meta?.indent || 0))));
+  const delta = Math.max(0, Number(targetIndent || 0) - minimumIndent);
+  if (!delta) return source;
+  return source.map((block) => {
+    const indent = Number(block?.meta?.indent || 0);
+    if (!['numbered', 'bullet', 'fold-list'].includes(block?.type) && indent <= 0) return block;
+    return {
+      ...block,
+      meta: {
+        ...(block.meta || {}),
+        indent: Math.min(9, Math.max(0, indent) + delta),
+        hierarchy: 'list',
+      },
+    };
+  });
 }
 
 export function documentBodyHasContent(value) {
@@ -307,7 +432,7 @@ export function normalizeDocumentBodyValue(value) {
       blocks: blocks.length ? blocks : [createDocumentBodyBlock()],
     };
   }
-  if (typeof value === 'string' && value && typeof document !== 'undefined' && /<(p|h[1-4]|li)\b/i.test(value)) {
+  if (typeof value === 'string' && value && typeof document !== 'undefined' && /<(p|h[1-6]|li|table|ol|ul|blockquote|div)\b/i.test(value)) {
     const blocks = parseClipboardHtml(value);
     if (blocks.length) return { format: DOCUMENT_BODY_FORMAT, blocks };
   }

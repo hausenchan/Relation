@@ -1,11 +1,12 @@
-import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button, Checkbox, Dropdown, Input, Tooltip } from 'antd';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Button, Checkbox, Divider, Dropdown, Input, Space, Tooltip, message } from 'antd';
 import {
   ArrowDownOutlined,
   ArrowLeftOutlined,
   ArrowRightOutlined,
   ArrowUpOutlined,
   DeleteOutlined,
+  LinkOutlined,
   PlusOutlined,
 } from '@ant-design/icons';
 import {
@@ -21,6 +22,7 @@ import {
   DOCUMENT_BODY_BLOCK_TYPES,
   normalizeDocumentBodyValue,
   parseDocumentBodyClipboard,
+  rebaseDocumentBodyClipboardBlocks,
   sanitizeDocumentBodyInlineHtml,
 } from '../utils/documentBodyBlocks';
 
@@ -173,7 +175,18 @@ function InlineBlockEditor({
     onChange?.(html);
   };
 
-  const activate = () => onActivate?.(editorRef.current);
+  const activate = () => {
+    const editor = editorRef.current;
+    const selection = window.getSelection?.();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    const commonAncestor = range?.commonAncestorContainer;
+    onActivate?.(
+      editor,
+      range && editor && commonAncestor && (commonAncestor === editor || editor.contains(commonAncestor))
+        ? range.cloneRange()
+        : null,
+    );
+  };
   const empty = !documentBodyInlineHtmlToPlain(value).trim();
 
   return (
@@ -265,10 +278,35 @@ function getSubtreeEndIndex(blocks, startIndex) {
   return endIndex;
 }
 
-export default function DocumentBodyEditor({ value, onChange, placeholder = '输入内容', readOnly = false, minHeight = 120 }) {
+function cloneDocumentBodyValue(value) {
+  return JSON.parse(JSON.stringify(normalizeDocumentBodyValue(value)));
+}
+
+function serializeDocumentBodyValue(value) {
+  return JSON.stringify(normalizeDocumentBodyValue(value));
+}
+
+export default function DocumentBodyEditor({
+  value,
+  onChange,
+  onSave,
+  onDirtyChange,
+  placeholder = '输入内容',
+  readOnly = false,
+  minHeight = 120,
+  style,
+}) {
   const normalized = useMemo(() => normalizeDocumentBodyValue(value), [value]);
+  const serializedValue = useMemo(() => serializeDocumentBodyValue(normalized), [normalized]);
   const blocks = normalized.blocks;
+  const editorRootRef = useRef(null);
+  const undoHistoryRef = useRef([]);
+  const lastEmittedValueRef = useRef('');
+  const pendingLocalValueRef = useRef(false);
+  const activeInlineEditorRef = useRef(null);
+  const inlineSelectionRangeRef = useRef(null);
   const [activeBlockId, setActiveBlockId] = useState(null);
+  const [inlineToolbarOpen, setInlineToolbarOpen] = useState(false);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openMenuBlockId, setOpenMenuBlockId] = useState(null);
   const [focusBlockId, setFocusBlockId] = useState(null);
@@ -283,13 +321,154 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
     return markers;
   }, [blocks]);
 
-  const emitBlocks = (nextBlocks, nextFocusId = null) => {
-    onChange?.({ ...normalized, blocks: nextBlocks });
+  useEffect(() => {
+    if (lastEmittedValueRef.current === serializedValue) {
+      lastEmittedValueRef.current = '';
+      pendingLocalValueRef.current = false;
+      return;
+    }
+    if (pendingLocalValueRef.current) {
+      pendingLocalValueRef.current = false;
+      lastEmittedValueRef.current = '';
+      return;
+    }
+    undoHistoryRef.current = [];
+  }, [serializedValue]);
+
+  const emitBlocks = (nextBlocks, nextFocusId = null, { recordUndo = true } = {}) => {
+    const currentSnapshot = cloneDocumentBodyValue(normalized);
+    const nextValue = { ...normalized, blocks: nextBlocks };
+    const nextSerializedValue = serializeDocumentBodyValue(nextValue);
+    if (nextSerializedValue === serializedValue) return;
+    if (recordUndo) {
+      const lastSnapshot = undoHistoryRef.current[undoHistoryRef.current.length - 1];
+      if (!lastSnapshot || serializeDocumentBodyValue(lastSnapshot) !== serializeDocumentBodyValue(currentSnapshot)) {
+        undoHistoryRef.current = [...undoHistoryRef.current, currentSnapshot].slice(-80);
+      }
+    }
+    lastEmittedValueRef.current = nextSerializedValue;
+    pendingLocalValueRef.current = true;
+    onChange?.(nextValue);
+    onDirtyChange?.(true);
     if (nextFocusId) {
       setActiveBlockId(nextFocusId);
       setFocusBlockId(nextFocusId);
     }
   };
+
+  const undoLastChange = () => {
+    const snapshot = undoHistoryRef.current.pop();
+    if (!snapshot) {
+      message.info('没有可撤回的操作');
+      return;
+    }
+    lastEmittedValueRef.current = serializeDocumentBodyValue(snapshot);
+    pendingLocalValueRef.current = true;
+    onChange?.(cloneDocumentBodyValue(snapshot));
+    onDirtyChange?.(true);
+    const nextActiveId = snapshot.blocks.some(block => block.id === activeBlockId)
+      ? activeBlockId
+      : snapshot.blocks[0]?.id;
+    setActiveBlockId(nextActiveId || null);
+    if (nextActiveId) setFocusBlockId(nextActiveId);
+    message.success('已撤回上一次操作');
+  };
+
+  const rememberInlineSelection = (blockId, editor, range) => {
+    setActiveBlockId(blockId);
+    activeInlineEditorRef.current = editor || null;
+    if (range && !range.collapsed) {
+      inlineSelectionRangeRef.current = range.cloneRange();
+      setInlineToolbarOpen(true);
+    } else {
+      inlineSelectionRangeRef.current = null;
+      setInlineToolbarOpen(false);
+    }
+  };
+
+  const restoreInlineSelection = () => {
+    const editor = activeInlineEditorRef.current;
+    const range = inlineSelectionRangeRef.current;
+    if (!editor || !range || range.collapsed || !document.contains(editor)) return null;
+    const selection = window.getSelection?.();
+    if (!selection) return null;
+    editor.focus();
+    selection.removeAllRanges();
+    selection.addRange(range.cloneRange());
+    return selection.getRangeAt(0);
+  };
+
+  const commitInlineMutation = (node) => {
+    const editor = activeInlineEditorRef.current;
+    if (!editor) return;
+    const selection = window.getSelection?.();
+    if (selection && node) {
+      const nextRange = document.createRange();
+      nextRange.selectNodeContents(node);
+      selection.removeAllRanges();
+      selection.addRange(nextRange);
+      inlineSelectionRangeRef.current = nextRange.cloneRange();
+    }
+    editor.dispatchEvent(new Event('input', { bubbles: true }));
+    setInlineToolbarOpen(true);
+  };
+
+  const wrapInlineSelection = (tagName, configure) => {
+    const range = restoreInlineSelection();
+    if (!range) {
+      message.info('请先选择要设置样式的文字');
+      return;
+    }
+    const wrapper = document.createElement(tagName);
+    configure?.(wrapper);
+    try {
+      range.surroundContents(wrapper);
+    } catch {
+      wrapper.appendChild(range.extractContents());
+      range.insertNode(wrapper);
+    }
+    commitInlineMutation(wrapper);
+  };
+
+  const applyInlineStyle = (style) => {
+    if (style === 'bold') wrapInlineSelection('strong');
+    if (style === 'italic') wrapInlineSelection('em');
+    if (style === 'underline') wrapInlineSelection('u');
+    if (style === 'strike') wrapInlineSelection('s');
+    if (style === 'code') wrapInlineSelection('code');
+    if (style === 'link') {
+      const href = window.prompt('请输入链接地址', 'https://');
+      if (!href) return;
+      wrapInlineSelection('a', node => {
+        node.setAttribute('href', href);
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noreferrer');
+      });
+    }
+  };
+
+  const applyInlineColor = (color) => {
+    wrapInlineSelection('span', node => node.setAttribute('style', `color: ${color}`));
+  };
+
+  useEffect(() => {
+    const handleEditorShortcut = (event) => {
+      if (readOnly || !editorRootRef.current?.contains(document.activeElement)) return;
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
+      const key = String(event.key || '').toLowerCase();
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        undoLastChange();
+        return;
+      }
+      if (key === 's' && !event.shiftKey) {
+        event.preventDefault();
+        Promise.resolve(onSave?.()).catch(() => {});
+      }
+    };
+    window.addEventListener('keydown', handleEditorShortcut);
+    return () => window.removeEventListener('keydown', handleEditorShortcut);
+  });
 
   const patchBlock = (id, patch) => emitBlocks(blocks.map(block => (block.id === id ? { ...block, ...patch } : block)));
   const patchBlockMeta = (id, patch) => emitBlocks(blocks.map(block => (
@@ -300,10 +479,14 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
     if (!pastedBlocks.length) return;
     const targetIndex = blocks.findIndex(block => block.id === targetBlockId);
     const targetBlock = blocks[targetIndex];
+    const targetIndent = targetBlock
+      ? getBlockIndent(targetBlock) + (targetBlock.type === 'fold-list' ? 1 : 0)
+      : 0;
+    const preparedBlocks = rebaseDocumentBodyClipboardBlocks(pastedBlocks, targetIndent);
     const nextBlocks = [...blocks];
-    if (targetBlock && isBlankBlock(targetBlock)) nextBlocks.splice(targetIndex, 1, ...pastedBlocks);
-    else nextBlocks.splice(targetIndex >= 0 ? targetIndex + 1 : nextBlocks.length, 0, ...pastedBlocks);
-    emitBlocks(nextBlocks, pastedBlocks[0]?.id);
+    if (targetBlock && isBlankBlock(targetBlock)) nextBlocks.splice(targetIndex, 1, ...preparedBlocks);
+    else nextBlocks.splice(targetIndex >= 0 ? targetIndex + 1 : nextBlocks.length, 0, ...preparedBlocks);
+    emitBlocks(nextBlocks, preparedBlocks[0]?.id);
   };
 
   const handleBlockPaste = (event, blockId) => {
@@ -514,7 +697,7 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
       autoFocus: focusBlockId === block.id,
       onAutoFocusDone: () => setFocusBlockId(null),
       onChange: content => patchBlock(block.id, { content }),
-      onActivate: () => setActiveBlockId(block.id),
+      onActivate: (editor, range) => rememberInlineSelection(block.id, editor, range),
       onEnter: () => handleEnter(block),
       onBackspace: (event) => {
         if (blocks.length <= 1) return;
@@ -535,27 +718,49 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
         nextRows[rowIndex][columnIndex] = cellValue;
         patchBlockMeta(block.id, { rows: nextRows });
       };
+      const resizeTable = (rowDelta, columnDelta) => {
+        const nextRowCount = Math.max(1, rows.length + rowDelta);
+        const nextColumnCount = Math.max(1, columnCount + columnDelta);
+        const nextRows = Array.from({ length: nextRowCount }, (_, rowIndex) => (
+          Array.from({ length: nextColumnCount }, (_, columnIndex) => rows[rowIndex]?.[columnIndex] || '')
+        ));
+        patchBlockMeta(block.id, { rows: nextRows });
+      };
       return (
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', minWidth: columnCount * 120, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
-            <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={`${block.id}-row-${rowIndex}`}>
-                  {Array.from({ length: columnCount }, (_, columnIndex) => (
-                    <td key={`${block.id}-cell-${rowIndex}-${columnIndex}`} style={{ border: '1px solid #e5e7eb', padding: 0 }}>
-                      <Input
-                        variant="borderless"
-                        value={row?.[columnIndex] || ''}
-                        readOnly={readOnly}
-                        onFocus={() => setActiveBlockId(block.id)}
-                        onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
-                      />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div>
+          {!readOnly && active && (
+            <Space size={4} wrap style={{ marginBottom: 8 }}>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => resizeTable(1, 0)}>行</Button>
+              <Button size="small" icon={<PlusOutlined />} onClick={() => resizeTable(0, 1)}>列</Button>
+              <Tooltip title="删除末行">
+                <Button size="small" icon={<DeleteOutlined />} disabled={rows.length <= 1} onClick={() => resizeTable(-1, 0)} />
+              </Tooltip>
+              <Tooltip title="删除末列">
+                <Button size="small" icon={<DeleteOutlined />} disabled={columnCount <= 1} onClick={() => resizeTable(0, -1)} />
+              </Tooltip>
+            </Space>
+          )}
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', minWidth: columnCount * 120, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+              <tbody>
+                {rows.map((row, rowIndex) => (
+                  <tr key={`${block.id}-row-${rowIndex}`}>
+                    {Array.from({ length: columnCount }, (_, columnIndex) => (
+                      <td key={`${block.id}-cell-${rowIndex}-${columnIndex}`} style={{ border: '1px solid #e5e7eb', padding: 0 }}>
+                        <Input
+                          variant="borderless"
+                          value={row?.[columnIndex] || ''}
+                          readOnly={readOnly}
+                          onFocus={() => setActiveBlockId(block.id)}
+                          onChange={event => updateCell(rowIndex, columnIndex, event.target.value)}
+                        />
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       );
     }
@@ -721,8 +926,86 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
     },
   };
 
+  const inlineColorOptions = ['#111827', '#ef4444', '#f97316', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#8b5cf6', '#ec4899', '#64748b', '#ffffff', '#92400e'];
+  const inlineToolbar = !readOnly && inlineToolbarOpen ? (
+    <div
+      data-document-body-inline-toolbar="true"
+      onMouseDown={event => event.preventDefault()}
+      style={{
+        position: 'sticky',
+        top: 0,
+        zIndex: 20,
+        display: 'flex',
+        alignItems: 'center',
+        width: 'fit-content',
+        maxWidth: '100%',
+        marginBottom: 8,
+        padding: 5,
+        border: '1px solid #e5e7eb',
+        borderRadius: 8,
+        background: '#fff',
+        boxShadow: '0 8px 24px rgba(15, 23, 42, 0.12)',
+      }}
+    >
+      <Space size={2} wrap>
+        {[
+          ['bold', 'B', '加粗'],
+          ['italic', 'I', '斜体'],
+          ['underline', 'U', '下划线'],
+          ['strike', 'S', '删除线'],
+          ['code', '{}', '行内代码'],
+          ['link', <LinkOutlined />, '链接'],
+        ].map(([key, label, title]) => (
+          <Tooltip key={key} title={title}>
+            <Button
+              size="small"
+              type="text"
+              aria-label={title}
+              onClick={() => applyInlineStyle(key)}
+              style={{
+                width: 28,
+                minWidth: 28,
+                padding: 0,
+                fontWeight: key === 'bold' ? 800 : 600,
+                fontStyle: key === 'italic' ? 'italic' : 'normal',
+                textDecoration: key === 'underline' ? 'underline' : key === 'strike' ? 'line-through' : 'none',
+              }}
+            >
+              {label}
+            </Button>
+          </Tooltip>
+        ))}
+        <Divider type="vertical" style={{ marginInline: 4 }} />
+        <Dropdown
+          trigger={['click']}
+          dropdownRender={() => (
+            <div
+              onMouseDown={event => event.preventDefault()}
+              style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 24px)', gap: 6, padding: 8, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, boxShadow: '0 12px 32px rgba(15, 23, 42, 0.16)' }}
+            >
+              {inlineColorOptions.map(color => (
+                <button
+                  key={color}
+                  type="button"
+                  aria-label={`文字颜色 ${color}`}
+                  onClick={() => applyInlineColor(color)}
+                  style={{ width: 24, height: 24, borderRadius: 4, border: color === '#ffffff' ? '1px solid #d1d5db' : '1px solid transparent', background: color, cursor: 'pointer' }}
+                />
+              ))}
+            </div>
+          )}
+        >
+          <Tooltip title="文字颜色">
+            <Button size="small" type="text" aria-label="文字颜色" style={{ width: 28, minWidth: 28, padding: 0, fontWeight: 800 }}>A</Button>
+          </Tooltip>
+        </Dropdown>
+      </Space>
+    </div>
+  ) : null;
+
   return (
-    <div style={{ minHeight, background: '#fff', padding: '2px 0 16px' }}>
+    <div ref={editorRootRef} style={{ minHeight, background: '#fff', padding: '2px 0 16px', ...style }}>
+      {inlineToolbar}
       <div>{blocks.map(renderBlock)}</div>
       {!readOnly && !(lastVisibleBlock?.type === 'paragraph' && isBlankBlock(lastVisibleBlock)) && (
         <div style={{ display: 'flex', alignItems: 'center', minHeight: 38, padding: '4px 8px 4px 0', marginTop: 4 }}>

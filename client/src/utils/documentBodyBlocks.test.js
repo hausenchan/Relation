@@ -3,6 +3,7 @@ import {
   documentBodyToPlain,
   normalizeDocumentBodyValue,
   parseDocumentBodyClipboard,
+  rebaseDocumentBodyClipboardBlocks,
 } from './documentBodyBlocks';
 
 describe('document body blocks', () => {
@@ -79,5 +80,52 @@ describe('document body blocks', () => {
     expect(value.blocks[0].content).toContain('font-family: PingFang SC');
     expect(value.blocks[1].content).toContain('color: rgb(212, 56, 13)');
     expect(value.blocks[2].content).toContain('<strong>许愿星</strong>');
+  });
+
+  test('merges Wolai visual and plain-text list depth without layout line breaks', () => {
+    const value = parseDocumentBodyClipboard(`
+      <div data-block-type="enum_list" style="margin-left: 28px">
+        <div contenteditable="true">
+          搜索套利本周消耗 $95000，毛利约 $21000
+        </div>
+      </div>
+      <div data-block-type="enum_list" style="margin-left: 56px">
+        <div contenteditable="true">
+          自家 AFS 消耗占比提高到 25%
+        </div>
+      </div>
+      <div data-block-type="enum_list" style="margin-left: 56px">
+        <div contenteditable="true">
+          本周谷歌政策调整
+        </div>
+      </div>
+      <div data-block-type="enum_list" style="margin-left: 28px">
+        <div contenteditable="true">
+          IAP 本周消耗 $4753
+        </div>
+      </div>
+    `, `a. 搜索套利本周消耗 $95000，毛利约 $21000
+    i. 自家 AFS 消耗占比提高到 25%
+    ii. 本周谷歌政策调整
+b. IAP 本周消耗 $4753`);
+
+    expect(value.blocks.map(block => block.type)).toEqual(['numbered', 'numbered', 'numbered', 'numbered']);
+    expect(value.blocks.map(block => block.meta.indent)).toEqual([1, 2, 2, 1]);
+    expect(value.blocks.map(block => block.content)).toEqual([
+      '搜索套利本周消耗 $95000，毛利约 $21000',
+      '自家 AFS 消耗占比提高到 25%',
+      '本周谷歌政策调整',
+      'IAP 本周消耗 $4753',
+    ]);
+    expect(value.blocks.every(block => !/[\r\n]/.test(block.content))).toBe(true);
+  });
+
+  test('rebases pasted Wolai hierarchy under the selected fold list item', () => {
+    const blocks = rebaseDocumentBodyClipboardBlocks([
+      { id: 'parent', type: 'numbered', content: '主项', meta: { indent: 0 } },
+      { id: 'child', type: 'numbered', content: '子项', meta: { indent: 1 } },
+    ], 1);
+
+    expect(blocks.map(block => block.meta.indent)).toEqual([1, 2]);
   });
 });
