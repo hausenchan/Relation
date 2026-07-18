@@ -3081,17 +3081,96 @@ function buildOperationalMeetingPreparationBlocks(questions = DEFAULT_OPERATIONA
   const source = Array.isArray(questions) && questions.length ? questions : DEFAULT_OPERATIONAL_MEETING_QUESTIONS;
   return {
     format: 'relation_document_blocks_v1',
-    blocks: source.map((question, index) => ({
-      id: `template_${question.key || index + 1}`,
+    blocks: source.flatMap((question, index) => {
+      const questionKey = question.key || `q_${index + 1}`;
+      return [
+        {
+          id: `template_${questionKey}`,
+          type: 'fold-list',
+          content: question.title || `问题 ${index + 1}`,
+          checked: false,
+          meta: {
+            indent: 0,
+            collapsed: false,
+            template_question_key: questionKey,
+          },
+        },
+        {
+          id: `template_${questionKey}_item_1`,
+          type: 'numbered',
+          content: '',
+          checked: false,
+          meta: {
+            indent: 1,
+            hierarchy: 'list',
+            template_question_parent: questionKey,
+          },
+        },
+      ];
+    }),
+  };
+}
+
+function upgradeOperationalMeetingPreparationBlocks(current, questions) {
+  if (!Array.isArray(current?.blocks) || !current.blocks.length) {
+    return buildOperationalMeetingPreparationBlocks(questions);
+  }
+  const source = Array.isArray(questions) && questions.length ? questions : DEFAULT_OPERATIONAL_MEETING_QUESTIONS;
+  const questionByKey = new Map(source.map((question, index) => [question.key || `q_${index + 1}`, question]));
+  const questionByTitle = new Map(source.map(question => [String(question.title || '').trim(), question]));
+  let activeQuestionKey = '';
+  let foundTemplateQuestion = false;
+  const migrated = current.blocks.map((block, index) => {
+    const meta = block?.meta && typeof block.meta === 'object' ? block.meta : {};
+    const title = String(block?.content || '').replace(/<[^>]+>/g, '').trim();
+    const question = questionByKey.get(meta.template_question_key)
+      || (Number(meta.indent || 0) === 0 && ['numbered', 'fold-list'].includes(block?.type) ? questionByTitle.get(title) : null);
+    if (question) {
+      foundTemplateQuestion = true;
+      activeQuestionKey = question.key || meta.template_question_key || `q_${index + 1}`;
+      return {
+        ...block,
+        type: 'fold-list',
+        meta: {
+          ...meta,
+          indent: 0,
+          collapsed: Boolean(meta.collapsed),
+          template_question_key: activeQuestionKey,
+        },
+      };
+    }
+    if (!activeQuestionKey) return block;
+    return {
+      ...block,
+      meta: {
+        ...meta,
+        indent: Math.max(1, Number(meta.indent || 0)),
+        hierarchy: 'list',
+        template_question_parent: meta.template_question_parent || activeQuestionKey,
+      },
+    };
+  });
+  if (!foundTemplateQuestion) return current;
+
+  const withChildren = [];
+  migrated.forEach((block, index) => {
+    withChildren.push(block);
+    if (block.type !== 'fold-list' || !block.meta?.template_question_key) return;
+    const nextBlock = migrated[index + 1];
+    if (nextBlock && Number(nextBlock.meta?.indent || 0) > 0) return;
+    withChildren.push({
+      id: `${block.id || `template_${block.meta.template_question_key}`}_item_1`,
       type: 'numbered',
-      content: question.title || `问题 ${index + 1}`,
+      content: '',
       checked: false,
       meta: {
-        indent: 0,
-        template_question_key: question.key || `q_${index + 1}`,
+        indent: 1,
+        hierarchy: 'list',
+        template_question_parent: block.meta.template_question_key,
       },
-    })),
-  };
+    });
+  });
+  return { ...current, format: 'relation_document_blocks_v1', blocks: withChildren };
 }
 
 function upgradeOperationalMeetingTemplateBlocks(templateId) {
@@ -3107,9 +3186,11 @@ function upgradeOperationalMeetingTemplateBlocks(templateId) {
   `);
   rows.forEach((row) => {
     const current = parseJsonSafe(row.default_blocks_json, null);
-    if (Array.isArray(current?.blocks) && current.blocks.length) return;
     const questions = parseJsonSafe(row.default_questions_json, DEFAULT_OPERATIONAL_MEETING_QUESTIONS);
-    update.run(JSON.stringify(buildOperationalMeetingPreparationBlocks(questions)), row.id);
+    const upgraded = upgradeOperationalMeetingPreparationBlocks(current, questions);
+    if (JSON.stringify(upgraded) !== JSON.stringify(current)) {
+      update.run(JSON.stringify(upgraded), row.id);
+    }
   });
 }
 

@@ -1,20 +1,20 @@
 import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Button, Checkbox, Dropdown, Input, Space, Tooltip } from 'antd';
+import { Button, Checkbox, Dropdown, Input, Tooltip } from 'antd';
 import {
-  BgColorsOutlined,
-  BoldOutlined,
-  ClearOutlined,
+  ArrowDownOutlined,
+  ArrowLeftOutlined,
+  ArrowRightOutlined,
+  ArrowUpOutlined,
   DeleteOutlined,
-  DownOutlined,
-  FontColorsOutlined,
-  ItalicOutlined,
-  MenuOutlined,
-  MinusOutlined,
   PlusOutlined,
-  StrikethroughOutlined,
-  UnderlineOutlined,
-  UpOutlined,
 } from '@ant-design/icons';
+import {
+  buildCollapsedDocumentBlockIds,
+  buildDocumentBlockGuideMap,
+  buildDocumentNumberedListValues,
+  getDocumentBlockHierarchyIndent,
+  isDocumentBlockHierarchyMember,
+} from '../utils/documentBlockHierarchy';
 import {
   createDocumentBodyBlock,
   documentBodyInlineHtmlToPlain,
@@ -24,8 +24,13 @@ import {
   sanitizeDocumentBodyInlineHtml,
 } from '../utils/documentBodyBlocks';
 
-const COLOR_OPTIONS = ['#1f2937', '#d4380d', '#1677ff', '#389e0d'];
-const BACKGROUND_OPTIONS = ['#fff1b8', '#d6e4ff', '#d9f7be', '#ffd6e7'];
+const LIST_INDENT_WIDTH = 28;
+const LIST_MARKER_WIDTH = 24;
+const LIST_TEXT_GAP = 6;
+const LIST_LINE_HEIGHT = 1.96;
+const LIST_MARKER_COLOR = '#202124';
+const LIST_GUIDE_COLOR = '#f0f0f0';
+const MAX_LIST_INDENT = 9;
 
 function formatAlphaNumber(value) {
   let number = Math.max(1, Number(value) || 1);
@@ -61,11 +66,78 @@ function formatNumberedMarker(value, indent) {
   return `${Math.max(1, Number(value) || 1)}.`;
 }
 
-function getBulletMarker(indent) {
-  return ['•', '◦', '◆'][Math.max(0, Number(indent) || 0) % 3];
+function renderBulletMarker(indent) {
+  const level = Math.max(0, Number(indent) || 0) % 3;
+  const common = {
+    display: 'block',
+    width: 5.5,
+    height: 5.5,
+    boxSizing: 'border-box',
+  };
+  if (level === 1) return <span aria-hidden="true" style={{ ...common, border: `1.25px solid ${LIST_MARKER_COLOR}`, borderRadius: '50%' }} />;
+  if (level === 2) return <span aria-hidden="true" style={{ ...common, background: LIST_MARKER_COLOR, transform: 'rotate(45deg)' }} />;
+  return <span aria-hidden="true" style={{ ...common, background: LIST_MARKER_COLOR, borderRadius: '50%' }} />;
 }
 
-function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onActivate, onEnter, onBackspace, onPaste }) {
+function FoldTriangle({ collapsed }) {
+  return (
+    <svg
+      aria-hidden="true"
+      viewBox="0 0 14 14"
+      style={{
+        display: 'block',
+        width: 14,
+        height: 14,
+        transform: collapsed ? 'translateX(0.5px)' : 'translateY(0.5px)',
+      }}
+    >
+      <path
+        d={collapsed ? 'M5 3.8 L10 7 L5 10.2 Z' : 'M3.8 5 L10.2 5 L7 10 Z'}
+        fill={LIST_MARKER_COLOR}
+        stroke={LIST_MARKER_COLOR}
+        strokeWidth="1.1"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+function BlockHandleIcon({ add = false }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        color: '#6b7280',
+        fontSize: add ? 18 : 16,
+        fontWeight: 700,
+        lineHeight: 1,
+      }}
+    >
+      {add ? '+' : '::'}
+    </span>
+  );
+}
+
+function InlineBlockEditor({
+  value,
+  placeholder,
+  readOnly,
+  style,
+  autoFocus,
+  onAutoFocusDone,
+  onChange,
+  onActivate,
+  onEnter,
+  onBackspace,
+  onIndent,
+  onPaste,
+}) {
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const composingRef = useRef(false);
@@ -80,6 +152,21 @@ function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onAc
     localHtmlRef.current = html;
   }, [value]);
 
+  useLayoutEffect(() => {
+    const editor = editorRef.current;
+    if (!autoFocus || readOnly || !editor) return;
+    editor.focus();
+    const selection = window.getSelection?.();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(editor);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    onAutoFocusDone?.();
+  }, [autoFocus, onAutoFocusDone, readOnly]);
+
   const emitChange = () => {
     const html = sanitizeDocumentBodyInlineHtml(editorRef.current?.innerHTML || '');
     localHtmlRef.current = html;
@@ -87,11 +174,15 @@ function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onAc
   };
 
   const activate = () => onActivate?.(editorRef.current);
+  const empty = !documentBodyInlineHtmlToPlain(value).trim();
 
   return (
     <div style={{ position: 'relative', width: '100%', minWidth: 0 }}>
-      {!documentBodyInlineHtmlToPlain(value).trim() && placeholder && (
-        <span aria-hidden="true" style={{ position: 'absolute', inset: '0 auto auto 0', color: '#9ca3af', pointerEvents: 'none', ...style }}>
+      {empty && placeholder && (
+        <span
+          aria-hidden="true"
+          style={{ position: 'absolute', inset: '0 auto auto 0', color: '#b8bcc2', pointerEvents: 'none', ...style }}
+        >
           {placeholder}
         </span>
       )}
@@ -122,41 +213,84 @@ function InlineBlockEditor({ value, placeholder, readOnly, style, onChange, onAc
         onKeyUp={activate}
         onPaste={onPaste}
         onKeyDown={(event) => {
+          if (event.key === 'Tab') {
+            event.preventDefault();
+            onIndent?.(event.shiftKey ? -1 : 1);
+            return;
+          }
           if (event.key === 'Enter' && !event.shiftKey && !composingRef.current) {
             event.preventDefault();
             onEnter?.();
-          } else if (event.key === 'Backspace' && !documentBodyInlineHtmlToPlain(editorRef.current?.innerHTML).trim()) {
+            return;
+          }
+          if (event.key === 'Backspace' && !documentBodyInlineHtmlToPlain(editorRef.current?.innerHTML).trim()) {
             onBackspace?.(event);
           }
         }}
-        style={{ minHeight: 24, outline: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...style }}
+        style={{ minHeight: 29, outline: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...style }}
       />
     </div>
   );
 }
 
-function blockTypeMenu(onSelect) {
-  const groups = [...new Set(DOCUMENT_BODY_BLOCK_TYPES.map(item => item.group))];
-  return {
-    items: groups.map(group => ({
-      type: 'group',
-      label: group,
-      children: DOCUMENT_BODY_BLOCK_TYPES
-        .filter(item => item.group === group)
-        .map(item => ({ key: item.value, label: item.label })),
-    })),
-    onClick: ({ key }) => onSelect(key),
-  };
+function groupedBlockTypeItems(prefix = 'type:') {
+  return [...new Set(DOCUMENT_BODY_BLOCK_TYPES.map(item => item.group))].map(group => ({
+    type: 'group',
+    label: group,
+    children: DOCUMENT_BODY_BLOCK_TYPES
+      .filter(item => item.group === group)
+      .map(item => ({ key: `${prefix}${item.value}`, label: item.label })),
+  }));
+}
+
+function getBlockIndent(block) {
+  return getDocumentBlockHierarchyIndent(block, MAX_LIST_INDENT);
+}
+
+function isBlankBlock(block) {
+  if (!block || block.type === 'divider' || block.type === 'table-simple') return false;
+  return !documentBodyInlineHtmlToPlain(block.content).trim()
+    && !documentBodyInlineHtmlToPlain(block.meta?.body).trim();
+}
+
+function getSubtreeEndIndex(blocks, startIndex) {
+  const block = blocks[startIndex];
+  if (!isDocumentBlockHierarchyMember(block)) return startIndex;
+  const indent = getBlockIndent(block);
+  let endIndex = startIndex;
+  for (let index = startIndex + 1; index < blocks.length; index += 1) {
+    if (!isDocumentBlockHierarchyMember(blocks[index]) || getBlockIndent(blocks[index]) <= indent) break;
+    endIndex = index;
+  }
+  return endIndex;
 }
 
 export default function DocumentBodyEditor({ value, onChange, placeholder = '输入内容', readOnly = false, minHeight = 120 }) {
   const normalized = useMemo(() => normalizeDocumentBodyValue(value), [value]);
   const blocks = normalized.blocks;
   const [activeBlockId, setActiveBlockId] = useState(null);
-  const activeEditorRef = useRef(null);
-  const savedRangeRef = useRef(null);
+  const [hoveredBlockId, setHoveredBlockId] = useState(null);
+  const [openMenuBlockId, setOpenMenuBlockId] = useState(null);
+  const [focusBlockId, setFocusBlockId] = useState(null);
+  const [draggingBlockId, setDraggingBlockId] = useState(null);
+  const hiddenBlockIds = useMemo(() => buildCollapsedDocumentBlockIds(blocks, MAX_LIST_INDENT), [blocks]);
+  const guideMap = useMemo(() => buildDocumentBlockGuideMap(blocks, hiddenBlockIds, MAX_LIST_INDENT), [blocks, hiddenBlockIds]);
+  const numberedMarkers = useMemo(() => {
+    const markers = new Map();
+    buildDocumentNumberedListValues(blocks, MAX_LIST_INDENT).forEach(({ index, indent }, blockId) => {
+      markers.set(blockId, formatNumberedMarker(index, indent));
+    });
+    return markers;
+  }, [blocks]);
 
-  const emitBlocks = (nextBlocks) => onChange?.({ ...normalized, blocks: nextBlocks });
+  const emitBlocks = (nextBlocks, nextFocusId = null) => {
+    onChange?.({ ...normalized, blocks: nextBlocks });
+    if (nextFocusId) {
+      setActiveBlockId(nextFocusId);
+      setFocusBlockId(nextFocusId);
+    }
+  };
+
   const patchBlock = (id, patch) => emitBlocks(blocks.map(block => (block.id === id ? { ...block, ...patch } : block)));
   const patchBlockMeta = (id, patch) => emitBlocks(blocks.map(block => (
     block.id === id ? { ...block, meta: { ...(block.meta || {}), ...patch } } : block
@@ -165,23 +299,11 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
   const insertPastedBlocks = (targetBlockId, pastedBlocks) => {
     if (!pastedBlocks.length) return;
     const targetIndex = blocks.findIndex(block => block.id === targetBlockId);
-    const insertIndex = targetIndex >= 0 ? targetIndex : blocks.length - 1;
-    const targetBlock = blocks[insertIndex];
-    const targetIsEmpty = targetBlock
-      && targetBlock.type !== 'divider'
-      && targetBlock.type !== 'table-simple'
-      && !documentBodyInlineHtmlToPlain(targetBlock.content).trim()
-      && !documentBodyInlineHtmlToPlain(targetBlock.meta?.body).trim();
-    const replacesTemplatePrompt = Boolean(
-      targetBlock?.meta?.template_question_key
-      && documentBodyInlineHtmlToPlain(pastedBlocks[0]?.content).trim()
-        === documentBodyInlineHtmlToPlain(targetBlock.content).trim(),
-    );
+    const targetBlock = blocks[targetIndex];
     const nextBlocks = [...blocks];
-    if (targetIsEmpty || replacesTemplatePrompt) nextBlocks.splice(insertIndex, 1, ...pastedBlocks);
-    else nextBlocks.splice(insertIndex + 1, 0, ...pastedBlocks);
-    emitBlocks(nextBlocks);
-    setActiveBlockId(pastedBlocks[0]?.id || null);
+    if (targetBlock && isBlankBlock(targetBlock)) nextBlocks.splice(targetIndex, 1, ...pastedBlocks);
+    else nextBlocks.splice(targetIndex >= 0 ? targetIndex + 1 : nextBlocks.length, 0, ...pastedBlocks);
+    emitBlocks(nextBlocks, pastedBlocks[0]?.id);
   };
 
   const handleBlockPaste = (event, blockId) => {
@@ -189,99 +311,227 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
     const html = event.clipboardData.getData('text/html') || '';
     const text = event.clipboardData.getData('text/plain') || '';
     const parsed = parseDocumentBodyClipboard(html, text);
-    const hasStructuralHtml = /<(?:p|div|h[1-6]|ol|ul|li|table|tr|br)\b/i.test(html);
-    const hasStructuredBlocks = parsed.blocks.length > 1
+    const structural = /<(?:p|div|h[1-6]|ol|ul|li|table|tr|br)\b/i.test(html)
+      || parsed.blocks.length > 1
       || parsed.blocks.some(item => item.type !== 'paragraph' || Number(item.meta?.indent || 0) > 0);
-    if (!parsed.blocks.length || (!hasStructuralHtml && !hasStructuredBlocks)) return;
+    if (!parsed.blocks.length || !structural) return;
     event.preventDefault();
     event.stopPropagation();
     insertPastedBlocks(blockId, parsed.blocks);
   };
 
-  const rememberSelection = (blockId, editor) => {
-    setActiveBlockId(blockId);
-    activeEditorRef.current = editor;
-    const selection = window.getSelection?.();
-    if (selection?.rangeCount && editor?.contains(selection.anchorNode)) savedRangeRef.current = selection.getRangeAt(0).cloneRange();
-  };
-
-  const restoreSelection = () => {
-    const selection = window.getSelection?.();
-    if (!selection || !savedRangeRef.current) return false;
-    selection.removeAllRanges();
-    selection.addRange(savedRangeRef.current);
-    activeEditorRef.current?.focus?.();
-    return true;
-  };
-
-  const formatSelection = (command, commandValue) => {
-    if (!restoreSelection()) return;
-    document.execCommand(command, false, commandValue);
-    activeEditorRef.current?.dispatchEvent(new Event('input', { bubbles: true }));
-  };
-
-  const insertBlock = (type = 'paragraph', afterId = blocks[blocks.length - 1]?.id, extra = {}) => {
-    const nextBlock = createDocumentBodyBlock(type, '', extra);
-    const index = blocks.findIndex(block => block.id === afterId);
+  const createBlockAfter = (type, afterId = blocks[blocks.length - 1]?.id, options = {}) => {
+    const afterIndex = blocks.findIndex(block => block.id === afterId);
+    const afterBlock = afterIndex >= 0 ? blocks[afterIndex] : null;
+    const currentIndent = afterBlock ? getBlockIndent(afterBlock) : 0;
+    const listType = ['bullet', 'numbered', 'fold-list'].includes(type);
+    const inheritedIndent = afterBlock?.type === 'fold-list' ? currentIndent + 1 : currentIndent;
+    let meta = {};
+    if (type === 'table-simple') meta = { rows: [['', ''], ['', '']] };
+    if (listType) meta = { indent: Math.min(MAX_LIST_INDENT, options.indent ?? inheritedIndent), hierarchy: 'list' };
+    if (type === 'fold-list') meta = { ...meta, collapsed: false };
+    if (!listType && inheritedIndent > 0) meta = { ...meta, indent: inheritedIndent, hierarchy: 'list' };
+    meta = { ...meta, ...(options.meta || {}) };
+    const nextBlock = createDocumentBodyBlock(type, options.content || '', { meta });
     const nextBlocks = [...blocks];
-    nextBlocks.splice(index >= 0 ? index + 1 : nextBlocks.length, 0, nextBlock);
-    emitBlocks(nextBlocks);
-    setActiveBlockId(nextBlock.id);
+    nextBlocks.splice(afterIndex >= 0 ? afterIndex + 1 : nextBlocks.length, 0, nextBlock);
+    emitBlocks(nextBlocks, nextBlock.id);
+    return nextBlock;
   };
 
-  const removeBlock = (id) => {
+  const replaceBlockType = (blockId, type) => {
+    const block = blocks.find(item => item.id === blockId);
+    if (!block) return;
+    const indent = getBlockIndent(block);
+    const nextMeta = type === 'table-simple'
+      ? { rows: Array.isArray(block.meta?.rows) ? block.meta.rows : [['', ''], ['', '']] }
+      : {
+        ...(block.meta || {}),
+        ...(['bullet', 'numbered', 'fold-list'].includes(type) || indent > 0 ? { indent, hierarchy: 'list' } : {}),
+        ...(type === 'fold-list' ? { collapsed: false } : {}),
+      };
+    patchBlock(blockId, { type, checked: false, meta: nextMeta });
+    setFocusBlockId(blockId);
+  };
+
+  const changeIndent = (blockId, delta) => {
+    const index = blocks.findIndex(block => block.id === blockId);
+    if (index < 0) return;
+    if (index === 0 && delta > 0) return;
+    const block = blocks[index];
+    const currentIndent = getBlockIndent(block);
+    const previousIndent = index > 0 ? getBlockIndent(blocks[index - 1]) : 0;
+    const nextIndent = Math.max(0, Math.min(MAX_LIST_INDENT, currentIndent + delta, previousIndent + 1));
+    if (nextIndent === currentIndent) return;
+    patchBlockMeta(blockId, { indent: nextIndent, hierarchy: 'list' });
+    setFocusBlockId(blockId);
+  };
+
+  const removeBlock = (blockId) => {
+    const index = blocks.findIndex(block => block.id === blockId);
+    if (index < 0) return;
     if (blocks.length === 1) {
-      patchBlock(id, { type: 'paragraph', content: '', checked: false, meta: {} });
+      const replacement = createDocumentBodyBlock('paragraph', '');
+      emitBlocks([replacement], replacement.id);
       return;
     }
-    emitBlocks(blocks.filter(block => block.id !== id));
+    const block = blocks[index];
+    const indent = getBlockIndent(block);
+    const endIndex = block.type === 'fold-list' ? getSubtreeEndIndex(blocks, index) : index;
+    const nextBlocks = blocks
+      .filter(item => item.id !== blockId)
+      .map((item, nextIndex) => {
+        const originalIndex = nextIndex >= index ? nextIndex + 1 : nextIndex;
+        if (block.type !== 'fold-list' || originalIndex <= index || originalIndex > endIndex) return item;
+        return { ...item, meta: { ...(item.meta || {}), indent: Math.max(indent, getBlockIndent(item) - 1) } };
+      });
+    const previous = nextBlocks[Math.max(0, index - 1)] || nextBlocks[0];
+    emitBlocks(nextBlocks, previous?.id);
   };
 
-  const moveBlock = (id, delta) => {
-    const from = blocks.findIndex(block => block.id === id);
-    const to = from + delta;
-    if (from < 0 || to < 0 || to >= blocks.length) return;
-    const next = [...blocks];
-    const [item] = next.splice(from, 1);
-    next.splice(to, 0, item);
-    emitBlocks(next);
+  const moveBlock = (blockId, delta) => {
+    const start = blocks.findIndex(block => block.id === blockId);
+    if (start < 0) return;
+    const end = getSubtreeEndIndex(blocks, start);
+    const indent = getBlockIndent(blocks[start]);
+    if (delta < 0) {
+      let previousStart = start - 1;
+      while (previousStart >= 0 && getBlockIndent(blocks[previousStart]) > indent) previousStart -= 1;
+      if (previousStart < 0 || getBlockIndent(blocks[previousStart]) !== indent) return;
+      const group = blocks.slice(start, end + 1);
+      const nextBlocks = [...blocks.slice(0, previousStart), ...group, ...blocks.slice(previousStart, start), ...blocks.slice(end + 1)];
+      emitBlocks(nextBlocks, blockId);
+      return;
+    }
+    const nextStart = end + 1;
+    if (nextStart >= blocks.length || getBlockIndent(blocks[nextStart]) !== indent) return;
+    const nextEnd = getSubtreeEndIndex(blocks, nextStart);
+    const group = blocks.slice(start, end + 1);
+    const nextBlocks = [...blocks.slice(0, start), ...blocks.slice(nextStart, nextEnd + 1), ...group, ...blocks.slice(nextEnd + 1)];
+    emitBlocks(nextBlocks, blockId);
   };
 
-  const renderBlockEditor = (block, index) => {
-    const headingLevel = Number(block.type.replace('heading', '')) || 0;
-    const indent = Math.max(0, Math.min(6, Number(block.meta?.indent || 0)));
+  const handleDrop = (event, targetBlockId) => {
+    event.preventDefault();
+    const sourceId = draggingBlockId || event.dataTransfer?.getData('text/plain');
+    if (!sourceId || sourceId === targetBlockId) return;
+    const sourceStart = blocks.findIndex(block => block.id === sourceId);
+    const targetIndex = blocks.findIndex(block => block.id === targetBlockId);
+    if (sourceStart < 0 || targetIndex < 0) return;
+    const sourceEnd = getSubtreeEndIndex(blocks, sourceStart);
+    if (targetIndex >= sourceStart && targetIndex <= sourceEnd) return;
+    const group = blocks.slice(sourceStart, sourceEnd + 1);
+    const remaining = [...blocks.slice(0, sourceStart), ...blocks.slice(sourceEnd + 1)];
+    const remainingTargetIndex = remaining.findIndex(block => block.id === targetBlockId);
+    remaining.splice(remainingTargetIndex < 0 ? remaining.length : remainingTargetIndex, 0, ...group);
+    emitBlocks(remaining, sourceId);
+    setDraggingBlockId(null);
+  };
+
+  const handleEnter = (block) => {
+    const indent = getBlockIndent(block);
+    if (block.type === 'fold-list') {
+      createBlockAfter('numbered', block.id, {
+        indent: Math.min(MAX_LIST_INDENT, indent + 1),
+        meta: {
+          hierarchy: 'list',
+          template_question_parent: block.meta?.template_question_key,
+        },
+      });
+      return;
+    }
+    if (['bullet', 'numbered'].includes(block.type)) {
+      createBlockAfter(block.type, block.id, { indent, meta: { hierarchy: 'list' } });
+      return;
+    }
+    createBlockAfter('paragraph', block.id, { meta: indent ? { indent, hierarchy: 'list' } : {} });
+  };
+
+  const handleBlockMenuAction = (block, key) => {
+    setOpenMenuBlockId(null);
+    if (key.startsWith('type:')) {
+      replaceBlockType(block.id, key.slice(5));
+      return;
+    }
+    if (key === 'indent-less') changeIndent(block.id, -1);
+    if (key === 'indent-more') changeIndent(block.id, 1);
+    if (key === 'move-up') moveBlock(block.id, -1);
+    if (key === 'move-down') moveBlock(block.id, 1);
+    if (key === 'delete') removeBlock(block.id);
+  };
+
+  const buildBlockMenu = (block, index) => ({
+    items: [
+      ...groupedBlockTypeItems(),
+      { type: 'divider' },
+      { key: 'indent-less', icon: <ArrowLeftOutlined />, label: '减少缩进', disabled: getBlockIndent(block) === 0 },
+      { key: 'indent-more', icon: <ArrowRightOutlined />, label: '增加缩进', disabled: index === 0 || getBlockIndent(block) >= MAX_LIST_INDENT },
+      { key: 'move-up', icon: <ArrowUpOutlined />, label: '上移', disabled: index === 0 },
+      { key: 'move-down', icon: <ArrowDownOutlined />, label: '下移', disabled: index === blocks.length - 1 },
+      { type: 'divider' },
+      { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
+    ],
+    onClick: ({ key, domEvent }) => {
+      domEvent?.stopPropagation();
+      handleBlockMenuAction(block, key);
+    },
+  });
+
+  const renderGuides = (block, centerY, markerOffset) => {
+    const guide = guideMap.get(block.id);
+    const indent = getBlockIndent(block);
+    if ((!guide?.ancestorLines?.length && !guide?.hasChildren) || indent < 0) return null;
+    const lineStyle = { position: 'absolute', width: 2, background: LIST_GUIDE_COLOR, pointerEvents: 'none', zIndex: 0 };
+    return (
+      <>
+        {(guide.ancestorLines || []).map(({ level, continuesBelow }) => (
+          <span
+            key={`${block.id}-guide-${level}`}
+            style={{
+              ...lineStyle,
+              left: level * LIST_INDENT_WIDTH + markerOffset,
+              top: -8,
+              ...(continuesBelow ? { bottom: -8 } : { height: centerY + 9 }),
+            }}
+          />
+        ))}
+        {guide.hasChildren && (
+          <span style={{ ...lineStyle, left: indent * LIST_INDENT_WIDTH + markerOffset, top: centerY, bottom: -8 }} />
+        )}
+      </>
+    );
+  };
+
+  const renderBlockInput = (block, index) => {
+    const indent = getBlockIndent(block);
+    const active = activeBlockId === block.id;
+    const fontSize = 15;
+    const lineHeightPx = fontSize * LIST_LINE_HEIGHT;
     const commonProps = {
       value: block.content,
-      placeholder: index === 0 ? placeholder : '输入内容',
+      placeholder: active ? (index === 0 ? placeholder : '输入内容') : '',
       readOnly,
+      autoFocus: focusBlockId === block.id,
+      onAutoFocusDone: () => setFocusBlockId(null),
       onChange: content => patchBlock(block.id, { content }),
-      onActivate: editor => rememberSelection(block.id, editor),
-      onEnter: () => insertBlock(
-        ['bullet', 'numbered', 'todo'].includes(block.type) ? block.type : 'paragraph',
-        block.id,
-        ['bullet', 'numbered', 'todo'].includes(block.type) ? { meta: { indent } } : {},
-      ),
-      onBackspace: event => {
+      onActivate: () => setActiveBlockId(block.id),
+      onEnter: () => handleEnter(block),
+      onBackspace: (event) => {
         if (blocks.length <= 1) return;
         event.preventDefault();
         removeBlock(block.id);
       },
+      onIndent: delta => changeIndent(block.id, delta),
       onPaste: event => handleBlockPaste(event, block.id),
-      style: {
-        fontSize: headingLevel ? [0, 28, 23, 19, 16][headingLevel] : 15,
-        fontWeight: headingLevel ? 700 : 400,
-        lineHeight: headingLevel ? 1.4 : 1.75,
-        color: block.type === 'quote' ? '#475569' : '#1f2937',
-        fontStyle: block.type === 'quote' ? 'italic' : 'normal',
-      },
+      style: { fontSize, lineHeight: LIST_LINE_HEIGHT, color: '#202124', fontWeight: 400, padding: 0 },
     };
 
-    if (block.type === 'divider') return <div style={{ borderTop: '1px solid #d1d5db', margin: '14px 0' }} />;
+    if (block.type === 'divider') return <div style={{ borderTop: '1px solid #e5e7eb', margin: '14px 0' }} />;
     if (block.type === 'table-simple') {
       const rows = Array.isArray(block.meta?.rows) && block.meta.rows.length ? block.meta.rows : [['', ''], ['', '']];
       const columnCount = Math.max(1, ...rows.map(row => (Array.isArray(row) ? row.length : 0)));
       const updateCell = (rowIndex, columnIndex, cellValue) => {
-        const nextRows = rows.map(row => Array.from({ length: columnCount }, (_, index) => row?.[index] || ''));
+        const nextRows = rows.map(row => Array.from({ length: columnCount }, (_, cursor) => row?.[cursor] || ''));
         nextRows[rowIndex][columnIndex] = cellValue;
         patchBlockMeta(block.id, { rows: nextRows });
       };
@@ -292,9 +542,9 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
               {rows.map((row, rowIndex) => (
                 <tr key={`${block.id}-row-${rowIndex}`}>
                   {Array.from({ length: columnCount }, (_, columnIndex) => (
-                    <td key={`${block.id}-cell-${rowIndex}-${columnIndex}`} style={{ border: '1px solid #d1d5db', padding: 0 }}>
+                    <td key={`${block.id}-cell-${rowIndex}-${columnIndex}`} style={{ border: '1px solid #e5e7eb', padding: 0 }}>
                       <Input
-                        bordered={false}
+                        variant="borderless"
                         value={row?.[columnIndex] || ''}
                         readOnly={readOnly}
                         onFocus={() => setActiveBlockId(block.id)}
@@ -306,140 +556,208 @@ export default function DocumentBodyEditor({ value, onChange, placeholder = '输
               ))}
             </tbody>
           </table>
-          {!readOnly && (
-            <Space size={4} style={{ marginTop: 6 }}>
-              <Button size="small" onClick={() => patchBlockMeta(block.id, { rows: [...rows, Array(columnCount).fill('')] })}>添加行</Button>
-              <Button size="small" onClick={() => patchBlockMeta(block.id, { rows: rows.map(row => [...row, '']) })}>添加列</Button>
-              <Button size="small" disabled={rows.length <= 1} onClick={() => patchBlockMeta(block.id, { rows: rows.slice(0, -1) })}>删除末行</Button>
-              <Button size="small" disabled={columnCount <= 1} onClick={() => patchBlockMeta(block.id, { rows: rows.map(row => row.slice(0, -1)) })}>删除末列</Button>
-            </Space>
-          )}
         </div>
       );
     }
-    if (block.type === 'fold-list') {
+
+    if (['fold-list', 'bullet', 'numbered'].includes(block.type)) {
       const collapsed = Boolean(block.meta?.collapsed);
+      const markerOffset = block.type === 'numbered' ? LIST_MARKER_WIDTH - 6 : LIST_MARKER_WIDTH / 2;
+      const markerStyle = {
+        width: LIST_MARKER_WIDTH,
+        minWidth: LIST_MARKER_WIDTH,
+        height: lineHeightPx,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: block.type === 'numbered' ? 'flex-end' : 'center',
+        position: 'relative',
+        zIndex: 1,
+        color: LIST_MARKER_COLOR,
+        fontFamily: 'Arial, Helvetica, sans-serif',
+        fontSize,
+        lineHeight: `${lineHeightPx}px`,
+      };
+      const marker = block.type === 'fold-list' ? (
+        <button
+          type="button"
+          aria-label={collapsed ? '展开折叠列表' : '收起折叠列表'}
+          onClick={(event) => {
+            event.stopPropagation();
+            patchBlockMeta(block.id, { collapsed: !collapsed });
+          }}
+          style={{ ...markerStyle, padding: 0, border: 0, background: 'transparent', cursor: 'pointer', appearance: 'none' }}
+        >
+          <FoldTriangle collapsed={collapsed} />
+        </button>
+      ) : block.type === 'bullet' ? (
+        <span style={markerStyle}>{renderBulletMarker(indent)}</span>
+      ) : (
+        <span style={markerStyle}>{numberedMarkers.get(block.id) || formatNumberedMarker(1, indent)}</span>
+      );
       return (
-        <div style={{ width: '100%' }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-            <Button
-              type="text"
-              size="small"
-              icon={collapsed ? <MenuOutlined /> : <DownOutlined />}
-              aria-label={collapsed ? '展开折叠列表' : '收起折叠列表'}
-              onClick={() => patchBlockMeta(block.id, { collapsed: !collapsed })}
-              style={{ width: 24, minWidth: 24, marginTop: 2 }}
+        <div style={{ position: 'relative', paddingLeft: indent * LIST_INDENT_WIDTH }}>
+          {renderGuides(block, lineHeightPx / 2 + 1, markerOffset)}
+          <div style={{ display: 'flex', gap: block.type === 'fold-list' ? 7 : LIST_TEXT_GAP, alignItems: 'flex-start' }}>
+            {marker}
+            <InlineBlockEditor
+              {...commonProps}
+              placeholder={active
+                ? (block.type === 'fold-list' ? '折叠列表标题' : block.type === 'numbered' ? '数字列表项' : '列表项')
+                : ''}
+              style={{ ...commonProps.style, minHeight: lineHeightPx }}
             />
-            <InlineBlockEditor {...commonProps} placeholder="折叠列表标题" />
           </div>
-          {!collapsed && (
-            <div style={{ margin: '6px 0 4px 32px', paddingLeft: 12, borderLeft: '2px solid #e5e7eb' }}>
-              <InlineBlockEditor
-                value={block.meta?.body || ''}
-                placeholder="折叠内容"
-                readOnly={readOnly}
-                onChange={body => patchBlockMeta(block.id, { body })}
-                onActivate={editor => rememberSelection(block.id, editor)}
-                style={{ fontSize: 15, lineHeight: 1.75, color: '#374151', minHeight: 48 }}
-              />
-            </div>
-          )}
         </div>
       );
     }
+
     if (block.type === 'todo') {
       return (
-        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', paddingLeft: indent * 24 }}>
-          <Checkbox checked={block.checked} disabled={readOnly} onChange={event => patchBlock(block.id, { checked: event.target.checked })} style={{ marginTop: 6 }} />
-          <InlineBlockEditor {...commonProps} placeholder="待办事项" />
+        <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', paddingLeft: indent * LIST_INDENT_WIDTH }}>
+          <Checkbox checked={Boolean(block.checked)} disabled={readOnly} onChange={event => patchBlock(block.id, { checked: event.target.checked })} style={{ paddingTop: 5 }} />
+          <InlineBlockEditor {...commonProps} placeholder={active ? '待办事项' : ''} />
         </div>
       );
     }
-    if (block.type === 'bullet' || block.type === 'numbered') {
-      let number = 0;
-      for (let cursor = index; cursor >= 0; cursor -= 1) {
-        const candidate = blocks[cursor];
-        const candidateIndent = Math.max(0, Math.min(6, Number(candidate.meta?.indent || 0)));
-        if (cursor < index && candidateIndent < indent) break;
-        if (candidate.type === 'numbered' && candidateIndent === indent) number += 1;
-      }
-      return (
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', paddingLeft: indent * 24 }}>
-          <span style={{ width: 22, minWidth: 22, paddingTop: 4, textAlign: 'right', color: '#374151' }}>
-            {block.type === 'numbered' ? formatNumberedMarker(number, indent) : getBulletMarker(indent)}
-          </span>
-          <InlineBlockEditor {...commonProps} placeholder={block.type === 'numbered' ? '数字列表项' : '列表项'} />
-        </div>
-      );
-    }
+
+    const headingLevel = Number(block.type.replace('heading', '')) || 0;
     if (block.type === 'quote') {
-      return <div style={{ borderLeft: '3px solid #94a3b8', paddingLeft: 12 }}><InlineBlockEditor {...commonProps} placeholder="引述文字" /></div>;
+      return <div style={{ borderLeft: '3px solid #94a3b8', paddingLeft: 12 }}><InlineBlockEditor {...commonProps} placeholder={active ? '引述文字' : ''} /></div>;
     }
     return (
-      <div style={{ paddingLeft: indent * 24 }}>
-        <InlineBlockEditor {...commonProps} />
+      <div style={{ paddingLeft: indent * LIST_INDENT_WIDTH }}>
+        <InlineBlockEditor
+          {...commonProps}
+          style={{
+            ...commonProps.style,
+            fontSize: headingLevel ? [0, 30, 24, 19, 16][headingLevel] : fontSize,
+            fontWeight: headingLevel ? 700 : 400,
+            lineHeight: headingLevel ? 1.35 : LIST_LINE_HEIGHT,
+          }}
+        />
       </div>
     );
   };
 
-  return (
-    <div style={{ border: '1px solid #d1d5db', background: '#fff', minHeight }}>
-      {!readOnly && (
-        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 2, padding: '6px 8px', borderBottom: '1px solid #e5e7eb', background: '#fafafa' }}>
-          {[
-            ['bold', <BoldOutlined />, '加粗'],
-            ['italic', <ItalicOutlined />, '斜体'],
-            ['underline', <UnderlineOutlined />, '下划线'],
-            ['strikeThrough', <StrikethroughOutlined />, '删除线'],
-          ].map(([command, icon, title]) => (
-            <Tooltip title={title} key={command}>
-              <Button type="text" size="small" icon={icon} disabled={!activeBlockId} onMouseDown={event => event.preventDefault()} onClick={() => formatSelection(command)} />
+  const renderBlock = (block, index) => {
+    if (hiddenBlockIds.has(block.id)) return null;
+    const active = activeBlockId === block.id;
+    const hovered = hoveredBlockId === block.id;
+    const menuOpen = openMenuBlockId === block.id;
+    const blankParagraph = block.type === 'paragraph' && isBlankBlock(block);
+    const handleVisible = !readOnly && (active || hovered || menuOpen || blankParagraph);
+    return (
+      <div
+        key={block.id}
+        data-document-body-block-id={block.id}
+        onDragOver={event => {
+          if (!readOnly) event.preventDefault();
+        }}
+        onDrop={event => handleDrop(event, block.id)}
+        onMouseEnter={() => setHoveredBlockId(block.id)}
+        onMouseLeave={() => setHoveredBlockId(current => (current === block.id ? null : current))}
+        onClick={() => setActiveBlockId(block.id)}
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 4,
+          minWidth: 0,
+          position: 'relative',
+          padding: ['fold-list', 'bullet', 'numbered'].includes(block.type) ? '1px 8px 1px 0' : '3px 8px 3px 0',
+          marginBottom: ['fold-list', 'bullet', 'numbered'].includes(block.type) ? 0 : 2,
+          borderRadius: 6,
+          background: menuOpen ? '#f8e6e8' : (draggingBlockId === block.id ? '#f8fafc' : 'transparent'),
+        }}
+      >
+        {!readOnly && (
+          <div style={{ width: 24, minWidth: 24, display: 'flex', justifyContent: 'center', paddingTop: blankParagraph ? 0 : 2, zIndex: 2 }}>
+            <Tooltip title={blankParagraph ? '添加内容' : '块菜单'} placement="left">
+              <Dropdown
+                trigger={['click']}
+                open={menuOpen}
+                menu={buildBlockMenu(block, index)}
+                onOpenChange={(open) => setOpenMenuBlockId(open ? block.id : null)}
+                placement="bottomLeft"
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<BlockHandleIcon add={blankParagraph} />}
+                  aria-label={blankParagraph ? '添加内容' : '块菜单'}
+                  draggable={!blankParagraph}
+                  onDragStart={(event) => {
+                    setDraggingBlockId(block.id);
+                    event.dataTransfer?.setData('text/plain', block.id);
+                    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragEnd={() => setDraggingBlockId(null)}
+                  onMouseDown={event => event.stopPropagation()}
+                  onClick={event => event.stopPropagation()}
+                  style={{
+                    width: 24,
+                    height: 24,
+                    minWidth: 24,
+                    opacity: handleVisible ? 1 : 0,
+                    pointerEvents: handleVisible ? 'auto' : 'none',
+                    color: '#6b7280',
+                    background: menuOpen ? '#eef2ff' : 'transparent',
+                  }}
+                />
+              </Dropdown>
             </Tooltip>
-          ))}
-          <Dropdown menu={{ items: COLOR_OPTIONS.map(color => ({ key: color, label: <span style={{ color, fontWeight: 700 }}>A {color}</span> })), onClick: ({ key }) => formatSelection('foreColor', key) }} trigger={['click']}>
-            <Tooltip title="文字颜色"><Button type="text" size="small" icon={<FontColorsOutlined />} disabled={!activeBlockId} /></Tooltip>
-          </Dropdown>
-          <Dropdown menu={{ items: BACKGROUND_OPTIONS.map(color => ({ key: color, label: <span style={{ display: 'inline-block', width: 76, background: color }}>背景色</span> })), onClick: ({ key }) => formatSelection('backColor', key) }} trigger={['click']}>
-            <Tooltip title="背景颜色"><Button type="text" size="small" icon={<BgColorsOutlined />} disabled={!activeBlockId} /></Tooltip>
-          </Dropdown>
-          <Tooltip title="清除格式"><Button type="text" size="small" icon={<ClearOutlined />} disabled={!activeBlockId} onClick={() => formatSelection('removeFormat')} /></Tooltip>
-          <span style={{ width: 1, height: 20, background: '#d1d5db', margin: '0 4px' }} />
-          <Dropdown menu={blockTypeMenu(type => insertBlock(type))} trigger={['click']}>
-            <Button type="text" size="small" icon={<PlusOutlined />}>添加内容</Button>
-          </Dropdown>
+          </div>
+        )}
+        <div style={{ flex: 1, minWidth: 0 }}>{renderBlockInput(block, index)}</div>
+      </div>
+    );
+  };
+
+  const lastVisibleBlock = [...blocks].reverse().find(block => !hiddenBlockIds.has(block.id));
+  const appendMenu = {
+    items: groupedBlockTypeItems('append:'),
+    onClick: ({ key, domEvent }) => {
+      domEvent?.stopPropagation();
+      if (key.startsWith('append:')) createBlockAfter(key.slice(7), blocks[blocks.length - 1]?.id);
+    },
+  };
+
+  return (
+    <div style={{ minHeight, background: '#fff', padding: '2px 0 16px' }}>
+      <div>{blocks.map(renderBlock)}</div>
+      {!readOnly && !(lastVisibleBlock?.type === 'paragraph' && isBlankBlock(lastVisibleBlock)) && (
+        <div style={{ display: 'flex', alignItems: 'center', minHeight: 38, padding: '4px 8px 4px 0', marginTop: 4 }}>
+          <div style={{ width: 24, minWidth: 24, display: 'flex', justifyContent: 'center' }}>
+            <Dropdown trigger={['click']} menu={appendMenu} placement="bottomLeft">
+              <Tooltip title="添加内容" placement="left">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  aria-label="添加内容"
+                  onMouseDown={event => event.preventDefault()}
+                  style={{ width: 24, height: 24, minWidth: 24, color: '#6b7280' }}
+                />
+              </Tooltip>
+            </Dropdown>
+          </div>
+          <button
+            type="button"
+            onClick={() => createBlockAfter('paragraph', blocks[blocks.length - 1]?.id)}
+            style={{
+              border: 0,
+              background: 'transparent',
+              color: '#b8bcc2',
+              cursor: 'text',
+              fontSize: 15,
+              lineHeight: 1.8,
+              padding: '0 8px',
+              textAlign: 'left',
+            }}
+          >
+            输入 / 选择样式内容
+          </button>
         </div>
       )}
-      <div style={{ padding: '10px 12px 14px' }}>
-        {blocks.map((block, index) => (
-          <div key={block.id} style={{ display: 'flex', gap: 6, alignItems: 'flex-start', padding: '4px 0', minHeight: 34 }}>
-            {!readOnly && (
-              <Space.Compact size="small" style={{ width: 28, minWidth: 28, flexDirection: 'column' }}>
-                <Dropdown menu={blockTypeMenu(type => patchBlock(block.id, {
-                  type,
-                  checked: false,
-                  meta: type === 'fold-list' ? { body: '' } : (type === 'table-simple' ? { rows: [['', ''], ['', '']] } : {}),
-                }))} trigger={['click']}>
-                  <Tooltip title="更改样式"><Button type="text" size="small" icon={<MenuOutlined />} /></Tooltip>
-                </Dropdown>
-              </Space.Compact>
-            )}
-            <div style={{ flex: 1, minWidth: 0 }}>{renderBlockEditor(block, index)}</div>
-            {!readOnly && activeBlockId === block.id && (
-              <Space.Compact size="small">
-                {['bullet', 'numbered', 'todo'].includes(block.type) && (
-                  <>
-                    <Tooltip title="减少缩进"><Button type="text" icon={<MinusOutlined />} onClick={() => patchBlockMeta(block.id, { indent: Math.max(0, Number(block.meta?.indent || 0) - 1) })} /></Tooltip>
-                    <Tooltip title="增加缩进"><Button type="text" icon={<PlusOutlined />} onClick={() => patchBlockMeta(block.id, { indent: Math.min(6, Number(block.meta?.indent || 0) + 1) })} /></Tooltip>
-                  </>
-                )}
-                <Tooltip title="上移"><Button type="text" icon={<UpOutlined />} disabled={index === 0} onClick={() => moveBlock(block.id, -1)} /></Tooltip>
-                <Tooltip title="下移"><Button type="text" icon={<DownOutlined />} disabled={index === blocks.length - 1} onClick={() => moveBlock(block.id, 1)} /></Tooltip>
-                <Tooltip title="删除"><Button type="text" danger icon={<DeleteOutlined />} onClick={() => removeBlock(block.id)} /></Tooltip>
-              </Space.Compact>
-            )}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

@@ -125,12 +125,20 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(templates.status, 200);
   assert.ok(templates.payload[0]?.id);
   assert.deepEqual(
-    templates.payload[0].sections[0].default_blocks.blocks.map(block => ({ type: block.type, content: block.content })),
+    templates.payload[0].sections[0].default_blocks.blocks.map(block => ({
+      type: block.type,
+      content: block.content,
+      indent: block.meta?.indent,
+    })),
     [
-      { type: 'numbered', content: '本周核心结果' },
-      { type: 'numbered', content: '一个最重要的判断' },
-      { type: 'numbered', content: '需要会上决策的问题' },
-      { type: 'numbered', content: '下周建议动作' },
+      { type: 'fold-list', content: '本周核心结果', indent: 0 },
+      { type: 'numbered', content: '', indent: 1 },
+      { type: 'fold-list', content: '一个最重要的判断', indent: 0 },
+      { type: 'numbered', content: '', indent: 1 },
+      { type: 'fold-list', content: '需要会上决策的问题', indent: 0 },
+      { type: 'numbered', content: '', indent: 1 },
+      { type: 'fold-list', content: '下周建议动作', indent: 0 },
+      { type: 'numbered', content: '', indent: 1 },
     ],
   );
 
