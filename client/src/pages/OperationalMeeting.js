@@ -862,16 +862,6 @@ export default function OperationalMeeting() {
         )}
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-          {!canEdit && (
-            <Alert
-              type="info"
-              showIcon
-              message="当前准备块为只读"
-              description={section.owner_name
-                ? `当前登录账号“${user?.display_name || user?.username || '-'}”正在查看“${section.owner_name}”负责的准备内容。CXO 可以编辑全部准备块，其他准备人员仅可编辑自己的准备块。`
-                : '当前账号没有此准备块的编辑权限。'}
-            />
-          )}
           <DocumentBodyEditor
             value={draft}
             onChange={value => patchPreparationContent(section, value)}
@@ -991,7 +981,6 @@ export default function OperationalMeeting() {
               placeholder="编辑会议提纲"
               readOnly={!detail.can_generate_agenda}
             />
-            <Alert type="success" showIcon message="毛利和利润类敏感字段已在生成前后过滤。" />
           </Space>
         ) : (
           <Empty description="暂无会议提纲" />
@@ -1303,11 +1292,6 @@ export default function OperationalMeeting() {
               placeholder="选择需要撰写本周准备内容的人员"
             />
           </div>
-          <Alert
-            type="info"
-            showIcon
-            message="此处仅管理需要撰写本周准备内容的人员。"
-          />
         </Space>
       </Modal>
 
