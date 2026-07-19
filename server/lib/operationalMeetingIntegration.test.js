@@ -181,6 +181,14 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(outsiderDetail.status, 404);
 
   const designatedSectionId = designatedDetail.payload.sections[0].id;
+  const emptyPreparationSubmission = await request(
+    baseUrl,
+    `/api/operational-meeting-sections/${designatedSectionId}/submit`,
+    { method: 'POST', token: designatedToken },
+  );
+  assert.equal(emptyPreparationSubmission.status, 400);
+  assert.equal(emptyPreparationSubmission.payload.error, '请填写好内容再提交');
+
   const preparationContent = {
     format: 'relation_document_body_v1',
     blocks: [{ id: 'prep-1', type: 'paragraph', content: '本周准备内容', meta: {} }],

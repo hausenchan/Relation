@@ -13,6 +13,8 @@ export const DEFAULT_OPERATIONAL_MEETING_QUESTIONS = [
   { key: 'next_action', title: '下周建议动作' },
 ];
 
+export const OPERATIONAL_PREPARATION_MIN_SUBMIT_CHARACTERS = 5;
+
 function createQuestionTitleBlock(question, index) {
   return createDocumentBodyBlock('fold-list', question.title || `问题 ${index + 1}`, {
     meta: {
@@ -206,4 +208,69 @@ export function operationalPreparationHasAnswers(value, fallbackQuestions = DEFA
     ) return false;
     return documentBodyHasContent({ blocks: [block] });
   });
+}
+
+export function getOperationalPreparationAnswerText(
+  value,
+  fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS,
+) {
+  const questions = Array.isArray(fallbackQuestions) && fallbackQuestions.length
+    ? fallbackQuestions
+    : DEFAULT_OPERATIONAL_MEETING_QUESTIONS;
+  const questionTitles = new Set(questions.map(question => String(question.title || '').trim()).filter(Boolean));
+  const normalized = normalizeOperationalPreparationContent(value, questions);
+  const answerBlocks = normalized.blocks.filter((block) => {
+    if (block?.meta?.template_question_key) return false;
+    const text = documentBodyInlineHtmlToPlain(block?.content || '').trim();
+    return !(
+      Number(block?.meta?.indent || 0) === 0
+      && ['numbered', 'fold-list'].includes(block?.type)
+      && questionTitles.has(text)
+    );
+  });
+  return documentBodyToPlain({ blocks: answerBlocks }, documentBodyInlineHtmlToPlain);
+}
+
+export function getOperationalPreparationAnswerCharacterCount(
+  value,
+  fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS,
+) {
+  const text = getOperationalPreparationAnswerText(value, fallbackQuestions)
+    .replace(/[\s\u200B-\u200D\uFEFF]/g, '');
+  return Array.from(text).length;
+}
+
+export function operationalPreparationCanSubmit(
+  value,
+  fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS,
+  minimumCharacters = OPERATIONAL_PREPARATION_MIN_SUBMIT_CHARACTERS,
+) {
+  return getOperationalPreparationAnswerCharacterCount(value, fallbackQuestions) > minimumCharacters;
+}
+
+export function getOperationalPreparationSubmissionStats(sections = [], localStatuses = {}) {
+  const requiredSections = (Array.isArray(sections) ? sections : [])
+    .filter(section => Number(section?.is_required ?? 1) === 1);
+  const isSubmitted = (section) => {
+    const localStatus = localStatuses?.[section.id];
+    const status = typeof localStatus === 'string'
+      ? localStatus
+      : (localStatus?.status || section?.status || 'draft');
+    return status === 'submitted' || status === 'locked';
+  };
+  const pendingOwnerMap = new Map();
+  requiredSections.filter(section => !isSubmitted(section)).forEach((section) => {
+    const userId = Number(section?.owner_user_id) || null;
+    const key = userId ? `user:${userId}` : `section:${section?.id}`;
+    if (pendingOwnerMap.has(key)) return;
+    pendingOwnerMap.set(key, {
+      userId,
+      name: section?.owner_name || section?.owner_username || section?.title || '未指定负责人',
+    });
+  });
+  return {
+    required: requiredSections.length,
+    submitted: requiredSections.filter(isSubmitted).length,
+    pendingOwners: [...pendingOwnerMap.values()],
+  };
 }

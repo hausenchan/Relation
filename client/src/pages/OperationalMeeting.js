@@ -26,10 +26,11 @@ import {
   getPreparationEditorState,
 } from '../utils/operationalMeetingAccess';
 import {
+  getOperationalPreparationSubmissionStats,
   getOperationalPreparationSignature,
   getOperationalPreparationSubmissionSignature,
   normalizeOperationalPreparationContent,
-  operationalPreparationHasAnswers,
+  operationalPreparationCanSubmit,
   operationalPreparationToPlain,
 } from '../utils/operationalMeetingPreparation';
 
@@ -511,8 +512,8 @@ export default function OperationalMeeting() {
       sectionDraftsRef.current[sectionId] || section.default_blocks,
       section.default_questions,
     );
-    if (!operationalPreparationHasAnswers(payload, section.default_questions)) {
-      message.warning('请先填写准备内容，再标记已提交');
+    if (!operationalPreparationCanSubmit(payload, section.default_questions)) {
+      message.warning('请填写好内容再提交');
       return;
     }
 
@@ -689,9 +690,9 @@ export default function OperationalMeeting() {
       setParticipantOpen(false);
       await loadDetail(detail.meeting.id);
       await loadMeetings();
-      message.success('参与人已更新');
+      message.success('准备人员已更新');
     } catch (error) {
-      message.error(error.response?.data?.error || error.message || '参与人更新失败');
+      message.error(error.response?.data?.error || error.message || '准备人员更新失败');
     } finally {
       setParticipantBusy(false);
     }
@@ -755,12 +756,7 @@ export default function OperationalMeeting() {
   }, [detail?.can_generate_agenda]);
 
   const preparationSubmissionStats = useMemo(() => {
-    const requiredSections = (detail?.sections || []).filter(section => Number(section.is_required ?? 1) === 1);
-    const submitted = requiredSections.filter((section) => {
-      const localStatus = sectionLocalStatuses[section.id]?.status || section.status;
-      return localStatus === 'submitted' || localStatus === 'locked';
-    }).length;
-    return { required: requiredSections.length, submitted };
+    return getOperationalPreparationSubmissionStats(detail?.sections || [], sectionLocalStatuses);
   }, [detail?.sections, sectionLocalStatuses]);
 
   const filteredAnnualRows = useMemo(() => {
@@ -866,7 +862,7 @@ export default function OperationalMeeting() {
               showIcon
               message="当前准备块为只读"
               description={section.owner_name
-                ? `当前登录账号“${user?.display_name || user?.username || '-'}”正在查看“${section.owner_name}”负责的准备内容。CXO 可以编辑全部准备块，其他参与人仅可编辑自己的准备块。`
+                ? `当前登录账号“${user?.display_name || user?.username || '-'}”正在查看“${section.owner_name}”负责的准备内容。CXO 可以编辑全部准备块，其他准备人员仅可编辑自己的准备块。`
                 : '当前账号没有此准备块的编辑权限。'}
             />
           )}
@@ -1045,9 +1041,6 @@ export default function OperationalMeeting() {
                 </div>
               </Space>
               <Space wrap>
-                {Boolean(detail?.can_manage_participants) && (
-                  <Button icon={<TeamOutlined />} onClick={openParticipantManager}>参与人</Button>
-                )}
                 <Button icon={<ReloadOutlined />} onClick={() => loadDetail(meetingId)}>刷新</Button>
               </Space>
             </div>
@@ -1057,18 +1050,43 @@ export default function OperationalMeeting() {
                 <Empty description="暂无详情" />
               ) : (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                    <Tag color={(statusMeta[detail.meeting.status] || statusMeta.draft).color}>
-                      {(statusMeta[detail.meeting.status] || statusMeta.draft).label}
-                    </Tag>
-                    <Text>准备：{detail.meeting.submitted_required_sections}/{detail.meeting.required_sections}</Text>
-                    <Text>提纲：{detail.meeting.agenda_status === 'generated' ? '已生成' : '未生成'}</Text>
-                    <Text>结论：{detail.meeting.decision_status === 'saved' ? '已保存' : '未填写'}</Text>
-                    {(detail.participants || []).map(item => (
-                      <Tag key={item.user_id} color={item.participant_type === 'cxo' ? 'blue' : 'default'}>
-                        {item.display_name || item.username}
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    flexWrap: 'wrap',
+                  }}>
+                    <Space wrap size={10}>
+                      <Tag color={(statusMeta[detail.meeting.status] || statusMeta.draft).color}>
+                        {(statusMeta[detail.meeting.status] || statusMeta.draft).label}
                       </Tag>
-                    ))}
+                      {detailTab === 'preparation' ? (
+                        <>
+                          <Text>提交进度：{preparationSubmissionStats.submitted}/{preparationSubmissionStats.required}</Text>
+                          {preparationSubmissionStats.pendingOwners.length ? (
+                            <>
+                              <Text type="secondary">未提交：</Text>
+                              {preparationSubmissionStats.pendingOwners.map(owner => (
+                                <Tag key={owner.userId || owner.name} color="default">{owner.name}</Tag>
+                              ))}
+                            </>
+                          ) : preparationSubmissionStats.required > 0 ? (
+                            <Tag color="green" icon={<CheckCircleOutlined />}>全部已提交</Tag>
+                          ) : (
+                            <Text type="secondary">暂无必填准备内容</Text>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <Text>提纲：{detail.meeting.agenda_status === 'generated' ? '已生成' : '未生成'}</Text>
+                          <Text>结论：{detail.meeting.decision_status === 'saved' ? '已保存' : '未填写'}</Text>
+                        </>
+                      )}
+                    </Space>
+                    {detailTab === 'preparation' && Boolean(detail?.can_manage_participants) && (
+                      <Button icon={<TeamOutlined />} onClick={openParticipantManager}>管理准备人员</Button>
+                    )}
                   </div>
                   <Tabs
                     activeKey={detailTab}
@@ -1229,21 +1247,21 @@ export default function OperationalMeeting() {
               placeholder="请选择模板"
             />
           </Form.Item>
-          <Form.Item label="指定参与人（可选）" name="participant_user_ids">
+          <Form.Item label="其他准备人员（可选）" name="participant_user_ids">
             <Select
               mode="multiple"
               allowClear
               options={eligibleParticipants
                 .filter(item => item.participant_type === 'designated')
                 .map(item => ({ value: Number(item.id), label: item.display_name || item.username }))}
-              placeholder="参与人只能查看自己的准备内容，可查看本周提纲和结论"
+              placeholder="选择需要额外撰写本周准备内容的人员"
             />
           </Form.Item>
         </Form>
       </Modal>
 
       <Modal
-        title="管理本周参与人"
+        title="管理本周准备人员"
         open={participantOpen}
         onCancel={() => setParticipantOpen(false)}
         onOk={saveParticipants}
@@ -1254,7 +1272,7 @@ export default function OperationalMeeting() {
       >
         <Space direction="vertical" size={16} style={{ width: '100%' }}>
           <div>
-            <Text type="secondary">CXO</Text>
+            <Text type="secondary">默认准备人员（CXO）</Text>
             <div style={{ marginTop: 8 }}>
               <Space wrap>
                 {eligibleParticipants
@@ -1264,7 +1282,7 @@ export default function OperationalMeeting() {
             </div>
           </div>
           <div>
-            <Text type="secondary">指定参与人</Text>
+            <Text type="secondary">其他准备人员</Text>
             <Select
               mode="multiple"
               allowClear
@@ -1274,13 +1292,13 @@ export default function OperationalMeeting() {
               options={eligibleParticipants
                 .filter(item => item.participant_type === 'designated')
                 .map(item => ({ value: Number(item.id), label: item.display_name || item.username }))}
-              placeholder="选择本周指定参与人"
+              placeholder="选择需要撰写本周准备内容的人员"
             />
           </div>
           <Alert
             type="info"
             showIcon
-            message="指定参与人只能查看自己的准备内容；AI 会议提纲和会议结论对本周全部参与人共享。"
+            message="此处仅管理需要撰写本周准备内容的人员。"
           />
         </Space>
       </Modal>

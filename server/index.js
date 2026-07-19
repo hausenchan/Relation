@@ -55,6 +55,9 @@ const {
   isMeetingCxo: isOperationalMeetingCxoForMeeting,
   isOperationalMeetingCxo,
 } = require('./lib/operationalMeetingPolicy');
+const {
+  operationalPreparationCanSubmit,
+} = require('./lib/operationalMeetingPreparation');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -20960,7 +20963,7 @@ function serializeOperationalMeetingRow(row = {}, user = null, participant = nul
     SELECT
       COUNT(*) as total_sections,
       SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
-      SUM(CASE WHEN is_required = 1 AND status = 'submitted' THEN 1 ELSE 0 END) as submitted_required_sections
+      SUM(CASE WHEN is_required = 1 AND status IN ('submitted', 'locked') THEN 1 ELSE 0 END) as submitted_required_sections
     FROM operational_meeting_sections
     WHERE meeting_id = ?
       ${canViewAllPreparations ? '' : 'AND owner_user_id = ?'}
@@ -20982,7 +20985,7 @@ function refreshOperationalMeetingStatuses(meetingId) {
   const stats = db.prepare(`
     SELECT
       SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
-      SUM(CASE WHEN is_required = 1 AND status = 'submitted' THEN 1 ELSE 0 END) as submitted_required_sections
+      SUM(CASE WHEN is_required = 1 AND status IN ('submitted', 'locked') THEN 1 ELSE 0 END) as submitted_required_sections
     FROM operational_meeting_sections
     WHERE meeting_id = ?
   `).get(id);
@@ -21407,7 +21410,7 @@ app.get('/api/operational-meeting-templates', requireOperationalMeetingAccess, (
 
 app.get('/api/operational-meetings/eligible-participants', requireOperationalMeetingAccess, (req, res) => {
   if (!isOperationalMeetingCxo(req.user)) {
-    return res.status(403).json({ error: '只有 CXO 可以配置周会参与人' });
+    return res.status(403).json({ error: '只有 CXO 可以配置周会准备人员' });
   }
   res.json(listOperationalMeetingEligibleUsers().map(user => ({
     ...user,
@@ -21562,7 +21565,7 @@ app.put('/api/operational-meetings/:id/participants', requireOperationalMeetingA
   const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
   if (!canManageOperationalMeeting(req.user, meeting._accessParticipant)) {
-    return res.status(403).json({ error: '只有 CXO 可以配置本周参与人' });
+    return res.status(403).json({ error: '只有 CXO 可以配置本周准备人员' });
   }
   const requestedParticipants = Array.isArray(req.body?.participants)
     ? req.body.participants
@@ -21575,7 +21578,7 @@ app.put('/api/operational-meetings/:id/participants', requireOperationalMeetingA
   try {
     updateParticipants();
   } catch (error) {
-    return res.status(400).json({ error: error.message || '参与人更新失败' });
+    return res.status(400).json({ error: error.message || '准备人员更新失败' });
   }
   const nextIds = listOperationalMeetingParticipantUserIds(meeting.id);
   res.json({
@@ -21671,6 +21674,11 @@ app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperation
   const section = getOperationalSectionForAccess(req.params.sectionId, req.user);
   if (!section) return res.status(404).json({ error: '准备块不存在' });
   if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权提交此准备块' });
+  const preparationContent = parseJsonSafe(section.content_json, null);
+  const defaultQuestions = parseJsonSafe(section.default_questions_json, []);
+  if (!operationalPreparationCanSubmit(preparationContent, defaultQuestions)) {
+    return res.status(400).json({ error: '请填写好内容再提交' });
+  }
   db.prepare(`
     UPDATE operational_meeting_sections
     SET status = 'submitted',
