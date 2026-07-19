@@ -15,14 +15,19 @@ function isMeetingCxo(user, participant) {
     || (isActiveParticipant(participant) && participant.participant_type === 'cxo');
 }
 
-function canViewMeeting(user, participant) {
-  return isOperationalMeetingCxo(user) || isActiveParticipant(participant);
+function canViewMeeting(user) {
+  // Operational meeting routes call this only after menu and sensitive-module gates pass.
+  return Boolean(user?.id);
 }
 
 function canViewPreparation(user, participant, section) {
   if (!user || !section || !canViewMeeting(user, participant)) return false;
   return isMeetingCxo(user, participant)
-    || Number(section.owner_user_id) === Number(user.id);
+    || (
+      isActiveParticipant(participant)
+      && Number(participant.preparation_section_id) === Number(section.id)
+      && Number(section.owner_user_id) === Number(user.id)
+    );
 }
 
 function canEditPreparation(user, participant, section) {

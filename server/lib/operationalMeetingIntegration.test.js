@@ -163,8 +163,12 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   ]);
   assert.equal(ceoList.payload.length, 1);
   assert.equal(designatedList.payload.length, 1);
-  assert.equal(outsiderList.payload.length, 0);
-  assert.equal(adminList.payload.length, 0);
+  assert.equal(outsiderList.payload.length, 1);
+  assert.equal(adminList.payload.length, 1);
+  assert.equal(designatedList.payload[0].can_view_preparation, 1);
+  assert.equal(outsiderList.payload[0].can_view_preparation, 0);
+  assert.equal(outsiderList.payload[0].required_sections, 0);
+  assert.equal(outsiderList.payload[0].submitted_required_sections, 0);
 
   const [ceoDetail, designatedDetail, outsiderDetail] = await Promise.all([
     request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: ceoToken }),
@@ -176,9 +180,13 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(designatedDetail.status, 200);
   assert.equal(designatedDetail.payload.sections.length, 1);
   assert.equal(Number(designatedDetail.payload.sections[0].owner_user_id), users.designatedId);
+  assert.equal(designatedDetail.payload.can_view_preparation, 1);
   assert.equal(designatedDetail.payload.can_generate_agenda, 0);
   assert.equal(designatedDetail.payload.can_edit_decision, 0);
-  assert.equal(outsiderDetail.status, 404);
+  assert.equal(outsiderDetail.status, 200);
+  assert.equal(outsiderDetail.payload.sections.length, 0);
+  assert.equal(outsiderDetail.payload.can_view_preparation, 0);
+  assert.equal(outsiderDetail.payload.participants.length, 0);
 
   const designatedSectionId = designatedDetail.payload.sections[0].id;
   const emptyPreparationSubmission = await request(
@@ -306,9 +314,11 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     request(baseUrl, '/api/operational-meetings/annual-summary?year=2026', { token: outsiderToken }),
   ]);
   assert.equal(designatedAnnual.payload.meetings.length, 1);
-  assert.equal(outsiderAnnual.payload.meetings.length, 0);
+  assert.equal(outsiderAnnual.payload.meetings.length, 1);
   assert.deepEqual(designatedAnnual.payload.meetings[0].agenda.agenda_content, agendaContent);
   assert.deepEqual(designatedAnnual.payload.meetings[0].decision.decision_content, decisionContent);
+  assert.deepEqual(outsiderAnnual.payload.meetings[0].agenda.agenda_content, agendaContent);
+  assert.deepEqual(outsiderAnnual.payload.meetings[0].decision.decision_content, decisionContent);
 
   const addOutsider = await request(baseUrl, `/api/operational-meetings/${meetingId}/participants`, {
     method: 'PUT',
@@ -331,7 +341,11 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   });
   assert.equal(removeDesignated.status, 200);
   const designatedAfterRemove = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
-  assert.equal(designatedAfterRemove.status, 404);
+  assert.equal(designatedAfterRemove.status, 200);
+  assert.equal(designatedAfterRemove.payload.sections.length, 0);
+  assert.equal(designatedAfterRemove.payload.can_view_preparation, 0);
+  assert.deepEqual(designatedAfterRemove.payload.agenda.agenda_content, agendaContent);
+  assert.deepEqual(designatedAfterRemove.payload.decision.decision_content, decisionContent);
   const cxoAfterRemove = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: ceoToken });
   const removedPreparation = cxoAfterRemove.payload.sections.find(
     section => Number(section.owner_user_id) === users.designatedId,

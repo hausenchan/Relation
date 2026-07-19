@@ -52,6 +52,7 @@ const {
   canGenerateAgenda: canGenerateOperationalAgenda,
   canViewMeeting: canViewOperationalMeeting,
   canViewPreparation: canViewOperationalPreparation,
+  isActiveParticipant: isActiveOperationalMeetingParticipant,
   isMeetingCxo: isOperationalMeetingCxoForMeeting,
   isOperationalMeetingCxo,
 } = require('./lib/operationalMeetingPolicy');
@@ -20958,8 +20959,11 @@ function getDefaultOperationalTemplate() {
 function serializeOperationalMeetingRow(row = {}, user = null, participant = null) {
   const accessParticipant = participant || row._accessParticipant || null;
   const canViewAllPreparations = user ? isOperationalMeetingCxoForMeeting(user, accessParticipant) : true;
+  const canViewAssignedPreparation = isActiveOperationalMeetingParticipant(accessParticipant)
+    && Number(accessParticipant?.preparation_section_id || 0) > 0;
+  const canViewPreparation = canViewAllPreparations || canViewAssignedPreparation;
   const { _accessParticipant, ...publicRow } = row;
-  const sectionStats = row.id ? db.prepare(`
+  const sectionStats = row.id && canViewPreparation ? db.prepare(`
     SELECT
       COUNT(*) as total_sections,
       SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
@@ -20974,6 +20978,7 @@ function serializeOperationalMeetingRow(row = {}, user = null, participant = nul
     total_sections: Number(sectionStats?.total_sections || 0),
     required_sections: Number(sectionStats?.required_sections || 0),
     submitted_required_sections: Number(sectionStats?.submitted_required_sections || 0),
+    can_view_preparation: canViewPreparation ? 1 : 0,
   };
 }
 
@@ -21419,7 +21424,6 @@ app.get('/api/operational-meetings/eligible-participants', requireOperationalMee
 });
 
 app.get('/api/operational-meetings', requireOperationalMeetingAccess, (req, res) => {
-  const cxoIdentity = isOperationalMeetingCxo(req.user);
   const rows = db.prepare(`
     SELECT m.*,
       creator.display_name as created_by_name,
@@ -21428,13 +21432,8 @@ app.get('/api/operational-meetings', requireOperationalMeetingAccess, (req, res)
     LEFT JOIN users creator ON creator.id = m.created_by
     LEFT JOIN users updater ON updater.id = m.updated_by
     WHERE m.deleted_at IS NULL
-      ${cxoIdentity ? '' : `AND EXISTS (
-        SELECT 1
-        FROM operational_meeting_participants p
-        WHERE p.meeting_id = m.id AND p.user_id = ? AND p.status = 'active'
-      )`}
     ORDER BY date(m.week_start) DESC, m.id DESC
-  `).all(...(cxoIdentity ? [] : [req.user.id]));
+  `).all();
   res.json(rows.map(row => {
     const participant = getOperationalMeetingParticipant(row.id, req.user.id);
     return serializeOperationalMeetingRow(row, req.user, participant);
@@ -21444,19 +21443,13 @@ app.get('/api/operational-meetings', requireOperationalMeetingAccess, (req, res)
 app.get('/api/operational-meetings/annual-summary', requireOperationalMeetingAccess, (req, res) => {
   const year = String(req.query.year || new Date().getFullYear()).trim();
   if (!/^\d{4}$/.test(year)) return res.status(400).json({ error: '年份格式不正确' });
-  const cxoIdentity = isOperationalMeetingCxo(req.user);
   const rows = db.prepare(`
     SELECT m.id, m.title, m.week_start, m.week_end, m.status, m.agenda_status, m.decision_status, m.updated_at
     FROM operational_meetings m
     WHERE m.deleted_at IS NULL
       AND substr(m.week_start, 1, 4) = ?
-      ${cxoIdentity ? '' : `AND EXISTS (
-        SELECT 1
-        FROM operational_meeting_participants p
-        WHERE p.meeting_id = m.id AND p.user_id = ? AND p.status = 'active'
-      )`}
     ORDER BY date(m.week_start) DESC, m.id DESC
-  `).all(...(cxoIdentity ? [year] : [year, req.user.id]));
+  `).all(year);
   const result = rows.map(meeting => {
     const agenda = db.prepare(`
       SELECT id, meeting_id, agenda_json, agenda_ciphertext, crypto_version, model_provider, model_name,
@@ -21558,6 +21551,9 @@ app.post('/api/operational-meetings', requireOperationalMeetingAccess, canWrite,
 app.get('/api/operational-meetings/:id/participants', requireOperationalMeetingAccess, (req, res) => {
   const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  if (!canManageOperationalMeeting(req.user, meeting._accessParticipant)) {
+    return res.status(403).json({ error: '只有 CXO 可以查看本周准备人员配置' });
+  }
   res.json({ participants: listOperationalMeetingParticipants(meeting.id) });
 });
 
@@ -21630,18 +21626,21 @@ app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, 
     FROM operational_meeting_decisions
     WHERE meeting_id = ?
   `).get(meeting.id);
+  const serializedMeeting = serializeOperationalMeetingRow(meeting, req.user, participant);
+  const canManage = canManageOperationalMeeting(req.user, participant);
   res.json({
-    meeting: serializeOperationalMeetingRow(meeting, req.user, participant),
+    meeting: serializedMeeting,
     sections,
     agenda: serializeOperationalAgenda(agenda),
     decision: serializeOperationalDecision(decision),
-    participants: listOperationalMeetingParticipants(meeting.id),
-    meeting_authorized_user_ids: listOperationalMeetingParticipantUserIds(meeting.id),
+    participants: canManage ? listOperationalMeetingParticipants(meeting.id) : [],
+    meeting_authorized_user_ids: canManage ? listOperationalMeetingParticipantUserIds(meeting.id) : [],
+    can_view_preparation: serializedMeeting.can_view_preparation,
     can_view_all_preparations: isOperationalMeetingCxoForMeeting(req.user, participant) ? 1 : 0,
     can_generate_agenda: canGenerateOperationalAgenda(req.user, participant) ? 1 : 0,
     can_edit_decision: canEditOperationalDecision(req.user, participant) ? 1 : 0,
-    can_manage_participants: canManageOperationalMeeting(req.user, participant) ? 1 : 0,
-    can_manage: canManageOperationalMeeting(req.user, participant) ? 1 : 0,
+    can_manage_participants: canManage ? 1 : 0,
+    can_manage: canManage ? 1 : 0,
   });
 });
 

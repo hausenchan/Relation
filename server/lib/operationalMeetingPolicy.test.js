@@ -15,22 +15,24 @@ const admin = { id: 4, role: 'admin', executive_role: null };
 const designatedParticipant = {
   user_id: 2,
   participant_type: 'designated',
+  preparation_section_id: 20,
   can_edit_decision: 1,
   status: 'active',
 };
 
 test('CXO can view every preparation while a designated participant only sees their own', () => {
-  const ownSection = { owner_user_id: 2 };
-  const otherSection = { owner_user_id: 3 };
+  const ownSection = { id: 20, owner_user_id: 2 };
+  const otherSection = { id: 21, owner_user_id: 3 };
 
   assert.equal(canViewPreparation(cxo, null, otherSection), true);
   assert.equal(canViewPreparation(designated, designatedParticipant, ownSection), true);
   assert.equal(canViewPreparation(designated, designatedParticipant, otherSection), false);
 });
 
-test('admin identity alone does not bypass weekly participation', () => {
-  assert.equal(canViewMeeting(admin, null), false);
-  assert.equal(canViewPreparation(admin, null, { owner_user_id: 4 }), false);
+test('post-gate users can view meeting content without receiving preparation access', () => {
+  assert.equal(canViewMeeting(admin, null), true);
+  assert.equal(canViewPreparation(admin, null, { id: 22, owner_user_id: 4 }), false);
+  assert.equal(canViewPreparation(designated, { ...designatedParticipant, status: 'removed' }, { id: 20, owner_user_id: 2 }), false);
 });
 
 test('designated participants can share meeting content but cannot generate the agenda', () => {
@@ -41,9 +43,9 @@ test('designated participants can share meeting content but cannot generate the 
 });
 
 test('CXO can edit any preparation while non-CXO users remain owner-only', () => {
-  const section = { owner_user_id: 3 };
+  const section = { id: 21, owner_user_id: 3 };
   assert.equal(canEditPreparation(cxo, null, section), true);
   assert.equal(canEditPreparation(other, null, section), false);
-  assert.equal(canEditPreparation(designated, designatedParticipant, { owner_user_id: 2 }), true);
+  assert.equal(canEditPreparation(designated, designatedParticipant, { id: 20, owner_user_id: 2 }), true);
   assert.equal(canEditPreparation(designated, designatedParticipant, section), false);
 });

@@ -15,3 +15,8 @@ export function getDefaultPreparationSectionKeys(sections = []) {
   if (editableKeys.length) return editableKeys;
   return sections[0]?.id == null ? [] : [String(sections[0].id)];
 }
+
+export function getOperationalMeetingDetailTab(requestedTab, canViewPreparation) {
+  if (canViewPreparation && requestedTab !== 'meeting') return 'preparation';
+  return 'meeting';
+}

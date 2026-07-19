@@ -1,5 +1,6 @@
 import {
   getDefaultPreparationSectionKeys,
+  getOperationalMeetingDetailTab,
   getPreparationEditorState,
 } from './operationalMeetingAccess';
 
@@ -23,5 +24,15 @@ describe('operational meeting preparation access', () => {
     ];
 
     expect(getDefaultPreparationSectionKeys(sections)).toEqual(['12']);
+  });
+
+  test('meeting-only users always land on the meeting tab', () => {
+    expect(getOperationalMeetingDetailTab('preparation', false)).toBe('meeting');
+    expect(getOperationalMeetingDetailTab('meeting', false)).toBe('meeting');
+  });
+
+  test('preparation users default to preparation but can switch to meeting', () => {
+    expect(getOperationalMeetingDetailTab('preparation', true)).toBe('preparation');
+    expect(getOperationalMeetingDetailTab('meeting', true)).toBe('meeting');
   });
 });

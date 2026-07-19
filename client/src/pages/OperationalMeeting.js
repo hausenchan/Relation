@@ -23,6 +23,7 @@ import {
 } from '../utils/documentBodyBlocks';
 import {
   getDefaultPreparationSectionKeys,
+  getOperationalMeetingDetailTab,
   getPreparationEditorState,
 } from '../utils/operationalMeetingAccess';
 import {
@@ -182,7 +183,9 @@ export default function OperationalMeeting() {
   const cxoIdentity = Boolean(isExecutive?.());
   const isDetailView = Boolean(meetingId);
   const listView = searchParams.get('view') === 'annual' ? 'annual' : 'records';
-  const detailTab = searchParams.get('tab') === 'meeting' ? 'meeting' : 'preparation';
+  const requestedDetailTab = searchParams.get('tab') === 'meeting' ? 'meeting' : 'preparation';
+  const canViewPreparationTab = Boolean(detail?.can_view_preparation);
+  const detailTab = getOperationalMeetingDetailTab(requestedDetailTab, canViewPreparationTab);
 
   const updateSectionSaveState = useCallback((sectionId, patch) => {
     setSectionSaveStates((prev) => {
@@ -719,6 +722,9 @@ export default function OperationalMeeting() {
       key: 'progress',
       width: 180,
       render: (_, record) => {
+        if (!Number(record.can_view_preparation || 0)) {
+          return <Text type="secondary">不参与准备</Text>;
+        }
         const required = Number(record.required_sections || 0);
         const submitted = Number(record.submitted_required_sections || 0);
         const percent = required ? Math.round((submitted / required) * 100) : 0;
@@ -1092,7 +1098,9 @@ export default function OperationalMeeting() {
                     activeKey={detailTab}
                     onChange={key => setSearchParams(key === 'meeting' ? { tab: 'meeting' } : {})}
                     items={[
-                      { key: 'preparation', label: '准备', children: preparationPanel },
+                      ...(canViewPreparationTab
+                        ? [{ key: 'preparation', label: '准备', children: preparationPanel }]
+                        : []),
                       { key: 'meeting', label: '会议', children: meetingPanel },
                     ]}
                   />
