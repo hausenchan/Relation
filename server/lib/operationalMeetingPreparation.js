@@ -56,6 +56,12 @@ function getOperationalPreparationAnswerCharacterCount(value, fallbackQuestions 
   return Array.from(text).length;
 }
 
+function getOperationalPreparationSubmissionSignature(value, fallbackQuestions = []) {
+  return getOperationalPreparationAnswerText(value, fallbackQuestions)
+    .replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ')
+    .trim();
+}
+
 function operationalPreparationCanSubmit(
   value,
   fallbackQuestions = [],
@@ -68,5 +74,6 @@ module.exports = {
   OPERATIONAL_PREPARATION_MIN_SUBMIT_CHARACTERS,
   getOperationalPreparationAnswerCharacterCount,
   getOperationalPreparationAnswerText,
+  getOperationalPreparationSubmissionSignature,
   operationalPreparationCanSubmit,
 };

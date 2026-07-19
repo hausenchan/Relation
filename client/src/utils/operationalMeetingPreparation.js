@@ -182,14 +182,9 @@ export function getOperationalPreparationSignature(value, fallbackQuestions = DE
 }
 
 export function getOperationalPreparationSubmissionSignature(value, fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS) {
-  const normalized = normalizeOperationalPreparationContent(value, fallbackQuestions);
-  return JSON.stringify({
-    ...normalized,
-    blocks: normalized.blocks.map((block) => {
-      const { collapsed, ...meta } = block.meta || {};
-      return { ...block, meta };
-    }),
-  });
+  return getOperationalPreparationAnswerText(value, fallbackQuestions)
+    .replace(/[\s\u200B-\u200D\uFEFF]+/g, ' ')
+    .trim();
 }
 
 export function operationalPreparationHasAnswers(value, fallbackQuestions = DEFAULT_OPERATIONAL_MEETING_QUESTIONS) {

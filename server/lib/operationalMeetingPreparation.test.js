@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   getOperationalPreparationAnswerCharacterCount,
+  getOperationalPreparationSubmissionSignature,
   operationalPreparationCanSubmit,
 } = require('./operationalMeetingPreparation');
 
@@ -31,4 +32,28 @@ test('preparation submission requires more than five effective characters', () =
 test('template question titles do not count as answers', () => {
   assert.equal(getOperationalPreparationAnswerCharacterCount(content('&nbsp;'), questions), 0);
   assert.equal(operationalPreparationCanSubmit(content('&nbsp;'), questions), false);
+});
+
+test('submission signature ignores presentation-only changes', () => {
+  const plain = content('本周准备内容');
+  const formatted = content('<strong>本周准备内容</strong>');
+  const collapsed = {
+    ...plain,
+    blocks: plain.blocks.map((block, index) => (
+      index === 0 ? { ...block, meta: { ...block.meta, collapsed: true } } : block
+    )),
+  };
+
+  assert.equal(
+    getOperationalPreparationSubmissionSignature(formatted, questions),
+    getOperationalPreparationSubmissionSignature(plain, questions),
+  );
+  assert.equal(
+    getOperationalPreparationSubmissionSignature(collapsed, questions),
+    getOperationalPreparationSubmissionSignature(plain, questions),
+  );
+  assert.notEqual(
+    getOperationalPreparationSubmissionSignature(content('本周准备内容已修改'), questions),
+    getOperationalPreparationSubmissionSignature(plain, questions),
+  );
 });

@@ -227,6 +227,48 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   const submittedDetail = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
   assert.equal(submittedDetail.payload.sections[0].status, 'submitted');
   assert.ok(submittedDetail.payload.sections[0].submitted_at);
+  const submittedAt = submittedDetail.payload.sections[0].submitted_at;
+
+  const repeatSubmittedPreparation = await request(
+    baseUrl,
+    `/api/operational-meeting-sections/${designatedSectionId}`,
+    {
+      method: 'PUT',
+      token: designatedToken,
+      body: { content: preparationContent },
+    },
+  );
+  assert.equal(repeatSubmittedPreparation.status, 200, JSON.stringify(repeatSubmittedPreparation.payload));
+  assert.equal(repeatSubmittedPreparation.payload.status, 'submitted');
+  assert.equal(repeatSubmittedPreparation.payload.submission_changed, 0);
+
+  const collapseOnlyPreparation = await request(
+    baseUrl,
+    `/api/operational-meeting-sections/${designatedSectionId}`,
+    {
+      method: 'PUT',
+      token: designatedToken,
+      body: {
+        content: {
+          ...preparationContent,
+          blocks: preparationContent.blocks.map(block => ({
+            ...block,
+            meta: { ...block.meta, collapsed: true },
+          })),
+        },
+      },
+    },
+  );
+  assert.equal(collapseOnlyPreparation.status, 200, JSON.stringify(collapseOnlyPreparation.payload));
+  assert.equal(collapseOnlyPreparation.payload.status, 'submitted');
+  assert.equal(collapseOnlyPreparation.payload.submission_changed, 0);
+  const detailAfterEquivalentSaves = await request(
+    baseUrl,
+    `/api/operational-meetings/${meetingId}`,
+    { token: designatedToken },
+  );
+  assert.equal(detailAfterEquivalentSaves.payload.sections[0].status, 'submitted');
+  assert.equal(detailAfterEquivalentSaves.payload.sections[0].submitted_at, submittedAt);
 
   const editSubmittedPreparation = await request(
     baseUrl,
@@ -243,6 +285,8 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     },
   );
   assert.equal(editSubmittedPreparation.status, 200, JSON.stringify(editSubmittedPreparation.payload));
+  assert.equal(editSubmittedPreparation.payload.status, 'draft');
+  assert.equal(editSubmittedPreparation.payload.submission_changed, 1);
   const editedDetail = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
   assert.equal(editedDetail.payload.sections[0].status, 'draft');
   assert.equal(editedDetail.payload.sections[0].submitted_at, null);

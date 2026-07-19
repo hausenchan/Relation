@@ -123,4 +123,25 @@ describe('operational meeting preparation content', () => {
       getOperationalPreparationSubmissionSignature(value),
     );
   });
+
+  test('does not invalidate submission for equivalent formatting-only changes', () => {
+    const value = createDefaultOperationalPreparationContent();
+    const plain = {
+      ...value,
+      blocks: value.blocks.map((block, index) => (
+        index === 1 ? { ...block, content: '本周准备内容' } : block
+      )),
+    };
+    const formatted = {
+      ...plain,
+      blocks: plain.blocks.map((block, index) => (
+        index === 1 ? { ...block, content: '<strong>本周准备内容</strong>' } : block
+      )),
+    };
+
+    expect(getOperationalPreparationSignature(formatted)).not.toBe(getOperationalPreparationSignature(plain));
+    expect(getOperationalPreparationSubmissionSignature(formatted)).toBe(
+      getOperationalPreparationSubmissionSignature(plain),
+    );
+  });
 });

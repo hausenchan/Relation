@@ -57,6 +57,7 @@ const {
   isOperationalMeetingCxo,
 } = require('./lib/operationalMeetingPolicy');
 const {
+  getOperationalPreparationSubmissionSignature,
   operationalPreparationCanSubmit,
 } = require('./lib/operationalMeetingPreparation');
 
@@ -21654,19 +21655,40 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
+  const defaultQuestions = parseJsonSafe(section.default_questions_json, []);
+  const previousContent = parseJsonSafe(section.content_json, null);
+  const nextContent = parseJsonSafe(contentJson, null);
+  const submissionChanged = getOperationalPreparationSubmissionSignature(previousContent, defaultQuestions)
+    !== getOperationalPreparationSubmissionSignature(nextContent, defaultQuestions);
+  const shouldResetSubmission = section.status !== 'locked' && submissionChanged;
+  const nextStatus = shouldResetSubmission ? 'draft' : section.status;
+  const nextSubmittedBy = shouldResetSubmission ? null : section.submitted_by;
+  const nextSubmittedAt = shouldResetSubmission ? null : section.submitted_at;
   db.prepare(`
     UPDATE operational_meeting_sections
     SET content_json = ?,
         crypto_version = 'none',
-        status = CASE WHEN status = 'locked' THEN status ELSE 'draft' END,
-        submitted_by = CASE WHEN status = 'locked' THEN submitted_by ELSE NULL END,
-        submitted_at = CASE WHEN status = 'locked' THEN submitted_at ELSE NULL END,
+        status = ?,
+        submitted_by = ?,
+        submitted_at = ?,
         updated_by = ?,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
-  `).run(contentJson, req.user.id, section.id);
+  `).run(
+    contentJson,
+    nextStatus,
+    nextSubmittedBy,
+    nextSubmittedAt,
+    req.user.id,
+    section.id,
+  );
   refreshOperationalMeetingStatuses(section.meeting_id);
-  res.json({ success: true });
+  res.json({
+    success: true,
+    status: nextStatus,
+    submitted_at: nextSubmittedAt,
+    submission_changed: submissionChanged ? 1 : 0,
+  });
 });
 
 app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperationalMeetingAccess, canWrite, (req, res) => {
