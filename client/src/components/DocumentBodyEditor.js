@@ -37,6 +37,7 @@ const LIST_LINE_HEIGHT = 1.96;
 const LIST_MARKER_COLOR = '#202124';
 const LIST_GUIDE_COLOR = '#f0f0f0';
 const MAX_LIST_INDENT = 9;
+const DOCUMENT_BODY_SELECTION_EVENT = 'relation-document-body-selection-activate';
 
 function formatAlphaNumber(value) {
   let number = Math.max(1, Number(value) || 1);
@@ -312,6 +313,9 @@ export default function DocumentBodyEditor({
   const inlineSelectionRangeRef = useRef(null);
   const clipboardBlockIdsRef = useRef([]);
   const selectAllBlocksActiveRef = useRef(false);
+  const manualBlockSelectionActiveRef = useRef(false);
+  const blockSelectionDragRef = useRef(null);
+  const selectionScopeIdRef = useRef(`document-body-editor-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [inlineToolbarOpen, setInlineToolbarOpen] = useState(false);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
@@ -459,11 +463,12 @@ export default function DocumentBodyEditor({
     wrapInlineSelection('span', node => node.setAttribute('style', `color: ${color}`));
   };
 
-  const setClipboardBlockSelection = (ids = [], { selectAll = false } = {}) => {
+  const setClipboardBlockSelection = (ids = [], { selectAll = false, manual = false } = {}) => {
     const idSet = new Set(ids.filter(Boolean));
     const nextIds = blocks.map(block => block.id).filter(id => idSet.has(id));
     clipboardBlockIdsRef.current = nextIds;
     selectAllBlocksActiveRef.current = Boolean(selectAll && nextIds.length);
+    manualBlockSelectionActiveRef.current = Boolean(manual && nextIds.length);
     setClipboardBlockIds(current => (
       current.length === nextIds.length && current.every((id, index) => id === nextIds[index])
         ? current
@@ -474,8 +479,105 @@ export default function DocumentBodyEditor({
   const clearClipboardBlockSelection = () => {
     clipboardBlockIdsRef.current = [];
     selectAllBlocksActiveRef.current = false;
+    manualBlockSelectionActiveRef.current = false;
     setClipboardBlockIds(current => (current.length ? [] : current));
   };
+
+  const activateClipboardSelectionScope = () => {
+    document.dispatchEvent(new CustomEvent(DOCUMENT_BODY_SELECTION_EVENT, {
+      detail: { sourceId: selectionScopeIdRef.current },
+    }));
+  };
+
+  useEffect(() => {
+    const handleOtherEditorSelection = (event) => {
+      if (event.detail?.sourceId === selectionScopeIdRef.current) return;
+      if (clipboardBlockIdsRef.current.length) clearClipboardBlockSelection();
+    };
+    document.addEventListener(DOCUMENT_BODY_SELECTION_EVENT, handleOtherEditorSelection);
+    return () => document.removeEventListener(DOCUMENT_BODY_SELECTION_EVENT, handleOtherEditorSelection);
+  }, []);
+
+  const getVisibleClipboardBlockIds = () => (
+    Array.from(blocksRootRef.current?.querySelectorAll?.('[data-document-body-block-id]') || [])
+      .map(node => node.getAttribute('data-document-body-block-id'))
+      .filter(Boolean)
+  );
+
+  const getClipboardBlockIdFromPoint = (clientX, clientY, visibleIds = []) => {
+    const root = blocksRootRef.current;
+    if (!root) return null;
+    const directNode = document.elementFromPoint?.(clientX, clientY)?.closest?.('[data-document-body-block-id]');
+    if (directNode && root.contains(directNode)) {
+      return directNode.getAttribute('data-document-body-block-id');
+    }
+    const nodes = Array.from(root.querySelectorAll('[data-document-body-block-id]'))
+      .filter(node => !visibleIds.length || visibleIds.includes(node.getAttribute('data-document-body-block-id')));
+    const nodeAtY = nodes.find((node) => {
+      const rect = node.getBoundingClientRect();
+      return clientY >= rect.top && clientY <= rect.bottom;
+    });
+    if (nodeAtY) return nodeAtY.getAttribute('data-document-body-block-id');
+    if (!nodes.length) return null;
+    if (clientY < nodes[0].getBoundingClientRect().top) return nodes[0].getAttribute('data-document-body-block-id');
+    if (clientY > nodes[nodes.length - 1].getBoundingClientRect().bottom) {
+      return nodes[nodes.length - 1].getAttribute('data-document-body-block-id');
+    }
+    return null;
+  };
+
+  const setClipboardBlockRangeSelection = (startId, endId, visibleIds) => {
+    const startIndex = visibleIds.indexOf(startId);
+    const endIndex = visibleIds.indexOf(endId);
+    if (startIndex < 0 || endIndex < 0) return;
+    const from = Math.min(startIndex, endIndex);
+    const to = Math.max(startIndex, endIndex);
+    setClipboardBlockSelection(visibleIds.slice(from, to + 1), { manual: true });
+    setActiveBlockId(endId);
+    setOpenMenuBlockId(null);
+  };
+
+  const handleEditorMouseDown = (event) => {
+    activateClipboardSelectionScope();
+    if (clipboardBlockIdsRef.current.length) clearClipboardBlockSelection();
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    if (event.target.closest?.('button, input, textarea, a, [role="button"]')) return;
+    const startNode = event.target.closest?.('[data-document-body-block-id]');
+    const startId = startNode?.getAttribute('data-document-body-block-id');
+    if (!startId) return;
+    const visibleIds = getVisibleClipboardBlockIds();
+    const startX = event.clientX;
+    const startY = event.clientY;
+
+    const cleanup = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      blockSelectionDragRef.current = null;
+    };
+    const handleMouseMove = (moveEvent) => {
+      const state = blockSelectionDragRef.current;
+      if (!state) return;
+      const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+      const currentId = getClipboardBlockIdFromPoint(moveEvent.clientX, moveEvent.clientY, visibleIds);
+      if (!state.dragging && (moved < 6 || !currentId || currentId === startId)) return;
+      if (!currentId) return;
+      state.dragging = true;
+      moveEvent.preventDefault();
+      window.getSelection?.()?.removeAllRanges();
+      setClipboardBlockRangeSelection(startId, currentId, visibleIds);
+    };
+    const handleMouseUp = (upEvent) => {
+      const state = blockSelectionDragRef.current;
+      cleanup();
+      if (state?.dragging) upEvent.preventDefault();
+    };
+
+    blockSelectionDragRef.current = { dragging: false, cleanup };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  useEffect(() => () => blockSelectionDragRef.current?.cleanup?.(), []);
 
   useEffect(() => {
     const validIds = clipboardBlockIdsRef.current.filter(id => blocks.some(block => block.id === id));
@@ -486,7 +588,7 @@ export default function DocumentBodyEditor({
 
   useEffect(() => {
     const handleSelectionChange = () => {
-      if (selectAllBlocksActiveRef.current) return;
+      if (selectAllBlocksActiveRef.current || manualBlockSelectionActiveRef.current) return;
       const selectedIds = getDocumentBodySelectionBlockIds(blocksRootRef.current);
       setClipboardBlockSelection(selectedIds.length > 1 ? selectedIds : []);
     };
@@ -503,6 +605,7 @@ export default function DocumentBodyEditor({
         const activeElement = document.activeElement;
         if (activeElement?.closest?.('input, textarea, [data-document-body-table-cell="true"]')) return;
         event.preventDefault();
+        activateClipboardSelectionScope();
         window.getSelection?.()?.removeAllRanges();
         setClipboardBlockSelection(blocks.map(block => block.id), { selectAll: true });
         return;
@@ -562,7 +665,7 @@ export default function DocumentBodyEditor({
 
   const handleEditorCopy = (event) => {
     let selectedIds = clipboardBlockIdsRef.current;
-    if (!selectAllBlocksActiveRef.current) {
+    if (!selectAllBlocksActiveRef.current && !manualBlockSelectionActiveRef.current) {
       const nativeSelectedIds = getDocumentBodySelectionBlockIds(blocksRootRef.current);
       if (nativeSelectedIds.length < 2) return;
       selectedIds = nativeSelectedIds;
@@ -1089,11 +1192,10 @@ export default function DocumentBodyEditor({
       tabIndex={0}
       aria-label="正文编辑区"
       onCopy={handleEditorCopy}
-      onMouseDown={() => {
-        if (clipboardBlockIdsRef.current.length) clearClipboardBlockSelection();
-      }}
+      onMouseDown={handleEditorMouseDown}
       onKeyDownCapture={(event) => {
-        if (!selectAllBlocksActiveRef.current || event.metaKey || event.ctrlKey || event.altKey) return;
+        if ((!selectAllBlocksActiveRef.current && !manualBlockSelectionActiveRef.current)
+          || event.metaKey || event.ctrlKey || event.altKey) return;
         clearClipboardBlockSelection();
       }}
       style={{ minHeight, background: '#fff', padding: '2px 0 16px', outline: 'none', ...style }}

@@ -126,4 +126,77 @@ describe('DocumentBodyEditor block copy', () => {
     expect(JSON.parse(clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME)).blocks.map(block => block.content))
       .toEqual(['第一块', '<strong>第二块</strong>']);
   });
+
+  test('drags across independent editable blocks and copies the selected block range', () => {
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={() => {}} />);
+    });
+    const blockNodes = container.querySelectorAll('[data-document-body-block-id]');
+    const editableNodes = container.querySelectorAll('[contenteditable="true"]');
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = jest.fn(() => editableNodes[1]);
+
+    flushSync(() => {
+      editableNodes[0].dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+      }));
+      window.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: 10,
+        clientY: 60,
+      }));
+      window.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true,
+        clientX: 10,
+        clientY: 60,
+      }));
+    });
+
+    expect(container.querySelectorAll('[data-document-body-block-id][data-copy-selected="true"]')).toHaveLength(2);
+    window.getSelection()?.removeAllRanges();
+    const clipboardData = createClipboardData();
+    let copyEvent;
+    flushSync(() => {
+      copyEvent = dispatchCopy(blockNodes[0], clipboardData);
+    });
+
+    expect(copyEvent.defaultPrevented).toBe(true);
+    expect(JSON.parse(clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME)).blocks.map(block => block.content))
+      .toEqual(['第一块', '<strong>第二块</strong>']);
+    document.elementFromPoint = originalElementFromPoint;
+  });
+
+  test('keeps block selection active in only one meeting editor at a time', () => {
+    flushSync(() => {
+      root.render(
+        <>
+          <DocumentBodyEditor value={value} onChange={() => {}} />
+          <DocumentBodyEditor value={value} onChange={() => {}} />
+        </>
+      );
+    });
+    const editorRegions = container.querySelectorAll('[aria-label="正文编辑区"]');
+    const firstInlineEditor = editorRegions[0].querySelector('[contenteditable="true"]');
+    const secondInlineEditor = editorRegions[1].querySelector('[contenteditable="true"]');
+
+    firstInlineEditor.focus();
+    flushSync(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'a', metaKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editorRegions[0].querySelectorAll('[data-copy-selected="true"]')).toHaveLength(3);
+
+    secondInlineEditor.focus();
+    flushSync(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'a', metaKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(editorRegions[0].querySelectorAll('[data-copy-selected="true"]')).toHaveLength(0);
+    expect(editorRegions[1].querySelectorAll('[data-copy-selected="true"]')).toHaveLength(3);
+  });
 });
