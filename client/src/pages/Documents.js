@@ -3212,6 +3212,7 @@ export default function Documents() {
   const applyingUndoRef = useRef(false);
   const editorAreaSelectionRef = useRef(null);
   const selectedAreaBlockIdsRef = useRef([]);
+  const selectAllEditorBlocksRef = useRef(false);
   const blockHandleSelectionRef = useRef(null);
   const activeEditorSnapshotRef = useRef(null);
   const liveEditorSnapshotRef = useRef(null);
@@ -4374,13 +4375,38 @@ export default function Documents() {
   }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
 
   useEffect(() => {
+    const handleSelectAllKeyDown = (event) => {
+      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
+      const key = String(event.key || '').toLowerCase();
+      if (key !== 'a' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
+      const editorNode = document.getElementById('document-editor-blocks');
+      const activeElement = document.activeElement;
+      if (!editorNode?.contains(activeElement)) return;
+      if (activeElement?.closest?.('input, textarea, [data-document-table-cell="true"], [data-document-database-editor-block-id]')) return;
+      event.preventDefault();
+      window.getSelection?.()?.removeAllRanges();
+      setAreaBlockSelection(editorBlocks.map(block => block.id));
+      selectAllEditorBlocksRef.current = true;
+    };
+    window.addEventListener('keydown', handleSelectAllKeyDown);
+    return () => window.removeEventListener('keydown', handleSelectAllKeyDown);
+  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen, editorBlocks]);
+
+  useEffect(() => {
     const handleDocumentCopy = (event) => {
       if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const activeElement = document.activeElement;
       const activeTextSelection = activeElement?.closest?.('textarea, input, [contenteditable="true"]')
         && window.getSelection?.()?.toString?.();
-      if (activeTextSelection) return;
-      const payload = getActiveDocumentClipboardPayload();
+      const nativeSelectedBlockIds = getSelectedEditorBlockIds();
+      if (activeTextSelection && nativeSelectedBlockIds.length < 2 && !selectAllEditorBlocksRef.current) return;
+      const nativeSelectedSet = new Set(nativeSelectedBlockIds);
+      const nativeSelectedBlocks = nativeSelectedBlockIds.length > 1
+        ? editorBlocks.filter(block => nativeSelectedSet.has(block.id))
+        : [];
+      const payload = nativeSelectedBlocks.length
+        ? blocksToClipboardPayload(nativeSelectedBlocks)
+        : getActiveDocumentClipboardPayload();
       if (!payload?.text && !payload?.html) return;
       if (!writeClipboardPayloadToEvent(event, payload)) return;
       event.preventDefault();
@@ -7590,6 +7616,7 @@ export default function Documents() {
 
   const setAreaBlockSelection = (ids = []) => {
     const nextIds = normalizeBlockSelectionIds(ids);
+    selectAllEditorBlocksRef.current = false;
     selectedAreaBlockIdsRef.current = nextIds;
     setSelectedAreaBlockIds(prev => (
       prev.length === nextIds.length && prev.every((id, index) => id === nextIds[index]) ? prev : nextIds
@@ -7690,6 +7717,10 @@ export default function Documents() {
 
   const handleEditorAreaMouseDown = (event) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    if (selectAllEditorBlocksRef.current) {
+      selectAllEditorBlocksRef.current = false;
+      clearAreaBlockSelection();
+    }
     const startBlockNode = event.target.closest?.('[data-doc-block-id]');
     const startsInBlockTextArea = Boolean(startBlockNode && event.target.closest?.('textarea'));
     if (isEditorAreaSelectionIgnoredTarget(event.target) && !startsInBlockTextArea) return;
@@ -14658,6 +14689,8 @@ export default function Documents() {
               }}>
                 <section
                   id="document-editor-blocks"
+                  tabIndex={0}
+                  aria-label="文档正文编辑区"
                   onMouseDown={handleEditorAreaMouseDown}
                   onPaste={handleEditorPaste}
                   onDragOver={handleEditorDragOver}
@@ -14669,6 +14702,7 @@ export default function Documents() {
                   maxWidth: isMobile ? '100%' : getEditorMaxWidth(selectedDoc),
                   width: '100%',
                   position: 'relative',
+                  outline: 'none',
                   paddingBottom: isMobile ? 120 : 96,
                   minHeight: isMobile ? 'calc(100vh - 260px)' : 420,
                 }}>

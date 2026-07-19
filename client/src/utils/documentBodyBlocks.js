@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify';
 
 export const DOCUMENT_BODY_FORMAT = 'relation_document_blocks_v1';
+export const DOCUMENT_BODY_CLIPBOARD_MIME = 'application/x-relation-document-blocks';
 
 export const DOCUMENT_BODY_BLOCK_TYPES = [
   { value: 'paragraph', label: '文本', group: '基础' },
@@ -378,6 +379,115 @@ export function parseDocumentBodyClipboard(html = '', text = '') {
     format: DOCUMENT_BODY_FORMAT,
     blocks,
   };
+}
+
+function escapeClipboardHtml(value = '') {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function cloneClipboardMeta(meta) {
+  if (!meta || typeof meta !== 'object') return {};
+  try {
+    return JSON.parse(JSON.stringify(meta));
+  } catch {
+    return { ...meta };
+  }
+}
+
+function documentBodyBlockToClipboardText(block) {
+  if (!block) return '';
+  if (block.type === 'divider') return '---';
+  if (block.type === 'table-simple') {
+    return (block.meta?.rows || [])
+      .map(row => (Array.isArray(row) ? row.map(cell => documentBodyInlineHtmlToPlain(cell)).join('\t') : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+  const indent = Math.max(0, Number(block.meta?.indent || 0));
+  const text = documentBodyInlineHtmlToPlain(block.content || '');
+  const prefix = block.type === 'numbered'
+    ? '1. '
+    : (['bullet', 'fold-list'].includes(block.type)
+      ? '- '
+      : (block.type === 'todo' ? `[${block.checked ? 'x' : ' '}] ` : ''));
+  const body = block.type === 'fold-list' ? documentBodyInlineHtmlToPlain(block.meta?.body || '') : '';
+  return `${'  '.repeat(indent)}${prefix}${text}${body ? `\n${'  '.repeat(indent + 1)}${body}` : ''}`;
+}
+
+function documentBodyBlockToClipboardHtml(block) {
+  if (!block) return '';
+  if (block.type === 'divider') return '<hr>';
+  if (block.type === 'table-simple') {
+    const rows = (block.meta?.rows || []).map(row => (
+      `<tr>${(Array.isArray(row) ? row : []).map(cell => `<td>${sanitizeDocumentBodyInlineHtml(cell)}</td>`).join('')}</tr>`
+    )).join('');
+    return rows ? `<table data-document-table-block="true"><tbody>${rows}</tbody></table>` : '';
+  }
+  const indent = Math.max(0, Number(block.meta?.indent || 0));
+  const content = sanitizeDocumentBodyInlineHtml(block.content || '');
+  const headingLevel = String(block.type || '').match(/^heading([1-4])$/)?.[1];
+  const tag = headingLevel ? `h${headingLevel}` : (block.type === 'quote' ? 'blockquote' : 'div');
+  const attributes = [
+    `data-block-type="${escapeClipboardHtml(block.type || 'paragraph')}"`,
+    `data-indent="${indent}"`,
+    `aria-level="${indent + 1}"`,
+  ];
+  if (block.type === 'todo') attributes.push(`data-checked="${block.checked ? 'true' : 'false'}"`);
+  return `<${tag} ${attributes.join(' ')}>${content}</${tag}>`;
+}
+
+export function buildDocumentBodyClipboardPayload(blocks = []) {
+  const source = (Array.isArray(blocks) ? blocks : []).filter(Boolean);
+  return {
+    text: source.map(documentBodyBlockToClipboardText).filter(Boolean).join('\n'),
+    html: source.map(documentBodyBlockToClipboardHtml).filter(Boolean).join(''),
+    blocks: source.map(block => ({
+      type: block.type || 'paragraph',
+      content: block.type === 'divider' ? '' : String(block.content || ''),
+      checked: Boolean(block.checked),
+      meta: cloneClipboardMeta(block.meta),
+    })),
+  };
+}
+
+export function parseDocumentBodyClipboardData(clipboardData) {
+  const raw = clipboardData?.getData?.(DOCUMENT_BODY_CLIPBOARD_MIME) || '';
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.blocks)) {
+        return parsed.blocks.map(block => createDocumentBodyBlock(block?.type || 'paragraph', block?.content || '', {
+          checked: Boolean(block?.checked),
+          meta: cloneClipboardMeta(block?.meta),
+        }));
+      }
+    } catch {
+      // Fall through to the standard HTML/plain-text parser.
+    }
+  }
+  const html = clipboardData?.getData?.('text/html') || '';
+  const text = clipboardData?.getData?.('text/plain') || '';
+  return parseDocumentBodyClipboard(html, text).blocks;
+}
+
+export function getDocumentBodySelectionBlockIds(root, selection = globalThis.window?.getSelection?.()) {
+  if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return [];
+  const ranges = Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index));
+  return Array.from(root.querySelectorAll('[data-document-body-block-id]'))
+    .filter(node => ranges.some((range) => {
+      try {
+        return range.intersectsNode(node);
+      } catch {
+        return false;
+      }
+    }))
+    .map(node => node.getAttribute('data-document-body-block-id'))
+    .filter(Boolean);
 }
 
 export function rebaseDocumentBodyClipboardBlocks(blocks = [], targetIndent = 0) {

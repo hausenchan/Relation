@@ -1,8 +1,12 @@
 import {
+  buildDocumentBodyClipboardPayload,
+  DOCUMENT_BODY_CLIPBOARD_MIME,
   DOCUMENT_BODY_FORMAT,
   documentBodyToPlain,
+  getDocumentBodySelectionBlockIds,
   normalizeDocumentBodyValue,
   parseDocumentBodyClipboard,
+  parseDocumentBodyClipboardData,
   rebaseDocumentBodyClipboardBlocks,
 } from './documentBodyBlocks';
 
@@ -127,5 +131,62 @@ b. IAP 本周消耗 $4753`);
     ], 1);
 
     expect(blocks.map(block => block.meta.indent)).toEqual([1, 2]);
+  });
+
+  test('copies multiple blocks with rich text, list depth, and structured clipboard data', () => {
+    const payload = buildDocumentBodyClipboardPayload([
+      { id: 'source-1', type: 'fold-list', content: '<strong>经营结果</strong>', meta: { indent: 0, collapsed: true } },
+      { id: 'source-2', type: 'numbered', content: '<span style="color: #ef4444">收入增长</span>', meta: { indent: 1, hierarchy: 'list' } },
+    ]);
+
+    expect(payload.text).toBe('- 经营结果\n  1. 收入增长');
+    expect(payload.html).toContain('data-block-type="fold-list"');
+    expect(payload.html).toContain('data-indent="1"');
+    expect(payload.blocks).toEqual([
+      { type: 'fold-list', content: '<strong>经营结果</strong>', checked: false, meta: { indent: 0, collapsed: true } },
+      { type: 'numbered', content: '<span style="color: #ef4444">收入增长</span>', checked: false, meta: { indent: 1, hierarchy: 'list' } },
+    ]);
+  });
+
+  test('pastes structured blocks with fresh ids and preserved hierarchy', () => {
+    const clipboardData = {
+      getData: type => (type === DOCUMENT_BODY_CLIPBOARD_MIME ? JSON.stringify({
+        blocks: [
+          { type: 'numbered', content: '<strong>目标</strong>', meta: { indent: 2, hierarchy: 'list' } },
+          { type: 'todo', content: '确认', checked: true, meta: {} },
+        ],
+      }) : ''),
+    };
+
+    const firstPaste = parseDocumentBodyClipboardData(clipboardData);
+    const secondPaste = parseDocumentBodyClipboardData(clipboardData);
+
+    expect(firstPaste.map(block => block.type)).toEqual(['numbered', 'todo']);
+    expect(firstPaste[0].meta).toEqual({ indent: 2, hierarchy: 'list' });
+    expect(firstPaste[1].checked).toBe(true);
+    expect(firstPaste[0].id).not.toBe(secondPaste[0].id);
+  });
+
+  test('finds only the blocks touched by a native multi-block selection', () => {
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <div data-document-body-block-id="one">第一块</div>
+      <div data-document-body-block-id="two">第二块</div>
+      <div data-document-body-block-id="three">第三块</div>
+    `;
+    document.body.appendChild(root);
+    const firstText = root.children[0].firstChild;
+    const secondText = root.children[1].firstChild;
+    const range = document.createRange();
+    range.setStart(firstText, 1);
+    range.setEnd(secondText, 2);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    expect(getDocumentBodySelectionBlockIds(root, selection)).toEqual(['one', 'two']);
+
+    selection.removeAllRanges();
+    root.remove();
   });
 });

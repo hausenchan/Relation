@@ -17,11 +17,15 @@ import {
   isDocumentBlockHierarchyMember,
 } from '../utils/documentBlockHierarchy';
 import {
+  buildDocumentBodyClipboardPayload,
   createDocumentBodyBlock,
+  DOCUMENT_BODY_CLIPBOARD_MIME,
   documentBodyInlineHtmlToPlain,
   DOCUMENT_BODY_BLOCK_TYPES,
+  getDocumentBodySelectionBlockIds,
   normalizeDocumentBodyValue,
   parseDocumentBodyClipboard,
+  parseDocumentBodyClipboardData,
   rebaseDocumentBodyClipboardBlocks,
   sanitizeDocumentBodyInlineHtml,
 } from '../utils/documentBodyBlocks';
@@ -300,17 +304,21 @@ export default function DocumentBodyEditor({
   const serializedValue = useMemo(() => serializeDocumentBodyValue(normalized), [normalized]);
   const blocks = normalized.blocks;
   const editorRootRef = useRef(null);
+  const blocksRootRef = useRef(null);
   const undoHistoryRef = useRef([]);
   const lastEmittedValueRef = useRef('');
   const pendingLocalValueRef = useRef(false);
   const activeInlineEditorRef = useRef(null);
   const inlineSelectionRangeRef = useRef(null);
+  const clipboardBlockIdsRef = useRef([]);
+  const selectAllBlocksActiveRef = useRef(false);
   const [activeBlockId, setActiveBlockId] = useState(null);
   const [inlineToolbarOpen, setInlineToolbarOpen] = useState(false);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openMenuBlockId, setOpenMenuBlockId] = useState(null);
   const [focusBlockId, setFocusBlockId] = useState(null);
   const [draggingBlockId, setDraggingBlockId] = useState(null);
+  const [clipboardBlockIds, setClipboardBlockIds] = useState([]);
   const hiddenBlockIds = useMemo(() => buildCollapsedDocumentBlockIds(blocks, MAX_LIST_INDENT), [blocks]);
   const guideMap = useMemo(() => buildDocumentBlockGuideMap(blocks, hiddenBlockIds, MAX_LIST_INDENT), [blocks, hiddenBlockIds]);
   const numberedMarkers = useMemo(() => {
@@ -451,11 +459,55 @@ export default function DocumentBodyEditor({
     wrapInlineSelection('span', node => node.setAttribute('style', `color: ${color}`));
   };
 
+  const setClipboardBlockSelection = (ids = [], { selectAll = false } = {}) => {
+    const idSet = new Set(ids.filter(Boolean));
+    const nextIds = blocks.map(block => block.id).filter(id => idSet.has(id));
+    clipboardBlockIdsRef.current = nextIds;
+    selectAllBlocksActiveRef.current = Boolean(selectAll && nextIds.length);
+    setClipboardBlockIds(current => (
+      current.length === nextIds.length && current.every((id, index) => id === nextIds[index])
+        ? current
+        : nextIds
+    ));
+  };
+
+  const clearClipboardBlockSelection = () => {
+    clipboardBlockIdsRef.current = [];
+    selectAllBlocksActiveRef.current = false;
+    setClipboardBlockIds(current => (current.length ? [] : current));
+  };
+
+  useEffect(() => {
+    const validIds = clipboardBlockIdsRef.current.filter(id => blocks.some(block => block.id === id));
+    if (validIds.length !== clipboardBlockIdsRef.current.length) {
+      setClipboardBlockSelection(validIds, { selectAll: selectAllBlocksActiveRef.current });
+    }
+  }, [serializedValue]);
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      if (selectAllBlocksActiveRef.current) return;
+      const selectedIds = getDocumentBodySelectionBlockIds(blocksRootRef.current);
+      setClipboardBlockSelection(selectedIds.length > 1 ? selectedIds : []);
+    };
+    document.addEventListener('selectionchange', handleSelectionChange);
+    return () => document.removeEventListener('selectionchange', handleSelectionChange);
+  });
+
   useEffect(() => {
     const handleEditorShortcut = (event) => {
-      if (readOnly || !editorRootRef.current?.contains(document.activeElement)) return;
+      if (!editorRootRef.current?.contains(document.activeElement)) return;
       if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       const key = String(event.key || '').toLowerCase();
+      if (key === 'a' && !event.shiftKey) {
+        const activeElement = document.activeElement;
+        if (activeElement?.closest?.('input, textarea, [data-document-body-table-cell="true"]')) return;
+        event.preventDefault();
+        window.getSelection?.()?.removeAllRanges();
+        setClipboardBlockSelection(blocks.map(block => block.id), { selectAll: true });
+        return;
+      }
+      if (readOnly) return;
       if (key === 'z' && !event.shiftKey) {
         event.preventDefault();
         undoLastChange();
@@ -493,14 +545,38 @@ export default function DocumentBodyEditor({
     if (readOnly || !event.clipboardData) return;
     const html = event.clipboardData.getData('text/html') || '';
     const text = event.clipboardData.getData('text/plain') || '';
-    const parsed = parseDocumentBodyClipboard(html, text);
-    const structural = /<(?:p|div|h[1-6]|ol|ul|li|table|tr|br)\b/i.test(html)
-      || parsed.blocks.length > 1
-      || parsed.blocks.some(item => item.type !== 'paragraph' || Number(item.meta?.indent || 0) > 0);
-    if (!parsed.blocks.length || !structural) return;
+    const hasRelationBlocks = Boolean(event.clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME));
+    const pastedBlocks = hasRelationBlocks
+      ? parseDocumentBodyClipboardData(event.clipboardData)
+      : parseDocumentBodyClipboard(html, text).blocks;
+    const structural = hasRelationBlocks
+      || /<(?:p|div|h[1-6]|ol|ul|li|table|tr|br)\b/i.test(html)
+      || pastedBlocks.length > 1
+      || pastedBlocks.some(item => item.type !== 'paragraph' || Number(item.meta?.indent || 0) > 0);
+    if (!pastedBlocks.length || !structural) return;
     event.preventDefault();
     event.stopPropagation();
-    insertPastedBlocks(blockId, parsed.blocks);
+    clearClipboardBlockSelection();
+    insertPastedBlocks(blockId, pastedBlocks);
+  };
+
+  const handleEditorCopy = (event) => {
+    let selectedIds = clipboardBlockIdsRef.current;
+    if (!selectAllBlocksActiveRef.current) {
+      const nativeSelectedIds = getDocumentBodySelectionBlockIds(blocksRootRef.current);
+      if (nativeSelectedIds.length < 2) return;
+      selectedIds = nativeSelectedIds;
+    }
+    const selectedSet = new Set(selectedIds);
+    const selectedBlocks = blocks.filter(block => selectedSet.has(block.id));
+    if (!selectedBlocks.length || !event.clipboardData) return;
+    const payload = buildDocumentBodyClipboardPayload(selectedBlocks);
+    event.clipboardData.setData('text/plain', payload.text);
+    if (payload.html) event.clipboardData.setData('text/html', payload.html);
+    event.clipboardData.setData(DOCUMENT_BODY_CLIPBOARD_MIME, JSON.stringify({ blocks: payload.blocks }));
+    event.preventDefault();
+    event.stopPropagation();
+    message.success('已复制');
   };
 
   const createBlockAfter = (type, afterId = blocks[blocks.length - 1]?.id, options = {}) => {
@@ -849,6 +925,7 @@ export default function DocumentBodyEditor({
     const active = activeBlockId === block.id;
     const hovered = hoveredBlockId === block.id;
     const menuOpen = openMenuBlockId === block.id;
+    const clipboardSelected = clipboardBlockIds.includes(block.id);
     const blankParagraph = block.type === 'paragraph' && isBlankBlock(block);
     const handleVisible = !readOnly && (active || hovered || menuOpen || blankParagraph);
     return (
@@ -862,6 +939,7 @@ export default function DocumentBodyEditor({
         onMouseEnter={() => setHoveredBlockId(block.id)}
         onMouseLeave={() => setHoveredBlockId(current => (current === block.id ? null : current))}
         onClick={() => setActiveBlockId(block.id)}
+        data-copy-selected={clipboardSelected ? 'true' : undefined}
         style={{
           display: 'flex',
           alignItems: 'flex-start',
@@ -871,7 +949,9 @@ export default function DocumentBodyEditor({
           padding: ['fold-list', 'bullet', 'numbered'].includes(block.type) ? '1px 8px 1px 0' : '3px 8px 3px 0',
           marginBottom: ['fold-list', 'bullet', 'numbered'].includes(block.type) ? 0 : 2,
           borderRadius: 6,
-          background: menuOpen ? '#f8e6e8' : (draggingBlockId === block.id ? '#f8fafc' : 'transparent'),
+          background: clipboardSelected
+            ? '#eaf2ff'
+            : (menuOpen ? '#f8e6e8' : (draggingBlockId === block.id ? '#f8fafc' : 'transparent')),
         }}
       >
         {!readOnly && (
@@ -1004,9 +1084,22 @@ export default function DocumentBodyEditor({
   ) : null;
 
   return (
-    <div ref={editorRootRef} style={{ minHeight, background: '#fff', padding: '2px 0 16px', ...style }}>
+    <div
+      ref={editorRootRef}
+      tabIndex={0}
+      aria-label="正文编辑区"
+      onCopy={handleEditorCopy}
+      onMouseDown={() => {
+        if (clipboardBlockIdsRef.current.length) clearClipboardBlockSelection();
+      }}
+      onKeyDownCapture={(event) => {
+        if (!selectAllBlocksActiveRef.current || event.metaKey || event.ctrlKey || event.altKey) return;
+        clearClipboardBlockSelection();
+      }}
+      style={{ minHeight, background: '#fff', padding: '2px 0 16px', outline: 'none', ...style }}
+    >
       {inlineToolbar}
-      <div>{blocks.map(renderBlock)}</div>
+      <div ref={blocksRootRef}>{blocks.map(renderBlock)}</div>
       {!readOnly && !(lastVisibleBlock?.type === 'paragraph' && isBlankBlock(lastVisibleBlock)) && (
         <div style={{ display: 'flex', alignItems: 'center', minHeight: 38, padding: '4px 8px 4px 0', marginTop: 4 }}>
           <div style={{ width: 24, minWidth: 24, display: 'flex', justifyContent: 'center' }}>
