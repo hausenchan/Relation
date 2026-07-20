@@ -15525,7 +15525,7 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-app.get('/api/ai-suggestions', (req, res) => {
+app.get('/api/ai-suggestions', requireExecutive, (req, res) => {
   try {
     const businessLine = String(req.query.business_line || AI_SUGGESTION_DEFAULT_BUSINESS_LINE).trim()
       || AI_SUGGESTION_DEFAULT_BUSINESS_LINE;
@@ -21840,9 +21840,7 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
 // =========== 公司经营模块 API ===========
 // 权限中间件：仅高管可访问
 function requireExecutive(req, res, next) {
-  const { executive_role, role } = req.user;
-  const execRoles = ['ceo', 'coo', 'cto', 'cmo'];
-  if (!execRoles.includes(executive_role) && !execRoles.includes(role)) {
+  if (!isOperationalMeetingCxo(req.user)) {
     return res.status(403).json({ error: '仅高管可访问此模块' });
   }
   next();

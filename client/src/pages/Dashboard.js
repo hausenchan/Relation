@@ -397,7 +397,7 @@ export default function Dashboard() {
   const [teamTaskTitleSearch, setTeamTaskTitleSearch] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState([]);
   const [aiSuggestionMeta, setAiSuggestionMeta] = useState(null);
-  const [aiSuggestionsLoading, setAiSuggestionsLoading] = useState(true);
+  const [aiSuggestionsLoading, setAiSuggestionsLoading] = useState(false);
   const [aiSuggestionLoadError, setAiSuggestionLoadError] = useState('');
   const [aiSuggestionStatusFilter, setAiSuggestionStatusFilter] = useState(AI_SUGGESTION_STATUS_VALUES);
   const [aiSuggestionPriorityFilter, setAiSuggestionPriorityFilter] = useState(AI_SUGGESTION_PRIORITY_VALUES);
@@ -411,7 +411,8 @@ export default function Dashboard() {
 
   const canAssignOthers = true; // 所有角色都可以跨组指派任务
   const canViewAssignedTasks = canAssignOthers;
-  const canManageTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || isExecutive();
+  const canViewAiSuggestions = isExecutive();
+  const canManageTeamTasks = ['admin', 'leader', 'sales_director'].includes(user?.role) || canViewAiSuggestions;
   const canViewTeamScope = canManageTeamTasks || (user?.team_ids?.length > 0) || (user?.managed_team_ids?.length > 0);
   const canViewTeamTasks = canViewTeamScope || teamTasks.length > 0;
   const hideRelationshipPanels = stats?.showRelationshipPanels === false
@@ -455,7 +456,10 @@ export default function Dashboard() {
     if (activeTaskTab === TASK_TAB_KEYS.team && !canViewTeamTasks) {
       setActiveTaskTab(TASK_TAB_KEYS.execution);
     }
-  }, [activeTaskTab, canViewTeamTasks]);
+    if (activeTaskTab === TASK_TAB_KEYS.ai && !canViewAiSuggestions) {
+      setActiveTaskTab(TASK_TAB_KEYS.execution);
+    }
+  }, [activeTaskTab, canViewAiSuggestions, canViewTeamTasks]);
 
   const toDisplayStatus = (status) => {
     return statusMap[status] ? status : 'done';
@@ -485,6 +489,7 @@ export default function Dashboard() {
   });
 
   const loadAiSuggestions = useCallback(async ({ silent = false } = {}) => {
+    if (!canViewAiSuggestions) return null;
     if (!silent) setAiSuggestionsLoading(true);
     try {
       const data = await aiSuggestionsApi.list({ business_line: 'zhixiao' });
@@ -501,15 +506,26 @@ export default function Dashboard() {
     } finally {
       if (!silent) setAiSuggestionsLoading(false);
     }
-  }, []);
+  }, [canViewAiSuggestions]);
 
   useEffect(() => {
-    if (activeTaskTab !== TASK_TAB_KEYS.ai) return undefined;
+    if (!canViewAiSuggestions) {
+      setAiSuggestions([]);
+      setAiSuggestionMeta(null);
+      setAiSuggestionLoadError('');
+      setAiSuggestionsLoading(false);
+      return;
+    }
+    loadAiSuggestions();
+  }, [canViewAiSuggestions, loadAiSuggestions]);
+
+  useEffect(() => {
+    if (!canViewAiSuggestions || activeTaskTab !== TASK_TAB_KEYS.ai) return undefined;
     const timer = setInterval(() => {
       loadAiSuggestions({ silent: true });
     }, 300000);
     return () => clearInterval(timer);
-  }, [activeTaskTab, loadAiSuggestions]);
+  }, [activeTaskTab, canViewAiSuggestions, loadAiSuggestions]);
 
   const buildAssignedTasks = (allTasks, allFollowUpData) => {
     const normalTasks = allTasks
@@ -776,8 +792,6 @@ export default function Dashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const aiSuggestionsPromise = loadAiSuggestions();
-
       // 基础统计
       const statsData = await statsApi.get();
       setStats(statsData);
@@ -793,7 +807,6 @@ export default function Dashboard() {
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
       setWatchedTasks(buildWatchedTasks(allTasks, watchedFollowUpData));
       setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
-      await aiSuggestionsPromise;
 
     } catch (err) {
       console.error('加载数据失败:', err);
@@ -2215,18 +2228,19 @@ export default function Dashboard() {
     });
   }
 
-  tabItems.push({
-    key: TASK_TAB_KEYS.ai,
-    label: (
-      <span>
-        <RobotOutlined /> AI建议
-        {filteredAiSuggestions.filter(item => item.status === 'pending_review').length > 0 && (
-          <Badge count={filteredAiSuggestions.filter(item => item.status === 'pending_review').length} style={{ marginLeft: 8 }} />
-        )}
-      </span>
-    ),
-    children: (
-      <div>
+  if (canViewAiSuggestions) {
+    tabItems.push({
+      key: TASK_TAB_KEYS.ai,
+      label: (
+        <span>
+          <RobotOutlined /> AI建议
+          {filteredAiSuggestions.filter(item => item.status === 'pending_review').length > 0 && (
+            <Badge count={filteredAiSuggestions.filter(item => item.status === 'pending_review').length} style={{ marginLeft: 8 }} />
+          )}
+        </span>
+      ),
+      children: (
+        <div>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
             <Input
@@ -2321,11 +2335,14 @@ export default function Dashboard() {
             <Empty description="当前筛选条件下暂无 AI 建议" />
           </Card>
         )}
-      </div>
-    ),
-  });
+        </div>
+      ),
+    });
+  }
 
-  const topSummaryCards = activeTaskTab === TASK_TAB_KEYS.ai ? aiSuggestionSummaryCards : taskStatCards;
+  const topSummaryCards = canViewAiSuggestions && activeTaskTab === TASK_TAB_KEYS.ai
+    ? aiSuggestionSummaryCards
+    : taskStatCards;
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
@@ -2399,7 +2416,7 @@ export default function Dashboard() {
           items={tabItems}
           tabBarGutter={isMobile ? 12 : undefined}
           tabBarExtraContent={isMobile ? undefined : {
-            right: activeTaskTab === TASK_TAB_KEYS.ai
+            right: canViewAiSuggestions && activeTaskTab === TASK_TAB_KEYS.ai
               ? <Text type="secondary" style={{ fontSize: 12 }}>{aiSuggestionMetaText}</Text>
               : <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>新建任务</Button>,
           }}

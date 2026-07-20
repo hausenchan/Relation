@@ -7,6 +7,7 @@ const {
   canGenerateAgenda,
   canViewMeeting,
   canViewPreparation,
+  isOperationalMeetingCxo,
 } = require('./operationalMeetingPolicy');
 
 const cxo = { id: 1, role: 'member', executive_role: 'ceo' };
@@ -20,6 +21,15 @@ const designatedParticipant = {
   can_edit_decision: 1,
   status: 'active',
 };
+
+test('CXO identity accepts all executive roles and rejects non-CXO accounts', () => {
+  for (const role of ['ceo', 'coo', 'cto', 'cmo']) {
+    assert.equal(isOperationalMeetingCxo({ role }), true);
+    assert.equal(isOperationalMeetingCxo({ role: 'member', executive_role: role }), true);
+  }
+  assert.equal(isOperationalMeetingCxo(admin), false);
+  assert.equal(isOperationalMeetingCxo(other), false);
+});
 
 test('CXO can view every preparation while a designated participant only sees their own', () => {
   const ownSection = { id: 20, owner_user_id: 2 };
