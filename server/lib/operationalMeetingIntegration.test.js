@@ -181,11 +181,15 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   assert.equal(designatedDetail.payload.sections.length, 1);
   assert.equal(Number(designatedDetail.payload.sections[0].owner_user_id), users.designatedId);
   assert.equal(designatedDetail.payload.can_view_preparation, 1);
+  assert.equal(designatedDetail.payload.can_edit_agenda, 1);
   assert.equal(designatedDetail.payload.can_generate_agenda, 0);
-  assert.equal(designatedDetail.payload.can_edit_decision, 0);
+  assert.equal(designatedDetail.payload.can_edit_decision, 1);
   assert.equal(outsiderDetail.status, 200);
   assert.equal(outsiderDetail.payload.sections.length, 0);
   assert.equal(outsiderDetail.payload.can_view_preparation, 0);
+  assert.equal(outsiderDetail.payload.can_edit_agenda, 1);
+  assert.equal(outsiderDetail.payload.can_generate_agenda, 0);
+  assert.equal(outsiderDetail.payload.can_edit_decision, 1);
   assert.equal(outsiderDetail.payload.participants.length, 0);
 
   const designatedSectionId = designatedDetail.payload.sections[0].id;
@@ -336,6 +340,13 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   });
   assert.equal(saveAgenda.status, 200, JSON.stringify(saveAgenda.payload));
 
+  const outsiderSavesAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
+    method: 'PUT',
+    token: outsiderToken,
+    body: { agenda: agendaContent, model_provider: 'edited' },
+  });
+  assert.equal(outsiderSavesAgenda.status, 200, JSON.stringify(outsiderSavesAgenda.payload));
+
   const decisionContent = {
     format: 'relation_document_body_v1',
     blocks: [{ id: 'decision-1', type: 'paragraph', content: '本周会议结论', meta: {} }],
@@ -346,6 +357,13 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     body: { decision: decisionContent, status: 'saved' },
   });
   assert.equal(saveDecision.status, 200, JSON.stringify(saveDecision.payload));
+
+  const outsiderSavesDecision = await request(baseUrl, `/api/operational-meetings/${meetingId}/decision`, {
+    method: 'PUT',
+    token: outsiderToken,
+    body: { decision: decisionContent, status: 'saved' },
+  });
+  assert.equal(outsiderSavesDecision.status, 200, JSON.stringify(outsiderSavesDecision.payload));
 
   const meetingContentDetail = await request(baseUrl, `/api/operational-meetings/${meetingId}`, { token: designatedToken });
   assert.deepEqual(meetingContentDetail.payload.agenda.agenda_content, agendaContent);

@@ -47,6 +47,7 @@ const {
   testLlmConnection,
 } = require('./lib/aiTrainingRuntime');
 const {
+  canEditAgenda: canEditOperationalAgenda,
   canEditDecision: canEditOperationalDecision,
   canEditPreparation: canEditOperationalPreparation,
   canGenerateAgenda: canGenerateOperationalAgenda,
@@ -21638,6 +21639,7 @@ app.get('/api/operational-meetings/:id', requireOperationalMeetingAccess, (req, 
     meeting_authorized_user_ids: canManage ? listOperationalMeetingParticipantUserIds(meeting.id) : [],
     can_view_preparation: serializedMeeting.can_view_preparation,
     can_view_all_preparations: isOperationalMeetingCxoForMeeting(req.user, participant) ? 1 : 0,
+    can_edit_agenda: canEditOperationalAgenda(req.user, participant) ? 1 : 0,
     can_generate_agenda: canGenerateOperationalAgenda(req.user, participant) ? 1 : 0,
     can_edit_decision: canEditOperationalDecision(req.user, participant) ? 1 : 0,
     can_manage_participants: canManage ? 1 : 0,
@@ -21738,8 +21740,8 @@ app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeet
 app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess, canWrite, (req, res) => {
   const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
-  if (!canGenerateOperationalAgenda(req.user, meeting._accessParticipant)) {
-    return res.status(403).json({ error: '只有 CXO 可以保存会议提纲' });
+  if (!canEditOperationalAgenda(req.user, meeting._accessParticipant)) {
+    return res.status(403).json({ error: '无权编辑本周会议提纲' });
   }
   let agendaJson;
   try {

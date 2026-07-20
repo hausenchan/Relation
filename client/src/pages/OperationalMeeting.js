@@ -594,7 +594,7 @@ export default function OperationalMeeting() {
   };
 
   const saveAgenda = async ({ silent = false } = {}) => {
-    if (!detail?.meeting?.id) return false;
+    if (!detail?.meeting?.id || !detail?.can_edit_agenda) return false;
     const payload = normalizeOperationalAgendaContent(agendaDraftRef.current);
     if (!payload) return false;
     const signature = getDocumentBodySignature(payload);
@@ -627,7 +627,7 @@ export default function OperationalMeeting() {
   };
 
   const saveDecision = async ({ silent = false } = {}) => {
-    if (!detail?.meeting?.id) return false;
+    if (!detail?.meeting?.id || !detail?.can_edit_decision) return false;
     const payload = normalizeOperationalDecisionContent(decisionDraftRef.current);
     const signature = getDocumentBodySignature(payload);
     if (signature === decisionLastSavedSignatureRef.current) {
@@ -943,11 +943,11 @@ export default function OperationalMeeting() {
         size="small"
         extra={(
           <Space wrap>
-            {agendaDraft && Boolean(detail.can_generate_agenda) && renderMeetingSaveStatus(agendaSaveState)}
-            {agendaSaveState.phase === 'error' && Boolean(detail.can_generate_agenda) && (
+            {agendaDraft && Boolean(detail.can_edit_agenda) && renderMeetingSaveStatus(agendaSaveState)}
+            {agendaSaveState.phase === 'error' && Boolean(detail.can_edit_agenda) && (
               <Button size="small" onClick={() => saveAgenda({ silent: false })}>重试</Button>
             )}
-            {Boolean(detail.can_generate_agenda) && (
+            {Boolean(detail.can_edit_agenda) && (
               <Button
                 icon={<SaveOutlined />}
                 loading={agendaSaveState.phase === 'saving'}
@@ -979,7 +979,7 @@ export default function OperationalMeeting() {
               onSave={() => saveAgenda({ silent: false })}
               minHeight={360}
               placeholder="编辑会议提纲"
-              readOnly={!detail.can_generate_agenda}
+              readOnly={!detail.can_edit_agenda}
             />
           </Space>
         ) : (

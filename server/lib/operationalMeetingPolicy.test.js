@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  canEditAgenda,
   canEditDecision,
   canEditPreparation,
   canGenerateAgenda,
@@ -29,17 +30,25 @@ test('CXO can view every preparation while a designated participant only sees th
   assert.equal(canViewPreparation(designated, designatedParticipant, otherSection), false);
 });
 
-test('post-gate users can view meeting content without receiving preparation access', () => {
+test('post-gate users can edit meeting content without receiving preparation access', () => {
   assert.equal(canViewMeeting(admin, null), true);
+  assert.equal(canEditAgenda(admin, null), true);
+  assert.equal(canEditDecision(admin, null), true);
   assert.equal(canViewPreparation(admin, null, { id: 22, owner_user_id: 4 }), false);
   assert.equal(canViewPreparation(designated, { ...designatedParticipant, status: 'removed' }, { id: 20, owner_user_id: 2 }), false);
 });
 
-test('designated participants can share meeting content but cannot generate the agenda', () => {
+test('designated participants can edit meeting content but cannot generate the agenda', () => {
   assert.equal(canViewMeeting(designated, designatedParticipant), true);
+  assert.equal(canEditAgenda(designated, designatedParticipant), true);
   assert.equal(canEditDecision(designated, designatedParticipant), true);
   assert.equal(canGenerateAgenda(designated, designatedParticipant), false);
   assert.equal(canGenerateAgenda(cxo, null), true);
+});
+
+test('system readonly and guest roles cannot edit meeting content', () => {
+  assert.equal(canEditAgenda({ id: 5, role: 'readonly' }, null), false);
+  assert.equal(canEditDecision({ id: 6, role: 'guest' }, null), false);
 });
 
 test('CXO can edit any preparation while non-CXO users remain owner-only', () => {

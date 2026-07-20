@@ -42,13 +42,22 @@ function canGenerateAgenda(user, participant) {
   return Number(participant.can_generate_agenda ?? 1) === 1;
 }
 
-function canEditDecision(user, participant) {
-  if (isMeetingCxo(user, participant)) return true;
-  return isActiveParticipant(participant) && Number(participant.can_edit_decision || 0) === 1;
+function canEditMeetingContent(user) {
+  if (!canViewMeeting(user)) return false;
+  return !['readonly', 'guest'].includes(String(user.role || '').toLowerCase());
+}
+
+function canEditAgenda(user) {
+  return canEditMeetingContent(user);
+}
+
+function canEditDecision(user) {
+  return canEditMeetingContent(user);
 }
 
 module.exports = {
   CXO_ROLES,
+  canEditAgenda,
   canEditDecision,
   canEditPreparation,
   canGenerateAgenda,
