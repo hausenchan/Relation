@@ -5,9 +5,11 @@ import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
   ArrowUpOutlined,
+  CopyOutlined,
   DeleteOutlined,
   LinkOutlined,
   PlusOutlined,
+  SnippetsOutlined,
 } from '@ant-design/icons';
 import {
   buildCollapsedDocumentBlockIds,
@@ -18,10 +20,13 @@ import {
 } from '../utils/documentBlockHierarchy';
 import {
   buildDocumentBodyClipboardPayload,
+  cloneDocumentBodyBlocks,
   createDocumentBodyBlock,
+  DOCUMENT_BODY_CLIPBOARD_HTML_ATTR,
   DOCUMENT_BODY_CLIPBOARD_MIME,
   documentBodyInlineHtmlToPlain,
   DOCUMENT_BODY_BLOCK_TYPES,
+  getDocumentBodyBlockUnitIds,
   getDocumentBodySelectionBlockIds,
   normalizeDocumentBodyValue,
   parseDocumentBodyClipboard,
@@ -312,6 +317,7 @@ export default function DocumentBodyEditor({
   const activeInlineEditorRef = useRef(null);
   const inlineSelectionRangeRef = useRef(null);
   const clipboardBlockIdsRef = useRef([]);
+  const blockSelectionAnchorRef = useRef(null);
   const selectAllBlocksActiveRef = useRef(false);
   const manualBlockSelectionActiveRef = useRef(false);
   const blockSelectionDragRef = useRef(null);
@@ -463,9 +469,13 @@ export default function DocumentBodyEditor({
     wrapInlineSelection('span', node => node.setAttribute('style', `color: ${color}`));
   };
 
-  const setClipboardBlockSelection = (ids = [], { selectAll = false, manual = false } = {}) => {
+  const setClipboardBlockSelection = (ids = [], {
+    selectAll = false,
+    manual = false,
+    sourceBlocks = blocks,
+  } = {}) => {
     const idSet = new Set(ids.filter(Boolean));
-    const nextIds = blocks.map(block => block.id).filter(id => idSet.has(id));
+    const nextIds = sourceBlocks.map(block => block.id).filter(id => idSet.has(id));
     clipboardBlockIdsRef.current = nextIds;
     selectAllBlocksActiveRef.current = Boolean(selectAll && nextIds.length);
     manualBlockSelectionActiveRef.current = Boolean(manual && nextIds.length);
@@ -480,7 +490,47 @@ export default function DocumentBodyEditor({
     clipboardBlockIdsRef.current = [];
     selectAllBlocksActiveRef.current = false;
     manualBlockSelectionActiveRef.current = false;
+    blockSelectionAnchorRef.current = null;
     setClipboardBlockIds(current => (current.length ? [] : current));
+  };
+
+  const getBlockSelectionUnitIds = blockId => getDocumentBodyBlockUnitIds(blocks, blockId);
+
+  const selectBlockFromHandle = (event, blockId) => {
+    const unitIds = getBlockSelectionUnitIds(blockId);
+    if (!unitIds.length) return [];
+    activateClipboardSelectionScope();
+    window.getSelection?.()?.removeAllRanges();
+
+    if (event?.shiftKey && blockSelectionAnchorRef.current) {
+      const anchorUnitIds = getBlockSelectionUnitIds(blockSelectionAnchorRef.current);
+      const anchorIndexes = anchorUnitIds.map(id => blocks.findIndex(block => block.id === id)).filter(index => index >= 0);
+      const targetIndexes = unitIds.map(id => blocks.findIndex(block => block.id === id)).filter(index => index >= 0);
+      if (anchorIndexes.length && targetIndexes.length) {
+        const from = Math.min(...anchorIndexes, ...targetIndexes);
+        const to = Math.max(...anchorIndexes, ...targetIndexes);
+        const rangeIds = blocks.slice(from, to + 1).map(block => block.id);
+        setClipboardBlockSelection(rangeIds, { manual: true });
+        setActiveBlockId(blockId);
+        return rangeIds;
+      }
+    }
+
+    if (event?.metaKey || event?.ctrlKey) {
+      const current = new Set(clipboardBlockIdsRef.current);
+      const removeUnit = unitIds.every(id => current.has(id));
+      unitIds.forEach(id => (removeUnit ? current.delete(id) : current.add(id)));
+      const nextIds = current.size ? [...current] : unitIds;
+      setClipboardBlockSelection(nextIds, { manual: true });
+      blockSelectionAnchorRef.current = blockId;
+      setActiveBlockId(blockId);
+      return nextIds;
+    }
+
+    blockSelectionAnchorRef.current = blockId;
+    setClipboardBlockSelection(unitIds, { manual: true });
+    setActiveBlockId(blockId);
+    return unitIds;
   };
 
   const activateClipboardSelectionScope = () => {
@@ -648,7 +698,8 @@ export default function DocumentBodyEditor({
     if (readOnly || !event.clipboardData) return;
     const html = event.clipboardData.getData('text/html') || '';
     const text = event.clipboardData.getData('text/plain') || '';
-    const hasRelationBlocks = Boolean(event.clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME));
+    const hasRelationBlocks = Boolean(event.clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME))
+      || html.includes(DOCUMENT_BODY_CLIPBOARD_HTML_ATTR);
     const pastedBlocks = hasRelationBlocks
       ? parseDocumentBodyClipboardData(event.clipboardData)
       : parseDocumentBodyClipboard(html, text).blocks;
@@ -680,6 +731,65 @@ export default function DocumentBodyEditor({
     event.preventDefault();
     event.stopPropagation();
     message.success('已复制');
+  };
+
+  const getBlockActionIds = (blockId) => {
+    const selectedIds = clipboardBlockIdsRef.current;
+    return selectedIds.includes(blockId) && selectedIds.length
+      ? selectedIds
+      : getBlockSelectionUnitIds(blockId);
+  };
+
+  const copyBlockIdsToClipboard = async (ids = []) => {
+    const idSet = new Set(ids);
+    const selectedBlocks = blocks.filter(block => idSet.has(block.id));
+    if (!selectedBlocks.length) return false;
+    const payload = buildDocumentBodyClipboardPayload(selectedBlocks);
+    if (navigator.clipboard?.write && window.ClipboardItem && window.isSecureContext) {
+      await navigator.clipboard.write([new window.ClipboardItem({
+        'text/plain': new Blob([payload.text], { type: 'text/plain' }),
+        'text/html': new Blob([payload.html], { type: 'text/html' }),
+      })]);
+      return true;
+    }
+    if (typeof document.execCommand === 'function') {
+      editorRootRef.current?.focus?.();
+      if (document.execCommand('copy')) return true;
+    }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(payload.text);
+      return true;
+    }
+    return false;
+  };
+
+  const duplicateBlocksByIds = (ids = []) => {
+    const idSet = new Set(ids);
+    const selectedBlocks = blocks.filter(block => idSet.has(block.id));
+    if (!selectedBlocks.length) return false;
+    const copies = cloneDocumentBodyBlocks(selectedBlocks);
+    const lastSelectedIndex = Math.max(...selectedBlocks.map(block => blocks.findIndex(item => item.id === block.id)));
+    const nextBlocks = [...blocks];
+    nextBlocks.splice(lastSelectedIndex + 1, 0, ...copies);
+    emitBlocks(nextBlocks, copies[0]?.id);
+    blockSelectionAnchorRef.current = copies[0]?.id || null;
+    setClipboardBlockSelection(copies.map(block => block.id), {
+      manual: true,
+      sourceBlocks: nextBlocks,
+    });
+    return true;
+  };
+
+  const deleteBlocksByIds = (ids = []) => {
+    const deleteSet = new Set(ids);
+    const firstDeletedIndex = blocks.findIndex(block => deleteSet.has(block.id));
+    if (firstDeletedIndex < 0) return false;
+    let nextBlocks = blocks.filter(block => !deleteSet.has(block.id));
+    if (!nextBlocks.length) nextBlocks = [createDocumentBodyBlock('paragraph', '')];
+    const nextFocus = nextBlocks[Math.min(firstDeletedIndex, nextBlocks.length - 1)] || nextBlocks[0];
+    clearClipboardBlockSelection();
+    emitBlocks(nextBlocks, nextFocus?.id);
+    return true;
   };
 
   const createBlockAfter = (type, afterId = blocks[blocks.length - 1]?.id, options = {}) => {
@@ -809,35 +919,56 @@ export default function DocumentBodyEditor({
     createBlockAfter('paragraph', block.id, { meta: indent ? { indent, hierarchy: 'list' } : {} });
   };
 
-  const handleBlockMenuAction = (block, key) => {
+  const handleBlockMenuAction = async (block, key) => {
     setOpenMenuBlockId(null);
+    const actionIds = getBlockActionIds(block.id);
     if (key.startsWith('type:')) {
       replaceBlockType(block.id, key.slice(5));
+      return;
+    }
+    if (key === 'copy') {
+      try {
+        const copied = await copyBlockIdsToClipboard(actionIds);
+        if (!copied) throw new Error('clipboard unavailable');
+        message.success(actionIds.length > 1 ? `已复制 ${actionIds.length} 个块` : '已复制');
+      } catch {
+        message.error('复制失败，请使用 Ctrl/Cmd+C');
+      }
+      return;
+    }
+    if (key === 'duplicate') {
+      duplicateBlocksByIds(actionIds);
       return;
     }
     if (key === 'indent-less') changeIndent(block.id, -1);
     if (key === 'indent-more') changeIndent(block.id, 1);
     if (key === 'move-up') moveBlock(block.id, -1);
     if (key === 'move-down') moveBlock(block.id, 1);
-    if (key === 'delete') removeBlock(block.id);
+    if (key === 'delete') deleteBlocksByIds(actionIds);
   };
 
-  const buildBlockMenu = (block, index) => ({
-    items: [
+  const buildBlockMenu = (block, index) => {
+    const actionCount = Math.max(1, getBlockActionIds(block.id).length);
+    return {
+      items: [
       ...groupedBlockTypeItems(),
+      { type: 'divider' },
+      { key: 'copy', icon: <CopyOutlined />, label: actionCount > 1 ? `复制 ${actionCount} 个块` : '复制' },
+      { key: 'duplicate', icon: <SnippetsOutlined />, label: actionCount > 1 ? `拷贝 ${actionCount} 个块的副本` : '拷贝副本' },
       { type: 'divider' },
       { key: 'indent-less', icon: <ArrowLeftOutlined />, label: '减少缩进', disabled: getBlockIndent(block) === 0 },
       { key: 'indent-more', icon: <ArrowRightOutlined />, label: '增加缩进', disabled: index === 0 || getBlockIndent(block) >= MAX_LIST_INDENT },
       { key: 'move-up', icon: <ArrowUpOutlined />, label: '上移', disabled: index === 0 },
       { key: 'move-down', icon: <ArrowDownOutlined />, label: '下移', disabled: index === blocks.length - 1 },
       { type: 'divider' },
-      { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true },
-    ],
-    onClick: ({ key, domEvent }) => {
-      domEvent?.stopPropagation();
-      handleBlockMenuAction(block, key);
-    },
-  });
+      { key: 'delete', icon: <DeleteOutlined />, label: actionCount > 1 ? `删除 ${actionCount} 个块` : '删除', danger: true },
+      ],
+      onClick: ({ key, domEvent }) => {
+        domEvent?.stopPropagation();
+        handleBlockMenuAction(block, key);
+      },
+    };
+  };
 
   const renderGuides = (block, centerY, markerOffset) => {
     const guide = guideMap.get(block.id);
@@ -1030,7 +1161,10 @@ export default function DocumentBodyEditor({
     const menuOpen = openMenuBlockId === block.id;
     const clipboardSelected = clipboardBlockIds.includes(block.id);
     const blankParagraph = block.type === 'paragraph' && isBlankBlock(block);
-    const handleVisible = !readOnly && (active || hovered || menuOpen || blankParagraph);
+    const selectedVisibleBlockIds = clipboardBlockIds.filter(id => !hiddenBlockIds.has(id));
+    const groupHandleBlockId = selectedVisibleBlockIds.length > 1 ? selectedVisibleBlockIds[0] : null;
+    const canShowGroupHandle = !groupHandleBlockId || groupHandleBlockId === block.id || menuOpen;
+    const handleVisible = !readOnly && canShowGroupHandle && (active || hovered || menuOpen || clipboardSelected || blankParagraph);
     return (
       <div
         key={block.id}
@@ -1043,6 +1177,7 @@ export default function DocumentBodyEditor({
         onMouseLeave={() => setHoveredBlockId(current => (current === block.id ? null : current))}
         onClick={() => setActiveBlockId(block.id)}
         data-copy-selected={clipboardSelected ? 'true' : undefined}
+        data-block-selected={clipboardSelected ? 'true' : undefined}
         style={{
           display: 'flex',
           alignItems: 'flex-start',
@@ -1053,7 +1188,7 @@ export default function DocumentBodyEditor({
           marginBottom: ['fold-list', 'bullet', 'numbered'].includes(block.type) ? 0 : 2,
           borderRadius: 6,
           background: clipboardSelected
-            ? '#eaf2ff'
+            ? '#f8e6e8'
             : (menuOpen ? '#f8e6e8' : (draggingBlockId === block.id ? '#f8fafc' : 'transparent')),
         }}
       >
@@ -1064,7 +1199,10 @@ export default function DocumentBodyEditor({
                 trigger={['click']}
                 open={menuOpen}
                 menu={buildBlockMenu(block, index)}
-                onOpenChange={(open) => setOpenMenuBlockId(open ? block.id : null)}
+                onOpenChange={(open) => {
+                  if (open && !clipboardBlockIdsRef.current.includes(block.id)) selectBlockFromHandle(null, block.id);
+                  setOpenMenuBlockId(open ? block.id : null);
+                }}
                 placement="bottomLeft"
               >
                 <Button
@@ -1079,7 +1217,10 @@ export default function DocumentBodyEditor({
                     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
                   }}
                   onDragEnd={() => setDraggingBlockId(null)}
-                  onMouseDown={event => event.stopPropagation()}
+                  onMouseDown={event => {
+                    event.stopPropagation();
+                    if (!blankParagraph) selectBlockFromHandle(event, block.id);
+                  }}
                   onClick={event => event.stopPropagation()}
                   style={{
                     width: 24,
@@ -1088,7 +1229,7 @@ export default function DocumentBodyEditor({
                     opacity: handleVisible ? 1 : 0,
                     pointerEvents: handleVisible ? 'auto' : 'none',
                     color: '#6b7280',
-                    background: menuOpen ? '#eef2ff' : 'transparent',
+                    background: menuOpen || clipboardSelected ? '#f8e6e8' : 'transparent',
                   }}
                 />
               </Dropdown>

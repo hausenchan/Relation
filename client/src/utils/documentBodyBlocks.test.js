@@ -1,8 +1,11 @@
 import {
   buildDocumentBodyClipboardPayload,
+  cloneDocumentBodyBlocks,
+  DOCUMENT_BODY_CLIPBOARD_HTML_ATTR,
   DOCUMENT_BODY_CLIPBOARD_MIME,
   DOCUMENT_BODY_FORMAT,
   documentBodyToPlain,
+  getDocumentBodyBlockUnitIds,
   getDocumentBodySelectionBlockIds,
   normalizeDocumentBodyValue,
   parseDocumentBodyClipboard,
@@ -142,6 +145,7 @@ b. IAP 本周消耗 $4753`);
     expect(payload.text).toBe('- 经营结果\n  1. 收入增长');
     expect(payload.html).toContain('data-block-type="fold-list"');
     expect(payload.html).toContain('data-indent="1"');
+    expect(payload.html).toContain(DOCUMENT_BODY_CLIPBOARD_HTML_ATTR);
     expect(payload.blocks).toEqual([
       { type: 'fold-list', content: '<strong>经营结果</strong>', checked: false, meta: { indent: 0, collapsed: true } },
       { type: 'numbered', content: '<span style="color: #ef4444">收入增长</span>', checked: false, meta: { indent: 1, hierarchy: 'list' } },
@@ -165,6 +169,46 @@ b. IAP 本周消耗 $4753`);
     expect(firstPaste[0].meta).toEqual({ indent: 2, hierarchy: 'list' });
     expect(firstPaste[1].checked).toBe(true);
     expect(firstPaste[0].id).not.toBe(secondPaste[0].id);
+  });
+
+  test('restores structured blocks from the HTML clipboard envelope', () => {
+    const payload = buildDocumentBodyClipboardPayload([
+      { id: 'fold', type: 'fold-list', content: '<strong>周会模板</strong>', meta: { indent: 0, collapsed: true } },
+      { id: 'child', type: 'numbered', content: '经营结果', meta: { indent: 1, hierarchy: 'list' } },
+    ]);
+    const clipboardData = {
+      getData: type => (type === 'text/html' ? payload.html : ''),
+    };
+
+    const pasted = parseDocumentBodyClipboardData(clipboardData);
+
+    expect(pasted.map(block => block.type)).toEqual(['fold-list', 'numbered']);
+    expect(pasted[0].meta).toMatchObject({ collapsed: true, indent: 0 });
+    expect(pasted[1].meta).toMatchObject({ hierarchy: 'list', indent: 1 });
+  });
+
+  test('selects a fold block together with its complete nested subtree', () => {
+    const blocks = [
+      { id: 'fold', type: 'fold-list', meta: { indent: 0 } },
+      { id: 'child', type: 'numbered', meta: { indent: 1, hierarchy: 'list' } },
+      { id: 'grandchild', type: 'paragraph', meta: { indent: 2, hierarchy: 'list' } },
+      { id: 'next', type: 'paragraph', meta: {} },
+    ];
+
+    expect(getDocumentBodyBlockUnitIds(blocks, 'fold')).toEqual(['fold', 'child', 'grandchild']);
+    expect(getDocumentBodyBlockUnitIds(blocks, 'child')).toEqual(['child']);
+  });
+
+  test('clones selected blocks with fresh ids and unchanged content metadata', () => {
+    const source = [
+      { id: 'fold', type: 'fold-list', content: '<strong>模板</strong>', checked: false, meta: { indent: 0, collapsed: true } },
+      { id: 'todo', type: 'todo', content: '跟进', checked: true, meta: { indent: 1 } },
+    ];
+
+    const copies = cloneDocumentBodyBlocks(source);
+
+    expect(copies.map(block => block.id)).not.toEqual(source.map(block => block.id));
+    expect(copies.map(({ id, ...block }) => block)).toEqual(source.map(({ id, ...block }) => block));
   });
 
   test('finds only the blocks touched by a native multi-block selection', () => {

@@ -376,6 +376,7 @@ const documentAutoSaveDelay = 3000;
 const documentAutoSaveInterval = 30000;
 const documentLiveSyncInterval = 5000;
 const documentClipboardBlocksMime = 'application/x-relation-document-blocks';
+const documentClipboardBlocksHtmlAttr = 'data-relation-document-blocks';
 const documentFolderSidebarCollapsedStorageKey = 'documents.folderSidebarCollapsed';
 const documentFolderSidebarWidthStorageKey = 'documents.folderSidebarWidth';
 const documentFolderSidebarDefaultWidth = 340;
@@ -2300,10 +2301,13 @@ function blockToClipboardPayload(block) {
 
 function blocksToClipboardPayload(blocks = []) {
   const payloads = blocks.map(blockToClipboardPayload).filter(payload => payload.text || payload.html);
+  const structuredBlocks = payloads.flatMap(payload => payload.blocks || []);
+  const html = payloads.map(payload => payload.html).filter(Boolean).join('');
+  const encoded = escapeHtml(encodeURIComponent(JSON.stringify({ blocks: structuredBlocks })));
   return {
     text: payloads.map(payload => payload.text).filter(Boolean).join('\n\n'),
-    html: payloads.map(payload => payload.html).filter(Boolean).join(''),
-    blocks: payloads.flatMap(payload => payload.blocks || []),
+    html: `<div ${documentClipboardBlocksHtmlAttr}="${encoded}">${html}</div>`,
+    blocks: structuredBlocks,
   };
 }
 
@@ -2332,9 +2336,23 @@ function writeClipboardPayloadToEvent(event, { text = '', html = '', blocks = []
 
 function parseClipboardDocumentBlocks(clipboardData) {
   const raw = clipboardData?.getData?.(documentClipboardBlocksMime);
-  if (!raw) return [];
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed?.blocks)) return parsed.blocks;
+    } catch {
+      // Fall through to the HTML envelope used by menu-based copy.
+    }
+  }
+  const html = clipboardData?.getData?.('text/html') || '';
+  if (!html || typeof document === 'undefined') return [];
+  const container = document.createElement('div');
+  container.innerHTML = html;
+  const encoded = container.querySelector(`[${documentClipboardBlocksHtmlAttr}]`)
+    ?.getAttribute(documentClipboardBlocksHtmlAttr);
+  if (!encoded) return [];
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(decodeURIComponent(encoded));
     return Array.isArray(parsed?.blocks) ? parsed.blocks : [];
   } catch {
     return [];
@@ -6097,6 +6115,36 @@ export default function Documents() {
     return true;
   };
 
+  const duplicateBlocksByIds = (ids = []) => {
+    const targetIds = normalizeBlockSelectionIds(ids);
+    if (!targetIds.length) return false;
+    const targetSet = new Set(targetIds);
+    const sourceBlocks = editorBlocks.filter(block => targetSet.has(block.id));
+    if (!sourceBlocks.length) return false;
+    const copies = sourceBlocks.map(block => createBlock(block.type, block.content || '', {
+      checked: Boolean(block.checked),
+      highlight: block.highlight || '',
+      meta: cloneMeta(block.meta),
+    }));
+    const lastSourceIndex = Math.max(...sourceBlocks.map(block => editorBlocks.findIndex(item => item.id === block.id)));
+    pushEditorUndoSnapshot();
+    const nextBlocks = [...editorBlocks];
+    nextBlocks.splice(lastSourceIndex + 1, 0, ...copies);
+    setEditorBlocks(nextBlocks);
+    setSelectedBlockId(copies[0]?.id || null);
+    const copyIds = copies.map(block => block.id);
+    selectAllEditorBlocksRef.current = false;
+    selectedAreaBlockIdsRef.current = copyIds;
+    setSelectedAreaBlockIds(copyIds);
+    pendingBlockMenuTargetIdsRef.current = [];
+    activeBlockMenuTargetIdsRef.current = [];
+    setBlockMenuTargetIds([]);
+    setOpenBlockMenuId(null);
+    setHoveredBlockId(null);
+    window.setTimeout(() => document.getElementById(`doc-block-${copies[0]?.id}`)?.scrollIntoView({ block: 'nearest' }), 0);
+    return true;
+  };
+
   const changeBlockType = (id, type, extra = {}) => {
     const current = editorBlocks.find(block => block.id === id);
     updateBlock(id, {
@@ -6373,7 +6421,10 @@ export default function Documents() {
       return next;
     });
     setSelectedBlockId(nextBlocks[0].id);
-    setAreaBlockSelection(nextBlocks.map(block => block.id));
+    const nextBlockIds = nextBlocks.map(block => block.id);
+    selectAllEditorBlocksRef.current = false;
+    selectedAreaBlockIdsRef.current = nextBlockIds;
+    setSelectedAreaBlockIds(nextBlockIds);
     setSelectedTableCell(null);
     setSelectedTableRange(null);
     setOpenBlockMenuId(null);
@@ -6991,6 +7042,10 @@ export default function Documents() {
       }
       return;
     }
+    if (key === 'duplicate') {
+      duplicateBlocksByIds(targetIds);
+      return;
+    }
     if (key === 'insert-paragraph-before') {
       addBlockBefore(block.id, 'paragraph', { content: '' });
       return;
@@ -7040,6 +7095,7 @@ export default function Documents() {
       : canAdjustBlockHierarchyIndent(block);
     return [
       { key: 'copy', icon: <CopyOutlined />, label: targetCount > 1 ? `复制 ${targetCount} 个块` : (isTableLikeBlock(block) ? '复制整个表格' : '复制') },
+      { key: 'duplicate', icon: <PlusCircleOutlined />, label: targetCount > 1 ? `拷贝 ${targetCount} 个块的副本` : '拷贝副本' },
       ...(hierarchyAdjustable ? [
         { key: 'indent-right', icon: <MenuUnfoldOutlined />, label: targetCount > 1 ? `右移 ${targetCount} 个块` : '右移一级' },
         { key: 'indent-left', icon: <MenuFoldOutlined />, label: targetCount > 1 ? `左移 ${targetCount} 个块` : '左移一级' },
@@ -7826,6 +7882,21 @@ export default function Documents() {
       .filter(Boolean);
   };
 
+  const getBlockSelectionUnitIds = (blockId) => {
+    const startIndex = editorBlocks.findIndex(block => block.id === blockId);
+    if (startIndex < 0) return [];
+    const root = editorBlocks[startIndex];
+    if (root.type !== 'fold-list') return [root.id];
+    const rootIndent = getBlockHierarchyIndent(root);
+    let endIndex = startIndex;
+    for (let index = startIndex + 1; index < editorBlocks.length; index += 1) {
+      const block = editorBlocks[index];
+      if (!isDocumentBlockHierarchyMember(block) || getBlockHierarchyIndent(block) <= rootIndent) break;
+      endIndex = index;
+    }
+    return editorBlocks.slice(startIndex, endIndex + 1).map(block => block.id);
+  };
+
   const getBlockMenuTargetIds = (blockId) => {
     const selectedTargetIds = selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds;
     if (selectedTargetIds.includes(blockId) && selectedTargetIds.length) return selectedTargetIds;
@@ -7835,7 +7906,7 @@ export default function Documents() {
     if (activeTargetIds.includes(blockId)) return activeTargetIds;
     const textSelectionIds = getSelectedEditorBlockIds();
     if (textSelectionIds.includes(blockId)) return textSelectionIds;
-    return [blockId].filter(Boolean);
+    return getBlockSelectionUnitIds(blockId);
   };
 
   const captureBlockMenuTargetIds = (blockId) => {
@@ -7853,11 +7924,13 @@ export default function Documents() {
     const blockIds = getVisibleEditorBlockIds();
     const blockIndex = blockIds.indexOf(blockId);
     if (blockIndex < 0) return;
+    const unitIds = getBlockSelectionUnitIds(blockId);
 
     if (event.shiftKey && selectedBlockId) {
       const anchorIndex = blockIds.indexOf(selectedBlockId);
       if (anchorIndex >= 0) {
-        setBlockRangeSelection(selectedBlockId, blockId, blockIds);
+        const visibleUnitIds = unitIds.filter(id => blockIds.includes(id));
+        setBlockRangeSelection(selectedBlockId, visibleUnitIds[visibleUnitIds.length - 1] || blockId, blockIds);
         return;
       }
     }
@@ -7865,16 +7938,17 @@ export default function Documents() {
     if (event.metaKey || event.ctrlKey) {
       const currentSelection = selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds;
       const base = currentSelection.length ? currentSelection : (selectedBlockId ? [selectedBlockId] : []);
-      const next = base.includes(blockId)
-        ? base.filter(id => id !== blockId)
-        : [...base, blockId];
-      setAreaBlockSelection(next.length ? next : [blockId]);
+      const removeUnit = unitIds.every(id => base.includes(id));
+      const next = removeUnit
+        ? base.filter(id => !unitIds.includes(id))
+        : [...new Set([...base, ...unitIds])];
+      setAreaBlockSelection(next.length ? next : unitIds);
       setSelectedBlockId(blockId);
       return;
     }
 
     setSelectedBlockId(blockId);
-    setAreaBlockSelection(getBlockMenuTargetIds(blockId));
+    setAreaBlockSelection(unitIds);
   };
 
   const updateHandleDragSelection = (clientY) => {

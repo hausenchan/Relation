@@ -15,11 +15,25 @@ jest.mock('antd', () => {
     Button,
     Checkbox: ({ checked, onChange }) => <input type="checkbox" checked={checked} onChange={onChange} />,
     Divider: () => <hr />,
-    Dropdown: ({ children }) => ReactModule.createElement(ReactModule.Fragment, null, children),
+    Dropdown: ({ children, menu }) => (
+      <>
+        {children}
+        {(menu?.items || []).filter(item => item?.key).map(item => (
+          <button
+            key={item.key}
+            type="button"
+            data-menu-key={item.key}
+            onClick={() => menu.onClick?.({ key: item.key, domEvent: { stopPropagation: () => {} } })}
+          >
+            {item.label}
+          </button>
+        ))}
+      </>
+    ),
     Input,
     Space: ({ children }) => <div>{children}</div>,
     Tooltip: ({ children }) => ReactModule.createElement(ReactModule.Fragment, null, children),
-    message: { info: jest.fn(), success: jest.fn() },
+    message: { error: jest.fn(), info: jest.fn(), success: jest.fn() },
   };
 });
 
@@ -28,9 +42,11 @@ jest.mock('@ant-design/icons', () => ({
   ArrowLeftOutlined: () => null,
   ArrowRightOutlined: () => null,
   ArrowUpOutlined: () => null,
+  CopyOutlined: () => null,
   DeleteOutlined: () => null,
   LinkOutlined: () => null,
   PlusOutlined: () => null,
+  SnippetsOutlined: () => null,
 }));
 
 function createClipboardData() {
@@ -101,6 +117,74 @@ describe('DocumentBodyEditor block copy', () => {
     expect(clipboardData.getData('text/plain')).toBe('- 第一块\n  1. 第二块\n第三块');
     expect(clipboardData.getData('text/html')).toContain('<strong>第二块</strong>');
     expect(JSON.parse(clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME)).blocks).toHaveLength(3);
+  });
+
+  test('selects a fold handle as one block unit including all descendants', () => {
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={() => {}} />);
+    });
+    const foldHandle = container.querySelector('button[aria-label="块菜单"]');
+
+    flushSync(() => {
+      foldHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    });
+
+    expect(container.querySelectorAll('[data-document-body-block-id][data-block-selected="true"]')).toHaveLength(2);
+    const clipboardData = createClipboardData();
+    let copyEvent;
+    flushSync(() => {
+      copyEvent = dispatchCopy(foldHandle, clipboardData);
+    });
+
+    expect(copyEvent.defaultPrevented).toBe(true);
+    expect(JSON.parse(clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME)).blocks.map(block => block.content))
+      .toEqual(['第一块', '<strong>第二块</strong>']);
+  });
+
+  test('adds an independent block to the selected fold subtree with Cmd/Ctrl click', () => {
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={() => {}} />);
+    });
+    const handles = container.querySelectorAll('button[aria-label="块菜单"]');
+
+    flushSync(() => {
+      handles[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      handles[2].dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true,
+        button: 0,
+        metaKey: true,
+      }));
+    });
+
+    expect(container.querySelectorAll('[data-document-body-block-id][data-block-selected="true"]')).toHaveLength(3);
+  });
+
+  test('duplicates the selected fold subtree directly below the source blocks', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={onChange} />);
+    });
+    const firstBlock = container.querySelector('[data-document-body-block-id="one"]');
+    const foldHandle = firstBlock.querySelector('button[aria-label="块菜单"]');
+    const duplicateButton = firstBlock.querySelector('button[data-menu-key="duplicate"]');
+
+    flushSync(() => {
+      foldHandle.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+      duplicateButton.click();
+    });
+
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks.map(block => block.content)).toEqual([
+      '第一块',
+      '<strong>第二块</strong>',
+      '第一块',
+      '<strong>第二块</strong>',
+      '第三块',
+    ]);
+    expect(nextValue.blocks[2].id).not.toBe('one');
+    expect(nextValue.blocks[3].id).not.toBe('two');
+    expect(nextValue.blocks[2].meta).toEqual(value.blocks[0].meta);
+    expect(nextValue.blocks[3].meta).toEqual(value.blocks[1].meta);
   });
 
   test('copies only the blocks intersected by a native mouse-style selection', () => {

@@ -2,6 +2,7 @@ import DOMPurify from 'dompurify';
 
 export const DOCUMENT_BODY_FORMAT = 'relation_document_blocks_v1';
 export const DOCUMENT_BODY_CLIPBOARD_MIME = 'application/x-relation-document-blocks';
+export const DOCUMENT_BODY_CLIPBOARD_HTML_ATTR = 'data-relation-document-blocks';
 
 export const DOCUMENT_BODY_BLOCK_TYPES = [
   { value: 'paragraph', label: '文本', group: '基础' },
@@ -399,6 +400,39 @@ function cloneClipboardMeta(meta) {
   }
 }
 
+function normalizeClipboardPayloadBlocks(blocks = []) {
+  return (Array.isArray(blocks) ? blocks : []).map(block => ({
+    type: block?.type || 'paragraph',
+    content: block?.type === 'divider' ? '' : String(block?.content || ''),
+    checked: Boolean(block?.checked),
+    meta: cloneClipboardMeta(block?.meta),
+  }));
+}
+
+function parseClipboardPayload(raw = '') {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed?.blocks) ? normalizeClipboardPayloadBlocks(parsed.blocks) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function parseDocumentBodyClipboardHtmlPayload(html = '') {
+  if (!html || typeof document === 'undefined') return [];
+  const container = document.createElement('div');
+  container.innerHTML = String(html);
+  const encoded = container.querySelector(`[${DOCUMENT_BODY_CLIPBOARD_HTML_ATTR}]`)
+    ?.getAttribute(DOCUMENT_BODY_CLIPBOARD_HTML_ATTR);
+  if (!encoded) return [];
+  try {
+    return parseClipboardPayload(decodeURIComponent(encoded));
+  } catch {
+    return [];
+  }
+}
+
 function documentBodyBlockToClipboardText(block) {
   if (!block) return '';
   if (block.type === 'divider') return '---';
@@ -443,36 +477,56 @@ function documentBodyBlockToClipboardHtml(block) {
 
 export function buildDocumentBodyClipboardPayload(blocks = []) {
   const source = (Array.isArray(blocks) ? blocks : []).filter(Boolean);
+  const structuredBlocks = normalizeClipboardPayloadBlocks(source);
+  const html = source.map(documentBodyBlockToClipboardHtml).filter(Boolean).join('');
+  const encoded = escapeClipboardHtml(encodeURIComponent(JSON.stringify({ blocks: structuredBlocks })));
   return {
     text: source.map(documentBodyBlockToClipboardText).filter(Boolean).join('\n'),
-    html: source.map(documentBodyBlockToClipboardHtml).filter(Boolean).join(''),
-    blocks: source.map(block => ({
-      type: block.type || 'paragraph',
-      content: block.type === 'divider' ? '' : String(block.content || ''),
-      checked: Boolean(block.checked),
-      meta: cloneClipboardMeta(block.meta),
-    })),
+    html: `<div ${DOCUMENT_BODY_CLIPBOARD_HTML_ATTR}="${encoded}">${html}</div>`,
+    blocks: structuredBlocks,
   };
 }
 
 export function parseDocumentBodyClipboardData(clipboardData) {
   const raw = clipboardData?.getData?.(DOCUMENT_BODY_CLIPBOARD_MIME) || '';
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed?.blocks)) {
-        return parsed.blocks.map(block => createDocumentBodyBlock(block?.type || 'paragraph', block?.content || '', {
-          checked: Boolean(block?.checked),
-          meta: cloneClipboardMeta(block?.meta),
-        }));
-      }
-    } catch {
-      // Fall through to the standard HTML/plain-text parser.
-    }
-  }
   const html = clipboardData?.getData?.('text/html') || '';
+  const rawBlocks = parseClipboardPayload(raw);
+  const structuredBlocks = rawBlocks.length ? rawBlocks : parseDocumentBodyClipboardHtmlPayload(html);
+  if (structuredBlocks.length) {
+    return structuredBlocks.map(block => createDocumentBodyBlock(block.type, block.content, {
+      checked: block.checked,
+      meta: cloneClipboardMeta(block.meta),
+    }));
+  }
   const text = clipboardData?.getData?.('text/plain') || '';
   return parseDocumentBodyClipboard(html, text).blocks;
+}
+
+export function cloneDocumentBodyBlocks(blocks = []) {
+  return normalizeClipboardPayloadBlocks(blocks).map(block => createDocumentBodyBlock(block.type, block.content, {
+    checked: block.checked,
+    meta: cloneClipboardMeta(block.meta),
+  }));
+}
+
+export function getDocumentBodyBlockUnitIds(blocks = [], blockId = '') {
+  const source = Array.isArray(blocks) ? blocks : [];
+  const startIndex = source.findIndex(block => block?.id === blockId);
+  if (startIndex < 0) return [];
+  const root = source[startIndex];
+  if (root.type !== 'fold-list') return [root.id];
+  const rootIndent = Math.max(0, Number(root.meta?.indent || 0));
+  let endIndex = startIndex;
+  for (let index = startIndex + 1; index < source.length; index += 1) {
+    const block = source[index];
+    const indent = Math.max(0, Number(block?.meta?.indent || 0));
+    const hierarchyMember = ['bullet', 'numbered', 'fold-list'].includes(block?.type)
+      || block?.meta?.hierarchy === 'list'
+      || indent > 0;
+    if (!hierarchyMember || indent <= rootIndent) break;
+    endIndex = index;
+  }
+  return source.slice(startIndex, endIndex + 1).map(block => block.id).filter(Boolean);
 }
 
 export function getDocumentBodySelectionBlockIds(root, selection = globalThis.window?.getSelection?.()) {

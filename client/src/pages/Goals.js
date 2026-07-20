@@ -23,10 +23,14 @@ import { DeleteOutlined, EditOutlined, EyeOutlined, FilterOutlined, PlusOutlined
 import dayjs from 'dayjs';
 import { goalsApi, usersApi, projectGroupsApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
+import DocumentBodyEditor from '../components/DocumentBodyEditor';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
-import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
+import {
+  goalDocumentContentToPlain,
+  normalizeGoalDocumentContent,
+  serializeGoalDocumentContent,
+} from '../utils/goalDocumentContent';
 
-const { TextArea } = Input;
 const { RangePicker } = DatePicker;
 const { useBreakpoint } = Grid;
 const executiveRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
@@ -302,7 +306,8 @@ function Goals() {
       progress: 0,
       status: 'pending',
       scope_type: 'personal',
-      result: '',
+      description: normalizeGoalDocumentContent(''),
+      result: normalizeGoalDocumentContent(''),
     });
     setModalVisible(true);
   };
@@ -314,7 +319,8 @@ function Goals() {
       status: record.status,
       scope_type: record.scope_type || 'personal',
       progress: Number(record.progress || 0),
-      result: record.result || '',
+      description: normalizeGoalDocumentContent(record.description || ''),
+      result: normalizeGoalDocumentContent(record.result || ''),
     };
 
     if (record.goal_type === 'quarter' && record.period) {
@@ -373,7 +379,7 @@ function Goals() {
 
       const payload = {
         title: values.title,
-        description: values.description,
+        description: serializeGoalDocumentContent(values.description),
         owner_id: values.owner_id,
         project_group_id: values.project_group_id || null,
         department: values.department || undefined,
@@ -382,7 +388,7 @@ function Goals() {
         deadline: values.deadline ? values.deadline.format('YYYY-MM-DD') : null,
         progress: values.progress || 0,
         status: values.status,
-        result: values.result || '',
+        result: serializeGoalDocumentContent(values.result),
         goal_type: values.goal_type,
         period,
         parent_id: values.goal_type === 'quarter' ? null : values.parent_id,
@@ -470,7 +476,7 @@ function Goals() {
       title: '目标描述',
       dataIndex: 'description',
       ellipsis: true,
-      render: (value) => richTextToPlain(value) || '-',
+      render: (value) => goalDocumentContentToPlain(value) || '-',
     },
     {
       title: '项目组',
@@ -516,7 +522,7 @@ function Goals() {
       title: '结果',
       dataIndex: 'result',
       ellipsis: true,
-      render: (value) => richTextToPlain(value) || '-',
+      render: (value) => goalDocumentContentToPlain(value) || '-',
     },
     {
       title: '操作',
@@ -581,10 +587,10 @@ function Goals() {
 
         <Typography.Paragraph
           style={{ marginBottom: 0 }}
-          type={record.description ? undefined : 'secondary'}
+          type={goalDocumentContentToPlain(record.description) ? undefined : 'secondary'}
           ellipsis={{ rows: 2, expandable: false }}
         >
-          {richTextToPlain(record.description) || '暂无目标描述'}
+          {goalDocumentContentToPlain(record.description) || '暂无目标描述'}
         </Typography.Paragraph>
 
         <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
@@ -829,7 +835,11 @@ function Goals() {
           </Form.Item>
 
           <Form.Item name="description" label="目标描述" valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="请输入目标描述..." minHeight={140} enableTables />
+            <DocumentBodyEditor
+              placeholder="请输入目标描述..."
+              minHeight={180}
+              style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 8px 14px' }}
+            />
           </Form.Item>
 
           <Form.Item name="owner_id" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
@@ -906,7 +916,11 @@ function Goals() {
           </Form.Item>
 
           <Form.Item name="result" label="目标结果" valuePropName="value" trigger="onChange">
-            <RichTextEditor placeholder="填写目标完成得怎么样..." minHeight={140} enableTables />
+            <DocumentBodyEditor
+              placeholder="填写目标完成得怎么样..."
+              minHeight={180}
+              style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 8px 14px' }}
+            />
           </Form.Item>
         </Form>
       </Modal>
@@ -986,11 +1000,11 @@ function Goals() {
             </Descriptions>
 
             <Card title="目标描述" size="small">
-              <RichTextView value={detailRecord.description} />
+              <DocumentBodyEditor value={normalizeGoalDocumentContent(detailRecord.description)} readOnly minHeight={60} />
             </Card>
 
             <Card title="目标结果" size="small">
-              <RichTextView value={detailRecord.result} />
+              <DocumentBodyEditor value={normalizeGoalDocumentContent(detailRecord.result)} readOnly minHeight={60} />
             </Card>
 
             <Card title={`下级目标（${detailRecord.children?.length || 0}）`} size="small">
