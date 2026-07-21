@@ -34,6 +34,10 @@ import {
   rebaseDocumentBodyClipboardBlocks,
   sanitizeDocumentBodyInlineHtml,
 } from '../utils/documentBodyBlocks';
+import {
+  documentClipboardHasEmbeddedBlocks,
+  flattenDocumentClipboardHtml,
+} from '../utils/documentClipboard';
 
 const LIST_INDENT_WIDTH = 28;
 const LIST_MARKER_WIDTH = 24;
@@ -136,6 +140,187 @@ function BlockHandleIcon({ add = false }) {
   );
 }
 
+function getCollapsedInlineCaretOffset(editor) {
+  if (!editor || typeof document === 'undefined') return null;
+  const selection = window.getSelection?.();
+  if (!selection || !selection.isCollapsed || !selection.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.startContainer)) return null;
+  const before = document.createRange();
+  before.selectNodeContents(editor);
+  before.setEnd(range.startContainer, range.startOffset);
+  return before.toString().length;
+}
+
+function getCollapsedInlineRange(editor) {
+  if (!editor || typeof document === 'undefined') return null;
+  const selection = window.getSelection?.();
+  if (!selection || !selection.isCollapsed || !selection.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  if (!editor.contains(range.startContainer)) return null;
+  return { selection, range };
+}
+
+function getDeepInlineLeaf(node, direction) {
+  let current = node;
+  while (current?.nodeType === 1 && current.childNodes?.length) {
+    current = direction === 'backward' ? current.lastChild : current.firstChild;
+  }
+  return current;
+}
+
+function getAdjacentInlineLeaf(editor, container, offset, direction) {
+  if (container?.nodeType === 1) {
+    const childIndex = direction === 'backward' ? offset - 1 : offset;
+    if (childIndex >= 0 && childIndex < container.childNodes.length) {
+      return getDeepInlineLeaf(container.childNodes[childIndex], direction);
+    }
+  }
+
+  let current = container;
+  while (current && current !== editor) {
+    const sibling = direction === 'backward' ? current.previousSibling : current.nextSibling;
+    if (sibling) return getDeepInlineLeaf(sibling, direction);
+    current = current.parentNode;
+  }
+  return null;
+}
+
+function findAdjacentInlineContent(editor, container, offset, direction) {
+  let candidate = getAdjacentInlineLeaf(editor, container, offset, direction);
+  let attempts = 0;
+  while (candidate && candidate !== editor && attempts < 100) {
+    if (candidate.nodeType === 3 && candidate.data?.length) return candidate;
+    if (candidate.nodeType === 1 && candidate.tagName === 'BR') return candidate;
+    const next = getAdjacentInlineLeaf(editor, candidate, 0, direction);
+    if (next === candidate) return null;
+    candidate = next;
+    attempts += 1;
+  }
+  return null;
+}
+
+function setCollapsedInlineSelection(selection, node, offset) {
+  const range = document.createRange();
+  range.setStart(node, Math.max(0, offset));
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+function dispatchInlineDeleteInput(editor, inputType) {
+  const inputEvent = typeof window.InputEvent === 'function'
+    ? new window.InputEvent('input', { bubbles: true, inputType })
+    : new Event('input', { bubbles: true });
+  editor.dispatchEvent(inputEvent);
+}
+
+function deleteInlineCharacter(editor, direction) {
+  const caret = getCollapsedInlineRange(editor);
+  if (!caret) return false;
+  const { selection, range } = caret;
+  const container = range.startContainer;
+  const offset = range.startOffset;
+
+  if (container.nodeType === 3) {
+    const text = container.data || '';
+    if (direction === 'backward' && offset > 0) {
+      const prefixCharacters = Array.from(text.slice(0, offset));
+      const previousCharacter = prefixCharacters[prefixCharacters.length - 1] || '';
+      const start = Math.max(0, offset - previousCharacter.length);
+      container.deleteData(start, offset - start);
+      setCollapsedInlineSelection(selection, container, start);
+      dispatchInlineDeleteInput(editor, 'deleteContentBackward');
+      return true;
+    }
+    if (direction === 'forward' && offset < text.length) {
+      const nextCharacter = Array.from(text.slice(offset))[0] || '';
+      container.deleteData(offset, nextCharacter.length);
+      setCollapsedInlineSelection(selection, container, offset);
+      dispatchInlineDeleteInput(editor, 'deleteContentForward');
+      return true;
+    }
+  }
+
+  const adjacent = findAdjacentInlineContent(editor, container, offset, direction);
+  if (!adjacent) return false;
+  if (adjacent.nodeType === 3) {
+    const text = adjacent.data || '';
+    if (!text) return false;
+    if (direction === 'backward') {
+      const characters = Array.from(text);
+      const previousCharacter = characters[characters.length - 1] || '';
+      const start = Math.max(0, text.length - previousCharacter.length);
+      adjacent.deleteData(start, text.length - start);
+      setCollapsedInlineSelection(selection, adjacent, start);
+      dispatchInlineDeleteInput(editor, 'deleteContentBackward');
+      return true;
+    }
+    const nextCharacter = Array.from(text)[0] || '';
+    adjacent.deleteData(0, nextCharacter.length);
+    setCollapsedInlineSelection(selection, adjacent, 0);
+    dispatchInlineDeleteInput(editor, 'deleteContentForward');
+    return true;
+  }
+  if (adjacent.nodeType === 1 && adjacent.tagName === 'BR') {
+    const parent = adjacent.parentNode;
+    const childIndex = parent ? Array.prototype.indexOf.call(parent.childNodes, adjacent) : -1;
+    if (!parent || childIndex < 0) return false;
+    parent.removeChild(adjacent);
+    setCollapsedInlineSelection(selection, parent, childIndex);
+    dispatchInlineDeleteInput(editor, direction === 'backward' ? 'deleteContentBackward' : 'deleteContentForward');
+    return true;
+  }
+  return false;
+}
+
+function escapeInlineClipboardText(value = '') {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getInlineClipboardHtml(html = '', text = '') {
+  const flattened = sanitizeDocumentBodyInlineHtml(flattenDocumentClipboardHtml(html));
+  if (flattened) return flattened;
+  return sanitizeDocumentBodyInlineHtml(
+    escapeInlineClipboardText(String(text || '').replace(/\r\n?/g, '\n')).replace(/\n/g, '<br>')
+  );
+}
+
+function insertInlineClipboardHtml(editor, html) {
+  const editable = Boolean(
+    editor?.isContentEditable || editor?.getAttribute?.('contenteditable') === 'true'
+  );
+  if (!editable || !html || typeof document === 'undefined') return false;
+  editor.focus();
+  const selection = window.getSelection?.();
+  if (!selection) return false;
+  let range = selection.rangeCount ? selection.getRangeAt(0) : null;
+  if (!range || !editor.contains(range.startContainer) || !editor.contains(range.endContainer)) {
+    range = document.createRange();
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.deleteContents();
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const fragment = template.content;
+  const lastNode = fragment.lastChild;
+  range.insertNode(fragment);
+  if (lastNode) {
+    range.setStartAfter(lastNode);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
+
 function InlineBlockEditor({
   value,
   placeholder,
@@ -147,6 +332,7 @@ function InlineBlockEditor({
   onActivate,
   onEnter,
   onBackspace,
+  onDelete,
   onIndent,
   onPaste,
 }) {
@@ -246,8 +432,34 @@ function InlineBlockEditor({
             onEnter?.();
             return;
           }
-          if (event.key === 'Backspace' && !documentBodyInlineHtmlToPlain(editorRef.current?.innerHTML).trim()) {
-            onBackspace?.(event);
+          const simpleDelete = !event.metaKey && !event.ctrlKey && !event.altKey && !composingRef.current;
+          if (event.key === 'Backspace' && simpleDelete) {
+            if (deleteInlineCharacter(editorRef.current, 'backward')) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+            const content = sanitizeDocumentBodyInlineHtml(editorRef.current?.innerHTML || '');
+            const empty = !documentBodyInlineHtmlToPlain(content).trim();
+            const atStart = getCollapsedInlineCaretOffset(editorRef.current) === 0;
+            if ((empty || atStart) && onBackspace?.(event, { atStart, content, empty })) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
+            return;
+          }
+          if (event.key === 'Delete' && simpleDelete) {
+            if (deleteInlineCharacter(editorRef.current, 'forward')) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+            const content = sanitizeDocumentBodyInlineHtml(editorRef.current?.innerHTML || '');
+            const hasCollapsedCaret = getCollapsedInlineCaretOffset(editorRef.current) !== null;
+            if (hasCollapsedCaret && onDelete?.(event, { content })) {
+              event.preventDefault();
+              event.stopPropagation();
+            }
           }
         }}
         style={{ minHeight: 29, outline: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...style }}
@@ -700,6 +912,29 @@ export default function DocumentBodyEditor({
     const text = event.clipboardData.getData('text/plain') || '';
     const hasRelationBlocks = Boolean(event.clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME))
       || html.includes(DOCUMENT_BODY_CLIPBOARD_HTML_ATTR);
+    const inlineEditor = event.currentTarget?.isContentEditable
+      ? event.currentTarget
+      : event.target?.closest?.('[contenteditable="true"]');
+    const structuralHtml = /<(?:ol|ul|li|table|tr|h[1-6]|blockquote)\b/i.test(html);
+    const structuralPlainText = !html && String(text || '').replace(/\r\n?/g, '\n').split('\n')
+      .filter(line => line.trim())
+      .some(line => /^\s*(?:[-*•◦▪]\s+|(?:\d+|[a-zA-Z]+)[.)、]\s+)/.test(line));
+    const shouldPasteInline = Boolean(
+      inlineEditor
+      && !hasRelationBlocks
+      && !structuralHtml
+      && !structuralPlainText
+      && !documentClipboardHasEmbeddedBlocks(html)
+    );
+    if (shouldPasteInline) {
+      const inlineHtml = getInlineClipboardHtml(html, text);
+      if (!inlineHtml) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearClipboardBlockSelection();
+      insertInlineClipboardHtml(inlineEditor, inlineHtml);
+      return;
+    }
     const pastedBlocks = hasRelationBlocks
       ? parseDocumentBodyClipboardData(event.clipboardData)
       : parseDocumentBodyClipboard(html, text).blocks;
@@ -861,6 +1096,46 @@ export default function DocumentBodyEditor({
     emitBlocks(nextBlocks, previous?.id);
   };
 
+  const mergeBlockWithPreviousAtStart = (blockId, currentContent = '') => {
+    const index = blocks.findIndex(block => block.id === blockId);
+    if (index <= 0) return false;
+    const current = blocks[index];
+    const previous = blocks[index - 1];
+    if (!current || !previous) return false;
+    if (isBlankBlock(current)) {
+      removeBlock(blockId);
+      return true;
+    }
+    const unsupportedTypes = new Set(['divider', 'table-simple']);
+    if (unsupportedTypes.has(current.type) || unsupportedTypes.has(previous.type)) return false;
+    const mergedContent = sanitizeDocumentBodyInlineHtml(
+      `${previous.content || ''}${currentContent || current.content || ''}`
+    );
+    const nextBlocks = [...blocks];
+    nextBlocks[index - 1] = { ...previous, content: mergedContent };
+    nextBlocks.splice(index, 1);
+    emitBlocks(nextBlocks, previous.id);
+    return true;
+  };
+
+  const mergeBlockWithNextAtEnd = (blockId, currentContent = '') => {
+    const index = blocks.findIndex(block => block.id === blockId);
+    if (index < 0 || index >= blocks.length - 1) return false;
+    const current = blocks[index];
+    const next = blocks[index + 1];
+    if (!current || !next) return false;
+    const unsupportedTypes = new Set(['divider', 'table-simple']);
+    if (unsupportedTypes.has(current.type) || unsupportedTypes.has(next.type)) return false;
+    const mergedContent = sanitizeDocumentBodyInlineHtml(
+      `${currentContent || current.content || ''}${next.content || ''}`
+    );
+    const nextBlocks = [...blocks];
+    nextBlocks[index] = { ...current, content: mergedContent };
+    nextBlocks.splice(index + 1, 1);
+    emitBlocks(nextBlocks, current.id);
+    return true;
+  };
+
   const moveBlock = (blockId, delta) => {
     const start = blocks.findIndex(block => block.id === blockId);
     if (start < 0) return;
@@ -1009,11 +1284,12 @@ export default function DocumentBodyEditor({
       onChange: content => patchBlock(block.id, { content }),
       onActivate: (editor, range) => rememberInlineSelection(block.id, editor, range),
       onEnter: () => handleEnter(block),
-      onBackspace: (event) => {
-        if (blocks.length <= 1) return;
-        event.preventDefault();
-        removeBlock(block.id);
-      },
+      onBackspace: (_event, context) => (
+        blocks.length > 1 && mergeBlockWithPreviousAtStart(block.id, context?.content)
+      ),
+      onDelete: (_event, context) => (
+        blocks.length > 1 && mergeBlockWithNextAtEnd(block.id, context?.content)
+      ),
       onIndent: delta => changeIndent(block.id, delta),
       onPaste: event => handleBlockPaste(event, block.id),
       style: { fontSize, lineHeight: LIST_LINE_HEIGHT, color: '#202124', fontWeight: 400, padding: 0 },

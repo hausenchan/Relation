@@ -1,3 +1,6 @@
+const SERVER_STARTUP_STARTED_AT = Date.now();
+console.log(`[startup] process started pid=${process.pid} node=${process.version}`);
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -14,6 +17,8 @@ const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
 const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
 const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
+const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
+const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
 const {
   decodeOssKey,
   deleteOssObjectByPath,
@@ -34,6 +39,12 @@ const {
 } = require('./lib/aiSuggestionStore');
 const { createAiTrainingExternalConnectorRuntime } = require('./lib/aiTrainingConnectors');
 const { createAiTrainingEventStream } = require('./lib/aiTrainingEventStream');
+const {
+  createMediaManagementRouter,
+  deleteMediaAssetByDocumentId,
+  ensureMediaDocumentPlacement,
+  resolveMediaDocumentTitle,
+} = require('./lib/mediaManagement');
 const {
   enhanceAiTrainingSkillResponse,
   estimateTokenCount,
@@ -2334,6 +2345,7 @@ db.exec(`
     custom_width INTEGER,
     small_font_enabled INTEGER DEFAULT 0,
     title_numbering_enabled INTEGER DEFAULT 0,
+    default_shares_initialized INTEGER DEFAULT 0,
     pinned_at DATETIME,
     created_by INTEGER,
     updated_by INTEGER,
@@ -2495,6 +2507,7 @@ addColumnIfMissing('documents', 'import_batch_no', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'import_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'quality_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'icon_key', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'default_shares_initialized', 'INTEGER DEFAULT 0');
 const documentsMissingContentText = db.prepare(`
   SELECT id, content
   FROM documents
@@ -2759,9 +2772,65 @@ db.exec(`
     progress    INTEGER DEFAULT 0,
     status      TEXT DEFAULT 'pending',
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    default_shares_initialized INTEGER DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS weekly_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    week_start TEXT NOT NULL,
+    week_end TEXT NOT NULL,
+    completed TEXT,
+    next_week_plan TEXT,
+    risks TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    default_shares_initialized INTEGER DEFAULT 0,
+    UNIQUE(user_id, week_start)
+  );
+
+  CREATE TABLE IF NOT EXISTS content_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    target_key TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_content_shares_entity
+    ON content_shares(entity_type, entity_id);
+  CREATE INDEX IF NOT EXISTS idx_content_shares_target
+    ON content_shares(target_type, target_id, target_key);
+
+  CREATE TABLE IF NOT EXISTS content_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    scope_key TEXT NOT NULL DEFAULT 'main',
+    snapshot_json TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'save',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+addColumnIfMissing('goals', 'default_shares_initialized', 'INTEGER DEFAULT 0');
+addColumnIfMissing('weekly_reports', 'default_shares_initialized', 'INTEGER DEFAULT 0');
+ensureMysqlLongTextColumn('weekly_reports', 'completed', 'NULL');
+ensureMysqlLongTextColumn('weekly_reports', 'next_week_plan', 'NULL');
+ensureMysqlLongTextColumn('weekly_reports', 'risks', 'NULL');
+ensureMysqlLongTextColumn('content_revisions', 'snapshot_json');
+createIndexesIfColumnsExist('content_revisions', [
+  {
+    name: 'idx_content_revisions_entity',
+    columnsSql: 'entity_type, entity_id, scope_key, id',
+    columns: ['entity_type', 'entity_id', 'scope_key', 'id'],
+  },
+]);
 
 // goals 表动态补全字段（兼容旧数据）
 const goalCols = db.prepare("PRAGMA table_info(goals)").all().map(c => c.name);
@@ -2794,6 +2863,9 @@ if (goalCols.length > 0) {
     db.exec("ALTER TABLE goals ADD COLUMN status TEXT DEFAULT 'pending'");
   }
 }
+ensureMysqlLongTextColumn('goals', 'title');
+ensureMysqlLongTextColumn('goals', 'description', 'NULL');
+ensureMysqlLongTextColumn('goals', 'result', 'NULL');
 
 // users 表加 leader_id / department / team_id
 const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
@@ -3043,6 +3115,9 @@ addColumnIfMissing('operational_meeting_sections', 'visibility_scope', "TEXT DEF
 addColumnIfMissing('operational_meeting_sections', 'content_json', 'TEXT DEFAULT NULL');
 addColumnIfMissing('operational_meeting_agendas', 'agenda_json', 'TEXT DEFAULT NULL');
 addColumnIfMissing('operational_meeting_decisions', 'decision_json', 'TEXT DEFAULT NULL');
+ensureMysqlLongTextColumn('operational_meeting_sections', 'content_json', 'NULL');
+ensureMysqlLongTextColumn('operational_meeting_agendas', 'agenda_json', 'NULL');
+ensureMysqlLongTextColumn('operational_meeting_decisions', 'decision_json', 'NULL');
 
 createIndexesIfColumnsExist('sensitive_module_members', [
   { name: 'idx_sensitive_module_members_user', columnsSql: 'user_id', columns: ['user_id'] },
@@ -3399,6 +3474,7 @@ const OPERATION_LOG_NAME_FIELDS = [
   'display_name',
   'username',
   'app_name',
+  'media_name',
   'company_entity',
   'destinations',
 ];
@@ -3439,6 +3515,7 @@ const OPERATION_LOG_BUSINESS_MAP = {
   'company-subject-attachments': '主体附件',
   'product-assets': '产品资产',
   'product-asset-reductions': '产品核减',
+  'media-management': '媒体管理',
   documents: '文档中心',
   'document-folders': '文档目录',
   'document-attachments': '文档附件',
@@ -3491,6 +3568,7 @@ const OPERATION_LOG_TABLE_MAP = {
   'company-subject-attachments': 'company_subject_attachments',
   'product-assets': 'product_assets',
   'product-asset-reductions': 'product_asset_reductions',
+  'media-management': 'media_assets',
   documents: 'documents',
   'document-folders': 'document_folders',
   'document-attachments': 'document_attachments',
@@ -3539,6 +3617,8 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/documents\/(\d+)\/page-options$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存页面选项' },
   { pattern: /^\/documents\/bulk-shares$/, businessType: '文档共享', table: 'document_shares', action: '批量追加共享范围' },
   { pattern: /^\/documents\/(\d+)\/shares$/, businessType: '文档共享', table: 'document_shares', idGroup: 1, action: '保存共享范围' },
+  { pattern: /^\/goals\/(\d+)\/shares$/, businessType: '目标共享', table: 'content_shares', idGroup: 1, action: '保存共享范围' },
+  { pattern: /^\/weekly-reports\/(\d+)\/shares$/, businessType: '周报共享', table: 'content_shares', idGroup: 1, action: '保存共享范围' },
   { pattern: /^\/documents\/(\d+)\/attachments$/, businessType: '文档附件', table: 'document_attachments', responseId: true, action: '上传附件' },
   { pattern: /^\/documents\/(\d+)\/blocks\/([^/]+)\/comments$/, businessType: '文档块评论', table: 'document_block_comments', responseId: true, action: '新增块评论' },
   { pattern: /^\/documents\/(\d+)\/change-logs$/, businessType: '文档改动历史', table: 'document_change_logs', responseId: true, action: '新增改动历史' },
@@ -4585,6 +4665,7 @@ function isOperationTeamGoal(goal) {
 }
 
 function buildGoalVisibilityFilter(user) {
+  if (isAdmin(user?.role) || isAdmin(user?.executive_role)) return { sql: '', params: [] };
   const visibleOwnerIds = getVisibleGoalOwnerIds(user.id, user.role);
   if (visibleOwnerIds === null) return { sql: '', params: [] };
 
@@ -4599,15 +4680,27 @@ function buildGoalVisibilityFilter(user) {
     conditions.push("(g.scope_type = 'team' AND COALESCE(g.department, tm.department, u.department) = 'operation')");
   }
 
+  const shared = buildContentShareVisibilityClause(user, 'goal', 'g.id', 'goal_share');
+  conditions.push(shared.sql);
+  params.push(...shared.params);
+
   if (!conditions.length) return { sql: ' AND 1=0', params: [] };
   return { sql: ` AND (${conditions.join(' OR ')})`, params };
 }
 
 function canAccessGoal(user, goal) {
+  if (isAdmin(user?.role) || isAdmin(user?.executive_role)) return true;
   const visibleOwnerIds = getVisibleGoalOwnerIds(user.id, user.role);
   if (visibleOwnerIds === null) return true;
   if (visibleOwnerIds.includes(Number(goal.owner_id))) return true;
-  return canViewOperationTeamGoals(user) && isOperationTeamGoal(goal);
+  if (canViewOperationTeamGoals(user) && isOperationTeamGoal(goal)) return true;
+  return isContentSharedWithUser(user, 'goal', goal.id);
+}
+
+function canEditGoal(user, goal) {
+  if (!user || !goal || ['readonly', 'guest'].includes(user.role)) return false;
+  return canManageGoalForOwner(user, goal.owner_id)
+    || isContentSharedWithUser(user, 'goal', goal.id);
 }
 
 function canManageGoalForOwner(actor, ownerId) {
@@ -5471,6 +5564,7 @@ app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_teams WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_departments WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_project_groups WHERE user_id = ?').run(req.params.id);
+  db.prepare("DELETE FROM content_shares WHERE target_type = 'user' AND target_id = ?").run(req.params.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   clearRuntimeCache();
   res.json({ success: true });
@@ -5514,6 +5608,7 @@ app.delete('/api/teams/:id', auth, adminOnly, (req, res) => {
     db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(nextTeam?.team_id || null, userId);
   });
   db.prepare('DELETE FROM director_teams WHERE team_id = ?').run(req.params.id);
+  db.prepare("DELETE FROM content_shares WHERE target_type = 'team' AND target_id = ?").run(req.params.id);
   db.prepare('DELETE FROM teams WHERE id = ?').run(req.params.id);
   clearRuntimeCache();
   res.json({ success: true });
@@ -5568,6 +5663,7 @@ app.put('/api/project-groups/:id', auth, adminOnly, (req, res) => {
 app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_project_groups WHERE project_group_id = ?').run(req.params.id);
   db.prepare('UPDATE goals SET project_group_id = NULL WHERE project_group_id = ?').run(req.params.id);
+  db.prepare("DELETE FROM content_shares WHERE target_type = 'project_group' AND target_id = ?").run(req.params.id);
   db.prepare('DELETE FROM project_groups WHERE id = ?').run(req.params.id);
   clearRuntimeCache();
   res.json({ success: true });
@@ -6927,12 +7023,14 @@ function getVisibleDocument(id, user) {
       updater.display_name as updated_by_name,
       pg.name as project_group_name,
       f.name as folder_name,
+      media_link.id as media_asset_id,
       CASE WHEN fav.user_id IS NULL THEN 0 ELSE 1 END as is_favorite
     FROM documents d
     LEFT JOIN users creator ON d.created_by = creator.id
     LEFT JOIN users updater ON d.updated_by = updater.id
     LEFT JOIN project_groups pg ON d.project_group_id = pg.id
     LEFT JOIN document_folders f ON d.folder_id = f.id
+    LEFT JOIN media_assets media_link ON media_link.document_id = d.id
     LEFT JOIN document_favorites fav ON fav.document_id = d.id AND fav.user_id = ?
     WHERE d.id = ? AND COALESCE(d.is_deleted, 0) = 0
     ${visibility.sql}
@@ -6970,9 +7068,114 @@ function normalizeDocumentShares(shares) {
   return rows;
 }
 
+function buildShareTargetMatch(user, alias) {
+  const clauses = [`${alias}.target_type = 'user' AND ${alias}.target_id = ?`];
+  const params = [Number(user.id)];
+
+  const departmentKeys = getDepartmentKeysForUser(user);
+  if (departmentKeys.length) {
+    clauses.push(`${alias}.target_type = 'department' AND ${alias}.target_key IN (${departmentKeys.map(() => '?').join(',')})`);
+    params.push(...departmentKeys);
+  }
+
+  const teamIds = getUserTeamIds(user.id);
+  if (teamIds.length) {
+    clauses.push(`${alias}.target_type = 'team' AND ${alias}.target_id IN (${teamIds.map(() => '?').join(',')})`);
+    params.push(...teamIds);
+  }
+
+  const projectGroupIds = getUserProjectGroupIds(user.id);
+  if (projectGroupIds.length) {
+    clauses.push(`${alias}.target_type = 'project_group' AND ${alias}.target_id IN (${projectGroupIds.map(() => '?').join(',')})`);
+    params.push(...projectGroupIds);
+  }
+
+  return { sql: clauses.map(clause => `(${clause})`).join(' OR '), params };
+}
+
+function buildContentShareVisibilityClause(user, entityType, entityIdExpression, alias = 'content_share') {
+  const target = buildShareTargetMatch(user, alias);
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM content_shares ${alias}
+      WHERE ${alias}.entity_type = ?
+        AND ${alias}.entity_id = ${entityIdExpression}
+        AND (${target.sql})
+    )`,
+    params: [entityType, ...target.params],
+  };
+}
+
+function isContentSharedWithUser(user, entityType, entityId) {
+  if (!user?.id || !entityType || !Number(entityId)) return false;
+  const target = buildShareTargetMatch(user, 'content_share');
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM content_shares content_share
+    WHERE content_share.entity_type = ?
+      AND content_share.entity_id = ?
+      AND (${target.sql})
+    LIMIT 1
+  `).get(entityType, Number(entityId), ...target.params));
+}
+
+const DOCUMENT_DEFAULT_SHARE_VERSION = 2;
+const CONTENT_DEFAULT_SHARE_VERSION = 1;
+const CONTENT_SHARE_ENTITY_TABLES = {
+  goal: 'goals',
+  weekly_report: 'weekly_reports',
+};
+
+function markContentDefaultSharesInitialized(entityType, entityId) {
+  const table = CONTENT_SHARE_ENTITY_TABLES[entityType];
+  if (!table || !Number(entityId)) return;
+  db.prepare(`UPDATE ${table} SET default_shares_initialized = ? WHERE id = ?`)
+    .run(CONTENT_DEFAULT_SHARE_VERSION, Number(entityId));
+}
+
+function replaceContentShares(entityType, entityId, shares, userId) {
+  const normalized = normalizeDocumentShares(shares);
+  db.prepare('DELETE FROM content_shares WHERE entity_type = ? AND entity_id = ?')
+    .run(entityType, Number(entityId));
+  const insert = db.prepare(`
+    INSERT INTO content_shares (
+      entity_type, entity_id, target_type, target_id, target_key, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  normalized.forEach(share => insert.run(
+    entityType,
+    Number(entityId),
+    share.target_type,
+    share.target_id,
+    share.target_key,
+    Number(userId) || null,
+  ));
+  markContentDefaultSharesInitialized(entityType, entityId);
+  return normalized;
+}
+
+function getContentShares(entityType, entityId) {
+  ensureContentDefaultShares(entityType, entityId);
+  return db.prepare(`
+    SELECT content_share.*,
+      u.display_name as user_name,
+      t.name as team_name,
+      pg.name as project_group_name
+    FROM content_shares content_share
+    LEFT JOIN users u
+      ON content_share.target_type = 'user' AND content_share.target_id = u.id
+    LEFT JOIN teams t
+      ON content_share.target_type = 'team' AND content_share.target_id = t.id
+    LEFT JOIN project_groups pg
+      ON content_share.target_type = 'project_group' AND content_share.target_id = pg.id
+    WHERE content_share.entity_type = ? AND content_share.entity_id = ?
+    ORDER BY content_share.target_type, content_share.id
+  `).all(entityType, Number(entityId));
+}
+
 function getDefaultDocumentShares() {
   const users = db.prepare(`
-    SELECT id, role, executive_role, account_status
+    SELECT id, username, display_name, role, executive_role, account_status
     FROM users
     WHERE COALESCE(account_status, 'active') = 'active'
     ORDER BY id ASC
@@ -6992,7 +7195,35 @@ function replaceDocumentShares(documentId, shares, userId) {
     VALUES (?, ?, ?, ?, ?)
   `);
   normalized.forEach(share => insert.run(documentId, share.target_type, share.target_id, share.target_key, userId));
+  db.prepare('UPDATE documents SET default_shares_initialized = ? WHERE id = ?')
+    .run(DOCUMENT_DEFAULT_SHARE_VERSION, documentId);
   return normalized;
+}
+
+function initializeLegacyDefaultShares() {
+  const startedAt = Date.now();
+  console.log('[startup] legacy default-share migration started');
+  try {
+    const defaultShares = getDefaultDocumentShares();
+    const stats = initializeLegacyDefaultSharesBulk({
+      db,
+      defaultShares,
+      documentVersion: DOCUMENT_DEFAULT_SHARE_VERSION,
+      contentVersion: CONTENT_DEFAULT_SHARE_VERSION,
+      contentEntityTables: CONTENT_SHARE_ENTITY_TABLES,
+    });
+    console.log(
+      `[startup] legacy default-share migration finished elapsed_ms=${Date.now() - startedAt}`,
+      stats,
+    );
+    return stats;
+  } catch (error) {
+    console.error(
+      `[startup] legacy default-share migration failed elapsed_ms=${Date.now() - startedAt}; continuing startup`,
+      error,
+    );
+    return null;
+  }
 }
 
 function addDocumentShares(documentId, shares, userId) {
@@ -7018,7 +7249,71 @@ function addDocumentShares(documentId, shares, userId) {
   return { requested: normalized.length, added };
 }
 
+function addContentShares(entityType, entityId, shares, userId) {
+  if (!CONTENT_SHARE_ENTITY_TABLES[entityType]) return { requested: 0, added: 0 };
+  const normalized = normalizeDocumentShares(shares);
+  const existing = db.prepare(`
+    SELECT target_type, target_id, target_key
+    FROM content_shares
+    WHERE entity_type = ? AND entity_id = ?
+  `).all(entityType, Number(entityId));
+  const existingKeys = new Set(existing.map(getDocumentShareKey));
+  const insert = db.prepare(`
+    INSERT INTO content_shares (
+      entity_type, entity_id, target_type, target_id, target_key, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  let added = 0;
+  normalized.forEach(share => {
+    const key = getDocumentShareKey(share);
+    if (existingKeys.has(key)) return;
+    insert.run(
+      entityType,
+      Number(entityId),
+      share.target_type,
+      share.target_id,
+      share.target_key,
+      Number(userId) || null,
+    );
+    existingKeys.add(key);
+    added += 1;
+  });
+  return { requested: normalized.length, added };
+}
+
+function ensureContentDefaultShares(entityType, entityId) {
+  const table = CONTENT_SHARE_ENTITY_TABLES[entityType];
+  if (!table || !Number(entityId)) return;
+  const row = db.prepare(`SELECT default_shares_initialized FROM ${table} WHERE id = ?`)
+    .get(Number(entityId));
+  if (!row || Number(row.default_shares_initialized || 0) >= CONTENT_DEFAULT_SHARE_VERSION) return;
+  const defaultShares = getDefaultDocumentShares();
+  if (!defaultShares.length) return;
+  const initialize = db.transaction(() => {
+    addContentShares(entityType, entityId, defaultShares, null);
+    markContentDefaultSharesInitialized(entityType, entityId);
+  });
+  initialize();
+}
+
+function ensureDocumentDefaultShares(documentId) {
+  const document = db.prepare('SELECT id, default_shares_initialized FROM documents WHERE id = ?')
+    .get(Number(documentId));
+  if (!document || Number(document.default_shares_initialized || 0) >= DOCUMENT_DEFAULT_SHARE_VERSION) return;
+  const defaultShares = getDefaultDocumentShares();
+  if (!defaultShares.length) return;
+  const initialize = db.transaction(() => {
+    addDocumentShares(document.id, defaultShares, null);
+    db.prepare('UPDATE documents SET default_shares_initialized = ? WHERE id = ?')
+      .run(DOCUMENT_DEFAULT_SHARE_VERSION, document.id);
+  });
+  initialize();
+}
+
+initializeLegacyDefaultShares();
+
 function getDocumentShares(documentId) {
+  ensureDocumentDefaultShares(documentId);
   return db.prepare(`
     SELECT ds.*,
       u.display_name as user_name,
@@ -7207,6 +7502,38 @@ function createDocumentRecord(body, user) {
 }
 
 ensureDocumentDirectoryBlueprint();
+
+app.use('/api/media-management', createMediaManagementRouter({
+  db,
+  canWrite,
+  isAdmin,
+  getUserMenuPerms,
+  getUserModulePerms,
+  buildDocumentVisibilityFilter,
+  getVisibleDocument,
+  canEditDocument,
+  canManageDocument,
+  createDocumentRecord,
+  getDefaultDocumentShares,
+  addDocumentShares,
+  insertDocumentEditRecord,
+  encryptRow,
+  decryptRow,
+  prepareMediaDocumentPlacement: () => {
+    const startedAt = Date.now();
+    console.log('[startup] media document placement started');
+    const placement = ensureMediaDocumentPlacement(db);
+    console.log(
+      `[startup] media document placement finished elapsed_ms=${Date.now() - startedAt}`,
+      {
+        folder_id: placement.document_defaults.folder_id,
+        documents_scanned: placement.documents_scanned,
+        documents_updated: placement.documents_updated,
+      },
+    );
+    return placement;
+  },
+}));
 
 app.get('/api/document-folders', (req, res) => {
   const rows = db.prepare(`
@@ -8200,9 +8527,10 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   const contentText = canEditCurrentDocument && hasBodyField('content_text')
     ? extractDocumentText(content, req.body.content_text)
     : extractDocumentText(content, doc.content_text);
-  const nextTitle = canEditCurrentDocument && hasBodyField('title')
-    ? (req.body.title || doc.title)
-    : doc.title;
+  const nextTitle = resolveMediaDocumentTitle(
+    doc,
+    canEditCurrentDocument && hasBodyField('title') ? req.body.title : doc.title,
+  );
   const beforeSnapshot = {
     title: doc.title,
     content: doc.content,
@@ -8262,7 +8590,10 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
     });
   }
   const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
-  const nextTitle = hasBodyField('title') ? (req.body.title || doc.title) : doc.title;
+  const nextTitle = resolveMediaDocumentTitle(
+    doc,
+    hasBodyField('title') ? req.body.title : doc.title,
+  );
   const content = hasBodyField('content') ? req.body.content : doc.content;
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
   const contentText = extractDocumentText(
@@ -8310,7 +8641,7 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
   const restoreSnapshot = resolveDocumentEditRecordRestoreSnapshot(record, doc);
   if (!restoreSnapshot) return res.status(400).json({ error: '该页面编辑记录缺少可恢复快照，无法恢复' });
 
-  const targetTitle = restoreSnapshot.title;
+  const targetTitle = resolveMediaDocumentTitle(doc, restoreSnapshot.title);
   const targetContent = restoreSnapshot.content;
   const targetContentText = restoreSnapshot.content_text;
   const beforeSnapshot = {
@@ -8399,7 +8730,12 @@ app.delete('/api/documents/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以删除文档' });
-  db.prepare('UPDATE documents SET is_deleted = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.user.id, doc.id);
+  const removeDocument = db.transaction(() => {
+    deleteMediaAssetByDocumentId(db, doc.id);
+    db.prepare('UPDATE documents SET is_deleted = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(req.user.id, doc.id);
+  });
+  removeDocument();
   res.json({ success: true });
 });
 
@@ -18202,7 +18538,161 @@ app.get('/api/trips/stats/summary', (req, res) => {
   res.json({ monthly, byType, byUser, byGroup, alerts });
 });
 
+const CONTENT_REVISION_ACTION_LABELS = {
+  baseline: '初始版本',
+  create: '创建',
+  save: '自动保存',
+  manual_save: '手动保存',
+  submit: '提交',
+  restore: '恢复历史版本',
+  generate: 'AI 生成',
+};
+const CONTENT_REVISION_SNAPSHOT_LIMIT = Number(process.env.RELATION_CONTENT_REVISION_LIMIT || 20 * 1024 * 1024);
+
+function stringifyContentRevisionSnapshot(snapshot) {
+  const serialized = JSON.stringify(snapshot ?? {});
+  if (Buffer.byteLength(serialized, 'utf8') > CONTENT_REVISION_SNAPSHOT_LIMIT) {
+    return null;
+  }
+  return serialized;
+}
+
+function parseContentRevisionSnapshot(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('content_revisions', row);
+  return parseMaybeJson(decrypted.snapshot_json, null);
+}
+
+function insertContentRevision({ entityType, entityId, scopeKey = 'main', snapshot, action = 'save', userId }) {
+  const normalizedEntityId = Number(entityId);
+  if (!entityType || !normalizedEntityId || snapshot == null) return null;
+  const snapshotJson = stringifyContentRevisionSnapshot(snapshot);
+  if (!snapshotJson) {
+    console.warn(`[content-revisions] skip oversized snapshot: ${entityType}/${normalizedEntityId}/${scopeKey}`);
+    return null;
+  }
+  const latest = db.prepare(`
+    SELECT * FROM content_revisions
+    WHERE entity_type = ? AND entity_id = ? AND scope_key = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(entityType, normalizedEntityId, scopeKey);
+  if (latest) {
+    const latestSnapshot = parseContentRevisionSnapshot(latest);
+    const latestSnapshotJson = latestSnapshot && stringifyContentRevisionSnapshot(latestSnapshot);
+    if (latestSnapshotJson && latestSnapshotJson === snapshotJson) return latest.id;
+  }
+  const encrypted = encryptRow('content_revisions', { snapshot_json: snapshotJson });
+  return db.prepare(`
+    INSERT INTO content_revisions (
+      entity_type, entity_id, scope_key, snapshot_json, action, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    entityType,
+    normalizedEntityId,
+    scopeKey,
+    encrypted.snapshot_json,
+    action || 'save',
+    userId ? Number(userId) : null,
+  ).lastInsertRowid;
+}
+
+function recordContentRevisionChange({ entityType, entityId, scopeKey = 'main', before, after, action = 'save', userId }) {
+  if (before != null) {
+    insertContentRevision({ entityType, entityId, scopeKey, snapshot: before, action: 'baseline', userId });
+  }
+  return insertContentRevision({ entityType, entityId, scopeKey, snapshot: after, action, userId });
+}
+
+function listContentRevisions(entityType, entityId, scopeKey = 'main') {
+  const rows = db.prepare(`
+    SELECT r.id, r.entity_type, r.entity_id, r.scope_key, r.snapshot_json,
+      r.action, r.created_by, r.created_at,
+      u.display_name as created_by_name, u.username as created_by_username
+    FROM content_revisions r
+    LEFT JOIN users u ON u.id = r.created_by
+    WHERE r.entity_type = ? AND r.entity_id = ? AND r.scope_key = ?
+    ORDER BY r.id DESC
+    LIMIT 100
+  `).all(entityType, Number(entityId), scopeKey);
+  const snapshots = rows.map(parseContentRevisionSnapshot);
+  return rows.map((row, index) => {
+    const { snapshot_json: _snapshotJson, ...publicRow } = row;
+    const changeItems = buildContentRevisionChanges(
+      entityType,
+      scopeKey,
+      snapshots[index + 1] || null,
+      snapshots[index],
+    );
+    return {
+      ...publicRow,
+      version_label: `V${rows.length - index}`,
+      action_label: CONTENT_REVISION_ACTION_LABELS[row.action] || row.action || '保存',
+      can_restore: index > 0 ? 1 : 0,
+      change_items: changeItems,
+      change_summary: changeItems.map(item => item.label).join('、'),
+    };
+  });
+}
+
+function getContentRevision(revisionId, entityType, entityId, scopeKey = null) {
+  const row = db.prepare(`
+    SELECT * FROM content_revisions
+    WHERE id = ? AND entity_type = ? AND entity_id = ?
+    ${scopeKey ? 'AND scope_key = ?' : ''}
+  `).get(...(scopeKey
+    ? [Number(revisionId), entityType, Number(entityId), scopeKey]
+    : [Number(revisionId), entityType, Number(entityId)]));
+  if (!row) return null;
+  return { ...row, snapshot: parseContentRevisionSnapshot(row) };
+}
+
 // =========== 目标管理 API ===========
+const GOAL_REVISION_FIELDS = [
+  'title', 'description', 'owner_id', 'department', 'team_id', 'project_group_id',
+  'scope_type', 'deadline', 'progress', 'status', 'result', 'goal_type', 'period', 'parent_id',
+];
+const GOAL_MANAGEMENT_FIELDS = [
+  'owner_id', 'project_group_id', 'department', 'team_id',
+  'scope_type', 'goal_type', 'period', 'parent_id',
+];
+
+function getGoalRecord(goalId) {
+  return db.prepare('SELECT * FROM goals WHERE id = ?').get(Number(goalId)) || null;
+}
+
+function buildGoalRevisionSnapshot(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('goals', row);
+  return GOAL_REVISION_FIELDS.reduce((snapshot, field) => {
+    snapshot[field] = decrypted[field] ?? null;
+    return snapshot;
+  }, {});
+}
+
+function getGoalPermissionFlags(row, user) {
+  const canWriteGoal = Boolean(user && !['readonly', 'guest'].includes(user.role));
+  const canManage = canWriteGoal && canManageGoalForOwner(user, row?.owner_id);
+  const canEdit = canEditGoal(user, row);
+  return {
+    can_edit: canEdit ? 1 : 0,
+    can_share: canEdit ? 1 : 0,
+    can_manage: canManage ? 1 : 0,
+    can_delete: canManage ? 1 : 0,
+  };
+}
+
+function serializeGoalLiveRecord(row, user = null) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    ...buildGoalRevisionSnapshot(row),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    ...(user ? getGoalPermissionFlags(row, user) : {}),
+  };
+}
+
 // 获取目标列表
 app.get('/api/goals', (req, res) => {
   const { department, status, goal_type, scope_type, period, parent_id, owner_id, owner_role, project_group_id, team_id } = req.query;
@@ -18299,6 +18789,7 @@ app.get('/api/goals', (req, res) => {
   const goals = decryptRows('goals', db.prepare(q).all(...params)).map(g => ({
     ...g,
     parent_title: safeDecrypt(g.parent_title),
+    ...getGoalPermissionFlags(g, req.user),
   }));
 
   // 为每个目标加载子目标数量
@@ -18351,7 +18842,10 @@ app.get('/api/goals/:id', (req, res) => {
     WHERE g.parent_id = ?
     ORDER BY g.period DESC, g.created_at DESC
   `).all(id);
-  const children = decryptRows('goals', childrenRaw);
+  const children = decryptRows(
+    'goals',
+    childrenRaw.filter(child => canAccessGoal(req.user, child)),
+  ).map(child => ({ ...child, ...getGoalPermissionFlags(child, req.user) }));
 
   const decGoal = decryptRow('goals', goal);
   decGoal.parent_title = safeDecrypt(decGoal.parent_title);
@@ -18359,7 +18853,99 @@ app.get('/api/goals/:id', (req, res) => {
     ...decGoal,
     department: decGoal.department || decGoal.team_department || decGoal.owner_department || null,
     children,
+    ...getGoalPermissionFlags(goal, req.user),
   });
+});
+
+app.get('/api/goals/:id/live', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canAccessGoal(req.user, goal)) return res.status(403).json({ error: '无权限查看该目标' });
+  const since = String(req.query?.since || '');
+  if (since && since === String(goal.updated_at || '')) {
+    return res.json({ id: Number(goal.id), has_changes: false, updated_at: goal.updated_at });
+  }
+  return res.json({ ...serializeGoalLiveRecord(goal, req.user), has_changes: true });
+});
+
+app.get('/api/goals/:id/history', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canAccessGoal(req.user, goal)) return res.status(403).json({ error: '无权限查看该目标' });
+  insertContentRevision({
+    entityType: 'goal',
+    entityId: goal.id,
+    snapshot: buildGoalRevisionSnapshot(goal),
+    action: 'baseline',
+    userId: goal.owner_id,
+  });
+  return res.json({
+    can_restore: canEditGoal(req.user, goal) ? 1 : 0,
+    revisions: listContentRevisions('goal', goal.id),
+  });
+});
+
+app.post('/api/goals/:id/history/:revisionId/restore', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canEditGoal(req.user, goal)) {
+    return res.status(403).json({ error: '无权恢复该目标版本' });
+  }
+  const revision = getContentRevision(req.params.revisionId, 'goal', goal.id, 'main');
+  if (!revision?.snapshot) return res.status(404).json({ error: '历史版本不存在' });
+  const snapshot = revision.snapshot;
+  if (Number(snapshot.owner_id) !== Number(goal.owner_id)
+      && !canManageGoalForOwner(req.user, snapshot.owner_id)) {
+    return res.status(403).json({ error: '无权恢复为该负责人名下的目标' });
+  }
+  if (!canManageGoalForOwner(req.user, goal.owner_id)) {
+    const changesManagementField = GOAL_MANAGEMENT_FIELDS.some(field => (
+      String(snapshot[field] ?? '') !== String(goal[field] ?? '')
+    ));
+    if (changesManagementField) {
+      return res.status(403).json({ error: '共享协作者不能通过历史版本变更目标归属和负责人' });
+    }
+  }
+  const encrypted = encryptRow('goals', {
+    title: snapshot.title,
+    description: snapshot.description,
+    result: snapshot.result,
+  });
+  const updatedAt = new Date().toISOString();
+  db.prepare(`
+    UPDATE goals SET
+      title = ?, description = ?, owner_id = ?, department = ?, team_id = ?,
+      project_group_id = ?, scope_type = ?, deadline = ?, progress = ?, status = ?,
+      result = ?, goal_type = ?, period = ?, parent_id = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    encrypted.title,
+    encrypted.description,
+    snapshot.owner_id,
+    snapshot.department,
+    snapshot.team_id,
+    snapshot.project_group_id,
+    snapshot.scope_type,
+    snapshot.deadline,
+    snapshot.progress,
+    snapshot.status,
+    encrypted.result,
+    snapshot.goal_type,
+    snapshot.period,
+    snapshot.parent_id,
+    updatedAt,
+    goal.id,
+  );
+  const restored = getGoalRecord(goal.id);
+  recordContentRevisionChange({
+    entityType: 'goal',
+    entityId: goal.id,
+    before: buildGoalRevisionSnapshot(goal),
+    after: buildGoalRevisionSnapshot(restored),
+    action: 'restore',
+    userId: req.user.id,
+  });
+  return res.json(serializeGoalLiveRecord(restored, req.user));
 });
 
 // 创建目标
@@ -18387,58 +18973,120 @@ app.post('/api/goals', (req, res) => {
     INSERT INTO goals (title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result, goal_type, period, parent_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(enc.title, enc.description, owner_id, normalizedDepartment, team_id || null, project_group_id || null, normalizedScopeType, deadline, progress || 0, normalizedStatus, enc.result || null, goal_type, period, parent_id || null);
-
-  res.json({ id: insertResult.lastInsertRowid });
+  const created = getGoalRecord(insertResult.lastInsertRowid);
+  replaceContentShares(
+    'goal',
+    created.id,
+    Array.isArray(req.body?.shares) ? req.body.shares : getDefaultDocumentShares(),
+    req.user.id,
+  );
+  insertContentRevision({
+    entityType: 'goal',
+    entityId: created.id,
+    snapshot: buildGoalRevisionSnapshot(created),
+    action: 'create',
+    userId: req.user.id,
+  });
+  res.json(serializeGoalLiveRecord(created, req.user));
 });
 
 // 更新目标
 app.put('/api/goals/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result, goal_type, period, parent_id } = req.body;
-  const existing = db.prepare('SELECT owner_id, department, team_id, project_group_id, scope_type FROM goals WHERE id = ?').get(id);
+  const body = req.body || {};
+  const existing = getGoalRecord(id);
   if (!existing) return res.status(404).json({ error: '目标不存在' });
-
-  const targetOwnerId = owner_id || existing.owner_id;
-  if (!canManageGoalForOwner(req.user, targetOwnerId)) {
+  const hasField = field => Object.prototype.hasOwnProperty.call(body, field);
+  const targetOwnerId = hasField('owner_id') ? Number(body.owner_id) : Number(existing.owner_id);
+  const canManageExistingGoal = canManageGoalForOwner(req.user, existing.owner_id);
+  if (!canEditGoal(req.user, existing)) {
     return res.status(403).json({ error: '无权编辑该目标' });
   }
-
+  if (targetOwnerId !== Number(existing.owner_id)
+      && (!canManageExistingGoal || !canManageGoalForOwner(req.user, targetOwnerId))) {
+    return res.status(403).json({ error: '无权变更该目标负责人' });
+  }
+  if (!canManageExistingGoal) {
+    const changesManagementField = GOAL_MANAGEMENT_FIELDS.some(field => (
+      hasField(field)
+      && String(body[field] ?? '') !== String(existing[field] ?? '')
+    ));
+    if (changesManagementField) {
+      return res.status(403).json({ error: '共享协作者不能变更目标归属和负责人' });
+    }
+  }
+  const baseUpdatedAt = String(body.base_updated_at || '');
+  if (baseUpdatedAt && baseUpdatedAt !== String(existing.updated_at || '')) {
+    return res.status(409).json({
+      error: '目标已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeGoalLiveRecord(existing, req.user),
+    });
+  }
+  const mergedScope = {
+    scope_type: hasField('scope_type') ? body.scope_type : existing.scope_type,
+    project_group_id: hasField('project_group_id') ? body.project_group_id : existing.project_group_id,
+    department: hasField('department') ? body.department : existing.department,
+    team_id: hasField('team_id') ? body.team_id : existing.team_id,
+  };
   const scopeError = validateGoalScopeFields({
-    scope_type: scope_type || existing.scope_type,
-    project_group_id: project_group_id ?? existing.project_group_id,
-    department: department ?? existing.department,
-    team_id: team_id ?? existing.team_id,
+    ...mergedScope,
   });
   if (scopeError) {
     return res.status(400).json({ error: scopeError });
   }
+  if (hasField('title') && !String(body.title || '').trim()) {
+    return res.status(400).json({ error: '目标标题不能为空' });
+  }
 
-  const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(targetOwnerId);
-  const normalizedDepartment = department || owner?.department || null;
-  const normalizedStatus = status;
-
-  const enc = encryptRow('goals', { title, description, result });
+  const patch = {};
+  GOAL_REVISION_FIELDS.forEach((field) => {
+    if (hasField(field)) patch[field] = body[field];
+  });
+  if (hasField('owner_id')) patch.owner_id = targetOwnerId;
+  if (hasField('department')) {
+    const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(targetOwnerId);
+    patch.department = body.department || owner?.department || null;
+  }
+  const contentPatch = {};
+  ['title', 'description', 'result'].forEach((field) => {
+    if (hasField(field)) contentPatch[field] = body[field];
+  });
+  Object.assign(patch, encryptRow('goals', contentPatch));
+  const fields = Object.keys(patch);
+  if (!fields.length) return res.json(serializeGoalLiveRecord(existing, req.user));
+  const updatedAt = new Date().toISOString();
   db.prepare(`
-    UPDATE goals SET
-      title = COALESCE(?, title),
-      description = COALESCE(?, description),
-      owner_id = COALESCE(?, owner_id),
-      department = COALESCE(?, department),
-      team_id = COALESCE(?, team_id),
-      project_group_id = COALESCE(?, project_group_id),
-      scope_type = COALESCE(?, scope_type),
-      deadline = COALESCE(?, deadline),
-      progress = COALESCE(?, progress),
-      status = COALESCE(?, status),
-      result = COALESCE(?, result),
-      goal_type = COALESCE(?, goal_type),
-      period = COALESCE(?, period),
-      parent_id = COALESCE(?, parent_id),
-      updated_at = CURRENT_TIMESTAMP
+    UPDATE goals
+    SET ${fields.map(field => `${field} = ?`).join(', ')}, updated_at = ?
     WHERE id = ?
-  `).run(enc.title, enc.description, owner_id, normalizedDepartment, team_id, project_group_id, scope_type, deadline, progress, normalizedStatus, enc.result, goal_type, period, parent_id, id);
+  `).run(...fields.map(field => patch[field]), updatedAt, Number(id));
 
-  res.json({ success: true });
+  const updated = getGoalRecord(id);
+  recordContentRevisionChange({
+    entityType: 'goal',
+    entityId: updated.id,
+    before: buildGoalRevisionSnapshot(existing),
+    after: buildGoalRevisionSnapshot(updated),
+    action: body.revision_action === 'manual_save' ? 'manual_save' : 'save',
+    userId: req.user.id,
+  });
+  res.json(serializeGoalLiveRecord(updated, req.user));
+});
+
+app.get('/api/goals/:id/shares', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canAccessGoal(req.user, goal)) return res.status(403).json({ error: '无权限查看该目标' });
+  return res.json(getContentShares('goal', goal.id));
+});
+
+app.put('/api/goals/:id/shares', canWrite, (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canEditGoal(req.user, goal)) return res.status(403).json({ error: '无权调整该目标共享范围' });
+  const shares = replaceContentShares('goal', goal.id, req.body?.shares || [], req.user.id);
+  return res.json({ success: true, shares });
 });
 
 // 删除目标（级联删除子目标）
@@ -18453,6 +19101,8 @@ app.delete('/api/goals/:id', (req, res) => {
   function deleteGoalAndChildren(goalId) {
     const children = db.prepare('SELECT id FROM goals WHERE parent_id = ?').all(goalId);
     children.forEach(c => deleteGoalAndChildren(c.id));
+    db.prepare("DELETE FROM content_revisions WHERE entity_type = 'goal' AND entity_id = ?").run(goalId);
+    db.prepare("DELETE FROM content_shares WHERE entity_type = 'goal' AND entity_id = ?").run(goalId);
     db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
   }
   deleteGoalAndChildren(id);
@@ -18460,10 +19110,106 @@ app.delete('/api/goals/:id', (req, res) => {
 });
 
 // =========== 周报管理 API ===========
+const WEEKLY_REPORT_REVISION_FIELDS = [
+  'user_id', 'week_start', 'week_end', 'completed', 'next_week_plan', 'risks',
+];
+
+function getWeeklyReportRecord(reportId) {
+  return db.prepare(`
+    SELECT wr.*, u.display_name as user_name, u.department, u.role as user_role
+    FROM weekly_reports wr
+    LEFT JOIN users u ON u.id = wr.user_id
+    WHERE wr.id = ?
+  `).get(Number(reportId)) || null;
+}
+
+function getWeeklyReportVisibleOwnerIds(user) {
+  const userId = Number(user?.id);
+  const role = user?.role;
+  if (!userId) return [];
+  if (isAdmin(role) || isAdmin(user?.executive_role)) return null;
+
+  if (role === 'member') {
+    const visibleIds = new Set([userId]);
+    const me = db.prepare('SELECT leader_id FROM users WHERE id = ?').get(userId);
+    if (me?.leader_id) visibleIds.add(Number(me.leader_id));
+    getUserTeamIds(userId).forEach(teamId => {
+      const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(teamId);
+      if (team?.leader_id) visibleIds.add(Number(team.leader_id));
+    });
+    db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'weekly_reports')
+      .flatMap(row => getUsersByTeamIds([row.target_team_id]))
+      .forEach(id => visibleIds.add(Number(id)));
+    return [...visibleIds];
+  }
+
+  if (role === 'leader') {
+    const managedTeamIds = getManagedTeamIds(userId, role) || [];
+    const crossTeamIds = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'weekly_reports').map(row => row.target_team_id);
+    const teamIds = [...new Set([...managedTeamIds, ...crossTeamIds])];
+    return teamIds.length
+      ? [...new Set([userId, ...getUsersByTeamIds(teamIds)])]
+      : [userId];
+  }
+
+  if (role === 'sales_director') {
+    const managedTeamIds = getManagedTeamIds(userId, role) || [];
+    return managedTeamIds.length ? getUsersByTeamIds(managedTeamIds) : null;
+  }
+
+  return null;
+}
+
+function canAccessWeeklyReport(user, report) {
+  if (!user || !report) return false;
+  const visibleOwnerIds = getWeeklyReportVisibleOwnerIds(user);
+  if (visibleOwnerIds === null || visibleOwnerIds.includes(Number(report.user_id))) return true;
+  return isContentSharedWithUser(user, 'weekly_report', report.id);
+}
+
+function canEditWeeklyReport(user, report) {
+  return Boolean(
+    user?.id
+    && report
+    && !['readonly', 'guest'].includes(user.role)
+    && (
+      isAdmin(user.role)
+      || isAdmin(user.executive_role)
+      || Number(user.id) === Number(report.user_id)
+      || isContentSharedWithUser(user, 'weekly_report', report.id)
+    )
+  );
+}
+
+function buildWeeklyReportRevisionSnapshot(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('weekly_reports', row);
+  return WEEKLY_REPORT_REVISION_FIELDS.reduce((snapshot, field) => {
+    snapshot[field] = decrypted[field] ?? null;
+    return snapshot;
+  }, {});
+}
+
+function serializeWeeklyReportRecord(row, user = null) {
+  if (!row) return null;
+  const decrypted = decryptRow('weekly_reports', row);
+  return {
+    ...decrypted,
+    id: Number(decrypted.id),
+    user_id: Number(decrypted.user_id),
+    ...(user ? {
+      can_edit: canEditWeeklyReport(user, row) ? 1 : 0,
+      can_share: canEditWeeklyReport(user, row) ? 1 : 0,
+      can_delete: isAdmin(user.role) ? 1 : 0,
+    } : {}),
+  };
+}
+
 // 获取周报列表
 app.get('/api/weekly-reports', (req, res) => {
   const { week_start, department } = req.query;
-  const { id: userId, role } = req.user;
 
   let q = `
     SELECT wr.*, u.display_name as user_name, u.department, u.role as user_role
@@ -18473,55 +19219,20 @@ app.get('/api/weekly-reports', (req, res) => {
   `;
   const params = [];
 
-  // 角色过滤
-  if (role === 'member') {
-    const visibleIds = new Set([userId]);
-    const me = db.prepare('SELECT leader_id FROM users WHERE id = ?').get(userId);
-    if (me?.leader_id) visibleIds.add(me.leader_id);
-
-    const myTeamIds = getUserTeamIds(userId);
-    myTeamIds.forEach(teamId => {
-      const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(teamId);
-      if (team?.leader_id) visibleIds.add(team.leader_id);
-    });
-
-    // 获取跨团队访问权限
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'weekly_reports').map(r => r.target_team_id);
-    if (crossTeams.length > 0) {
-      const crossMembers = getUsersByTeamIds(crossTeams);
-      crossMembers.forEach(id => visibleIds.add(id));
-    }
-
-    const ids = [...visibleIds];
-    q += ` AND wr.user_id IN (${ids.map(() => '?').join(',')})`;
-    params.push(...ids);
-  } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    // 获取跨团队访问权限
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'weekly_reports').map(r => r.target_team_id);
-
-    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
-
-    if (allTeamIds.length) {
-      const members = getUsersByTeamIds(allTeamIds);
-      q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
-    } else {
-      q += ' AND wr.user_id = ?';
-      params.push(userId);
-    }
-  } else if (role === 'sales_director') {
-    // 总监看辖区内的周报
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
-    }
+  const visibleOwnerIds = getWeeklyReportVisibleOwnerIds(req.user);
+  if (visibleOwnerIds !== null) {
+    const shared = buildContentShareVisibilityClause(
+      req.user,
+      'weekly_report',
+      'wr.id',
+      'weekly_report_share',
+    );
+    const ownerSql = visibleOwnerIds.length
+      ? `wr.user_id IN (${visibleOwnerIds.map(() => '?').join(',')})`
+      : '1=0';
+    q += ` AND (${ownerSql} OR ${shared.sql})`;
+    params.push(...visibleOwnerIds, ...shared.params);
   }
-  // admin 看全部，不加过滤
 
   if (week_start) { q += ' AND wr.week_start = ?'; params.push(week_start); }
   if (department) {
@@ -18536,47 +19247,170 @@ app.get('/api/weekly-reports', (req, res) => {
   }
 
   q += ' ORDER BY wr.week_start DESC, u.display_name ASC';
-  res.json(decryptRows('weekly_reports', db.prepare(q).all(...params)));
+  res.json(db.prepare(q).all(...params).map(row => serializeWeeklyReportRecord(row, req.user)));
+});
+
+app.get('/api/weekly-reports/:id/live', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canEditWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权编辑该周报' });
+  const since = String(req.query?.since || '');
+  if (since && since === String(report.updated_at || '')) {
+    return res.json({ id: Number(report.id), has_changes: false, updated_at: report.updated_at });
+  }
+  return res.json({ ...serializeWeeklyReportRecord(report, req.user), has_changes: true });
+});
+
+app.get('/api/weekly-reports/:id/history', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canAccessWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权查看该周报历史' });
+  insertContentRevision({
+    entityType: 'weekly_report',
+    entityId: report.id,
+    snapshot: buildWeeklyReportRevisionSnapshot(report),
+    action: 'baseline',
+    userId: report.user_id,
+  });
+  return res.json({
+    can_restore: canEditWeeklyReport(req.user, report) ? 1 : 0,
+    revisions: listContentRevisions('weekly_report', report.id),
+  });
+});
+
+app.post('/api/weekly-reports/:id/history/:revisionId/restore', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canEditWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权恢复该周报版本' });
+  const revision = getContentRevision(req.params.revisionId, 'weekly_report', report.id, 'main');
+  if (!revision?.snapshot) return res.status(404).json({ error: '历史版本不存在' });
+  const encrypted = encryptRow('weekly_reports', {
+    completed: revision.snapshot.completed,
+    next_week_plan: revision.snapshot.next_week_plan,
+    risks: revision.snapshot.risks,
+  });
+  const updatedAt = new Date().toISOString();
+  db.prepare(`
+    UPDATE weekly_reports
+    SET week_end = ?, completed = ?, next_week_plan = ?, risks = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    revision.snapshot.week_end || report.week_end,
+    encrypted.completed,
+    encrypted.next_week_plan,
+    encrypted.risks,
+    updatedAt,
+    report.id,
+  );
+  const restored = getWeeklyReportRecord(report.id);
+  recordContentRevisionChange({
+    entityType: 'weekly_report',
+    entityId: report.id,
+    before: buildWeeklyReportRevisionSnapshot(report),
+    after: buildWeeklyReportRevisionSnapshot(restored),
+    action: 'restore',
+    userId: req.user.id,
+  });
+  return res.json(serializeWeeklyReportRecord(restored, req.user));
 });
 
 // 创建或更新周报
 app.post('/api/weekly-reports', (req, res) => {
-  const { user_id, week_start, week_end, completed, next_week_plan, risks } = req.body;
+  const { user_id, week_start, week_end, completed, next_week_plan, risks, base_updated_at } = req.body;
   const { id: currentUserId, role } = req.user;
+  const normalizedUserId = Number(user_id);
 
-  if (!user_id || !week_start || !week_end) {
+  if (!normalizedUserId || !week_start || !week_end) {
     return res.status(400).json({ error: '用户、周起止日期必填' });
   }
 
-  // 权限检查：只能写自己的周报，除非是 admin
-  if (!isAdmin(role) && user_id !== currentUserId) {
-    return res.status(403).json({ error: '无权限' });
-  }
-
   // 检查是否已存在
-  const existing = db.prepare('SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?').get(user_id, week_start);
+  const existingId = db.prepare('SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?').get(normalizedUserId, week_start)?.id;
+  const existing = existingId ? getWeeklyReportRecord(existingId) : null;
+  if (existing) {
+    if (!canEditWeeklyReport(req.user, existing)) {
+      return res.status(403).json({ error: '无权编辑该周报' });
+    }
+  } else if (!isAdmin(role)
+      && !isAdmin(req.user.executive_role)
+      && normalizedUserId !== Number(currentUserId)) {
+    return res.status(403).json({ error: '无权限为该用户创建周报' });
+  }
+  const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
+  if (existing && hasBaseUpdatedAt && String(existing.updated_at || '') !== String(base_updated_at || '')) {
+    return res.status(409).json({
+      error: '周报已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeWeeklyReportRecord(existing, req.user),
+    });
+  }
 
   const enc = encryptRow('weekly_reports', { completed, next_week_plan, risks });
-  if (existing) {
-    // 更新
-    db.prepare(`
-      UPDATE weekly_reports SET
-        week_end = ?,
-        completed = ?,
-        next_week_plan = ?,
-        risks = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(week_end, enc.completed, enc.next_week_plan, enc.risks, existing.id);
-    res.json({ id: existing.id, updated: true });
-  } else {
-    // 新建
-    const result = db.prepare(`
-      INSERT INTO weekly_reports (user_id, week_start, week_end, completed, next_week_plan, risks)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(user_id, week_start, week_end, enc.completed, enc.next_week_plan, enc.risks);
-    res.json({ id: result.lastInsertRowid, created: true });
+  try {
+    let reportId;
+    if (existing) {
+      const updatedAt = new Date().toISOString();
+      db.prepare(`
+        UPDATE weekly_reports SET
+          week_end = ?, completed = ?, next_week_plan = ?, risks = ?, updated_at = ?
+        WHERE id = ?
+      `).run(week_end, enc.completed, enc.next_week_plan, enc.risks, updatedAt, existing.id);
+      reportId = existing.id;
+    } else {
+      const result = db.prepare(`
+        INSERT INTO weekly_reports (user_id, week_start, week_end, completed, next_week_plan, risks)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(normalizedUserId, week_start, week_end, enc.completed, enc.next_week_plan, enc.risks);
+      reportId = result.lastInsertRowid;
+    }
+    const saved = getWeeklyReportRecord(reportId);
+    if (!existing) {
+      replaceContentShares(
+        'weekly_report',
+        reportId,
+        Array.isArray(req.body?.shares) ? req.body.shares : getDefaultDocumentShares(),
+        req.user.id,
+      );
+    }
+    recordContentRevisionChange({
+      entityType: 'weekly_report',
+      entityId: reportId,
+      before: buildWeeklyReportRevisionSnapshot(existing),
+      after: buildWeeklyReportRevisionSnapshot(saved),
+      action: req.body?.revision_action === 'manual_save' ? 'manual_save' : (existing ? 'save' : 'create'),
+      userId: req.user.id,
+    });
+    return res.json(serializeWeeklyReportRecord(saved, req.user));
+  } catch (error) {
+    if (/too long|packet|max_allowed_packet|data size/i.test(String(error?.message || ''))) {
+      return res.status(413).json({ error: '周报内容过大，服务端存储列或请求大小配置不足' });
+    }
+    throw error;
   }
+});
+
+app.get('/api/weekly-reports/:id/shares', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canAccessWeeklyReport(req.user, report)) {
+    return res.status(403).json({ error: '无权限查看该周报' });
+  }
+  return res.json(getContentShares('weekly_report', report.id));
+});
+
+app.put('/api/weekly-reports/:id/shares', canWrite, (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canEditWeeklyReport(req.user, report)) {
+    return res.status(403).json({ error: '无权调整该周报共享范围' });
+  }
+  const shares = replaceContentShares(
+    'weekly_report',
+    report.id,
+    req.body?.shares || [],
+    req.user.id,
+  );
+  return res.json({ success: true, shares });
 });
 
 // 删除周报
@@ -18588,6 +19422,8 @@ app.delete('/api/weekly-reports/:id', (req, res) => {
     return res.status(403).json({ error: '仅管理员可删除' });
   }
 
+  db.prepare("DELETE FROM content_revisions WHERE entity_type = 'weekly_report' AND entity_id = ?").run(id);
+  db.prepare("DELETE FROM content_shares WHERE entity_type = 'weekly_report' AND entity_id = ?").run(id);
   db.prepare('DELETE FROM weekly_reports WHERE id = ?').run(id);
   res.json({ success: true });
 });
@@ -18785,57 +19621,17 @@ app.delete('/api/leads/:id', (req, res) => {
 });
 
 // =========== 产品资产 API ===========
-function applyProductAssetVisibility(q, params, userId, role) {
-  if (role === 'member') {
-    const teamIds = getUserTeamIds(userId);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...teamIds, ...crossTeams])];
+function canAccessProductAssetsMenu(user) {
+  if (!user) return false;
+  if (isAdmin(user.role)) return true;
+  return getUserMenuPerms(user.id).includes('/product-assets');
+}
 
-    if (allTeamIds.length > 0) {
-      const visibleMembers = getUsersByTeamIds(allTeamIds);
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?';
-      params.push(userId, userId);
-      if (visibleMembers.length > 0) {
-        q += ' OR pa.owner_id IN (' + visibleMembers.map(() => '?').join(',') + ') OR pa.created_by IN (' + visibleMembers.map(() => '?').join(',') + ')';
-        params.push(...visibleMembers, ...visibleMembers);
-      }
-      q += ')';
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
-
-    if (allTeamIds.length) {
-      const members = getUsersByTeamIds(allTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      } else {
-        q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-        params.push(userId, userId);
-      }
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'sales_director') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      }
-    }
+function requireProductAssetsMenu(req, res, next) {
+  if (!canAccessProductAssetsMenu(req.user)) {
+    return res.status(403).json({ error: '无产品资产菜单权限' });
   }
-
-  return q;
+  next();
 }
 
 function getReductionSourceInfo(reductionId) {
@@ -19119,9 +19915,8 @@ app.delete('/api/company-subject-attachments/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/product-assets', (req, res) => {
+app.get('/api/product-assets', requireProductAssetsMenu, (req, res) => {
   const { budget_type, platform, launch_status, owner_id, has_reduction, reduction_status, company_entity, company_subject_id, group_name, appid } = req.query;
-  const { id: userId, role } = req.user;
 
   let q = `
     SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name,
@@ -19134,7 +19929,6 @@ app.get('/api/product-assets', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
-  q = applyProductAssetVisibility(q, params, userId, role);
 
   if (budget_type) { q += ' AND pa.budget_type = ?'; params.push(budget_type); }
   if (platform) { q += ' AND pa.platform = ?'; params.push(platform); }
@@ -19178,7 +19972,7 @@ app.get('/api/product-assets', (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/product-assets/:id', (req, res) => {
+app.get('/api/product-assets/:id', requireProductAssetsMenu, (req, res) => {
   const { id } = req.params;
   const asset = db.prepare(`
     SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name
@@ -19215,7 +20009,7 @@ app.get('/api/product-assets/:id', (req, res) => {
   res.json({ ...decryptRow('product_assets', asset), reductions: decodedReductions });
 });
 
-app.post('/api/product-assets', (req, res) => {
+app.post('/api/product-assets', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id: userId } = req.user;
   const payload = parseProductAssetPayload(req.body);
   if (payload.error) return res.status(400).json({ error: payload.error });
@@ -19248,7 +20042,7 @@ app.post('/api/product-assets', (req, res) => {
   res.json({ id: result.lastInsertRowid });
 });
 
-app.put('/api/product-assets/:id', (req, res) => {
+app.put('/api/product-assets/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT id FROM product_assets WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '产品资产不存在' });
@@ -19623,7 +20417,7 @@ function updateImportedProductAsset(assetId, patch) {
   return true;
 }
 
-app.post('/api/product-assets/import/preview', (req, res) => {
+app.post('/api/product-assets/import/preview', requireProductAssetsMenu, canWrite, (req, res) => {
   const rows = getProductAssetImportRows(req.body);
   if (!Array.isArray(rows) || rows.length === 0) {
     return res.status(400).json({ error: '数据为空' });
@@ -19637,7 +20431,7 @@ app.post('/api/product-assets/import/preview', (req, res) => {
   });
 });
 
-app.post('/api/product-assets/import', (req, res) => {
+app.post('/api/product-assets/import', requireProductAssetsMenu, canWrite, (req, res) => {
   const rows = getProductAssetImportRows(req.body);
   if (!Array.isArray(rows) || rows.length === 0) {
     return res.status(400).json({ error: '数据为空' });
@@ -19697,14 +20491,14 @@ app.post('/api/product-assets/import', (req, res) => {
   res.json(result);
 });
 
-app.delete('/api/product-assets/:id', (req, res) => {
+app.delete('/api/product-assets/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   db.prepare('DELETE FROM product_asset_reductions WHERE asset_id = ?').run(id);
   db.prepare('DELETE FROM product_assets WHERE id = ?').run(id);
   res.json({ success: true });
 });
 
-app.post('/api/product-assets/:assetId/reductions', (req, res) => {
+app.post('/api/product-assets/:assetId/reductions', requireProductAssetsMenu, canWrite, (req, res) => {
   const { assetId } = req.params;
   const {
     reduction_date, upstream, before_budget, after_budget, reduction_amount,
@@ -19741,7 +20535,7 @@ app.post('/api/product-assets/:assetId/reductions', (req, res) => {
   res.json({ id: result.lastInsertRowid });
 });
 
-app.put('/api/product-asset-reductions/:id', (req, res) => {
+app.put('/api/product-asset-reductions/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   const {
     reduction_date, upstream, before_budget, after_budget, reduction_amount,
@@ -19786,7 +20580,7 @@ app.put('/api/product-asset-reductions/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/product-asset-reductions/:id', (req, res) => {
+app.delete('/api/product-asset-reductions/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT asset_id FROM product_asset_reductions WHERE id = ?').get(id);
   db.prepare('DELETE FROM product_asset_reductions WHERE id = ?').run(id);
@@ -19794,7 +20588,7 @@ app.delete('/api/product-asset-reductions/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/product-asset-reductions/simple', (req, res) => {
+app.get('/api/product-asset-reductions/simple', requireProductAssetsMenu, (req, res) => {
   const rows = db.prepare(`
     SELECT r.id, r.reduction_date, r.reason_type, r.status, pa.app_name, pa.budget_type
     FROM product_asset_reductions r
@@ -20735,6 +21529,45 @@ function serializeOperationalDecision(row) {
   };
 }
 
+function buildOperationalSectionRevisionSnapshot(row) {
+  if (!row) return null;
+  return {
+    content: parseJsonSafe(row.content_json, null),
+    status: row.status || 'draft',
+    submitted_by: row.submitted_by || null,
+    submitted_at: row.submitted_at || null,
+  };
+}
+
+function buildOperationalAgendaRevisionSnapshot(row) {
+  if (!row) return null;
+  return {
+    agenda: parseJsonSafe(row.agenda_json, null),
+    source_hash: row.source_hash || null,
+    model_provider: row.model_provider || null,
+    model_name: row.model_name || null,
+    prompt_version: row.prompt_version || null,
+    safety_scan_status: row.safety_scan_status || null,
+  };
+}
+
+function buildOperationalDecisionRevisionSnapshot(row) {
+  if (!row) return null;
+  return {
+    decision: parseJsonSafe(row.decision_json, null),
+    status: row.status || 'draft',
+  };
+}
+
+function touchOperationalMeeting(meetingId, userId, updatedAt = new Date().toISOString()) {
+  db.prepare(`
+    UPDATE operational_meetings
+    SET updated_by = ?, updated_at = ?
+    WHERE id = ?
+  `).run(Number(userId) || null, updatedAt, Number(meetingId));
+  return updatedAt;
+}
+
 function isPrivilegedIdentity(user) {
   return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role)));
 }
@@ -21025,8 +21858,7 @@ function refreshOperationalMeetingStatuses(meetingId) {
     SET status = ?,
         brief_status = ?,
         agenda_status = ?,
-        decision_status = ?,
-        updated_at = CURRENT_TIMESTAMP
+        decision_status = ?
     WHERE id = ?
   `).run(status, briefStatus, agendaStatus, decisionStatus, id);
 }
@@ -21651,6 +22483,21 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
   const section = getOperationalSectionForAccess(req.params.sectionId, req.user);
   if (!section) return res.status(404).json({ error: '准备块不存在' });
   if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权编辑此准备块' });
+  const baseUpdatedAt = String(req.body?.base_updated_at || '');
+  if (baseUpdatedAt && baseUpdatedAt !== String(section.updated_at || '')) {
+    return res.status(409).json({
+      error: '准备内容已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: {
+        id: Number(section.id),
+        content: parseJsonSafe(section.content_json, null),
+        status: section.status || 'draft',
+        submitted_at: section.submitted_at || null,
+        updated_at: section.updated_at,
+        updated_by: section.updated_by || null,
+      },
+    });
+  }
   let contentJson;
   try {
     contentJson = stringifyOperationalMeetingContent(req.body?.content, '准备内容');
@@ -21666,6 +22513,7 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
   const nextStatus = shouldResetSubmission ? 'draft' : section.status;
   const nextSubmittedBy = shouldResetSubmission ? null : section.submitted_by;
   const nextSubmittedAt = shouldResetSubmission ? null : section.submitted_at;
+  const updatedAt = new Date().toISOString();
   db.prepare(`
     UPDATE operational_meeting_sections
     SET content_json = ?,
@@ -21674,7 +22522,7 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
         submitted_by = ?,
         submitted_at = ?,
         updated_by = ?,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = ?
     WHERE id = ?
   `).run(
     contentJson,
@@ -21682,14 +22530,28 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
     nextSubmittedBy,
     nextSubmittedAt,
     req.user.id,
+    updatedAt,
     section.id,
   );
+  const updatedSection = db.prepare('SELECT * FROM operational_meeting_sections WHERE id = ?').get(section.id);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: section.meeting_id,
+    scopeKey: `section:${section.id}`,
+    before: buildOperationalSectionRevisionSnapshot(section),
+    after: buildOperationalSectionRevisionSnapshot(updatedSection),
+    action: 'save',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(section.meeting_id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(section.meeting_id);
   res.json({
     success: true,
     status: nextStatus,
     submitted_at: nextSubmittedAt,
     submission_changed: submissionChanged ? 1 : 0,
+    updated_at: updatedAt,
+    updated_by: req.user.id,
   });
 });
 
@@ -21702,17 +22564,29 @@ app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperation
   if (!operationalPreparationCanSubmit(preparationContent, defaultQuestions)) {
     return res.status(400).json({ error: '请填写好内容再提交' });
   }
+  const updatedAt = new Date().toISOString();
   db.prepare(`
     UPDATE operational_meeting_sections
     SET status = 'submitted',
         submitted_by = ?,
-        submitted_at = CURRENT_TIMESTAMP,
+        submitted_at = ?,
         updated_by = ?,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = ?
     WHERE id = ?
-  `).run(req.user.id, req.user.id, section.id);
+  `).run(req.user.id, updatedAt, req.user.id, updatedAt, section.id);
+  const submittedSection = db.prepare('SELECT * FROM operational_meeting_sections WHERE id = ?').get(section.id);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: section.meeting_id,
+    scopeKey: `section:${section.id}`,
+    before: buildOperationalSectionRevisionSnapshot(section),
+    after: buildOperationalSectionRevisionSnapshot(submittedSection),
+    action: 'submit',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(section.meeting_id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(section.meeting_id);
-  res.json({ success: true });
+  res.json({ success: true, updated_at: updatedAt });
 });
 
 app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeetingAccess, canWrite, async (req, res) => {
@@ -21743,13 +22617,24 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
   if (!canEditOperationalAgenda(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '无权编辑本周会议提纲' });
   }
+  const existingAgenda = db.prepare('SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id) || null;
+  const baseUpdatedAt = String(req.body?.base_updated_at || '');
+  const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
+  if (existingAgenda && hasBaseUpdatedAt && baseUpdatedAt !== String(existingAgenda.updated_at || '')) {
+    return res.status(409).json({
+      error: '会议提纲已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeOperationalAgenda(existingAgenda),
+    });
+  }
   let agendaJson;
   try {
     agendaJson = stringifyOperationalMeetingContent(req.body?.agenda, '会议提纲');
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
-  let agendaId = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id)?.id;
+  const updatedAt = new Date().toISOString();
+  let agendaId = existingAgenda?.id;
   if (agendaId) {
     db.prepare(`
       UPDATE operational_meeting_agendas
@@ -21761,8 +22646,8 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
           prompt_version = ?,
           safety_scan_status = ?,
           generated_by = ?,
-          generated_at = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP
+          generated_at = ?,
+          updated_at = ?
       WHERE id = ?
     `).run(
       agendaJson,
@@ -21772,14 +22657,16 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
       req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
       req.body?.safety_scan_status || 'passed',
       req.user.id,
+      updatedAt,
+      updatedAt,
       agendaId,
     );
   } else {
     const result = db.prepare(`
       INSERT INTO operational_meeting_agendas (
         meeting_id, agenda_json, crypto_version, source_hash,
-        model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at
-      ) VALUES (?, ?, 'none', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at, updated_at
+      ) VALUES (?, ?, 'none', ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       meeting.id,
       agendaJson,
@@ -21789,11 +22676,24 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
       req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
       req.body?.safety_scan_status || 'passed',
       req.user.id,
+      updatedAt,
+      updatedAt,
     );
     agendaId = result.lastInsertRowid;
   }
+  const savedAgenda = db.prepare('SELECT * FROM operational_meeting_agendas WHERE id = ?').get(agendaId);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: meeting.id,
+    scopeKey: 'agenda',
+    before: buildOperationalAgendaRevisionSnapshot(existingAgenda),
+    after: buildOperationalAgendaRevisionSnapshot(savedAgenda),
+    action: req.body?.revision_action === 'generate' ? 'generate' : 'save',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(meeting.id);
-  res.json({ success: true, id: agendaId });
+  res.json({ success: true, id: agendaId, updated_at: updatedAt, updated_by: req.user.id });
 });
 
 app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAccess, canWrite, (req, res) => {
@@ -21802,13 +22702,24 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
   if (!canEditOperationalDecision(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '无权编辑本周会议结论' });
   }
+  const existingDecision = db.prepare('SELECT * FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id) || null;
+  const baseUpdatedAt = String(req.body?.base_updated_at || '');
+  const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
+  if (existingDecision && hasBaseUpdatedAt && baseUpdatedAt !== String(existingDecision.updated_at || '')) {
+    return res.status(409).json({
+      error: '会议结论已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeOperationalDecision(existingDecision),
+    });
+  }
   let decisionJson;
   try {
     decisionJson = stringifyOperationalMeetingContent(req.body?.decision, '会议结论');
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
-  let decisionId = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id)?.id;
+  const updatedAt = new Date().toISOString();
+  let decisionId = existingDecision?.id;
   if (decisionId) {
     db.prepare(`
       UPDATE operational_meeting_decisions
@@ -21816,25 +22727,163 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
           crypto_version = 'none',
           status = ?,
           updated_by = ?,
-          updated_at = CURRENT_TIMESTAMP
+          updated_at = ?
       WHERE id = ?
-    `).run(decisionJson, req.body?.status || 'saved', req.user.id, decisionId);
+    `).run(decisionJson, req.body?.status || 'saved', req.user.id, updatedAt, decisionId);
   } else {
     const result = db.prepare(`
       INSERT INTO operational_meeting_decisions (
-        meeting_id, decision_json, crypto_version, status, created_by, updated_by
-      ) VALUES (?, ?, 'none', ?, ?, ?)
+        meeting_id, decision_json, crypto_version, status, created_by, updated_by, updated_at
+      ) VALUES (?, ?, 'none', ?, ?, ?, ?)
     `).run(
       meeting.id,
       decisionJson,
       req.body?.status || 'saved',
       req.user.id,
       req.user.id,
+      updatedAt,
     );
     decisionId = result.lastInsertRowid;
   }
+  const savedDecision = db.prepare('SELECT * FROM operational_meeting_decisions WHERE id = ?').get(decisionId);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: meeting.id,
+    scopeKey: 'decision',
+    before: buildOperationalDecisionRevisionSnapshot(existingDecision),
+    after: buildOperationalDecisionRevisionSnapshot(savedDecision),
+    action: 'save',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(meeting.id);
-  res.json({ success: true, id: decisionId });
+  res.json({ success: true, id: decisionId, updated_at: updatedAt, updated_by: req.user.id });
+});
+
+function getOperationalHistoryScopeContext(meeting, user, scopeKey) {
+  if (scopeKey === 'agenda') {
+    const row = db.prepare('SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id) || null;
+    return {
+      row,
+      snapshot: buildOperationalAgendaRevisionSnapshot(row),
+      canView: true,
+      canRestore: canEditOperationalAgenda(user, meeting._accessParticipant),
+    };
+  }
+  if (scopeKey === 'decision') {
+    const row = db.prepare('SELECT * FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id) || null;
+    return {
+      row,
+      snapshot: buildOperationalDecisionRevisionSnapshot(row),
+      canView: true,
+      canRestore: canEditOperationalDecision(user, meeting._accessParticipant),
+    };
+  }
+  const sectionId = Number(String(scopeKey || '').match(/^section:(\d+)$/)?.[1]);
+  if (!sectionId) return null;
+  const row = db.prepare('SELECT * FROM operational_meeting_sections WHERE id = ? AND meeting_id = ?').get(sectionId, meeting.id);
+  if (!row) return null;
+  const participant = meeting._accessParticipant;
+  return {
+    row,
+    snapshot: buildOperationalSectionRevisionSnapshot(row),
+    canView: canViewOperationalPreparation(user, participant, row),
+    canRestore: canEditOperationalSection(user, { ...row, _accessParticipant: participant }),
+  };
+}
+
+app.get('/api/operational-meetings/:id/history', requireOperationalMeetingAccess, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  const scopeKey = String(req.query?.scope || 'agenda');
+  const context = getOperationalHistoryScopeContext(meeting, req.user, scopeKey);
+  if (!context || !context.canView) return res.status(403).json({ error: '无权查看该内容历史' });
+  if (context.snapshot) {
+    insertContentRevision({
+      entityType: 'operational_meeting',
+      entityId: meeting.id,
+      scopeKey,
+      snapshot: context.snapshot,
+      action: 'baseline',
+      userId: context.row?.updated_by || context.row?.generated_by || meeting.created_by,
+    });
+  }
+  return res.json({
+    scope: scopeKey,
+    can_restore: context.canRestore ? 1 : 0,
+    revisions: listContentRevisions('operational_meeting', meeting.id, scopeKey),
+  });
+});
+
+app.post('/api/operational-meetings/:id/history/:revisionId/restore', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  const scopeKey = String(req.body?.scope || 'agenda');
+  const context = getOperationalHistoryScopeContext(meeting, req.user, scopeKey);
+  if (!context || !context.canRestore) return res.status(403).json({ error: '无权恢复该内容版本' });
+  const revision = getContentRevision(req.params.revisionId, 'operational_meeting', meeting.id, scopeKey);
+  if (!revision?.snapshot) return res.status(404).json({ error: '历史版本不存在' });
+  const snapshot = revision.snapshot;
+  const updatedAt = new Date().toISOString();
+
+  if (scopeKey === 'agenda') {
+    if (!context.row) return res.status(404).json({ error: '会议提纲不存在' });
+    db.prepare(`
+      UPDATE operational_meeting_agendas
+      SET agenda_json = ?, source_hash = ?, model_provider = ?, model_name = ?,
+        prompt_version = ?, safety_scan_status = ?, generated_by = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      stringifyOperationalMeetingContent(snapshot.agenda, '会议提纲'),
+      snapshot.source_hash || null,
+      snapshot.model_provider || 'restored',
+      snapshot.model_name || null,
+      snapshot.prompt_version || null,
+      snapshot.safety_scan_status || 'passed',
+      req.user.id,
+      updatedAt,
+      context.row.id,
+    );
+  } else if (scopeKey === 'decision') {
+    if (!context.row) return res.status(404).json({ error: '会议结论不存在' });
+    db.prepare(`
+      UPDATE operational_meeting_decisions
+      SET decision_json = ?, status = ?, updated_by = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      stringifyOperationalMeetingContent(snapshot.decision, '会议结论'),
+      snapshot.status || 'saved',
+      req.user.id,
+      updatedAt,
+      context.row.id,
+    );
+  } else {
+    db.prepare(`
+      UPDATE operational_meeting_sections
+      SET content_json = ?, status = 'draft', submitted_by = NULL, submitted_at = NULL,
+        updated_by = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      stringifyOperationalMeetingContent(snapshot.content, '准备内容'),
+      req.user.id,
+      updatedAt,
+      context.row.id,
+    );
+  }
+
+  const refreshedContext = getOperationalHistoryScopeContext(meeting, req.user, scopeKey);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: meeting.id,
+    scopeKey,
+    before: context.snapshot,
+    after: refreshedContext?.snapshot,
+    action: 'restore',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
+  refreshOperationalMeetingStatuses(meeting.id);
+  return res.json({ success: true, scope: scopeKey, updated_at: updatedAt });
 });
 
 // =========== 公司经营模块 API ===========
@@ -22379,6 +23428,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[startup] server listening elapsed_ms=${Date.now() - SERVER_STARTUP_STARTED_AT}`);
   console.log(`服务器启动在 http://localhost:${PORT}`);
   console.log(`局域网访问: http://[你的IP]:${PORT}`);
 });

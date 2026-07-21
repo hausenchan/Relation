@@ -44,6 +44,8 @@ const PAGE_TITLE_MAP = {
   '/dev-tasks': '需求',
   '/company-subjects': '主体管理',
   '/product-assets': '产品资产',
+  '/product-templates': '产品模版',
+  '/media-management': '媒体管理',
   '/documents': '文档中心',
   '/network-capture': '网络抓包',
   '/persons': '人脉管理',
@@ -373,6 +375,8 @@ import AiTrainingWorkbench from './pages/AiTrainingWorkbench';
 import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
 import ProductAssets from './pages/ProductAssets';
+import ProductTemplates from './pages/ProductTemplates';
+import MediaManagement from './pages/MediaManagement';
 import CompanySubjects from './pages/CompanySubjects';
 import Documents from './pages/Documents';
 import NetworkCapture from './pages/NetworkCapture';
@@ -392,9 +396,9 @@ const roleLabel = { admin: '管理员', leader: '组长', member: '成员', read
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
 
 // 路由守卫
-function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
+function PrivateRoute({ children, module, menuKey, executiveOnly, adminOnly }) {
   const location = useLocation();
-  const { user, loading, canAccessModule, isExecutive } = useAuth();
+  const { user, loading, canAccessModule, canAccessMenu, isExecutive } = useAuth();
   if (loading) return null;
   if (!user) {
     const redirectPath = getLocationPath(location);
@@ -421,6 +425,14 @@ function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
       <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🚫</div>
         <div>您没有访问该模块的权限，请联系管理员</div>
+      </div>
+    );
+  }
+  if (menuKey && !canAccessMenu(menuKey)) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🚫</div>
+        <div>您没有访问该菜单的权限，请联系管理员</div>
       </div>
     );
   }
@@ -767,6 +779,12 @@ function AppLayout() {
     },
     canAccessMenu('/product-assets') && {
       key: '/product-assets', icon: <AppstoreOutlined />, label: <Link to="/product-assets">产品资产</Link>,
+    },
+    canAccessMenu('/product-templates') && {
+      key: '/product-templates', icon: <FileTextOutlined />, label: <Link to="/product-templates">产品模版</Link>,
+    },
+    canAccessMenu('/media-management') && {
+      key: '/media-management', icon: <AppstoreOutlined />, label: <Link to="/media-management">媒体管理</Link>,
     },
     canAccessMenu('/documents') && {
       key: '/documents', icon: <FileTextOutlined />, label: <Link to="/documents">文档中心</Link>,
@@ -1223,7 +1241,9 @@ function AppLayout() {
             <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
             <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />
-            <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
+            <Route path="/product-assets" element={<PrivateRoute menuKey="/product-assets"><ProductAssets /></PrivateRoute>} />
+            <Route path="/product-templates" element={<PrivateRoute module="product_assets"><ProductTemplates /></PrivateRoute>} />
+            <Route path="/media-management" element={<PrivateRoute module="product_assets"><MediaManagement /></PrivateRoute>} />
             <Route path="/documents" element={<PrivateRoute><Documents /></PrivateRoute>} />
             <Route path="/network-capture" element={<PrivateRoute><NetworkCapture /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}

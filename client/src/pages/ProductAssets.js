@@ -11,6 +11,7 @@ import {
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { companySubjectsApi, productAssetsApi, usersApi } from '../api';
+import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 
 const { Text } = Typography;
@@ -214,6 +215,8 @@ export default function ProductAssets() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
   const navigate = useNavigate();
+  const { canWrite } = useAuth();
+  const canEditAssets = canWrite?.('product_assets');
   const [searchParams] = useSearchParams();
   const [rows, setRows] = useState([]);
   const [users, setUsers] = useState([]);
@@ -269,6 +272,10 @@ export default function ProductAssets() {
   }, []);
 
   const openCreateAsset = () => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     setEditingAsset(null);
     assetForm.resetFields();
     assetForm.setFieldsValue({ launch_status: 'not_launched' });
@@ -276,12 +283,20 @@ export default function ProductAssets() {
   };
 
   const openEditAsset = (record) => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     setEditingAsset(record);
     assetForm.setFieldsValue({ ...record, company_subject_id: record.company_subject_id || undefined });
     setAssetModalOpen(true);
   };
 
   const saveAsset = async () => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     try {
       const values = await assetForm.validateFields();
       if (editingAsset) {
@@ -315,6 +330,10 @@ export default function ProductAssets() {
   };
 
   const openCreateReduction = (asset = detailRecord) => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     setEditingReduction(null);
     reductionForm.resetFields();
     reductionForm.setFieldsValue({
@@ -326,6 +345,10 @@ export default function ProductAssets() {
   };
 
   const openEditReduction = (record) => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     setEditingReduction(record);
     reductionForm.setFieldsValue({
       ...record,
@@ -335,6 +358,10 @@ export default function ProductAssets() {
   };
 
   const saveReduction = async () => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     try {
       const values = await reductionForm.validateFields();
       const payload = {
@@ -358,6 +385,10 @@ export default function ProductAssets() {
   };
 
   const deleteAsset = (record) => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     Modal.confirm({
       title: '删除产品资产',
       content: `确定删除「${record.app_name}」吗？相关核减记录也会删除。`,
@@ -373,6 +404,10 @@ export default function ProductAssets() {
   };
 
   const deleteReduction = (record) => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     Modal.confirm({
       title: '删除核减记录',
       content: '确定删除这条核减记录吗？已关联的策略不会删除，但会失去来源对象。',
@@ -389,6 +424,10 @@ export default function ProductAssets() {
   };
 
   const createLinkedStrategy = (reduction) => {
+    if (!canEditAssets) {
+      message.warning('当前账号只能查看产品资产');
+      return;
+    }
     navigate(`/strategies?action=create&source_type=asset_reduction&source_id=${reduction.id}`);
   };
 
@@ -654,8 +693,12 @@ export default function ProductAssets() {
       render: (_, record) => (
         <Space size="small">
           <Button type="link" size="small" onClick={() => openDetail(record)}>详情</Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditAsset(record)}>编辑</Button>
-          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteAsset(record)}>删除</Button>
+          {canEditAssets && (
+            <>
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditAsset(record)}>编辑</Button>
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteAsset(record)}>删除</Button>
+            </>
+          )}
         </Space>
       ),
     },
@@ -688,7 +731,9 @@ export default function ProductAssets() {
           <Text type="secondary">负责人：{record.owner_name || '-'}</Text>
           <Space size="small" wrap>
             <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); openDetail(record); }}>详情</Button>
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditAsset(record); }}>编辑</Button>
+            {canEditAssets && (
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditAsset(record); }}>编辑</Button>
+            )}
           </Space>
         </Space>
       </div>
@@ -709,9 +754,15 @@ export default function ProductAssets() {
       width: 260,
       render: (_, record) => (
         <Space size="small" wrap>
-          <Button type="link" size="small" icon={<BranchesOutlined />} onClick={() => createLinkedStrategy(record)}>新增关联策略</Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditReduction(record)}>编辑</Button>
-          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteReduction(record)}>删除</Button>
+          {canEditAssets ? (
+            <>
+              <Button type="link" size="small" icon={<BranchesOutlined />} onClick={() => createLinkedStrategy(record)}>新增关联策略</Button>
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditReduction(record)}>编辑</Button>
+              <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteReduction(record)}>删除</Button>
+            </>
+          ) : (
+            <Text type="secondary">只读</Text>
+          )}
         </Space>
       ),
     },
@@ -782,10 +833,14 @@ export default function ProductAssets() {
           </Space>
           <Space wrap style={{ width: isMobile ? '100%' : undefined }}>
             <Button icon={<DownloadOutlined />} onClick={downloadTemplate} style={{ width: isMobile ? '100%' : undefined }}>下载模板</Button>
-            <Upload accept=".csv" showUploadList={false} beforeUpload={importCsv}>
-              <Button icon={<UploadOutlined />} style={{ width: isMobile ? '100%' : undefined }}>CSV 导入</Button>
-            </Upload>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateAsset} style={{ width: isMobile ? '100%' : undefined }}>新增产品资产</Button>
+            {canEditAssets && (
+              <>
+                <Upload accept=".csv" showUploadList={false} beforeUpload={importCsv}>
+                  <Button icon={<UploadOutlined />} style={{ width: isMobile ? '100%' : undefined }}>CSV 导入</Button>
+                </Upload>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateAsset} style={{ width: isMobile ? '100%' : undefined }}>新增产品资产</Button>
+              </>
+            )}
           </Space>
         </div>
 
@@ -907,7 +962,9 @@ export default function ProductAssets() {
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <Text strong><WarningOutlined /> 核减记录</Text>
-                <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openCreateReduction(detailRecord)}>新增核减</Button>
+                {canEditAssets && (
+                  <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openCreateReduction(detailRecord)}>新增核减</Button>
+                )}
               </div>
               {isMobile ? (
                 <List
@@ -925,10 +982,12 @@ export default function ProductAssets() {
                           <Text>原因：{reductionReasonMap[record.reason_type] || record.reason_type}</Text>
                           <Text>处罚对象：{punishmentObjectMap[record.punishment_object] || record.punishment_object || '-'}</Text>
                           <Text type="secondary">关联策略：{record.strategy_count || 0}</Text>
-                          <Space wrap>
-                            <Button type="link" size="small" icon={<BranchesOutlined />} onClick={() => createLinkedStrategy(record)}>新增关联策略</Button>
-                            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditReduction(record)}>编辑</Button>
-                          </Space>
+                          {canEditAssets && (
+                            <Space wrap>
+                              <Button type="link" size="small" icon={<BranchesOutlined />} onClick={() => createLinkedStrategy(record)}>新增关联策略</Button>
+                              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditReduction(record)}>编辑</Button>
+                            </Space>
+                          )}
                         </Space>
                       </div>
                     </List.Item>

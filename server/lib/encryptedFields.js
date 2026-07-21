@@ -70,6 +70,14 @@ module.exports = {
     indexed: [],
   },
 
+  media_assets: {
+    fields: [
+      'media_name', 'domain_name', 'version_number', 'latest_features', 'uv_scale',
+      'sdk_ui_appid', 'task_config_requirements', 'special_entry_info', 'other_notes',
+    ],
+    indexed: [],
+  },
+
   company_subjects: {
     fields: ['group_name', 'company_entity', 'legal_person', 'legal_person_phone', 'email', 'remark'],
     indexed: [],
@@ -123,6 +131,11 @@ module.exports = {
   // 周报、经营周报：高敏，重点保护
   weekly_reports: {
     fields: ['completed', 'next_week_plan', 'risks'],
+    indexed: [],
+  },
+
+  content_revisions: {
+    fields: ['snapshot_json'],
     indexed: [],
   },
 

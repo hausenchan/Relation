@@ -167,6 +167,15 @@
 
 - 主体管理：`/company-subjects`
 - 产品资产：`/product-assets`
+- 产品模版：`/product-templates`
+- 媒体管理：`/media-management`
+
+媒体管理权限口径：
+
+- 管理员及老板身份可直接访问；其他用户需要 `/media-management` 菜单权限。
+- `guest` 还必须具备 `product_assets.can_read=1`；`readonly` 和 `guest` 不可写。
+- 每条媒体绑定一篇文档中心文档，列表、详情、编辑和删除继续按该文档的创建人、共享人和管理员权限判断。
+- 负责人会自动加入关联文档共享人；创建人或管理员可删除媒体，普通共享协作者可编辑但不可删除。
 
 ### 7.5 商务协作
 

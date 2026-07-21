@@ -3101,7 +3101,7 @@ function sortEditRecordsLatestFirst(records = []) {
   });
 }
 
-export default function Documents() {
+export default function Documents({ embedded = false, embeddedDocumentId = null }) {
   const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -3565,12 +3565,14 @@ export default function Documents() {
     ? getFolderInnerPathLabel(selectedDocFolder, folderPathMap)
     : (selectedDoc?.folder_name || '');
   const deepLinkedDocId = useMemo(() => {
+    const embeddedId = Number(embeddedDocumentId);
+    if (embedded && Number.isInteger(embeddedId) && embeddedId > 0) return embeddedId;
     return getDocumentIdFromSearch(searchParams);
-  }, [searchParams]);
+  }, [embedded, embeddedDocumentId, searchParams]);
   const mobileHasEditorTarget = Boolean(selectedDocId || selectedDoc || shareLinkError);
   const showMobileEditor = isMobile && mobileHasEditorTarget && !mobileLibraryVisible;
-  const showDocumentLibrary = !isMobile || !showMobileEditor;
-  const showDocumentEditor = !isMobile || showMobileEditor;
+  const showDocumentLibrary = !embedded && (!isMobile || !showMobileEditor);
+  const showDocumentEditor = embedded || !isMobile || showMobileEditor;
   liveEditorSnapshotRef.current = {
     title: editorTitle,
     blocks: editorBlocks,
@@ -3580,6 +3582,7 @@ export default function Documents() {
   const getDocTabId = (id) => Number(id);
 
   const replaceDocumentLinkParam = (docId) => {
+    if (embedded) return;
     const nextParams = new URLSearchParams(searchParams);
     documentLinkParamKeys.forEach(key => nextParams.delete(key));
     const normalizedId = getDocTabId(docId);
@@ -4003,7 +4006,7 @@ export default function Documents() {
     if (!docId) return;
     if (!options.keepContextMenu) closeDocContextMenu();
     if (isMobile) setMobileLibraryVisible(false);
-    if (getDocumentIdFromSearch(searchParams) !== docId) {
+    if (!embedded && getDocumentIdFromSearch(searchParams) !== docId) {
       replaceDocumentLinkParam(docId);
     }
     persistActiveDocTabState();
@@ -4212,7 +4215,7 @@ export default function Documents() {
   }, [globalSearchOpen, globalSearchKeyword, globalSearchTitleOnly, globalSearchExact]);
 
   useEffect(() => {
-    const docId = getDocumentIdFromSearch(searchParams);
+    const docId = deepLinkedDocId;
     if (!docId) {
       autoOpenedDocIdRef.current = null;
       return;
@@ -4224,7 +4227,7 @@ export default function Documents() {
     if (autoOpenedDocIdRef.current === docId) return;
     autoOpenedDocIdRef.current = docId;
     openDocumentTab(docId);
-  }, [searchParams, selectedDocId]);
+  }, [deepLinkedDocId, selectedDocId]);
 
   useEffect(() => {
     const normalizedSelectedDocId = getDocTabId(selectedDocId);
@@ -4653,8 +4656,10 @@ export default function Documents() {
         .map(user => Number(user.id))
         .filter(Boolean);
     }
-    createForm.setFieldsValue(initialValues);
     setCreateOpen(true);
+    window.setTimeout(() => {
+      createForm.setFieldsValue(initialValues);
+    }, 0);
   };
 
   const validateDocumentImportFile = (file) => {
@@ -14251,11 +14256,11 @@ export default function Documents() {
   return (
     <div style={{
       display: 'flex',
-      gap: isMobile ? 0 : 16,
-      height: isMobile ? 'auto' : 'calc(100vh - 120px)',
-      minHeight: isMobile ? 'calc(100vh - 80px)' : 640,
+      gap: embedded || isMobile ? 0 : 16,
+      height: embedded ? 'min(780px, calc(100vh - 180px))' : (isMobile ? 'auto' : 'calc(100vh - 120px)'),
+      minHeight: embedded ? 620 : (isMobile ? 'calc(100vh - 80px)' : 640),
       flexDirection: 'row',
-      overflow: isMobile ? 'visible' : 'hidden',
+      overflow: embedded || !isMobile ? 'hidden' : 'visible',
     }}>
       {showDocumentLibrary && (
       <aside style={{
@@ -14590,7 +14595,7 @@ export default function Documents() {
 
       {showDocumentEditor && (
       <main style={{ flex: 1, minWidth: 0, width: '100%', overflow: isMobile ? 'visible' : 'auto' }}>
-        {!isMobile && renderDocTabs()}
+        {!isMobile && !embedded && renderDocTabs()}
         {!selectedDoc ? (
           <div style={{
             minHeight: isMobile ? 'calc(100vh - 96px)' : '100%',
@@ -14642,7 +14647,7 @@ export default function Documents() {
                   borderBottom: '1px solid #eef2f7',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                    <Button type="text" icon={<LeftOutlined />} onClick={backToMobileLibrary} aria-label="返回文档列表" style={{ flex: '0 0 auto' }} />
+                    {!embedded && <Button type="text" icon={<LeftOutlined />} onClick={backToMobileLibrary} aria-label="返回文档列表" style={{ flex: '0 0 auto' }} />}
                     <Text strong ellipsis style={{ flex: 1, minWidth: 0 }}>
                       {editorTitle || selectedDoc.title || '未命名文档'}
                     </Text>
@@ -14738,22 +14743,28 @@ export default function Documents() {
                 </Space>
               </div>}
 
-              <Input
-                value={editorTitle}
-                onChange={event => {
-                  pushEditorUndoSnapshot();
-                  setEditorTitle(event.target.value);
-                }}
-                placeholder="文档标题"
-                style={{
-                  border: 'none',
-                  boxShadow: 'none',
-                  fontSize: isMobile ? 24 : 30,
-                  fontWeight: 700,
-                  padding: isMobile ? '4px 0 8px' : '8px 0',
-                  marginBottom: isMobile ? 6 : 8,
-                }}
-              />
+              {embedded || String(selectedDoc.doc_type || '').toUpperCase() === 'MEDIA' ? (
+                <Title level={2} style={{ margin: isMobile ? '4px 0 12px' : '8px 0 16px' }}>
+                  {editorTitle || selectedDoc.title || '未命名文档'}
+                </Title>
+              ) : (
+                <Input
+                  value={editorTitle}
+                  onChange={event => {
+                    pushEditorUndoSnapshot();
+                    setEditorTitle(event.target.value);
+                  }}
+                  placeholder="文档标题"
+                  style={{
+                    border: 'none',
+                    boxShadow: 'none',
+                    fontSize: isMobile ? 24 : 30,
+                    fontWeight: 700,
+                    padding: isMobile ? '4px 0 8px' : '8px 0',
+                    marginBottom: isMobile ? 6 : 8,
+                  }}
+                />
+              )}
 
               <div style={{
                 display: 'flex',

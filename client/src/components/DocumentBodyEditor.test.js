@@ -65,6 +65,13 @@ function dispatchCopy(target, clipboardData) {
   return event;
 }
 
+function dispatchPaste(target, clipboardData) {
+  const event = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'clipboardData', { value: clipboardData });
+  target.dispatchEvent(event);
+  return event;
+}
+
 describe('DocumentBodyEditor block copy', () => {
   let container;
   let root;
@@ -282,5 +289,135 @@ describe('DocumentBodyEditor block copy', () => {
     });
     expect(editorRegions[0].querySelectorAll('[data-copy-selected="true"]')).toHaveLength(0);
     expect(editorRegions[1].querySelectorAll('[data-copy-selected="true"]')).toHaveLength(3);
+  });
+
+  test('pastes multi-line inline content into the current block without creating extra blocks', () => {
+    const onChange = jest.fn();
+    const inlineValue = {
+      format: DOCUMENT_BODY_FORMAT,
+      blocks: [{ id: 'target', type: 'paragraph', content: '已有内容', meta: {} }],
+    };
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={inlineValue} onChange={onChange} />);
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    inlineEditor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(inlineEditor);
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const clipboardData = createClipboardData();
+    clipboardData.setData('text/html', '<div>第一行</div><div><strong>第二行</strong></div>');
+    clipboardData.setData('text/plain', '第一行\n第二行');
+
+    let pasteEvent;
+    flushSync(() => {
+      pasteEvent = dispatchPaste(inlineEditor, clipboardData);
+    });
+
+    expect(pasteEvent.defaultPrevented).toBe(true);
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks).toHaveLength(1);
+    expect(nextValue.blocks[0].content).toContain('已有内容第一行<br><strong>第二行</strong>');
+  });
+
+  test('Backspace at the start of a block merges it into the previous block', () => {
+    const onChange = jest.fn();
+    const mergeValue = {
+      format: DOCUMENT_BODY_FORMAT,
+      blocks: [
+        { id: 'previous', type: 'paragraph', content: '上一行', meta: {} },
+        { id: 'current', type: 'paragraph', content: '<strong>下一行</strong>', meta: {} },
+      ],
+    };
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={mergeValue} onChange={onChange} />);
+    });
+    const currentEditor = container.querySelector('[data-document-body-block-id="current"] [contenteditable="true"]');
+    currentEditor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(currentEditor);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    let backspaceEvent;
+    flushSync(() => {
+      backspaceEvent = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
+      currentEditor.dispatchEvent(backspaceEvent);
+    });
+
+    expect(backspaceEvent.defaultPrevented).toBe(true);
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks).toHaveLength(1);
+    expect(nextValue.blocks[0]).toMatchObject({ id: 'previous', content: '上一行<strong>下一行</strong>' });
+  });
+
+  test('Backspace inside a non-empty block deterministically deletes one character', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={{ blocks: [{ id: 'line', type: 'paragraph', content: '三个字', meta: {} }] }} onChange={onChange} />);
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    inlineEditor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(inlineEditor.firstChild, 2);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const event = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
+
+    flushSync(() => inlineEditor.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onChange.mock.calls.at(-1)[0].blocks[0].content).toBe('三字');
+  });
+
+  test('Backspace at the start of an inline line removes only the line break', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={{ blocks: [{ id: 'line', type: 'paragraph', content: '上一行<br>下一行', meta: {} }] }} onChange={onChange} />);
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    const textNodes = [...inlineEditor.childNodes].filter(node => node.nodeType === 3);
+    expect(textNodes).toHaveLength(2);
+    inlineEditor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(textNodes[1], 0);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const event = new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true, cancelable: true });
+
+    flushSync(() => inlineEditor.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onChange.mock.calls.at(-1)[0].blocks[0].content).toBe('上一行下一行');
+  });
+
+  test('Delete inside a non-empty block deterministically deletes one forward character', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={{ blocks: [{ id: 'line', type: 'paragraph', content: '三个字', meta: {} }] }} onChange={onChange} />);
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    inlineEditor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(inlineEditor.firstChild, 1);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const event = new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true });
+
+    flushSync(() => inlineEditor.dispatchEvent(event));
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(onChange.mock.calls.at(-1)[0].blocks[0].content).toBe('三字');
   });
 });
