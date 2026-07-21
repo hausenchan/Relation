@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Descriptions,
@@ -13,20 +14,25 @@ import {
   List,
   Modal,
   Popconfirm,
+  Popover,
   Row,
+  Segmented,
   Select,
   Space,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
 import {
   AppstoreOutlined,
+  ColumnHeightOutlined,
   DeleteOutlined,
   EditOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { mediaManagementApi, usersApi } from '../api';
 import Documents from './Documents';
@@ -51,6 +57,48 @@ const { Text, Title } = Typography;
 const { TextArea } = Input;
 const { useBreakpoint } = Grid;
 
+const visibleColumnsStorageKey = 'media-management-visible-columns-v2';
+const densityStorageKey = 'media-management-table-density';
+
+const requiredColumnKeys = ['cid', 'media_name'];
+const defaultVisibleColumnKeys = [
+  'cid',
+  'media_name',
+  'importance',
+  'category',
+  'yyz_version',
+  'display_style',
+  'budget_types',
+  'integration_progress',
+  'owner_name',
+  'updated_at',
+  'launch_date',
+];
+
+const columnSettingOptions = [
+  { label: 'CID', value: 'cid', disabled: true },
+  { label: '媒体', value: 'media_name', disabled: true },
+  { label: '重要程度', value: 'importance' },
+  { label: '类目', value: 'category' },
+  { label: 'YYZ版本', value: 'yyz_version' },
+  { label: '展示样式', value: 'display_style' },
+  { label: '预算', value: 'budget_types' },
+  { label: '对接进度', value: 'integration_progress' },
+  { label: '负责人', value: 'owner_name' },
+  { label: '更新时间', value: 'updated_at' },
+  { label: '上线时间', value: 'launch_date' },
+  { label: '域名', value: 'domain_name' },
+  { label: '版本号', value: 'version_number' },
+  { label: '最新媒体发版时间', value: 'latest_release_date' },
+  { label: '最新支持功能', value: 'latest_features' },
+  { label: 'UV量级', value: 'uv_scale' },
+  { label: '鉴黄API', value: 'porn_api_status' },
+  { label: 'APPID-SDK UI版', value: 'sdk_ui_appid' },
+  { label: '任务配置要求', value: 'task_config_requirements' },
+  { label: '特殊入口信息', value: 'special_entry_info' },
+  { label: '其他特殊记录', value: 'other_notes' },
+];
+
 const initialFilters = {
   search: '',
   importance: '',
@@ -73,9 +121,28 @@ function renderEnumTag(group, value) {
   return <Tag color={meta.color || 'default'}>{meta.label}</Tag>;
 }
 
-function renderBudgetTags(values = []) {
+function renderBudgetTags(values = [], options = {}) {
   if (!values.length) return <Text type="secondary">-</Text>;
-  return values.map(value => <Tag key={value}>{getOptionMeta('budget_types', value).label}</Tag>);
+  const maxCount = options.maxCount || values.length;
+  const visibleValues = values.slice(0, maxCount);
+  const hiddenValues = values.slice(maxCount);
+  const content = (
+    <Space size={[4, 4]} wrap={options.wrap !== false} style={{ maxWidth: '100%', rowGap: 4 }}>
+      {visibleValues.map(value => <Tag key={value} style={{ marginInlineEnd: 0 }}>{getOptionMeta('budget_types', value).label}</Tag>)}
+      {hiddenValues.length > 0 && (
+        <Tag color="default" style={{ marginInlineEnd: 0 }}>
+          +{hiddenValues.length}
+        </Tag>
+      )}
+    </Space>
+  );
+
+  if (!hiddenValues.length) return content;
+  return (
+    <Tooltip title={values.map(value => getOptionMeta('budget_types', value).label).join('、')}>
+      {content}
+    </Tooltip>
+  );
 }
 
 function displayText(value) {
@@ -90,6 +157,32 @@ function renderCompactText(value) {
       {text}
     </Text>
   );
+}
+
+function formatShortDateTime(value) {
+  if (!value) return '-';
+  const text = String(value).replace('T', ' ');
+  return text.length > 16 ? text.slice(0, 16) : text;
+}
+
+function readStoredVisibleColumns() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(visibleColumnsStorageKey) || '[]');
+    const optionValues = new Set(columnSettingOptions.map(option => option.value));
+    const stored = Array.isArray(parsed) ? parsed.filter(key => optionValues.has(key)) : [];
+    return Array.from(new Set([...requiredColumnKeys, ...(stored.length ? stored : defaultVisibleColumnKeys)]));
+  } catch {
+    return defaultVisibleColumnKeys;
+  }
+}
+
+function readStoredDensity() {
+  try {
+    const stored = localStorage.getItem(densityStorageKey);
+    return stored === 'small' ? 'small' : 'middle';
+  } catch {
+    return 'middle';
+  }
 }
 
 export default function MediaManagement() {
@@ -107,7 +200,25 @@ export default function MediaManagement() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState(readStoredVisibleColumns);
+  const [tableDensity, setTableDensity] = useState(readStoredDensity);
   const [form] = Form.useForm();
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(visibleColumnsStorageKey, JSON.stringify(visibleColumnKeys));
+    } catch {
+      // ignore storage failures in restricted browsers
+    }
+  }, [visibleColumnKeys]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(densityStorageKey, tableDensity);
+    } catch {
+      // ignore storage failures in restricted browsers
+    }
+  }, [tableDensity]);
 
   useEffect(() => {
     usersApi.listSimple()
@@ -205,40 +316,51 @@ export default function MediaManagement() {
     }
   };
 
-  const columns = [
-    { title: 'CID', dataIndex: 'cid', width: 100, render: value => <Text code>{value}</Text> },
+  const allColumns = [
+    { title: 'CID', dataIndex: 'cid', key: 'cid', width: 96, render: value => <Text code>{value}</Text> },
     {
       title: '媒体',
       dataIndex: 'media_name',
-      width: 180,
+      key: 'media_name',
+      width: 230,
       render: (value, record) => (
-        <Button type="link" onClick={() => openDetail(record)} style={{ padding: 0, height: 'auto', fontWeight: 600 }}>
-          {value}
-        </Button>
+        <Space direction="vertical" size={0} style={{ maxWidth: '100%' }}>
+          <Button
+            type="link"
+            onClick={() => openDetail(record)}
+            style={{ padding: 0, height: 'auto', maxWidth: '100%', fontWeight: 600 }}
+          >
+            <Text ellipsis={{ tooltip: value }} style={{ maxWidth: 198 }}>{value}</Text>
+          </Button>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            文档 #{record.document_id || '-'}
+          </Text>
+        </Space>
       ),
     },
-    { title: '重要程度', dataIndex: 'importance', width: 100, render: value => renderEnumTag('importance', value) },
-    { title: '类目', dataIndex: 'category', width: 120, render: value => getOptionMeta('category', value).label },
-    { title: 'YYZ版本', dataIndex: 'yyz_version', width: 160, render: value => getOptionMeta('yyz_version', value).label },
-    { title: '域名', dataIndex: 'domain_name', width: 180, render: renderCompactText },
-    { title: '版本号', dataIndex: 'version_number', width: 110, render: renderCompactText },
-    { title: '最新支持功能', dataIndex: 'latest_features', width: 220, render: renderCompactText },
-    { title: '展示样式', dataIndex: 'display_style', width: 180, render: value => getOptionMeta('display_style', value).label },
-    { title: '预算', dataIndex: 'budget_types', width: 230, render: renderBudgetTags },
-    { title: 'UV量级', dataIndex: 'uv_scale', width: 120, render: renderCompactText },
-    { title: '对接进度', dataIndex: 'integration_progress', width: 110, render: value => renderEnumTag('integration_progress', value) },
-    { title: '负责人', dataIndex: 'owner_name', width: 120, render: renderCompactText },
-    { title: '最新媒体发版时间', dataIndex: 'latest_release_date', width: 150, render: renderCompactText },
-    { title: '上线时间', dataIndex: 'launch_date', width: 110, render: renderCompactText },
-    { title: '鉴黄API', dataIndex: 'porn_api_status', width: 190, render: value => value ? getOptionMeta('porn_api_status', value).label : '-' },
-    { title: 'APPID-SDK UI版', dataIndex: 'sdk_ui_appid', width: 190, render: renderCompactText },
-    { title: '任务配置要求', dataIndex: 'task_config_requirements', width: 220, render: renderCompactText },
-    { title: '特殊入口信息', dataIndex: 'special_entry_info', width: 220, render: renderCompactText },
-    { title: '其他特殊记录', dataIndex: 'other_notes', width: 220, render: renderCompactText },
+    { title: '重要程度', dataIndex: 'importance', key: 'importance', width: 100, render: value => renderEnumTag('importance', value) },
+    { title: '类目', dataIndex: 'category', key: 'category', width: 104, render: value => getOptionMeta('category', value).label },
+    { title: 'YYZ版本', dataIndex: 'yyz_version', key: 'yyz_version', width: 156, render: value => renderCompactText(getOptionMeta('yyz_version', value).label) },
+    { title: '展示样式', dataIndex: 'display_style', key: 'display_style', width: 160, render: value => renderCompactText(getOptionMeta('display_style', value).label) },
+    { title: '预算', dataIndex: 'budget_types', key: 'budget_types', width: 172, render: values => renderBudgetTags(values, { maxCount: 2, wrap: false }) },
+    { title: '对接进度', dataIndex: 'integration_progress', key: 'integration_progress', width: 112, render: value => renderEnumTag('integration_progress', value) },
+    { title: '负责人', dataIndex: 'owner_name', key: 'owner_name', width: 118, render: renderCompactText },
+    { title: '更新时间', dataIndex: 'updated_at', key: 'updated_at', width: 140, render: (value, record) => renderCompactText(formatShortDateTime(value || record.document_updated_at)) },
+    { title: '上线时间', dataIndex: 'launch_date', key: 'launch_date', width: 112, render: renderCompactText },
+    { title: '域名', dataIndex: 'domain_name', key: 'domain_name', width: 168, render: renderCompactText },
+    { title: '版本号', dataIndex: 'version_number', key: 'version_number', width: 110, render: renderCompactText },
+    { title: '最新媒体发版时间', dataIndex: 'latest_release_date', key: 'latest_release_date', width: 150, render: renderCompactText },
+    { title: '最新支持功能', dataIndex: 'latest_features', key: 'latest_features', width: 230, render: renderCompactText },
+    { title: 'UV量级', dataIndex: 'uv_scale', key: 'uv_scale', width: 120, render: renderCompactText },
+    { title: '鉴黄API', dataIndex: 'porn_api_status', key: 'porn_api_status', width: 190, render: value => value ? renderCompactText(getOptionMeta('porn_api_status', value).label) : <Text type="secondary">-</Text> },
+    { title: 'APPID-SDK UI版', dataIndex: 'sdk_ui_appid', key: 'sdk_ui_appid', width: 190, render: renderCompactText },
+    { title: '任务配置要求', dataIndex: 'task_config_requirements', key: 'task_config_requirements', width: 230, render: renderCompactText },
+    { title: '特殊入口信息', dataIndex: 'special_entry_info', key: 'special_entry_info', width: 230, render: renderCompactText },
+    { title: '其他特殊记录', dataIndex: 'other_notes', key: 'other_notes', width: 230, render: renderCompactText },
     {
       title: '操作',
       key: 'actions',
-      width: 150,
+      width: 104,
       fixed: 'right',
       render: (_, record) => (
         <Space size={2}>
@@ -268,6 +390,30 @@ export default function MediaManagement() {
       ),
     },
   ];
+  const visibleColumnSet = new Set(visibleColumnKeys);
+  const columns = allColumns.filter(column => column.key === 'actions' || visibleColumnSet.has(column.key));
+  const tableScrollX = Math.max(1180, columns.reduce((sum, column) => sum + (Number(column.width) || 160), 0));
+
+  const handleVisibleColumnsChange = (keys) => {
+    setVisibleColumnKeys(Array.from(new Set([...requiredColumnKeys, ...keys])));
+  };
+
+  const columnSettingsMenu = (
+    <div style={{ width: 300, maxWidth: 'calc(100vw - 32px)', padding: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+        <Text strong>列表字段</Text>
+        <Button type="link" size="small" onClick={() => setVisibleColumnKeys(defaultVisibleColumnKeys)}>
+          恢复默认
+        </Button>
+      </div>
+      <Checkbox.Group
+        value={visibleColumnKeys}
+        options={columnSettingOptions}
+        onChange={handleVisibleColumnsChange}
+        style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}
+      />
+    </div>
+  );
 
   const renderMobileRecord = record => (
     <List.Item style={{ padding: 0, marginBottom: 10, border: 'none' }}>
@@ -284,16 +430,22 @@ export default function MediaManagement() {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
             <div style={{ minWidth: 0 }}>
               <Text strong ellipsis style={{ display: 'block' }}>{record.media_name}</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>CID {record.cid}</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                CID {record.cid} · {getOptionMeta('category', record.category).label} · {record.owner_name || '-'}
+              </Text>
             </div>
             {renderEnumTag('integration_progress', record.integration_progress)}
           </div>
+          <Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>
+            {getOptionMeta('yyz_version', record.yyz_version).label} · {getOptionMeta('display_style', record.display_style).label}
+          </Text>
           <Space size={[4, 4]} wrap>
             {renderEnumTag('importance', record.importance)}
-            <Tag>{getOptionMeta('category', record.category).label}</Tag>
-            {renderBudgetTags(record.budget_types)}
+            {renderBudgetTags(record.budget_types, { maxCount: 2 })}
           </Space>
-          <Text type="secondary">负责人：{record.owner_name || '-'}</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            更新：{formatShortDateTime(record.updated_at || record.document_updated_at)}
+          </Text>
         </Space>
       </div>
     </List.Item>
@@ -316,25 +468,57 @@ export default function MediaManagement() {
       </div>
 
       <Card size="small" style={{ borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: 'none' }}>
-        <Space wrap size={[8, 8]} style={{ width: '100%', marginBottom: 14 }}>
-          <Input
-            allowClear
-            prefix={<SearchOutlined />}
-            placeholder="搜索全部字段及文档正文"
-            value={filters.search}
-            onChange={event => setFilter('search', event.target.value)}
-            style={{ width: isMobile ? '100%' : 250 }}
-          />
-          <Select allowClear placeholder="重要程度" value={filters.importance || undefined} options={mediaImportanceOptions} onChange={value => setFilter('importance', value || '')} style={{ width: isMobile ? '100%' : 120 }} />
-          <Select allowClear placeholder="类目" value={filters.category || undefined} options={mediaCategoryOptions} onChange={value => setFilter('category', value || '')} style={{ width: isMobile ? '100%' : 140 }} />
-          <Select allowClear placeholder="YYZ版本" value={filters.yyz_version || undefined} options={mediaYyzVersionOptions} onChange={value => setFilter('yyz_version', value || '')} style={{ width: isMobile ? '100%' : 170 }} />
-          <Select allowClear placeholder="展示样式" value={filters.display_style || undefined} options={mediaDisplayStyleOptions} onChange={value => setFilter('display_style', value || '')} style={{ width: isMobile ? '100%' : 180 }} />
-          <Select mode="multiple" allowClear maxTagCount="responsive" placeholder="预算" value={filters.budget_types} options={mediaBudgetOptions} onChange={value => setFilter('budget_types', value)} style={{ width: isMobile ? '100%' : 210 }} />
-          <Select allowClear placeholder="对接进度" value={filters.integration_progress || undefined} options={mediaProgressOptions} onChange={value => setFilter('integration_progress', value || '')} style={{ width: isMobile ? '100%' : 130 }} />
-          <Select allowClear showSearch optionFilterProp="label" placeholder="负责人" value={filters.owner_id || undefined} options={userOptions} onChange={value => setFilter('owner_id', value || '')} style={{ width: isMobile ? '100%' : 140 }} />
-          <Select allowClear placeholder="鉴黄API" value={filters.porn_api_status || undefined} options={mediaPornApiOptions} onChange={value => setFilter('porn_api_status', value || '')} style={{ width: isMobile ? '100%' : 190 }} />
-          <Button onClick={() => setFilters(initialFilters)}>重置筛选</Button>
-        </Space>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            flexDirection: isMobile ? 'column' : 'row',
+            gap: 12,
+            marginBottom: 14,
+          }}
+        >
+          <Space wrap size={[8, 8]} style={{ width: isMobile ? '100%' : 'auto', flex: 1 }}>
+            <Input
+              allowClear
+              prefix={<SearchOutlined />}
+              placeholder="搜索全部字段及文档正文"
+              value={filters.search}
+              onChange={event => setFilter('search', event.target.value)}
+              style={{ width: isMobile ? '100%' : 260 }}
+            />
+            <Select allowClear placeholder="重要程度" value={filters.importance || undefined} options={mediaImportanceOptions} onChange={value => setFilter('importance', value || '')} style={{ width: isMobile ? '100%' : 120 }} />
+            <Select allowClear placeholder="类目" value={filters.category || undefined} options={mediaCategoryOptions} onChange={value => setFilter('category', value || '')} style={{ width: isMobile ? '100%' : 140 }} />
+            <Select allowClear placeholder="YYZ版本" value={filters.yyz_version || undefined} options={mediaYyzVersionOptions} onChange={value => setFilter('yyz_version', value || '')} style={{ width: isMobile ? '100%' : 170 }} />
+            <Select allowClear placeholder="展示样式" value={filters.display_style || undefined} options={mediaDisplayStyleOptions} onChange={value => setFilter('display_style', value || '')} style={{ width: isMobile ? '100%' : 180 }} />
+            <Select mode="multiple" allowClear maxTagCount="responsive" placeholder="预算" value={filters.budget_types} options={mediaBudgetOptions} onChange={value => setFilter('budget_types', value)} style={{ width: isMobile ? '100%' : 210 }} />
+            <Select allowClear placeholder="对接进度" value={filters.integration_progress || undefined} options={mediaProgressOptions} onChange={value => setFilter('integration_progress', value || '')} style={{ width: isMobile ? '100%' : 130 }} />
+            <Select allowClear showSearch optionFilterProp="label" placeholder="负责人" value={filters.owner_id || undefined} options={userOptions} onChange={value => setFilter('owner_id', value || '')} style={{ width: isMobile ? '100%' : 140 }} />
+            <Select allowClear placeholder="鉴黄API" value={filters.porn_api_status || undefined} options={mediaPornApiOptions} onChange={value => setFilter('porn_api_status', value || '')} style={{ width: isMobile ? '100%' : 190 }} />
+          </Space>
+
+          <Space wrap size={[8, 8]} style={{ width: isMobile ? '100%' : undefined, justifyContent: isMobile ? 'space-between' : 'flex-end' }}>
+            {!isMobile && (
+              <Segmented
+                size="small"
+                value={tableDensity}
+                onChange={setTableDensity}
+                options={[
+                  { value: 'middle', label: <Tooltip title="标准密度"><ColumnHeightOutlined /></Tooltip> },
+                  { value: 'small', label: <Tooltip title="紧凑密度"><ColumnHeightOutlined rotate={90} /></Tooltip> },
+                ]}
+              />
+            )}
+            {!isMobile && (
+              <Popover trigger="click" placement="bottomRight" content={columnSettingsMenu}>
+                <Button icon={<SettingOutlined />}>列设置</Button>
+              </Popover>
+            )}
+            <Button onClick={() => setFilters(initialFilters)} style={{ width: isMobile ? '100%' : undefined }}>
+              重置筛选
+            </Button>
+          </Space>
+        </div>
 
         {isMobile ? (
           <List
@@ -351,7 +535,8 @@ export default function MediaManagement() {
             dataSource={rows}
             rowKey="id"
             loading={loading}
-            scroll={{ x: 3200 }}
+            size={tableDensity}
+            scroll={{ x: tableScrollX }}
             onRow={record => ({
               onDoubleClick: event => {
                 if (event.target?.closest?.('button, a, input, [role="button"]')) return;
