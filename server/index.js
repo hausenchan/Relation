@@ -2761,7 +2761,43 @@ db.exec(`
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS weekly_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    week_start TEXT NOT NULL,
+    week_end TEXT NOT NULL,
+    completed TEXT,
+    next_week_plan TEXT,
+    risks TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, week_start)
+  );
+
+  CREATE TABLE IF NOT EXISTS content_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    scope_key TEXT NOT NULL DEFAULT 'main',
+    snapshot_json TEXT NOT NULL,
+    action TEXT NOT NULL DEFAULT 'save',
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
+
+ensureMysqlLongTextColumn('weekly_reports', 'completed', 'NULL');
+ensureMysqlLongTextColumn('weekly_reports', 'next_week_plan', 'NULL');
+ensureMysqlLongTextColumn('weekly_reports', 'risks', 'NULL');
+ensureMysqlLongTextColumn('content_revisions', 'snapshot_json');
+createIndexesIfColumnsExist('content_revisions', [
+  {
+    name: 'idx_content_revisions_entity',
+    columnsSql: 'entity_type, entity_id, scope_key, id',
+    columns: ['entity_type', 'entity_id', 'scope_key', 'id'],
+  },
+]);
 
 // goals 表动态补全字段（兼容旧数据）
 const goalCols = db.prepare("PRAGMA table_info(goals)").all().map(c => c.name);
@@ -2794,6 +2830,9 @@ if (goalCols.length > 0) {
     db.exec("ALTER TABLE goals ADD COLUMN status TEXT DEFAULT 'pending'");
   }
 }
+ensureMysqlLongTextColumn('goals', 'title');
+ensureMysqlLongTextColumn('goals', 'description', 'NULL');
+ensureMysqlLongTextColumn('goals', 'result', 'NULL');
 
 // users 表加 leader_id / department / team_id
 const userCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
@@ -3043,6 +3082,9 @@ addColumnIfMissing('operational_meeting_sections', 'visibility_scope', "TEXT DEF
 addColumnIfMissing('operational_meeting_sections', 'content_json', 'TEXT DEFAULT NULL');
 addColumnIfMissing('operational_meeting_agendas', 'agenda_json', 'TEXT DEFAULT NULL');
 addColumnIfMissing('operational_meeting_decisions', 'decision_json', 'TEXT DEFAULT NULL');
+ensureMysqlLongTextColumn('operational_meeting_sections', 'content_json', 'NULL');
+ensureMysqlLongTextColumn('operational_meeting_agendas', 'agenda_json', 'NULL');
+ensureMysqlLongTextColumn('operational_meeting_decisions', 'decision_json', 'NULL');
 
 createIndexesIfColumnsExist('sensitive_module_members', [
   { name: 'idx_sensitive_module_members_user', columnsSql: 'user_id', columns: ['user_id'] },
@@ -18202,7 +18244,131 @@ app.get('/api/trips/stats/summary', (req, res) => {
   res.json({ monthly, byType, byUser, byGroup, alerts });
 });
 
+const CONTENT_REVISION_ACTION_LABELS = {
+  baseline: '初始版本',
+  create: '创建',
+  save: '自动保存',
+  manual_save: '手动保存',
+  submit: '提交',
+  restore: '恢复历史版本',
+  generate: 'AI 生成',
+};
+const CONTENT_REVISION_SNAPSHOT_LIMIT = Number(process.env.RELATION_CONTENT_REVISION_LIMIT || 20 * 1024 * 1024);
+
+function stringifyContentRevisionSnapshot(snapshot) {
+  const serialized = JSON.stringify(snapshot ?? {});
+  if (Buffer.byteLength(serialized, 'utf8') > CONTENT_REVISION_SNAPSHOT_LIMIT) {
+    return null;
+  }
+  return serialized;
+}
+
+function parseContentRevisionSnapshot(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('content_revisions', row);
+  return parseMaybeJson(decrypted.snapshot_json, null);
+}
+
+function insertContentRevision({ entityType, entityId, scopeKey = 'main', snapshot, action = 'save', userId }) {
+  const normalizedEntityId = Number(entityId);
+  if (!entityType || !normalizedEntityId || snapshot == null) return null;
+  const snapshotJson = stringifyContentRevisionSnapshot(snapshot);
+  if (!snapshotJson) {
+    console.warn(`[content-revisions] skip oversized snapshot: ${entityType}/${normalizedEntityId}/${scopeKey}`);
+    return null;
+  }
+  const latest = db.prepare(`
+    SELECT * FROM content_revisions
+    WHERE entity_type = ? AND entity_id = ? AND scope_key = ?
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(entityType, normalizedEntityId, scopeKey);
+  if (latest) {
+    const latestSnapshot = parseContentRevisionSnapshot(latest);
+    const latestSnapshotJson = latestSnapshot && stringifyContentRevisionSnapshot(latestSnapshot);
+    if (latestSnapshotJson && latestSnapshotJson === snapshotJson) return latest.id;
+  }
+  const encrypted = encryptRow('content_revisions', { snapshot_json: snapshotJson });
+  return db.prepare(`
+    INSERT INTO content_revisions (
+      entity_type, entity_id, scope_key, snapshot_json, action, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    entityType,
+    normalizedEntityId,
+    scopeKey,
+    encrypted.snapshot_json,
+    action || 'save',
+    userId ? Number(userId) : null,
+  ).lastInsertRowid;
+}
+
+function recordContentRevisionChange({ entityType, entityId, scopeKey = 'main', before, after, action = 'save', userId }) {
+  if (before != null) {
+    insertContentRevision({ entityType, entityId, scopeKey, snapshot: before, action: 'baseline', userId });
+  }
+  return insertContentRevision({ entityType, entityId, scopeKey, snapshot: after, action, userId });
+}
+
+function listContentRevisions(entityType, entityId, scopeKey = 'main') {
+  const rows = db.prepare(`
+    SELECT r.id, r.entity_type, r.entity_id, r.scope_key, r.action, r.created_by, r.created_at,
+      u.display_name as created_by_name, u.username as created_by_username
+    FROM content_revisions r
+    LEFT JOIN users u ON u.id = r.created_by
+    WHERE r.entity_type = ? AND r.entity_id = ? AND r.scope_key = ?
+    ORDER BY r.id DESC
+    LIMIT 100
+  `).all(entityType, Number(entityId), scopeKey);
+  return rows.map((row, index) => ({
+    ...row,
+    version_label: `V${rows.length - index}`,
+    action_label: CONTENT_REVISION_ACTION_LABELS[row.action] || row.action || '保存',
+    can_restore: 1,
+  }));
+}
+
+function getContentRevision(revisionId, entityType, entityId, scopeKey = null) {
+  const row = db.prepare(`
+    SELECT * FROM content_revisions
+    WHERE id = ? AND entity_type = ? AND entity_id = ?
+    ${scopeKey ? 'AND scope_key = ?' : ''}
+  `).get(...(scopeKey
+    ? [Number(revisionId), entityType, Number(entityId), scopeKey]
+    : [Number(revisionId), entityType, Number(entityId)]));
+  if (!row) return null;
+  return { ...row, snapshot: parseContentRevisionSnapshot(row) };
+}
+
 // =========== 目标管理 API ===========
+const GOAL_REVISION_FIELDS = [
+  'title', 'description', 'owner_id', 'department', 'team_id', 'project_group_id',
+  'scope_type', 'deadline', 'progress', 'status', 'result', 'goal_type', 'period', 'parent_id',
+];
+
+function getGoalRecord(goalId) {
+  return db.prepare('SELECT * FROM goals WHERE id = ?').get(Number(goalId)) || null;
+}
+
+function buildGoalRevisionSnapshot(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('goals', row);
+  return GOAL_REVISION_FIELDS.reduce((snapshot, field) => {
+    snapshot[field] = decrypted[field] ?? null;
+    return snapshot;
+  }, {});
+}
+
+function serializeGoalLiveRecord(row) {
+  if (!row) return null;
+  return {
+    id: Number(row.id),
+    ...buildGoalRevisionSnapshot(row),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
 // 获取目标列表
 app.get('/api/goals', (req, res) => {
   const { department, status, goal_type, scope_type, period, parent_id, owner_id, owner_role, project_group_id, team_id } = req.query;
@@ -18362,6 +18528,88 @@ app.get('/api/goals/:id', (req, res) => {
   });
 });
 
+app.get('/api/goals/:id/live', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canAccessGoal(req.user, goal)) return res.status(403).json({ error: '无权限查看该目标' });
+  const since = String(req.query?.since || '');
+  if (since && since === String(goal.updated_at || '')) {
+    return res.json({ id: Number(goal.id), has_changes: false, updated_at: goal.updated_at });
+  }
+  return res.json({ ...serializeGoalLiveRecord(goal), has_changes: true });
+});
+
+app.get('/api/goals/:id/history', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canAccessGoal(req.user, goal)) return res.status(403).json({ error: '无权限查看该目标' });
+  insertContentRevision({
+    entityType: 'goal',
+    entityId: goal.id,
+    snapshot: buildGoalRevisionSnapshot(goal),
+    action: 'baseline',
+    userId: goal.owner_id,
+  });
+  return res.json({
+    can_restore: canManageGoalForOwner(req.user, goal.owner_id) ? 1 : 0,
+    revisions: listContentRevisions('goal', goal.id),
+  });
+});
+
+app.post('/api/goals/:id/history/:revisionId/restore', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canManageGoalForOwner(req.user, goal.owner_id)) {
+    return res.status(403).json({ error: '无权恢复该目标版本' });
+  }
+  const revision = getContentRevision(req.params.revisionId, 'goal', goal.id, 'main');
+  if (!revision?.snapshot) return res.status(404).json({ error: '历史版本不存在' });
+  const snapshot = revision.snapshot;
+  if (!canManageGoalForOwner(req.user, snapshot.owner_id)) {
+    return res.status(403).json({ error: '无权恢复为该负责人名下的目标' });
+  }
+  const encrypted = encryptRow('goals', {
+    title: snapshot.title,
+    description: snapshot.description,
+    result: snapshot.result,
+  });
+  const updatedAt = new Date().toISOString();
+  db.prepare(`
+    UPDATE goals SET
+      title = ?, description = ?, owner_id = ?, department = ?, team_id = ?,
+      project_group_id = ?, scope_type = ?, deadline = ?, progress = ?, status = ?,
+      result = ?, goal_type = ?, period = ?, parent_id = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    encrypted.title,
+    encrypted.description,
+    snapshot.owner_id,
+    snapshot.department,
+    snapshot.team_id,
+    snapshot.project_group_id,
+    snapshot.scope_type,
+    snapshot.deadline,
+    snapshot.progress,
+    snapshot.status,
+    encrypted.result,
+    snapshot.goal_type,
+    snapshot.period,
+    snapshot.parent_id,
+    updatedAt,
+    goal.id,
+  );
+  const restored = getGoalRecord(goal.id);
+  recordContentRevisionChange({
+    entityType: 'goal',
+    entityId: goal.id,
+    before: buildGoalRevisionSnapshot(goal),
+    after: buildGoalRevisionSnapshot(restored),
+    action: 'restore',
+    userId: req.user.id,
+  });
+  return res.json(serializeGoalLiveRecord(restored));
+});
+
 // 创建目标
 app.post('/api/goals', (req, res) => {
   const { title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result: goalResult, goal_type, period, parent_id } = req.body;
@@ -18387,58 +18635,86 @@ app.post('/api/goals', (req, res) => {
     INSERT INTO goals (title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result, goal_type, period, parent_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(enc.title, enc.description, owner_id, normalizedDepartment, team_id || null, project_group_id || null, normalizedScopeType, deadline, progress || 0, normalizedStatus, enc.result || null, goal_type, period, parent_id || null);
-
-  res.json({ id: insertResult.lastInsertRowid });
+  const created = getGoalRecord(insertResult.lastInsertRowid);
+  insertContentRevision({
+    entityType: 'goal',
+    entityId: created.id,
+    snapshot: buildGoalRevisionSnapshot(created),
+    action: 'create',
+    userId: req.user.id,
+  });
+  res.json(serializeGoalLiveRecord(created));
 });
 
 // 更新目标
 app.put('/api/goals/:id', (req, res) => {
   const { id } = req.params;
-  const { title, description, owner_id, department, team_id, project_group_id, scope_type, deadline, progress, status, result, goal_type, period, parent_id } = req.body;
-  const existing = db.prepare('SELECT owner_id, department, team_id, project_group_id, scope_type FROM goals WHERE id = ?').get(id);
+  const body = req.body || {};
+  const existing = getGoalRecord(id);
   if (!existing) return res.status(404).json({ error: '目标不存在' });
-
-  const targetOwnerId = owner_id || existing.owner_id;
-  if (!canManageGoalForOwner(req.user, targetOwnerId)) {
+  const hasField = field => Object.prototype.hasOwnProperty.call(body, field);
+  const targetOwnerId = hasField('owner_id') ? Number(body.owner_id) : Number(existing.owner_id);
+  if (!canManageGoalForOwner(req.user, existing.owner_id)
+      || !canManageGoalForOwner(req.user, targetOwnerId)) {
     return res.status(403).json({ error: '无权编辑该目标' });
   }
-
+  const baseUpdatedAt = String(body.base_updated_at || '');
+  if (baseUpdatedAt && baseUpdatedAt !== String(existing.updated_at || '')) {
+    return res.status(409).json({
+      error: '目标已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeGoalLiveRecord(existing),
+    });
+  }
+  const mergedScope = {
+    scope_type: hasField('scope_type') ? body.scope_type : existing.scope_type,
+    project_group_id: hasField('project_group_id') ? body.project_group_id : existing.project_group_id,
+    department: hasField('department') ? body.department : existing.department,
+    team_id: hasField('team_id') ? body.team_id : existing.team_id,
+  };
   const scopeError = validateGoalScopeFields({
-    scope_type: scope_type || existing.scope_type,
-    project_group_id: project_group_id ?? existing.project_group_id,
-    department: department ?? existing.department,
-    team_id: team_id ?? existing.team_id,
+    ...mergedScope,
   });
   if (scopeError) {
     return res.status(400).json({ error: scopeError });
   }
+  if (hasField('title') && !String(body.title || '').trim()) {
+    return res.status(400).json({ error: '目标标题不能为空' });
+  }
 
-  const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(targetOwnerId);
-  const normalizedDepartment = department || owner?.department || null;
-  const normalizedStatus = status;
-
-  const enc = encryptRow('goals', { title, description, result });
+  const patch = {};
+  GOAL_REVISION_FIELDS.forEach((field) => {
+    if (hasField(field)) patch[field] = body[field];
+  });
+  if (hasField('owner_id')) patch.owner_id = targetOwnerId;
+  if (hasField('department')) {
+    const owner = db.prepare('SELECT department FROM users WHERE id = ?').get(targetOwnerId);
+    patch.department = body.department || owner?.department || null;
+  }
+  const contentPatch = {};
+  ['title', 'description', 'result'].forEach((field) => {
+    if (hasField(field)) contentPatch[field] = body[field];
+  });
+  Object.assign(patch, encryptRow('goals', contentPatch));
+  const fields = Object.keys(patch);
+  if (!fields.length) return res.json(serializeGoalLiveRecord(existing));
+  const updatedAt = new Date().toISOString();
   db.prepare(`
-    UPDATE goals SET
-      title = COALESCE(?, title),
-      description = COALESCE(?, description),
-      owner_id = COALESCE(?, owner_id),
-      department = COALESCE(?, department),
-      team_id = COALESCE(?, team_id),
-      project_group_id = COALESCE(?, project_group_id),
-      scope_type = COALESCE(?, scope_type),
-      deadline = COALESCE(?, deadline),
-      progress = COALESCE(?, progress),
-      status = COALESCE(?, status),
-      result = COALESCE(?, result),
-      goal_type = COALESCE(?, goal_type),
-      period = COALESCE(?, period),
-      parent_id = COALESCE(?, parent_id),
-      updated_at = CURRENT_TIMESTAMP
+    UPDATE goals
+    SET ${fields.map(field => `${field} = ?`).join(', ')}, updated_at = ?
     WHERE id = ?
-  `).run(enc.title, enc.description, owner_id, normalizedDepartment, team_id, project_group_id, scope_type, deadline, progress, normalizedStatus, enc.result, goal_type, period, parent_id, id);
+  `).run(...fields.map(field => patch[field]), updatedAt, Number(id));
 
-  res.json({ success: true });
+  const updated = getGoalRecord(id);
+  recordContentRevisionChange({
+    entityType: 'goal',
+    entityId: updated.id,
+    before: buildGoalRevisionSnapshot(existing),
+    after: buildGoalRevisionSnapshot(updated),
+    action: body.revision_action === 'manual_save' ? 'manual_save' : 'save',
+    userId: req.user.id,
+  });
+  res.json(serializeGoalLiveRecord(updated));
 });
 
 // 删除目标（级联删除子目标）
@@ -18453,6 +18729,7 @@ app.delete('/api/goals/:id', (req, res) => {
   function deleteGoalAndChildren(goalId) {
     const children = db.prepare('SELECT id FROM goals WHERE parent_id = ?').all(goalId);
     children.forEach(c => deleteGoalAndChildren(c.id));
+    db.prepare("DELETE FROM content_revisions WHERE entity_type = 'goal' AND entity_id = ?").run(goalId);
     db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
   }
   deleteGoalAndChildren(id);
@@ -18460,6 +18737,50 @@ app.delete('/api/goals/:id', (req, res) => {
 });
 
 // =========== 周报管理 API ===========
+const WEEKLY_REPORT_REVISION_FIELDS = [
+  'user_id', 'week_start', 'week_end', 'completed', 'next_week_plan', 'risks',
+];
+
+function getWeeklyReportRecord(reportId) {
+  return db.prepare(`
+    SELECT wr.*, u.display_name as user_name, u.department, u.role as user_role
+    FROM weekly_reports wr
+    LEFT JOIN users u ON u.id = wr.user_id
+    WHERE wr.id = ?
+  `).get(Number(reportId)) || null;
+}
+
+function canEditWeeklyReport(user, report) {
+  return Boolean(
+    user?.id
+    && report
+    && (
+      isAdmin(user.role)
+      || isAdmin(user.executive_role)
+      || Number(user.id) === Number(report.user_id)
+    )
+  );
+}
+
+function buildWeeklyReportRevisionSnapshot(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('weekly_reports', row);
+  return WEEKLY_REPORT_REVISION_FIELDS.reduce((snapshot, field) => {
+    snapshot[field] = decrypted[field] ?? null;
+    return snapshot;
+  }, {});
+}
+
+function serializeWeeklyReportRecord(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('weekly_reports', row);
+  return {
+    ...decrypted,
+    id: Number(decrypted.id),
+    user_id: Number(decrypted.user_id),
+  };
+}
+
 // 获取周报列表
 app.get('/api/weekly-reports', (req, res) => {
   const { week_start, department } = req.query;
@@ -18539,43 +18860,127 @@ app.get('/api/weekly-reports', (req, res) => {
   res.json(decryptRows('weekly_reports', db.prepare(q).all(...params)));
 });
 
+app.get('/api/weekly-reports/:id/live', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canEditWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权编辑该周报' });
+  const since = String(req.query?.since || '');
+  if (since && since === String(report.updated_at || '')) {
+    return res.json({ id: Number(report.id), has_changes: false, updated_at: report.updated_at });
+  }
+  return res.json({ ...serializeWeeklyReportRecord(report), has_changes: true });
+});
+
+app.get('/api/weekly-reports/:id/history', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canEditWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权查看该周报历史' });
+  insertContentRevision({
+    entityType: 'weekly_report',
+    entityId: report.id,
+    snapshot: buildWeeklyReportRevisionSnapshot(report),
+    action: 'baseline',
+    userId: report.user_id,
+  });
+  return res.json({ revisions: listContentRevisions('weekly_report', report.id) });
+});
+
+app.post('/api/weekly-reports/:id/history/:revisionId/restore', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canEditWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权恢复该周报版本' });
+  const revision = getContentRevision(req.params.revisionId, 'weekly_report', report.id, 'main');
+  if (!revision?.snapshot) return res.status(404).json({ error: '历史版本不存在' });
+  const encrypted = encryptRow('weekly_reports', {
+    completed: revision.snapshot.completed,
+    next_week_plan: revision.snapshot.next_week_plan,
+    risks: revision.snapshot.risks,
+  });
+  const updatedAt = new Date().toISOString();
+  db.prepare(`
+    UPDATE weekly_reports
+    SET week_end = ?, completed = ?, next_week_plan = ?, risks = ?, updated_at = ?
+    WHERE id = ?
+  `).run(
+    revision.snapshot.week_end || report.week_end,
+    encrypted.completed,
+    encrypted.next_week_plan,
+    encrypted.risks,
+    updatedAt,
+    report.id,
+  );
+  const restored = getWeeklyReportRecord(report.id);
+  recordContentRevisionChange({
+    entityType: 'weekly_report',
+    entityId: report.id,
+    before: buildWeeklyReportRevisionSnapshot(report),
+    after: buildWeeklyReportRevisionSnapshot(restored),
+    action: 'restore',
+    userId: req.user.id,
+  });
+  return res.json(serializeWeeklyReportRecord(restored));
+});
+
 // 创建或更新周报
 app.post('/api/weekly-reports', (req, res) => {
-  const { user_id, week_start, week_end, completed, next_week_plan, risks } = req.body;
+  const { user_id, week_start, week_end, completed, next_week_plan, risks, base_updated_at } = req.body;
   const { id: currentUserId, role } = req.user;
+  const normalizedUserId = Number(user_id);
 
-  if (!user_id || !week_start || !week_end) {
+  if (!normalizedUserId || !week_start || !week_end) {
     return res.status(400).json({ error: '用户、周起止日期必填' });
   }
 
   // 权限检查：只能写自己的周报，除非是 admin
-  if (!isAdmin(role) && user_id !== currentUserId) {
+  if (!isAdmin(role) && !isAdmin(req.user.executive_role) && normalizedUserId !== Number(currentUserId)) {
     return res.status(403).json({ error: '无权限' });
   }
 
   // 检查是否已存在
-  const existing = db.prepare('SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?').get(user_id, week_start);
+  const existingId = db.prepare('SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?').get(normalizedUserId, week_start)?.id;
+  const existing = existingId ? getWeeklyReportRecord(existingId) : null;
+  const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
+  if (existing && hasBaseUpdatedAt && String(existing.updated_at || '') !== String(base_updated_at || '')) {
+    return res.status(409).json({
+      error: '周报已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeWeeklyReportRecord(existing),
+    });
+  }
 
   const enc = encryptRow('weekly_reports', { completed, next_week_plan, risks });
-  if (existing) {
-    // 更新
-    db.prepare(`
-      UPDATE weekly_reports SET
-        week_end = ?,
-        completed = ?,
-        next_week_plan = ?,
-        risks = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).run(week_end, enc.completed, enc.next_week_plan, enc.risks, existing.id);
-    res.json({ id: existing.id, updated: true });
-  } else {
-    // 新建
-    const result = db.prepare(`
-      INSERT INTO weekly_reports (user_id, week_start, week_end, completed, next_week_plan, risks)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(user_id, week_start, week_end, enc.completed, enc.next_week_plan, enc.risks);
-    res.json({ id: result.lastInsertRowid, created: true });
+  try {
+    let reportId;
+    if (existing) {
+      const updatedAt = new Date().toISOString();
+      db.prepare(`
+        UPDATE weekly_reports SET
+          week_end = ?, completed = ?, next_week_plan = ?, risks = ?, updated_at = ?
+        WHERE id = ?
+      `).run(week_end, enc.completed, enc.next_week_plan, enc.risks, updatedAt, existing.id);
+      reportId = existing.id;
+    } else {
+      const result = db.prepare(`
+        INSERT INTO weekly_reports (user_id, week_start, week_end, completed, next_week_plan, risks)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(normalizedUserId, week_start, week_end, enc.completed, enc.next_week_plan, enc.risks);
+      reportId = result.lastInsertRowid;
+    }
+    const saved = getWeeklyReportRecord(reportId);
+    recordContentRevisionChange({
+      entityType: 'weekly_report',
+      entityId: reportId,
+      before: buildWeeklyReportRevisionSnapshot(existing),
+      after: buildWeeklyReportRevisionSnapshot(saved),
+      action: req.body?.revision_action === 'manual_save' ? 'manual_save' : (existing ? 'save' : 'create'),
+      userId: req.user.id,
+    });
+    return res.json(serializeWeeklyReportRecord(saved));
+  } catch (error) {
+    if (/too long|packet|max_allowed_packet|data size/i.test(String(error?.message || ''))) {
+      return res.status(413).json({ error: '周报内容过大，服务端存储列或请求大小配置不足' });
+    }
+    throw error;
   }
 });
 
@@ -18588,6 +18993,7 @@ app.delete('/api/weekly-reports/:id', (req, res) => {
     return res.status(403).json({ error: '仅管理员可删除' });
   }
 
+  db.prepare("DELETE FROM content_revisions WHERE entity_type = 'weekly_report' AND entity_id = ?").run(id);
   db.prepare('DELETE FROM weekly_reports WHERE id = ?').run(id);
   res.json({ success: true });
 });
@@ -20735,6 +21141,45 @@ function serializeOperationalDecision(row) {
   };
 }
 
+function buildOperationalSectionRevisionSnapshot(row) {
+  if (!row) return null;
+  return {
+    content: parseJsonSafe(row.content_json, null),
+    status: row.status || 'draft',
+    submitted_by: row.submitted_by || null,
+    submitted_at: row.submitted_at || null,
+  };
+}
+
+function buildOperationalAgendaRevisionSnapshot(row) {
+  if (!row) return null;
+  return {
+    agenda: parseJsonSafe(row.agenda_json, null),
+    source_hash: row.source_hash || null,
+    model_provider: row.model_provider || null,
+    model_name: row.model_name || null,
+    prompt_version: row.prompt_version || null,
+    safety_scan_status: row.safety_scan_status || null,
+  };
+}
+
+function buildOperationalDecisionRevisionSnapshot(row) {
+  if (!row) return null;
+  return {
+    decision: parseJsonSafe(row.decision_json, null),
+    status: row.status || 'draft',
+  };
+}
+
+function touchOperationalMeeting(meetingId, userId, updatedAt = new Date().toISOString()) {
+  db.prepare(`
+    UPDATE operational_meetings
+    SET updated_by = ?, updated_at = ?
+    WHERE id = ?
+  `).run(Number(userId) || null, updatedAt, Number(meetingId));
+  return updatedAt;
+}
+
 function isPrivilegedIdentity(user) {
   return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role)));
 }
@@ -21025,8 +21470,7 @@ function refreshOperationalMeetingStatuses(meetingId) {
     SET status = ?,
         brief_status = ?,
         agenda_status = ?,
-        decision_status = ?,
-        updated_at = CURRENT_TIMESTAMP
+        decision_status = ?
     WHERE id = ?
   `).run(status, briefStatus, agendaStatus, decisionStatus, id);
 }
@@ -21651,6 +22095,21 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
   const section = getOperationalSectionForAccess(req.params.sectionId, req.user);
   if (!section) return res.status(404).json({ error: '准备块不存在' });
   if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权编辑此准备块' });
+  const baseUpdatedAt = String(req.body?.base_updated_at || '');
+  if (baseUpdatedAt && baseUpdatedAt !== String(section.updated_at || '')) {
+    return res.status(409).json({
+      error: '准备内容已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: {
+        id: Number(section.id),
+        content: parseJsonSafe(section.content_json, null),
+        status: section.status || 'draft',
+        submitted_at: section.submitted_at || null,
+        updated_at: section.updated_at,
+        updated_by: section.updated_by || null,
+      },
+    });
+  }
   let contentJson;
   try {
     contentJson = stringifyOperationalMeetingContent(req.body?.content, '准备内容');
@@ -21666,6 +22125,7 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
   const nextStatus = shouldResetSubmission ? 'draft' : section.status;
   const nextSubmittedBy = shouldResetSubmission ? null : section.submitted_by;
   const nextSubmittedAt = shouldResetSubmission ? null : section.submitted_at;
+  const updatedAt = new Date().toISOString();
   db.prepare(`
     UPDATE operational_meeting_sections
     SET content_json = ?,
@@ -21674,7 +22134,7 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
         submitted_by = ?,
         submitted_at = ?,
         updated_by = ?,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = ?
     WHERE id = ?
   `).run(
     contentJson,
@@ -21682,14 +22142,28 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
     nextSubmittedBy,
     nextSubmittedAt,
     req.user.id,
+    updatedAt,
     section.id,
   );
+  const updatedSection = db.prepare('SELECT * FROM operational_meeting_sections WHERE id = ?').get(section.id);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: section.meeting_id,
+    scopeKey: `section:${section.id}`,
+    before: buildOperationalSectionRevisionSnapshot(section),
+    after: buildOperationalSectionRevisionSnapshot(updatedSection),
+    action: 'save',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(section.meeting_id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(section.meeting_id);
   res.json({
     success: true,
     status: nextStatus,
     submitted_at: nextSubmittedAt,
     submission_changed: submissionChanged ? 1 : 0,
+    updated_at: updatedAt,
+    updated_by: req.user.id,
   });
 });
 
@@ -21702,17 +22176,29 @@ app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperation
   if (!operationalPreparationCanSubmit(preparationContent, defaultQuestions)) {
     return res.status(400).json({ error: '请填写好内容再提交' });
   }
+  const updatedAt = new Date().toISOString();
   db.prepare(`
     UPDATE operational_meeting_sections
     SET status = 'submitted',
         submitted_by = ?,
-        submitted_at = CURRENT_TIMESTAMP,
+        submitted_at = ?,
         updated_by = ?,
-        updated_at = CURRENT_TIMESTAMP
+        updated_at = ?
     WHERE id = ?
-  `).run(req.user.id, req.user.id, section.id);
+  `).run(req.user.id, updatedAt, req.user.id, updatedAt, section.id);
+  const submittedSection = db.prepare('SELECT * FROM operational_meeting_sections WHERE id = ?').get(section.id);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: section.meeting_id,
+    scopeKey: `section:${section.id}`,
+    before: buildOperationalSectionRevisionSnapshot(section),
+    after: buildOperationalSectionRevisionSnapshot(submittedSection),
+    action: 'submit',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(section.meeting_id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(section.meeting_id);
-  res.json({ success: true });
+  res.json({ success: true, updated_at: updatedAt });
 });
 
 app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeetingAccess, canWrite, async (req, res) => {
@@ -21743,13 +22229,24 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
   if (!canEditOperationalAgenda(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '无权编辑本周会议提纲' });
   }
+  const existingAgenda = db.prepare('SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id) || null;
+  const baseUpdatedAt = String(req.body?.base_updated_at || '');
+  const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
+  if (existingAgenda && hasBaseUpdatedAt && baseUpdatedAt !== String(existingAgenda.updated_at || '')) {
+    return res.status(409).json({
+      error: '会议提纲已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeOperationalAgenda(existingAgenda),
+    });
+  }
   let agendaJson;
   try {
     agendaJson = stringifyOperationalMeetingContent(req.body?.agenda, '会议提纲');
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
-  let agendaId = db.prepare('SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id)?.id;
+  const updatedAt = new Date().toISOString();
+  let agendaId = existingAgenda?.id;
   if (agendaId) {
     db.prepare(`
       UPDATE operational_meeting_agendas
@@ -21761,8 +22258,8 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
           prompt_version = ?,
           safety_scan_status = ?,
           generated_by = ?,
-          generated_at = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP
+          generated_at = ?,
+          updated_at = ?
       WHERE id = ?
     `).run(
       agendaJson,
@@ -21772,14 +22269,16 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
       req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
       req.body?.safety_scan_status || 'passed',
       req.user.id,
+      updatedAt,
+      updatedAt,
       agendaId,
     );
   } else {
     const result = db.prepare(`
       INSERT INTO operational_meeting_agendas (
         meeting_id, agenda_json, crypto_version, source_hash,
-        model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at
-      ) VALUES (?, ?, 'none', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at, updated_at
+      ) VALUES (?, ?, 'none', ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       meeting.id,
       agendaJson,
@@ -21789,11 +22288,24 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
       req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
       req.body?.safety_scan_status || 'passed',
       req.user.id,
+      updatedAt,
+      updatedAt,
     );
     agendaId = result.lastInsertRowid;
   }
+  const savedAgenda = db.prepare('SELECT * FROM operational_meeting_agendas WHERE id = ?').get(agendaId);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: meeting.id,
+    scopeKey: 'agenda',
+    before: buildOperationalAgendaRevisionSnapshot(existingAgenda),
+    after: buildOperationalAgendaRevisionSnapshot(savedAgenda),
+    action: req.body?.revision_action === 'generate' ? 'generate' : 'save',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(meeting.id);
-  res.json({ success: true, id: agendaId });
+  res.json({ success: true, id: agendaId, updated_at: updatedAt, updated_by: req.user.id });
 });
 
 app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAccess, canWrite, (req, res) => {
@@ -21802,13 +22314,24 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
   if (!canEditOperationalDecision(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '无权编辑本周会议结论' });
   }
+  const existingDecision = db.prepare('SELECT * FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id) || null;
+  const baseUpdatedAt = String(req.body?.base_updated_at || '');
+  const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
+  if (existingDecision && hasBaseUpdatedAt && baseUpdatedAt !== String(existingDecision.updated_at || '')) {
+    return res.status(409).json({
+      error: '会议结论已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: serializeOperationalDecision(existingDecision),
+    });
+  }
   let decisionJson;
   try {
     decisionJson = stringifyOperationalMeetingContent(req.body?.decision, '会议结论');
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
-  let decisionId = db.prepare('SELECT id FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id)?.id;
+  const updatedAt = new Date().toISOString();
+  let decisionId = existingDecision?.id;
   if (decisionId) {
     db.prepare(`
       UPDATE operational_meeting_decisions
@@ -21816,25 +22339,163 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
           crypto_version = 'none',
           status = ?,
           updated_by = ?,
-          updated_at = CURRENT_TIMESTAMP
+          updated_at = ?
       WHERE id = ?
-    `).run(decisionJson, req.body?.status || 'saved', req.user.id, decisionId);
+    `).run(decisionJson, req.body?.status || 'saved', req.user.id, updatedAt, decisionId);
   } else {
     const result = db.prepare(`
       INSERT INTO operational_meeting_decisions (
-        meeting_id, decision_json, crypto_version, status, created_by, updated_by
-      ) VALUES (?, ?, 'none', ?, ?, ?)
+        meeting_id, decision_json, crypto_version, status, created_by, updated_by, updated_at
+      ) VALUES (?, ?, 'none', ?, ?, ?, ?)
     `).run(
       meeting.id,
       decisionJson,
       req.body?.status || 'saved',
       req.user.id,
       req.user.id,
+      updatedAt,
     );
     decisionId = result.lastInsertRowid;
   }
+  const savedDecision = db.prepare('SELECT * FROM operational_meeting_decisions WHERE id = ?').get(decisionId);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: meeting.id,
+    scopeKey: 'decision',
+    before: buildOperationalDecisionRevisionSnapshot(existingDecision),
+    after: buildOperationalDecisionRevisionSnapshot(savedDecision),
+    action: 'save',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(meeting.id);
-  res.json({ success: true, id: decisionId });
+  res.json({ success: true, id: decisionId, updated_at: updatedAt, updated_by: req.user.id });
+});
+
+function getOperationalHistoryScopeContext(meeting, user, scopeKey) {
+  if (scopeKey === 'agenda') {
+    const row = db.prepare('SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id) || null;
+    return {
+      row,
+      snapshot: buildOperationalAgendaRevisionSnapshot(row),
+      canView: true,
+      canRestore: canEditOperationalAgenda(user, meeting._accessParticipant),
+    };
+  }
+  if (scopeKey === 'decision') {
+    const row = db.prepare('SELECT * FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id) || null;
+    return {
+      row,
+      snapshot: buildOperationalDecisionRevisionSnapshot(row),
+      canView: true,
+      canRestore: canEditOperationalDecision(user, meeting._accessParticipant),
+    };
+  }
+  const sectionId = Number(String(scopeKey || '').match(/^section:(\d+)$/)?.[1]);
+  if (!sectionId) return null;
+  const row = db.prepare('SELECT * FROM operational_meeting_sections WHERE id = ? AND meeting_id = ?').get(sectionId, meeting.id);
+  if (!row) return null;
+  const participant = meeting._accessParticipant;
+  return {
+    row,
+    snapshot: buildOperationalSectionRevisionSnapshot(row),
+    canView: canViewOperationalPreparation(user, participant, row),
+    canRestore: canEditOperationalSection(user, { ...row, _accessParticipant: participant }),
+  };
+}
+
+app.get('/api/operational-meetings/:id/history', requireOperationalMeetingAccess, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  const scopeKey = String(req.query?.scope || 'agenda');
+  const context = getOperationalHistoryScopeContext(meeting, req.user, scopeKey);
+  if (!context || !context.canView) return res.status(403).json({ error: '无权查看该内容历史' });
+  if (context.snapshot) {
+    insertContentRevision({
+      entityType: 'operational_meeting',
+      entityId: meeting.id,
+      scopeKey,
+      snapshot: context.snapshot,
+      action: 'baseline',
+      userId: context.row?.updated_by || context.row?.generated_by || meeting.created_by,
+    });
+  }
+  return res.json({
+    scope: scopeKey,
+    can_restore: context.canRestore ? 1 : 0,
+    revisions: listContentRevisions('operational_meeting', meeting.id, scopeKey),
+  });
+});
+
+app.post('/api/operational-meetings/:id/history/:revisionId/restore', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  const scopeKey = String(req.body?.scope || 'agenda');
+  const context = getOperationalHistoryScopeContext(meeting, req.user, scopeKey);
+  if (!context || !context.canRestore) return res.status(403).json({ error: '无权恢复该内容版本' });
+  const revision = getContentRevision(req.params.revisionId, 'operational_meeting', meeting.id, scopeKey);
+  if (!revision?.snapshot) return res.status(404).json({ error: '历史版本不存在' });
+  const snapshot = revision.snapshot;
+  const updatedAt = new Date().toISOString();
+
+  if (scopeKey === 'agenda') {
+    if (!context.row) return res.status(404).json({ error: '会议提纲不存在' });
+    db.prepare(`
+      UPDATE operational_meeting_agendas
+      SET agenda_json = ?, source_hash = ?, model_provider = ?, model_name = ?,
+        prompt_version = ?, safety_scan_status = ?, generated_by = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      stringifyOperationalMeetingContent(snapshot.agenda, '会议提纲'),
+      snapshot.source_hash || null,
+      snapshot.model_provider || 'restored',
+      snapshot.model_name || null,
+      snapshot.prompt_version || null,
+      snapshot.safety_scan_status || 'passed',
+      req.user.id,
+      updatedAt,
+      context.row.id,
+    );
+  } else if (scopeKey === 'decision') {
+    if (!context.row) return res.status(404).json({ error: '会议结论不存在' });
+    db.prepare(`
+      UPDATE operational_meeting_decisions
+      SET decision_json = ?, status = ?, updated_by = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      stringifyOperationalMeetingContent(snapshot.decision, '会议结论'),
+      snapshot.status || 'saved',
+      req.user.id,
+      updatedAt,
+      context.row.id,
+    );
+  } else {
+    db.prepare(`
+      UPDATE operational_meeting_sections
+      SET content_json = ?, status = 'draft', submitted_by = NULL, submitted_at = NULL,
+        updated_by = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      stringifyOperationalMeetingContent(snapshot.content, '准备内容'),
+      req.user.id,
+      updatedAt,
+      context.row.id,
+    );
+  }
+
+  const refreshedContext = getOperationalHistoryScopeContext(meeting, req.user, scopeKey);
+  recordContentRevisionChange({
+    entityType: 'operational_meeting',
+    entityId: meeting.id,
+    scopeKey,
+    before: context.snapshot,
+    after: refreshedContext?.snapshot,
+    action: 'restore',
+    userId: req.user.id,
+  });
+  touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
+  refreshOperationalMeetingStatuses(meeting.id);
+  return res.json({ success: true, scope: scopeKey, updated_at: updatedAt });
 });
 
 // =========== 公司经营模块 API ===========

@@ -126,6 +126,11 @@ module.exports = {
     indexed: [],
   },
 
+  content_revisions: {
+    fields: ['snapshot_json'],
+    indexed: [],
+  },
+
   executive_reports: {
     fields: [
       'weekly_results', 'key_judgment', 'decision_needed', 'next_week_actions',

@@ -394,6 +394,8 @@ export const operationalMeetingsApi = {
   generateAgenda: (id, data) => api.post(`/operational-meetings/${id}/agenda/generate`, data).then(r => r.data),
   saveAgenda: (id, data) => api.put(`/operational-meetings/${id}/agenda`, data).then(r => r.data),
   saveDecision: (id, data) => api.put(`/operational-meetings/${id}/decision`, data).then(r => r.data),
+  history: (id, params) => api.get(`/operational-meetings/${id}/history`, { params }).then(r => r.data),
+  restoreHistory: (id, revisionId, data) => api.post(`/operational-meetings/${id}/history/${revisionId}/restore`, data).then(r => r.data),
 };
 
 export const tasksApi = {
@@ -481,9 +483,21 @@ export const companySubjectsApi = {
 export const goalsApi = {
   list: (params) => api.get('/goals', { params }).then(r => r.data),
   get: (id) => api.get(`/goals/${id}`).then(r => r.data),
+  live: (id, params) => api.get(`/goals/${id}/live`, { params }).then(r => r.data),
+  history: (id) => api.get(`/goals/${id}/history`).then(r => r.data),
+  restoreHistory: (id, revisionId) => api.post(`/goals/${id}/history/${revisionId}/restore`).then(r => r.data),
   create: (data) => api.post('/goals', data).then(r => r.data),
   update: (id, data) => api.put(`/goals/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/goals/${id}`).then(r => r.data),
+};
+
+export const weeklyReportsApi = {
+  list: (params) => api.get('/weekly-reports', { params }).then(r => r.data),
+  save: (data) => api.post('/weekly-reports', data).then(r => r.data),
+  live: (id, params) => api.get(`/weekly-reports/${id}/live`, { params }).then(r => r.data),
+  history: (id) => api.get(`/weekly-reports/${id}/history`).then(r => r.data),
+  restoreHistory: (id, revisionId) => api.post(`/weekly-reports/${id}/history/${revisionId}/restore`).then(r => r.data),
+  delete: (id) => api.delete(`/weekly-reports/${id}`).then(r => r.data),
 };
 
 export const documentsApi = {

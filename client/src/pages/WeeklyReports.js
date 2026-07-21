@@ -1,11 +1,14 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Table, Button, Space, Modal, Form, Input, DatePicker, message, Drawer, Select, Tag, Grid, List, Typography } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, FilterOutlined, SettingOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FilterOutlined, HistoryOutlined, SettingOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useAuth } from '../AuthContext';
+import { weeklyReportsApi } from '../api';
+import ContentHistoryDrawer from '../components/ContentHistoryDrawer';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
+import { mergeCollaborativeDocumentBodies } from '../utils/collaborativeDocument';
 import {
   getWeeklyReportDraftSignature,
   normalizeWeeklyReportContent,
@@ -41,6 +44,46 @@ const departmentMap = {
 
 const getDepartmentLabel = (department) => departmentMap[department] || department || '-';
 
+const getWeeklyReportFormValues = (record, currentUserId) => {
+  const thisMonday = dayjs().startOf('isoWeek');
+  const thisSunday = dayjs().endOf('isoWeek');
+  return {
+    user_id: record?.user_id || currentUserId,
+    week_range: record
+      ? [dayjs(record.week_start), dayjs(record.week_end)]
+      : [thisMonday, thisSunday],
+    completed: normalizeWeeklyReportContent(record?.completed || ''),
+    next_week_plan: normalizeWeeklyReportContent(record?.next_week_plan || ''),
+    risks: normalizeWeeklyReportContent(record?.risks || ''),
+  };
+};
+
+const buildWeeklyReportRemoteSnapshot = (record) => record ? {
+  ...getWeeklyReportFormValues(record, record.user_id),
+  updated_at: record.updated_at || '',
+} : null;
+
+const mergeWeeklyReportContent = (base, local, remote) => {
+  if (!base) {
+    return {
+      values: local,
+      hadConflicts: true,
+    };
+  }
+  const completed = mergeCollaborativeDocumentBodies(base?.completed, local.completed, remote.completed);
+  const nextWeekPlan = mergeCollaborativeDocumentBodies(base?.next_week_plan, local.next_week_plan, remote.next_week_plan);
+  const risks = mergeCollaborativeDocumentBodies(base?.risks, local.risks, remote.risks);
+  return {
+    values: {
+      ...local,
+      completed: completed.value,
+      next_week_plan: nextWeekPlan.value,
+      risks: risks.value,
+    },
+    hadConflicts: completed.hadConflicts || nextWeekPlan.hadConflicts || risks.hadConflicts,
+  };
+};
+
 const getErrorMessage = async (res, fallback) => {
   try {
     const data = await res.json();
@@ -64,12 +107,21 @@ export default function WeeklyReports() {
   const [selectedReport, setSelectedReport] = useState(null);
   const [editingReportId, setEditingReportId] = useState(null);
   const [reportSaveState, setReportSaveState] = useState({ phase: 'idle', savedAt: null, error: '' });
+  const [remoteUpdateHint, setRemoteUpdateHint] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRevisions, setHistoryRevisions] = useState([]);
+  const [restoringRevisionId, setRestoringRevisionId] = useState(null);
   const [form] = Form.useForm();
   const reportAutoSaveTimerRef = useRef(null);
   const reportPendingSaveRef = useRef(null);
   const reportLastSavedSignatureRef = useRef('');
   const reportAutoSaveReadyRef = useRef(false);
   const persistWeeklyReportRef = useRef(null);
+  const editingReportIdRef = useRef(null);
+  const reportBaseSnapshotRef = useRef(null);
+  const reportDirtyRef = useRef(false);
+  const reportLiveSyncPendingRef = useRef(false);
 
   // 筛选
   const [filters, setFilters] = useState({
@@ -96,14 +148,10 @@ export default function WeeklyReports() {
   const fetchReports = async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (filters.week_start) params.append('week_start', filters.week_start);
-      if (filters.department) params.append('department', filters.department);
-
-      const res = await fetch(`/api/weekly-reports?${params}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-      });
-      const data = await res.json();
+      const params = {};
+      if (filters.week_start) params.week_start = filters.week_start;
+      if (filters.department) params.department = filters.department;
+      const data = await weeklyReportsApi.list(params);
       setReports(data);
     } catch (err) {
       message.error('加载失败');
@@ -126,17 +174,7 @@ export default function WeeklyReports() {
   };
 
   const getEditorInitialValues = (record = null) => {
-    const thisMonday = dayjs().startOf('isoWeek');
-    const thisSunday = dayjs().endOf('isoWeek');
-    return {
-      user_id: record?.user_id || currentUser?.id,
-      week_range: record
-        ? [dayjs(record.week_start), dayjs(record.week_end)]
-        : [thisMonday, thisSunday],
-      completed: normalizeWeeklyReportContent(record?.completed || ''),
-      next_week_plan: normalizeWeeklyReportContent(record?.next_week_plan || ''),
-      risks: normalizeWeeklyReportContent(record?.risks || ''),
-    };
+    return getWeeklyReportFormValues(record, currentUser?.id);
   };
 
   const openReportEditor = (record = null) => {
@@ -145,16 +183,28 @@ export default function WeeklyReports() {
     if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
     form.resetFields();
     form.setFieldsValue(initialValues);
-    setEditingReportId(record?.id || null);
+    const reportId = record?.id || null;
+    setEditingReportId(reportId);
+    editingReportIdRef.current = reportId;
+    reportBaseSnapshotRef.current = buildWeeklyReportRemoteSnapshot(record);
+    reportDirtyRef.current = false;
     reportLastSavedSignatureRef.current = record ? getWeeklyReportDraftSignature(initialValues) : '';
     setReportSaveState(record
       ? { phase: 'saved', savedAt: record.updated_at || record.created_at || null, error: '' }
       : { phase: 'idle', savedAt: null, error: '' });
+    setRemoteUpdateHint('');
     setModalVisible(true);
     reportAutoSaveReadyRef.current = true;
   };
 
-  const handleAdd = () => openReportEditor();
+  const handleAdd = () => {
+    const currentWeekStart = dayjs().startOf('isoWeek').format('YYYY-MM-DD');
+    const existingCurrentWeekReport = reports.find(report => (
+      Number(report.user_id) === Number(currentUser?.id)
+      && report.week_start === currentWeekStart
+    ));
+    openReportEditor(existingCurrentWeekReport || null);
+  };
 
   const handleEdit = (record) => openReportEditor(record);
 
@@ -164,10 +214,7 @@ export default function WeeklyReports() {
       content: '删除后无法恢复，确定要删除吗？',
       onOk: async () => {
         try {
-          await fetch(`/api/weekly-reports/${id}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
-          });
+          await weeklyReportsApi.delete(id);
           message.success('删除成功');
           fetchReports();
         } catch (err) {
@@ -177,11 +224,36 @@ export default function WeeklyReports() {
     });
   };
 
-  const persistWeeklyReport = async ({ silent = true, validate = false } = {}) => {
+  const applyRemoteWeeklyReport = useCallback((remoteRecord, { mergeLocal = true } = {}) => {
+    if (!remoteRecord) return { hadConflicts: false, dirty: reportDirtyRef.current };
+    const remoteSnapshot = buildWeeklyReportRemoteSnapshot(remoteRecord);
+    const localValues = form.getFieldsValue(true);
+    const merged = mergeLocal && reportDirtyRef.current
+      ? mergeWeeklyReportContent(reportBaseSnapshotRef.current, localValues, remoteSnapshot)
+      : { values: getWeeklyReportFormValues(remoteRecord, currentUser?.id), hadConflicts: false };
+    form.setFieldsValue(merged.values);
+    reportBaseSnapshotRef.current = remoteSnapshot;
+    reportLastSavedSignatureRef.current = getWeeklyReportDraftSignature(
+      getWeeklyReportFormValues(remoteRecord, currentUser?.id)
+    );
+    const dirty = getWeeklyReportDraftSignature(merged.values) !== reportLastSavedSignatureRef.current;
+    reportDirtyRef.current = dirty;
+    setReportSaveState({
+      phase: dirty ? 'dirty' : 'saved',
+      savedAt: remoteRecord.updated_at || new Date().toISOString(),
+      error: '',
+    });
+    setRemoteUpdateHint(merged.hadConflicts
+      ? '检测到同一内容被多人修改，已保留本地版本并合并其他块'
+      : '已同步协作者的最新修改');
+    return { ...merged, dirty };
+  }, [currentUser?.id, form]);
+
+  const persistWeeklyReport = async ({ silent = true, validate = false, retryOnConflict = true } = {}) => {
     if (!modalVisible && !reportAutoSaveReadyRef.current) return false;
     if (reportPendingSaveRef.current) {
       await reportPendingSaveRef.current.catch(() => null);
-      return persistWeeklyReportRef.current?.({ silent, validate }) || false;
+      return persistWeeklyReportRef.current?.({ silent, validate, retryOnConflict }) || false;
     }
 
     try {
@@ -189,6 +261,7 @@ export default function WeeklyReports() {
       if (!values.user_id || !Array.isArray(values.week_range) || !values.week_range[0] || !values.week_range[1]) return false;
       const signature = getWeeklyReportDraftSignature(values);
       if (signature === reportLastSavedSignatureRef.current) {
+        reportDirtyRef.current = false;
         setReportSaveState(prev => ({ ...prev, phase: 'saved', error: '' }));
         return true;
       }
@@ -199,41 +272,57 @@ export default function WeeklyReports() {
         completed: serializeWeeklyReportContent(values.completed),
         next_week_plan: serializeWeeklyReportContent(values.next_week_plan),
         risks: serializeWeeklyReportContent(values.risks),
+        base_updated_at: reportBaseSnapshotRef.current?.updated_at || null,
+        revision_action: silent ? 'save' : 'manual_save',
       };
 
-      const savePromise = (async () => {
-        setReportSaveState(prev => ({ ...prev, phase: 'saving', error: '' }));
-        const res = await fetch('/api/weekly-reports', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${localStorage.getItem('token')}`,
-          },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error(await getErrorMessage(res, '保存失败'));
-        const result = await res.json();
-        reportLastSavedSignatureRef.current = signature;
-        setEditingReportId(result.id || editingReportId || null);
-        const latestSignature = getWeeklyReportDraftSignature(form.getFieldsValue(true));
-        setReportSaveState({
-          phase: latestSignature === signature ? 'saved' : 'dirty',
-          savedAt: new Date().toISOString(),
-          error: '',
-        });
-        await fetchReports();
-        return true;
-      })();
+      setReportSaveState(prev => ({ ...prev, phase: 'saving', error: '' }));
+      const savePromise = weeklyReportsApi.save(payload);
       reportPendingSaveRef.current = savePromise;
+      let result;
       try {
-        const saved = await savePromise;
-        if (saved && !silent) message.success('周报已保存');
-        return saved;
+        result = await savePromise;
       } finally {
         if (reportPendingSaveRef.current === savePromise) reportPendingSaveRef.current = null;
       }
+      reportLastSavedSignatureRef.current = signature;
+      const reportId = result.id || editingReportIdRef.current || null;
+      editingReportIdRef.current = reportId;
+      setEditingReportId(reportId);
+      reportBaseSnapshotRef.current = {
+        ...values,
+        completed: normalizeWeeklyReportContent(values.completed),
+        next_week_plan: normalizeWeeklyReportContent(values.next_week_plan),
+        risks: normalizeWeeklyReportContent(values.risks),
+        updated_at: result.updated_at || new Date().toISOString(),
+      };
+      const latestSignature = getWeeklyReportDraftSignature(form.getFieldsValue(true));
+      const dirty = latestSignature !== signature;
+      reportDirtyRef.current = dirty;
+      setReportSaveState({
+        phase: dirty ? 'dirty' : 'saved',
+        savedAt: result.updated_at || new Date().toISOString(),
+        error: '',
+      });
+      setReports(prev => {
+        const exists = prev.some(item => Number(item.id) === Number(result.id));
+        return exists
+          ? prev.map(item => (Number(item.id) === Number(result.id) ? { ...item, ...result } : item))
+          : [result, ...prev];
+      });
+      if (!silent) message.success('周报已保存');
+      return true;
     } catch (err) {
-      const errorText = err.message || '保存失败';
+      if (err?.response?.status === 409 && err.response?.data?.latest) {
+        const merged = applyRemoteWeeklyReport(err.response.data.latest, { mergeLocal: true });
+        if (!merged.dirty) return true;
+        if (retryOnConflict && merged.dirty) {
+          return persistWeeklyReportRef.current?.({ silent, validate, retryOnConflict: false }) || false;
+        }
+      }
+      const errorText = err?.response?.status === 413
+        ? '周报内容过大，已保留在编辑器中，请联系运维升级存储列和请求大小配置后重试'
+        : (err.response?.data?.error || err.message || '保存失败');
       setReportSaveState(prev => ({ ...prev, phase: 'error', error: errorText }));
       if (!silent) message.error(errorText);
       return false;
@@ -245,6 +334,7 @@ export default function WeeklyReports() {
   const scheduleWeeklyReportAutoSave = () => {
     if (!reportAutoSaveReadyRef.current) return;
     if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
+    reportDirtyRef.current = true;
     setReportSaveState(prev => ({ ...prev, phase: 'dirty', error: '' }));
     reportAutoSaveTimerRef.current = window.setTimeout(() => {
       persistWeeklyReportRef.current?.({ silent: true }).catch(() => {});
@@ -252,15 +342,17 @@ export default function WeeklyReports() {
   };
 
   const handleSubmit = async () => {
+    if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
     const saved = await persistWeeklyReport({ silent: false, validate: true });
     if (!saved) return;
     reportAutoSaveReadyRef.current = false;
+    reportDirtyRef.current = false;
     setModalVisible(false);
   };
 
   const closeReportEditor = async () => {
     if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
-    if (reportPendingSaveRef.current || ['dirty', 'error'].includes(reportSaveState.phase)) {
+    if (reportPendingSaveRef.current || reportDirtyRef.current || ['dirty', 'error'].includes(reportSaveState.phase)) {
       const saved = await persistWeeklyReport({ silent: true });
       if (!saved) {
         message.error('周报尚未保存，请重试后再关闭');
@@ -268,8 +360,108 @@ export default function WeeklyReports() {
       }
     }
     reportAutoSaveReadyRef.current = false;
+    reportDirtyRef.current = false;
     setModalVisible(false);
     await fetchReports();
+  };
+
+  const syncWeeklyReportFromRemote = useCallback(async () => {
+    const reportId = editingReportIdRef.current;
+    const baseSnapshot = reportBaseSnapshotRef.current;
+    if (!modalVisible || !reportId || !baseSnapshot?.updated_at || reportLiveSyncPendingRef.current) return;
+    if (reportPendingSaveRef.current) return;
+    reportLiveSyncPendingRef.current = true;
+    try {
+      const remote = await weeklyReportsApi.live(reportId, { since: baseSnapshot.updated_at });
+      if (!remote?.has_changes) return;
+      const merged = applyRemoteWeeklyReport(remote, { mergeLocal: true });
+      setReports(prev => prev.map(item => (
+        Number(item.id) === Number(remote.id) ? { ...item, ...remote } : item
+      )));
+      if (merged.dirty) {
+        if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
+        reportAutoSaveTimerRef.current = window.setTimeout(() => {
+          persistWeeklyReportRef.current?.({ silent: true }).catch(() => {});
+        }, WEEKLY_REPORT_AUTO_SAVE_DELAY);
+      }
+    } catch (error) {
+      if (![403, 404].includes(error?.response?.status)) console.error(error);
+    } finally {
+      reportLiveSyncPendingRef.current = false;
+    }
+  }, [applyRemoteWeeklyReport, modalVisible]);
+
+  useEffect(() => {
+    if (!modalVisible || !editingReportId) return undefined;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') syncWeeklyReportFromRemote();
+    }, 5000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') syncWeeklyReportFromRemote();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [editingReportId, modalVisible, syncWeeklyReportFromRemote]);
+
+  useEffect(() => {
+    if (!remoteUpdateHint) return undefined;
+    const timer = window.setTimeout(() => setRemoteUpdateHint(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [remoteUpdateHint]);
+
+  const loadWeeklyReportHistory = async (reportId = editingReportIdRef.current) => {
+    if (!reportId) return;
+    setHistoryLoading(true);
+    try {
+      const result = await weeklyReportsApi.history(reportId);
+      setHistoryRevisions(Array.isArray(result?.revisions) ? result.revisions : []);
+    } catch (error) {
+      message.error(error.response?.data?.error || '加载历史版本失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openWeeklyReportHistory = async () => {
+    if (!editingReportIdRef.current) {
+      const saved = await persistWeeklyReport({ silent: true });
+      if (!saved || !editingReportIdRef.current) {
+        message.warning('请先填写并保存周报，再查看历史版本');
+        return;
+      }
+    }
+    setHistoryOpen(true);
+    await loadWeeklyReportHistory();
+  };
+
+  const restoreWeeklyReportHistory = async (revision) => {
+    const reportId = editingReportIdRef.current;
+    if (!reportId || !revision?.id) return;
+    setRestoringRevisionId(revision.id);
+    try {
+      if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
+      if (reportPendingSaveRef.current || reportDirtyRef.current) {
+        const saved = await persistWeeklyReport({ silent: true });
+        if (!saved) {
+          message.error('当前周报保存失败，未执行历史恢复');
+          return;
+        }
+      }
+      const restored = await weeklyReportsApi.restoreHistory(reportId, revision.id);
+      applyRemoteWeeklyReport(restored, { mergeLocal: false });
+      setReports(prev => prev.map(item => (
+        Number(item.id) === Number(restored.id) ? { ...item, ...restored } : item
+      )));
+      await loadWeeklyReportHistory(reportId);
+      message.success('已恢复周报历史版本');
+    } catch (error) {
+      message.error(error.response?.data?.error || '恢复历史版本失败');
+    } finally {
+      setRestoringRevisionId(null);
+    }
   };
 
   const showDetail = (record) => {
@@ -676,6 +868,9 @@ export default function WeeklyReports() {
             {reportSaveState.phase === 'error' && (
               <Button type="link" size="small" onClick={() => persistWeeklyReport({ silent: false })}>重试</Button>
             )}
+            <Button type="text" size="small" icon={<HistoryOutlined />} onClick={openWeeklyReportHistory}>
+              历史
+            </Button>
           </Space>
         )}
         open={modalVisible}
@@ -690,6 +885,11 @@ export default function WeeklyReports() {
         okText="完成"
         cancelText="关闭"
       >
+        {remoteUpdateHint && (
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            {remoteUpdateHint}
+          </Typography.Text>
+        )}
         <Form form={form} layout="vertical" onValuesChange={scheduleWeeklyReportAutoSave}>
           <Form.Item name="user_id" label="用户" hidden>
             <Input />
@@ -824,6 +1024,17 @@ export default function WeeklyReports() {
           </div>
         )}
       </Drawer>
+
+      <ContentHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        title="周报历史版本"
+        revisions={historyRevisions}
+        loading={historyLoading}
+        restoringId={restoringRevisionId}
+        onRestore={restoreWeeklyReportHistory}
+        width={isMobile ? '100%' : 460}
+      />
     </div>
   );
 }

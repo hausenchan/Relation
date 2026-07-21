@@ -6,7 +6,7 @@ import {
 } from 'antd';
 import {
   ArrowLeftOutlined, CalendarOutlined, CheckCircleOutlined, FileDoneOutlined,
-  PlusOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, TeamOutlined,
+  HistoryOutlined, PlusOutlined, ReloadOutlined, RobotOutlined, SaveOutlined, TeamOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -14,6 +14,8 @@ import { operationalMeetingsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { richTextToPlain } from '../components/RichText';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
+import ContentHistoryDrawer from '../components/ContentHistoryDrawer';
+import { mergeCollaborativeDocumentBodies } from '../utils/collaborativeDocument';
 import {
   createDocumentBodyBlock,
   documentBodyHasContent,
@@ -161,6 +163,14 @@ export default function OperationalMeeting() {
   const [annualDrafts, setAnnualDrafts] = useState({});
   const [annualKeyword, setAnnualKeyword] = useState('');
   const [annualOnlyConclusion, setAnnualOnlyConclusion] = useState(false);
+  const [remoteUpdateHint, setRemoteUpdateHint] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyScope, setHistoryScope] = useState('agenda');
+  const [historyTitle, setHistoryTitle] = useState('历史版本');
+  const [historyCanRestore, setHistoryCanRestore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRevisions, setHistoryRevisions] = useState([]);
+  const [restoringRevisionId, setRestoringRevisionId] = useState(null);
   const sectionDraftsRef = useRef({});
   const dirtySectionIdsRef = useRef(new Set());
   const sectionLastSavedSignatureRef = useRef({});
@@ -177,6 +187,12 @@ export default function OperationalMeeting() {
   const decisionDirtyRef = useRef(false);
   const agendaAutoSaveTimerRef = useRef(null);
   const decisionAutoSaveTimerRef = useRef(null);
+  const sectionRemoteSnapshotsRef = useRef({});
+  const agendaRemoteSnapshotRef = useRef(null);
+  const decisionRemoteSnapshotRef = useRef(null);
+  const agendaPendingSaveRef = useRef(null);
+  const decisionPendingSaveRef = useRef(null);
+  const detailSyncPendingRef = useRef(false);
 
   const hasSensitiveAccess = canAccessSensitiveModule?.(MODULE_KEY);
   const hasMenuAccess = canAccessMenu?.('/executive/operational');
@@ -223,16 +239,18 @@ export default function OperationalMeeting() {
     }
   }, [cxoIdentity]);
 
-  const loadDetail = useCallback(async (id) => {
+  const loadDetail = useCallback(async (id, { background = false } = {}) => {
     if (!id) return;
-    setDetailLoading(true);
+    if (!background) setDetailLoading(true);
     try {
       const data = await operationalMeetingsApi.get(id);
       setDetail(data);
+      return data;
     } catch (error) {
-      message.error(error.response?.data?.error || '加载经营周会详情失败');
+      if (!background) message.error(error.response?.data?.error || '加载经营周会详情失败');
+      return null;
     } finally {
-      setDetailLoading(false);
+      if (!background) setDetailLoading(false);
     }
   }, []);
 
@@ -258,6 +276,34 @@ export default function OperationalMeeting() {
   }, [meetingId, loadDetail]);
 
   useEffect(() => {
+    if (!meetingId) return undefined;
+    const sync = async () => {
+      if (document.visibilityState !== 'visible' || detailSyncPendingRef.current) return;
+      detailSyncPendingRef.current = true;
+      try {
+        await loadDetail(meetingId, { background: true });
+      } finally {
+        detailSyncPendingRef.current = false;
+      }
+    };
+    const timer = window.setInterval(sync, 5000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') sync();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [loadDetail, meetingId]);
+
+  useEffect(() => {
+    if (!remoteUpdateHint) return undefined;
+    const timer = window.setTimeout(() => setRemoteUpdateHint(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [remoteUpdateHint]);
+
+  useEffect(() => {
     if (!isDetailView && listView === 'annual') loadAnnualSummary();
   }, [isDetailView, listView, loadAnnualSummary]);
 
@@ -269,24 +315,36 @@ export default function OperationalMeeting() {
       const nextSavedSignatures = {};
       const nextSaveStates = {};
       const nextLocalStatuses = {};
+      const nextRemoteSectionSnapshots = {};
+      let receivedRemoteUpdate = false;
+      let hadMergeConflicts = false;
       for (const section of detail.sections || []) {
         const fallback = normalizeOperationalPreparationContent(section.default_blocks, section.default_questions);
+        const remoteContent = section.content
+          ? normalizeOperationalPreparationContent(section.content, section.default_questions)
+          : fallback;
+        const previousRemote = sectionRemoteSnapshotsRef.current[section.id];
         const hasPendingLocalDraft = dirtySectionIdsRef.current.has(Number(section.id))
           && sectionDraftsRef.current[section.id];
         if (hasPendingLocalDraft) {
-          nextSections[section.id] = sectionDraftsRef.current[section.id];
-        } else if (section.content) {
-          nextSections[section.id] = normalizeOperationalPreparationContent(
-            section.content,
-            section.default_questions,
-          );
+          const merged = previousRemote
+            ? mergeCollaborativeDocumentBodies(
+                previousRemote.content,
+                sectionDraftsRef.current[section.id],
+                remoteContent,
+              )
+            : { value: sectionDraftsRef.current[section.id], hadConflicts: false };
+          nextSections[section.id] = merged.value;
+          hadMergeConflicts = hadMergeConflicts || merged.hadConflicts;
         } else {
-          nextSections[section.id] = fallback;
+          nextSections[section.id] = remoteContent;
         }
+        if (previousRemote?.updated_at && previousRemote.updated_at !== section.updated_at) receivedRemoteUpdate = true;
+        nextRemoteSectionSnapshots[section.id] = { content: remoteContent, updated_at: section.updated_at || '' };
         nextSavedSignatures[section.id] = hasPendingLocalDraft
           ? (sectionLastSavedSignatureRef.current[section.id] || '')
           : (section.content
-            ? getOperationalPreparationSignature(nextSections[section.id], section.default_questions)
+            ? getOperationalPreparationSignature(remoteContent, section.default_questions)
             : '');
         nextSaveStates[section.id] = hasPendingLocalDraft
           ? {
@@ -304,10 +362,24 @@ export default function OperationalMeeting() {
               submittedAt: section.submitted_at || null,
             };
       }
-      const nextAgenda = normalizeOperationalAgendaContent(detail.agenda?.agenda_content);
-      const nextDecision = normalizeOperationalDecisionContent(detail.decision?.decision_content || '');
+      const remoteAgenda = normalizeOperationalAgendaContent(detail.agenda?.agenda_content);
+      const remoteDecision = normalizeOperationalDecisionContent(detail.decision?.decision_content || '');
+      const previousAgendaRemote = agendaRemoteSnapshotRef.current;
+      const previousDecisionRemote = decisionRemoteSnapshotRef.current;
+      const agendaMerge = agendaDirtyRef.current && agendaDraftRef.current && previousAgendaRemote?.content && remoteAgenda
+        ? mergeCollaborativeDocumentBodies(previousAgendaRemote.content, agendaDraftRef.current, remoteAgenda)
+        : null;
+      const decisionMerge = decisionDirtyRef.current && previousDecisionRemote?.content
+        ? mergeCollaborativeDocumentBodies(previousDecisionRemote.content, decisionDraftRef.current, remoteDecision)
+        : null;
+      const nextAgenda = agendaDirtyRef.current ? (agendaMerge?.value || agendaDraftRef.current) : remoteAgenda;
+      const nextDecision = decisionDirtyRef.current ? (decisionMerge?.value || decisionDraftRef.current) : remoteDecision;
+      hadMergeConflicts = hadMergeConflicts || Boolean(agendaMerge?.hadConflicts || decisionMerge?.hadConflicts);
+      if (previousAgendaRemote?.updated_at && previousAgendaRemote.updated_at !== detail.agenda?.updated_at) receivedRemoteUpdate = true;
+      if (previousDecisionRemote?.updated_at && previousDecisionRemote.updated_at !== detail.decision?.updated_at) receivedRemoteUpdate = true;
       if (!cancelled) {
         const preservedDirtySectionIds = new Set(dirtySectionIdsRef.current);
+        sectionRemoteSnapshotsRef.current = nextRemoteSectionSnapshots;
         sectionDraftsRef.current = nextSections;
         sectionLastSavedSignatureRef.current = nextSavedSignatures;
         sectionSaveStatesRef.current = nextSaveStates;
@@ -318,14 +390,23 @@ export default function OperationalMeeting() {
         setSectionLocalStatuses(nextLocalStatuses);
         agendaDraftRef.current = nextAgenda;
         decisionDraftRef.current = nextDecision;
-        agendaLastSavedSignatureRef.current = nextAgenda ? getDocumentBodySignature(nextAgenda) : '';
-        decisionLastSavedSignatureRef.current = detail.decision?.decision_content ? getDocumentBodySignature(nextDecision) : '';
-        agendaDirtyRef.current = false;
-        decisionDirtyRef.current = false;
+        agendaRemoteSnapshotRef.current = { content: remoteAgenda, updated_at: detail.agenda?.updated_at || '' };
+        decisionRemoteSnapshotRef.current = { content: remoteDecision, updated_at: detail.decision?.updated_at || '' };
+        agendaLastSavedSignatureRef.current = remoteAgenda ? getDocumentBodySignature(remoteAgenda) : '';
+        decisionLastSavedSignatureRef.current = detail.decision?.decision_content ? getDocumentBodySignature(remoteDecision) : '';
         setAgendaDraft(nextAgenda);
         setDecisionDraft(nextDecision);
-        setAgendaSaveState({ phase: detail.agenda?.agenda_content ? 'saved' : 'idle', savedAt: detail.agenda?.updated_at || detail.agenda?.generated_at || null });
-        setDecisionSaveState({ phase: detail.decision?.decision_content ? 'saved' : 'idle', savedAt: detail.decision?.updated_at || null });
+        setAgendaSaveState(prev => agendaDirtyRef.current
+          ? { ...prev, phase: 'dirty' }
+          : { phase: detail.agenda?.agenda_content ? 'saved' : 'idle', savedAt: detail.agenda?.updated_at || detail.agenda?.generated_at || null });
+        setDecisionSaveState(prev => decisionDirtyRef.current
+          ? { ...prev, phase: 'dirty' }
+          : { phase: detail.decision?.decision_content ? 'saved' : 'idle', savedAt: detail.decision?.updated_at || null });
+        if (receivedRemoteUpdate) {
+          setRemoteUpdateHint(hadMergeConflicts
+            ? '检测到协作者更新，已合并其他块并保留本地冲突内容'
+            : '已同步协作者的最新修改');
+        }
       }
     }
     hydrate();
@@ -441,10 +522,17 @@ export default function OperationalMeeting() {
     const savePromise = (async () => {
       updateSectionSaveState(normalizedSectionId, { phase: 'saving' });
       try {
-        await operationalMeetingsApi.updateSection(normalizedSectionId, {
+        const result = await operationalMeetingsApi.updateSection(normalizedSectionId, {
           content: payload,
+          ...(sectionRemoteSnapshotsRef.current[normalizedSectionId]?.updated_at
+            ? { base_updated_at: sectionRemoteSnapshotsRef.current[normalizedSectionId].updated_at }
+            : {}),
         });
         sectionLastSavedSignatureRef.current[normalizedSectionId] = signature;
+        sectionRemoteSnapshotsRef.current[normalizedSectionId] = {
+          content: payload,
+          updated_at: result.updated_at || new Date().toISOString(),
+        };
         const latest = sectionDraftsRef.current[normalizedSectionId] || payload;
         const latestSignature = getOperationalPreparationSignature(latest, section.default_questions);
         const isCurrent = latestSignature === signature;
@@ -455,8 +543,32 @@ export default function OperationalMeeting() {
         }));
         return true;
       } catch (error) {
+        if (error?.response?.status === 409 && error.response?.data?.latest) {
+          const latest = error.response.data.latest;
+          const remoteContent = normalizeOperationalPreparationContent(
+            latest.content,
+            section.default_questions,
+          );
+          const base = sectionRemoteSnapshotsRef.current[normalizedSectionId]?.content || remoteContent;
+          const local = sectionDraftsRef.current[normalizedSectionId] || payload;
+          const merged = mergeCollaborativeDocumentBodies(base, local, remoteContent);
+          sectionRemoteSnapshotsRef.current[normalizedSectionId] = {
+            content: remoteContent,
+            updated_at: latest.updated_at || '',
+          };
+          sectionLastSavedSignatureRef.current[normalizedSectionId] = getOperationalPreparationSignature(
+            remoteContent,
+            section.default_questions,
+          );
+          sectionDraftsRef.current = { ...sectionDraftsRef.current, [normalizedSectionId]: merged.value };
+          setSectionDrafts(prev => ({ ...prev, [normalizedSectionId]: merged.value }));
+          updateDirtySection(normalizedSectionId, true);
+          setRemoteUpdateHint(merged.hadConflicts
+            ? '准备内容存在同块冲突，已保留本地内容并合并其他修改'
+            : '已合并协作者的最新准备内容');
+        }
         updateSectionSaveState(normalizedSectionId, {
-          phase: 'error',
+          phase: error?.response?.status === 409 ? 'dirty' : 'error',
           error: error.response?.data?.error || error.message || '自动保存失败',
         });
         if (showError) message.error(error.response?.data?.error || error.message || '自动保存失败');
@@ -554,17 +666,23 @@ export default function OperationalMeeting() {
       }));
       const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, { sections });
       const agenda = normalizeOperationalAgendaContent(result.agenda);
-      await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
+      const savedAgenda = await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
         agenda,
         source_hash: result.source_hash,
         model_provider: result.runtime?.provider || 'rule',
         model_name: result.runtime?.model_name || '',
         prompt_version: result.prompt_version,
         safety_scan_status: 'passed',
+        revision_action: 'generate',
+        base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
       });
       agendaDraftRef.current = agenda;
       agendaLastSavedSignatureRef.current = getDocumentBodySignature(agenda);
       agendaDirtyRef.current = false;
+      agendaRemoteSnapshotRef.current = {
+        content: agenda,
+        updated_at: savedAgenda.updated_at || new Date().toISOString(),
+      };
       setAgendaDraft(agenda);
       setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString() });
       await loadMeetings();
@@ -595,6 +713,10 @@ export default function OperationalMeeting() {
 
   const saveAgenda = async ({ silent = false } = {}) => {
     if (!detail?.meeting?.id || !detail?.can_edit_agenda) return false;
+    if (agendaPendingSaveRef.current) {
+      await agendaPendingSaveRef.current.catch(() => null);
+      return saveAgenda({ silent });
+    }
     const payload = normalizeOperationalAgendaContent(agendaDraftRef.current);
     if (!payload) return false;
     const signature = getDocumentBodySignature(payload);
@@ -604,30 +726,61 @@ export default function OperationalMeeting() {
       return true;
     }
     setAgendaSaveState(prev => ({ ...prev, phase: 'saving' }));
+    const savePromise = operationalMeetingsApi.saveAgenda(detail.meeting.id, {
+      agenda: payload,
+      source_hash: detail.agenda?.source_hash || null,
+      model_provider: detail.agenda?.model_provider || 'edited',
+      model_name: detail.agenda?.model_name || '',
+      prompt_version: detail.agenda?.prompt_version || '',
+      safety_scan_status: detail.agenda?.safety_scan_status || 'passed',
+      base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
+    });
+    agendaPendingSaveRef.current = savePromise;
     try {
-      await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
-        agenda: payload,
-        source_hash: detail.agenda?.source_hash || null,
-        model_provider: detail.agenda?.model_provider || 'edited',
-        model_name: detail.agenda?.model_name || '',
-        prompt_version: detail.agenda?.prompt_version || '',
-        safety_scan_status: detail.agenda?.safety_scan_status || 'passed',
-      });
+      const saved = await savePromise;
       agendaLastSavedSignatureRef.current = signature;
       agendaDirtyRef.current = false;
-      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString() });
+      agendaRemoteSnapshotRef.current = {
+        content: payload,
+        updated_at: saved.updated_at || new Date().toISOString(),
+      };
+      setAgendaSaveState({ phase: 'saved', savedAt: saved.updated_at || new Date().toISOString() });
       await loadMeetings();
       if (!silent) message.success('会议提纲已保存');
       return true;
     } catch (error) {
-      setAgendaSaveState(prev => ({ ...prev, phase: 'error', error: error.response?.data?.error || error.message || '保存会议提纲失败' }));
+      if (error?.response?.status === 409 && error.response?.data?.latest) {
+        const latest = error.response.data.latest;
+        const remote = normalizeOperationalAgendaContent(latest.agenda_content);
+        const base = agendaRemoteSnapshotRef.current?.content || remote;
+        const merged = mergeCollaborativeDocumentBodies(base, agendaDraftRef.current, remote);
+        agendaRemoteSnapshotRef.current = { content: remote, updated_at: latest.updated_at || '' };
+        agendaLastSavedSignatureRef.current = remote ? getDocumentBodySignature(remote) : '';
+        agendaDraftRef.current = merged.value;
+        agendaDirtyRef.current = true;
+        setAgendaDraft(merged.value);
+        setRemoteUpdateHint(merged.hadConflicts
+          ? '会议提纲存在同块冲突，已保留本地内容并合并其他修改'
+          : '已合并协作者的最新会议提纲');
+      }
+      setAgendaSaveState(prev => ({
+        ...prev,
+        phase: error?.response?.status === 409 ? 'dirty' : 'error',
+        error: error.response?.data?.error || error.message || '保存会议提纲失败',
+      }));
       if (!silent) message.error(error.response?.data?.error || error.message || '保存会议提纲失败');
       return false;
+    } finally {
+      if (agendaPendingSaveRef.current === savePromise) agendaPendingSaveRef.current = null;
     }
   };
 
   const saveDecision = async ({ silent = false } = {}) => {
     if (!detail?.meeting?.id || !detail?.can_edit_decision) return false;
+    if (decisionPendingSaveRef.current) {
+      await decisionPendingSaveRef.current.catch(() => null);
+      return saveDecision({ silent });
+    }
     const payload = normalizeOperationalDecisionContent(decisionDraftRef.current);
     const signature = getDocumentBodySignature(payload);
     if (signature === decisionLastSavedSignatureRef.current) {
@@ -636,21 +789,48 @@ export default function OperationalMeeting() {
       return true;
     }
     setDecisionSaveState(prev => ({ ...prev, phase: 'saving' }));
+    const savePromise = operationalMeetingsApi.saveDecision(detail.meeting.id, {
+      decision: payload,
+      status: documentBodyHasContent(payload) ? 'saved' : 'draft',
+      base_updated_at: decisionRemoteSnapshotRef.current?.updated_at || null,
+    });
+    decisionPendingSaveRef.current = savePromise;
     try {
-      await operationalMeetingsApi.saveDecision(detail.meeting.id, {
-        decision: payload,
-        status: documentBodyHasContent(payload) ? 'saved' : 'draft',
-      });
+      const saved = await savePromise;
       decisionLastSavedSignatureRef.current = signature;
       decisionDirtyRef.current = false;
-      setDecisionSaveState({ phase: 'saved', savedAt: new Date().toISOString() });
+      decisionRemoteSnapshotRef.current = {
+        content: payload,
+        updated_at: saved.updated_at || new Date().toISOString(),
+      };
+      setDecisionSaveState({ phase: 'saved', savedAt: saved.updated_at || new Date().toISOString() });
       await loadMeetings();
       if (!silent) message.success('会议结论已保存');
       return true;
     } catch (error) {
-      setDecisionSaveState(prev => ({ ...prev, phase: 'error', error: error.response?.data?.error || error.message || '保存会议结论失败' }));
+      if (error?.response?.status === 409 && error.response?.data?.latest) {
+        const latest = error.response.data.latest;
+        const remote = normalizeOperationalDecisionContent(latest.decision_content || '');
+        const base = decisionRemoteSnapshotRef.current?.content || remote;
+        const merged = mergeCollaborativeDocumentBodies(base, decisionDraftRef.current, remote);
+        decisionRemoteSnapshotRef.current = { content: remote, updated_at: latest.updated_at || '' };
+        decisionLastSavedSignatureRef.current = getDocumentBodySignature(remote);
+        decisionDraftRef.current = merged.value;
+        decisionDirtyRef.current = true;
+        setDecisionDraft(merged.value);
+        setRemoteUpdateHint(merged.hadConflicts
+          ? '会议结论存在同块冲突，已保留本地内容并合并其他修改'
+          : '已合并协作者的最新会议结论');
+      }
+      setDecisionSaveState(prev => ({
+        ...prev,
+        phase: error?.response?.status === 409 ? 'dirty' : 'error',
+        error: error.response?.data?.error || error.message || '保存会议结论失败',
+      }));
       if (!silent) message.error(error.response?.data?.error || error.message || '保存会议结论失败');
       return false;
+    } finally {
+      if (decisionPendingSaveRef.current === savePromise) decisionPendingSaveRef.current = null;
     }
   };
 
@@ -675,6 +855,64 @@ export default function OperationalMeeting() {
       if (decisionAutoSaveTimerRef.current) window.clearTimeout(decisionAutoSaveTimerRef.current);
     };
   }, [decisionDraft]);
+
+  const loadOperationalHistory = async (scope = historyScope) => {
+    if (!detail?.meeting?.id || !scope) return;
+    setHistoryLoading(true);
+    try {
+      const result = await operationalMeetingsApi.history(detail.meeting.id, { scope });
+      setHistoryCanRestore(Boolean(result?.can_restore));
+      setHistoryRevisions(Array.isArray(result?.revisions) ? result.revisions : []);
+    } catch (error) {
+      message.error(error.response?.data?.error || '加载历史版本失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openOperationalHistory = async (scope, title) => {
+    setHistoryScope(scope);
+    setHistoryTitle(title);
+    setHistoryOpen(true);
+    await loadOperationalHistory(scope);
+  };
+
+  const restoreOperationalHistory = async (revision) => {
+    if (!detail?.meeting?.id || !revision?.id) return;
+    setRestoringRevisionId(revision.id);
+    try {
+      if (historyScope.startsWith('section:')) {
+        const sectionId = Number(historyScope.slice('section:'.length));
+        if (dirtySectionIdsRef.current.has(sectionId)) {
+          const saved = await persistSection(sectionId, { showError: true });
+          if (!saved) {
+            message.error('当前准备内容保存失败，未执行历史恢复');
+            return;
+          }
+        }
+      } else if (historyScope === 'agenda' && agendaDirtyRef.current) {
+        const saved = await saveAgenda({ silent: true });
+        if (!saved) {
+          message.error('当前会议提纲保存失败，未执行历史恢复');
+          return;
+        }
+      } else if (historyScope === 'decision' && decisionDirtyRef.current) {
+        const saved = await saveDecision({ silent: true });
+        if (!saved) {
+          message.error('当前会议结论保存失败，未执行历史恢复');
+          return;
+        }
+      }
+      await operationalMeetingsApi.restoreHistory(detail.meeting.id, revision.id, { scope: historyScope });
+      await loadDetail(detail.meeting.id, { background: true });
+      await loadOperationalHistory(historyScope);
+      message.success('已恢复历史版本');
+    } catch (error) {
+      message.error(error.response?.data?.error || '恢复历史版本失败');
+    } finally {
+      setRestoringRevisionId(null);
+    }
+  };
 
   const openParticipantManager = () => {
     setParticipantUserIds((detail?.participants || [])
@@ -847,6 +1085,14 @@ export default function OperationalMeeting() {
                 ? ` · ${dayjs(localStatus.submittedAt).format('MM-DD HH:mm')}`
                 : ''}
             </Tag>
+            <Button
+              type="text"
+              size="small"
+              icon={<HistoryOutlined />}
+              onClick={() => openOperationalHistory(`section:${section.id}`, `${section.title}历史版本`)}
+            >
+              历史
+            </Button>
             {canEdit && localStatus.status !== 'submitted' && localStatus.status !== 'locked' && (
               <Button
                 type="primary"
@@ -943,6 +1189,14 @@ export default function OperationalMeeting() {
         size="small"
         extra={(
           <Space wrap>
+            <Button
+              type="text"
+              size="small"
+              icon={<HistoryOutlined />}
+              onClick={() => openOperationalHistory('agenda', '会议提纲历史版本')}
+            >
+              历史
+            </Button>
             {agendaDraft && Boolean(detail.can_edit_agenda) && renderMeetingSaveStatus(agendaSaveState)}
             {agendaSaveState.phase === 'error' && Boolean(detail.can_edit_agenda) && (
               <Button size="small" onClick={() => saveAgenda({ silent: false })}>重试</Button>
@@ -990,19 +1244,27 @@ export default function OperationalMeeting() {
       <Card
         title={<Space><CheckCircleOutlined />会议结论</Space>}
         size="small"
-        extra={Boolean(detail.can_edit_decision) && (
+        extra={(
           <Space wrap>
-            {renderMeetingSaveStatus(decisionSaveState)}
-            {decisionSaveState.phase === 'error' && (
+            <Button
+              type="text"
+              size="small"
+              icon={<HistoryOutlined />}
+              onClick={() => openOperationalHistory('decision', '会议结论历史版本')}
+            >
+              历史
+            </Button>
+            {Boolean(detail.can_edit_decision) && renderMeetingSaveStatus(decisionSaveState)}
+            {Boolean(detail.can_edit_decision) && decisionSaveState.phase === 'error' && (
               <Button size="small" onClick={() => saveDecision({ silent: false })}>重试</Button>
             )}
-            <Button
+            {Boolean(detail.can_edit_decision) && <Button
               icon={<SaveOutlined />}
               loading={decisionSaveState.phase === 'saving'}
               onClick={() => saveDecision({ silent: false })}
             >
               保存结论
-            </Button>
+            </Button>}
           </Space>
         )}
       >
@@ -1045,6 +1307,9 @@ export default function OperationalMeeting() {
                 <Empty description="暂无详情" />
               ) : (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  {remoteUpdateHint && (
+                    <Alert type="info" showIcon message={remoteUpdateHint} />
+                  )}
                   <div style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1294,6 +1559,17 @@ export default function OperationalMeeting() {
           </div>
         </Space>
       </Modal>
+
+      <ContentHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        title={historyTitle}
+        revisions={historyRevisions}
+        loading={historyLoading}
+        restoringId={restoringRevisionId}
+        canRestore={historyCanRestore}
+        onRestore={restoreOperationalHistory}
+      />
 
     </div>
   );

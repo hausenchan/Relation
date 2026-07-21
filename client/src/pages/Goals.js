@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -19,10 +19,11 @@ import {
   Typography,
   message,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, EyeOutlined, FilterOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, EyeOutlined, FilterOutlined, HistoryOutlined, PlusOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { goalsApi, usersApi, projectGroupsApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
+import ContentHistoryDrawer from '../components/ContentHistoryDrawer';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
 import {
@@ -30,9 +31,14 @@ import {
   normalizeGoalDocumentContent,
   serializeGoalDocumentContent,
 } from '../utils/goalDocumentContent';
+import {
+  getDocumentBodyValueSignature,
+  mergeCollaborativeDocumentBodies,
+} from '../utils/collaborativeDocument';
 
 const { RangePicker } = DatePicker;
 const { useBreakpoint } = Grid;
+const GOAL_CONTENT_AUTO_SAVE_DELAY = 2000;
 const executiveRoles = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
 
 const goalTypeMap = {
@@ -122,6 +128,50 @@ const detailTextStyle = {
   color: '#1f1f1f',
 };
 
+function getGoalEditorValues(record) {
+  const values = {
+    ...record,
+    deadline: record?.deadline ? dayjs(record.deadline) : null,
+    status: record?.status,
+    scope_type: record?.scope_type || 'personal',
+    progress: Number(record?.progress || 0),
+    description: normalizeGoalDocumentContent(record?.description || ''),
+    result: normalizeGoalDocumentContent(record?.result || ''),
+  };
+  if (record?.goal_type === 'quarter' && record.period) {
+    const match = record.period.match(/^(\d{4})-(Q[1-4])$/);
+    if (match) {
+      values.period_year = Number(match[1]);
+      values.period_quarter = match[2];
+    }
+  } else if (record?.goal_type === 'month' && record.period) {
+    const monthValue = dayjs(`${record.period}-01`);
+    values.period_month = monthValue.isValid() ? monthValue : null;
+  } else if (record?.goal_type === 'week' && record.period) {
+    const match = record.period.match(/^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})$/);
+    if (match) values.period_range = [dayjs(match[1]), dayjs(match[2])];
+  }
+  return values;
+}
+
+function buildGoalContentSnapshot(record) {
+  if (!record) return null;
+  return {
+    title: record.title || '',
+    description: normalizeGoalDocumentContent(record.description || ''),
+    result: normalizeGoalDocumentContent(record.result || ''),
+    updated_at: record.updated_at || '',
+  };
+}
+
+function getGoalContentSignature(values = {}) {
+  return JSON.stringify({
+    title: values.title || '',
+    description: getDocumentBodyValueSignature(values.description),
+    result: getDocumentBodyValueSignature(values.result),
+  });
+}
+
 function Goals() {
   const screens = useBreakpoint();
   const isMobile = !screens.md;
@@ -149,7 +199,22 @@ function Goals() {
   const [detailVisible, setDetailVisible] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [goalSaveState, setGoalSaveState] = useState({ phase: 'idle', savedAt: null, error: '' });
+  const [remoteUpdateHint, setRemoteUpdateHint] = useState('');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyGoalId, setHistoryGoalId] = useState(null);
+  const [historyCanRestore, setHistoryCanRestore] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyRevisions, setHistoryRevisions] = useState([]);
+  const [restoringRevisionId, setRestoringRevisionId] = useState(null);
   const [form] = Form.useForm();
+  const goalAutoSaveTimerRef = useRef(null);
+  const goalPendingSaveRef = useRef(null);
+  const goalBaseSnapshotRef = useRef(null);
+  const goalLastSavedSignatureRef = useRef('');
+  const goalDirtyRef = useRef(false);
+  const goalLiveSyncPendingRef = useRef(false);
+  const persistGoalContentRef = useRef(null);
   const goalType = Form.useWatch('goal_type', form);
   const scopeType = Form.useWatch('scope_type', form);
 
@@ -309,38 +374,24 @@ function Goals() {
       description: normalizeGoalDocumentContent(''),
       result: normalizeGoalDocumentContent(''),
     });
+    goalBaseSnapshotRef.current = null;
+    goalLastSavedSignatureRef.current = '';
+    goalDirtyRef.current = false;
+    setGoalSaveState({ phase: 'idle', savedAt: null, error: '' });
+    setRemoteUpdateHint('');
     setModalVisible(true);
   };
 
   const handleEdit = (record) => {
-    const values = {
-      ...record,
-      deadline: record.deadline ? dayjs(record.deadline) : null,
-      status: record.status,
-      scope_type: record.scope_type || 'personal',
-      progress: Number(record.progress || 0),
-      description: normalizeGoalDocumentContent(record.description || ''),
-      result: normalizeGoalDocumentContent(record.result || ''),
-    };
-
-    if (record.goal_type === 'quarter' && record.period) {
-      const match = record.period.match(/^(\d{4})-(Q[1-4])$/);
-      if (match) {
-        values.period_year = Number(match[1]);
-        values.period_quarter = match[2];
-      }
-    } else if (record.goal_type === 'month' && record.period) {
-      const monthValue = dayjs(`${record.period}-01`);
-      values.period_month = monthValue.isValid() ? monthValue : null;
-    } else if (record.goal_type === 'week' && record.period) {
-      const match = record.period.match(/^(\d{4}-\d{2}-\d{2})~(\d{4}-\d{2}-\d{2})$/);
-      if (match) {
-        values.period_range = [dayjs(match[1]), dayjs(match[2])];
-      }
-    }
-
+    const values = getGoalEditorValues(record);
     setEditing(record);
+    form.resetFields();
     form.setFieldsValue(values);
+    goalBaseSnapshotRef.current = buildGoalContentSnapshot(record);
+    goalLastSavedSignatureRef.current = getGoalContentSignature(values);
+    goalDirtyRef.current = false;
+    setGoalSaveState({ phase: 'saved', savedAt: record.updated_at || null, error: '' });
+    setRemoteUpdateHint('');
     setModalVisible(true);
   };
 
@@ -364,8 +415,211 @@ function Goals() {
     });
   };
 
-  const handleSubmit = async () => {
+  const applyRemoteGoalContent = useCallback((remoteRecord, { mergeLocal = true } = {}) => {
+    if (!remoteRecord) return { dirty: goalDirtyRef.current, hadConflicts: false };
+    const remote = buildGoalContentSnapshot(remoteRecord);
+    const base = goalBaseSnapshotRef.current || remote;
+    const localValues = form.getFieldsValue(true);
+    let nextTitle = remote.title;
+    let description = { value: remote.description, hadConflicts: false };
+    let result = { value: remote.result, hadConflicts: false };
+    let titleConflict = false;
+    if (mergeLocal && goalDirtyRef.current) {
+      description = mergeCollaborativeDocumentBodies(base.description, localValues.description, remote.description);
+      result = mergeCollaborativeDocumentBodies(base.result, localValues.result, remote.result);
+      const localTitle = localValues.title || '';
+      const localTitleChanged = localTitle !== (base.title || '');
+      const remoteTitleChanged = remote.title !== (base.title || '');
+      if (localTitleChanged) nextTitle = localTitle;
+      titleConflict = localTitleChanged && remoteTitleChanged && localTitle !== remote.title;
+    }
+    const nextValues = { title: nextTitle, description: description.value, result: result.value };
+    form.setFieldsValue(nextValues);
+    goalBaseSnapshotRef.current = remote;
+    goalLastSavedSignatureRef.current = getGoalContentSignature(remote);
+    const dirty = getGoalContentSignature(nextValues) !== goalLastSavedSignatureRef.current;
+    goalDirtyRef.current = dirty;
+    const hadConflicts = titleConflict || description.hadConflicts || result.hadConflicts;
+    setGoalSaveState({
+      phase: dirty ? 'dirty' : 'saved',
+      savedAt: remote.updated_at || new Date().toISOString(),
+      error: '',
+    });
+    setRemoteUpdateHint(hadConflicts
+      ? '检测到同一内容被多人修改，已保留本地版本并合并其他块'
+      : '已同步协作者的最新修改');
+    return { dirty, hadConflicts };
+  }, [form]);
+
+  const persistGoalContent = async ({ silent = true, retryOnConflict = true } = {}) => {
+    if (!editing?.id || !modalVisible) return false;
+    if (goalPendingSaveRef.current) {
+      await goalPendingSaveRef.current.catch(() => null);
+      return persistGoalContentRef.current?.({ silent, retryOnConflict }) || false;
+    }
+    const values = form.getFieldsValue(true);
+    if (!String(values.title || '').trim()) return false;
+    const signature = getGoalContentSignature(values);
+    if (signature === goalLastSavedSignatureRef.current) {
+      goalDirtyRef.current = false;
+      setGoalSaveState(prev => ({ ...prev, phase: 'saved', error: '' }));
+      return true;
+    }
+    setGoalSaveState(prev => ({ ...prev, phase: 'saving', error: '' }));
+    const payload = {
+      title: values.title,
+      description: serializeGoalDocumentContent(values.description),
+      result: serializeGoalDocumentContent(values.result),
+      ...(goalBaseSnapshotRef.current?.updated_at
+        ? { base_updated_at: goalBaseSnapshotRef.current.updated_at }
+        : {}),
+      revision_action: silent ? 'save' : 'manual_save',
+    };
+    const savePromise = goalsApi.update(editing.id, payload);
+    goalPendingSaveRef.current = savePromise;
     try {
+      const saved = await savePromise;
+      goalLastSavedSignatureRef.current = signature;
+      goalBaseSnapshotRef.current = {
+        title: values.title || '',
+        description: normalizeGoalDocumentContent(values.description),
+        result: normalizeGoalDocumentContent(values.result),
+        updated_at: saved.updated_at || new Date().toISOString(),
+      };
+      const dirty = getGoalContentSignature(form.getFieldsValue(true)) !== signature;
+      goalDirtyRef.current = dirty;
+      setGoalSaveState({ phase: dirty ? 'dirty' : 'saved', savedAt: saved.updated_at, error: '' });
+      setEditing(prev => (prev ? { ...prev, ...saved } : prev));
+      setGoals(prev => prev.map(item => (Number(item.id) === Number(saved.id) ? { ...item, ...saved } : item)));
+      setGoalOptions(prev => prev.map(item => (Number(item.id) === Number(saved.id) ? { ...item, ...saved } : item)));
+      setDetailRecord(prev => (Number(prev?.id) === Number(saved.id) ? { ...prev, ...saved } : prev));
+      if (!silent) message.success('目标内容已保存');
+      return true;
+    } catch (error) {
+      if (error?.response?.status === 409 && error.response?.data?.latest) {
+        if (goalPendingSaveRef.current === savePromise) goalPendingSaveRef.current = null;
+        const merged = applyRemoteGoalContent(error.response.data.latest, { mergeLocal: true });
+        if (!merged.dirty) return true;
+        if (retryOnConflict && merged.dirty) {
+          return persistGoalContentRef.current?.({ silent, retryOnConflict: false }) || false;
+        }
+      }
+      const errorText = error.response?.data?.error || error.message || '目标内容保存失败';
+      setGoalSaveState(prev => ({ ...prev, phase: 'error', error: errorText }));
+      if (!silent) message.error(errorText);
+      return false;
+    } finally {
+      if (goalPendingSaveRef.current === savePromise) goalPendingSaveRef.current = null;
+    }
+  };
+
+  persistGoalContentRef.current = persistGoalContent;
+
+  const scheduleGoalContentAutoSave = () => {
+    if (!editing?.id || !modalVisible) return;
+    goalDirtyRef.current = true;
+    setGoalSaveState(prev => ({ ...prev, phase: 'dirty', error: '' }));
+    if (goalAutoSaveTimerRef.current) window.clearTimeout(goalAutoSaveTimerRef.current);
+    goalAutoSaveTimerRef.current = window.setTimeout(() => {
+      persistGoalContentRef.current?.({ silent: true }).catch(() => {});
+    }, GOAL_CONTENT_AUTO_SAVE_DELAY);
+  };
+
+  const syncGoalFromRemote = useCallback(async () => {
+    const goalId = editing?.id;
+    const base = goalBaseSnapshotRef.current;
+    if (!modalVisible || !goalId || !base?.updated_at || goalLiveSyncPendingRef.current || goalPendingSaveRef.current) return;
+    goalLiveSyncPendingRef.current = true;
+    try {
+      const remote = await goalsApi.live(goalId, { since: base.updated_at });
+      if (!remote?.has_changes) return;
+      const merged = applyRemoteGoalContent(remote, { mergeLocal: true });
+      setEditing(prev => (prev ? { ...prev, ...remote } : prev));
+      setGoals(prev => prev.map(item => (Number(item.id) === Number(remote.id) ? { ...item, ...remote } : item)));
+      if (merged.dirty) scheduleGoalContentAutoSave();
+    } catch (error) {
+      if (![403, 404].includes(error?.response?.status)) console.error(error);
+    } finally {
+      goalLiveSyncPendingRef.current = false;
+    }
+  }, [applyRemoteGoalContent, editing?.id, modalVisible]);
+
+  useEffect(() => {
+    if (!modalVisible || !editing?.id) return undefined;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') syncGoalFromRemote();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [editing?.id, modalVisible, syncGoalFromRemote]);
+
+  useEffect(() => {
+    if (!remoteUpdateHint) return undefined;
+    const timer = window.setTimeout(() => setRemoteUpdateHint(''), 5000);
+    return () => window.clearTimeout(timer);
+  }, [remoteUpdateHint]);
+
+  const loadGoalHistory = async (goalId = editing?.id || detailRecord?.id) => {
+    if (!goalId) return;
+    setHistoryLoading(true);
+    try {
+      const result = await goalsApi.history(goalId);
+      setHistoryCanRestore(Boolean(result?.can_restore));
+      setHistoryRevisions(Array.isArray(result?.revisions) ? result.revisions : []);
+    } catch (error) {
+      message.error(error.response?.data?.error || '加载历史版本失败');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const openGoalHistory = async (goalId = editing?.id || detailRecord?.id) => {
+    if (!goalId) return;
+    setHistoryGoalId(Number(goalId));
+    setHistoryOpen(true);
+    await loadGoalHistory(goalId);
+  };
+
+  const restoreGoalHistory = async (revision) => {
+    const goalId = historyGoalId;
+    if (!goalId || !revision?.id) return;
+    setRestoringRevisionId(revision.id);
+    try {
+      if (Number(editing?.id) === Number(goalId)) {
+        if (goalAutoSaveTimerRef.current) window.clearTimeout(goalAutoSaveTimerRef.current);
+        if (goalPendingSaveRef.current || goalDirtyRef.current) {
+          const saved = await persistGoalContent({ silent: true });
+          if (!saved) {
+            message.error('当前目标内容保存失败，未执行历史恢复');
+            return;
+          }
+        }
+      }
+      const restored = await goalsApi.restoreHistory(goalId, revision.id);
+      if (Number(editing?.id) === Number(goalId)) {
+        form.setFieldsValue(getGoalEditorValues(restored));
+        setEditing(prev => ({ ...prev, ...restored }));
+        goalBaseSnapshotRef.current = buildGoalContentSnapshot(restored);
+        goalLastSavedSignatureRef.current = getGoalContentSignature(getGoalEditorValues(restored));
+        goalDirtyRef.current = false;
+        setGoalSaveState({ phase: 'saved', savedAt: restored.updated_at, error: '' });
+      }
+      if (Number(detailRecord?.id) === Number(goalId)) {
+        const detail = await goalsApi.get(goalId);
+        setDetailRecord(detail);
+      }
+      await Promise.all([refreshGoals(), loadGoalHistory(goalId)]);
+      message.success('已恢复目标历史版本');
+    } catch (error) {
+      message.error(error.response?.data?.error || '恢复历史版本失败');
+    } finally {
+      setRestoringRevisionId(null);
+    }
+  };
+
+  const submitGoalForm = async (retryOnConflict = true) => {
+    try {
+      if (goalAutoSaveTimerRef.current) window.clearTimeout(goalAutoSaveTimerRef.current);
+      if (goalPendingSaveRef.current) await goalPendingSaveRef.current.catch(() => null);
       const values = await form.validateFields();
       let period = '';
       if (values.goal_type === 'quarter') {
@@ -392,10 +646,17 @@ function Goals() {
         goal_type: values.goal_type,
         period,
         parent_id: values.goal_type === 'quarter' ? null : values.parent_id,
+        ...(editing?.id && goalBaseSnapshotRef.current?.updated_at
+          ? { base_updated_at: goalBaseSnapshotRef.current.updated_at }
+          : {}),
+        revision_action: 'manual_save',
       };
 
       if (editing) {
-        await goalsApi.update(editing.id, payload);
+        const saved = await goalsApi.update(editing.id, payload);
+        goalBaseSnapshotRef.current = buildGoalContentSnapshot(saved);
+        goalLastSavedSignatureRef.current = getGoalContentSignature(getGoalEditorValues(saved));
+        goalDirtyRef.current = false;
         message.success('更新成功');
       } else {
         await goalsApi.create(payload);
@@ -406,9 +667,31 @@ function Goals() {
       await refreshGoals();
     } catch (error) {
       if (error?.errorFields) return;
+      if (editing?.id && error?.response?.status === 409 && error.response?.data?.latest) {
+        applyRemoteGoalContent(error.response.data.latest, { mergeLocal: true });
+        if (retryOnConflict) return submitGoalForm(false);
+      }
       message.error(error?.response?.data?.error || (editing ? '更新失败' : '创建失败'));
     }
   };
+
+  const handleSubmit = () => submitGoalForm(true);
+
+  const closeGoalEditor = async () => {
+    if (goalAutoSaveTimerRef.current) window.clearTimeout(goalAutoSaveTimerRef.current);
+    if (editing?.id && goalDirtyRef.current) {
+      const saved = await persistGoalContent({ silent: true });
+      if (!saved) {
+        message.error('目标内容尚未保存，请重试后再关闭');
+        return;
+      }
+    }
+    setModalVisible(false);
+  };
+
+  useEffect(() => () => {
+    if (goalAutoSaveTimerRef.current) window.clearTimeout(goalAutoSaveTimerRef.current);
+  }, []);
 
   const showDetail = async (record) => {
     setDetailVisible(true);
@@ -650,6 +933,13 @@ function Goals() {
       <Button onClick={resetFilters} style={{ width: isMobile ? '100%' : undefined }}>重置筛选</Button>
     </Space>
   );
+  const goalSaveMeta = {
+    idle: { color: 'default', text: '尚未保存' },
+    dirty: { color: 'default', text: '待自动保存' },
+    saving: { color: 'processing', text: '自动保存中' },
+    saved: { color: 'success', text: '已保存' },
+    error: { color: 'error', text: '自动保存失败' },
+  }[goalSaveState.phase] || { color: 'default', text: '尚未保存' };
 
   return (
     <div style={{ padding: isMobile ? 12 : 24 }}>
@@ -722,15 +1012,30 @@ function Goals() {
       </Drawer>
 
       <Modal
-        title={editing ? '编辑目标' : '新建目标'}
+        title={(
+          <Space size={8} wrap>
+            <span>{editing ? '编辑目标' : '新建目标'}</span>
+            {editing && <Tag color={goalSaveMeta.color}>{goalSaveMeta.text}</Tag>}
+            {editing && (
+              <Button type="text" size="small" icon={<HistoryOutlined />} onClick={() => openGoalHistory()}>
+                历史
+              </Button>
+            )}
+          </Space>
+        )}
         open={modalVisible}
         onOk={handleSubmit}
-        onCancel={() => setModalVisible(false)}
+        onCancel={closeGoalEditor}
         width={isMobile ? '100%' : 680}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
         destroyOnClose
       >
+        {remoteUpdateHint && (
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            {remoteUpdateHint}
+          </Typography.Text>
+        )}
         <Form
           form={form}
           layout="vertical"
@@ -756,6 +1061,9 @@ function Goals() {
               if (!form.getFieldValue('department')) {
                 form.setFieldValue('department', selectedUser?.department || undefined);
               }
+            }
+            if (['title', 'description', 'result'].some(field => Object.prototype.hasOwnProperty.call(changedValues, field))) {
+              scheduleGoalContentAutoSave();
             }
           }}
         >
@@ -838,6 +1146,7 @@ function Goals() {
             <DocumentBodyEditor
               placeholder="请输入目标描述..."
               minHeight={180}
+              onSave={() => persistGoalContent({ silent: false })}
               style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 8px 14px' }}
             />
           </Form.Item>
@@ -919,6 +1228,7 @@ function Goals() {
             <DocumentBodyEditor
               placeholder="填写目标完成得怎么样..."
               minHeight={180}
+              onSave={() => persistGoalContent({ silent: false })}
               style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 8px 14px' }}
             />
           </Form.Item>
@@ -933,16 +1243,21 @@ function Goals() {
         onClose={() => setDetailVisible(false)}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
         extra={detailRecord ? (
-          <Button
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => {
-              setDetailVisible(false);
-              handleEdit(detailRecord);
-            }}
-          >
-            编辑目标
-          </Button>
+          <Space size={8}>
+            <Button size="small" icon={<HistoryOutlined />} onClick={() => openGoalHistory(detailRecord.id)}>
+              历史
+            </Button>
+            <Button
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => {
+                setDetailVisible(false);
+                handleEdit(detailRecord);
+              }}
+            >
+              编辑目标
+            </Button>
+          </Space>
         ) : null}
       >
         {detailLoading && <div style={{ textAlign: 'center', padding: 32 }}>加载中...</div>}
@@ -1057,6 +1372,18 @@ function Goals() {
           </Space>
         )}
       </Drawer>
+
+      <ContentHistoryDrawer
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        title="目标历史版本"
+        revisions={historyRevisions}
+        loading={historyLoading}
+        restoringId={restoringRevisionId}
+        canRestore={historyCanRestore}
+        onRestore={restoreGoalHistory}
+        width={isMobile ? '100%' : 460}
+      />
     </div>
   );
 }
