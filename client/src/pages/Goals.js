@@ -38,6 +38,7 @@ import {
 } from '../utils/collaborativeDocument';
 import { getDefaultDocumentCxoUsers } from '../utils/documentDefaultShares';
 import {
+  createDefaultShareDraft,
   createEmptyShareDraft,
   draftToShares,
   ORGANIZATION_DEPARTMENT_OPTIONS,
@@ -194,6 +195,10 @@ function Goals() {
   const [shareDraft, setShareDraft] = useState(createEmptyShareDraft());
   const [shareLoading, setShareLoading] = useState(false);
   const [shareSaving, setShareSaving] = useState(false);
+  const [editorShareDraft, setEditorShareDraft] = useState(createEmptyShareDraft());
+  const [editorShareLoading, setEditorShareLoading] = useState(false);
+  const [editorShareLoaded, setEditorShareLoaded] = useState(false);
+  const [editorShareSaving, setEditorShareSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [filtersReady, setFiltersReady] = useState(false);
   const [filters, setFilters] = useState({
@@ -228,10 +233,13 @@ function Goals() {
   const goalDirtyRef = useRef(false);
   const goalLiveSyncPendingRef = useRef(false);
   const persistGoalContentRef = useRef(null);
+  const editorShareDirtyRef = useRef(false);
   const goalType = Form.useWatch('goal_type', form);
   const scopeType = Form.useWatch('scope_type', form);
   const defaultShareUsers = useMemo(() => getDefaultDocumentCxoUsers(users), [users]);
   const canManageEditingGoal = !editing || Boolean(Number(editing.can_manage));
+  const historyGoalRecord = [editing, detailRecord, ...goals]
+    .find(item => Number(item?.id) === Number(historyGoalId));
 
   useEffect(() => {
     loadUsers();
@@ -394,6 +402,10 @@ function Goals() {
     goalDirtyRef.current = false;
     setGoalSaveState({ phase: 'idle', savedAt: null, error: '' });
     setRemoteUpdateHint('');
+    editorShareDirtyRef.current = false;
+    setEditorShareDraft(createDefaultShareDraft(defaultShareUsers));
+    setEditorShareLoading(false);
+    setEditorShareLoaded(true);
     setModalVisible(true);
   };
 
@@ -411,7 +423,41 @@ function Goals() {
     goalDirtyRef.current = false;
     setGoalSaveState({ phase: 'saved', savedAt: record.updated_at || null, error: '' });
     setRemoteUpdateHint('');
+    editorShareDirtyRef.current = false;
+    setEditorShareDraft(createEmptyShareDraft());
+    setEditorShareLoading(true);
+    setEditorShareLoaded(false);
     setModalVisible(true);
+    goalsApi.listShares(record.id).then((shares) => {
+      setEditorShareDraft(sharesToDraft(shares));
+      setEditorShareLoaded(true);
+    }).catch((error) => {
+      message.error(error?.response?.data?.error || '加载目标共享范围失败');
+    }).finally(() => {
+      setEditorShareLoading(false);
+    });
+  };
+
+  useEffect(() => {
+    if (!modalVisible || editing || editorShareDirtyRef.current || !editorShareLoaded) return;
+    setEditorShareDraft(createDefaultShareDraft(defaultShareUsers));
+  }, [defaultShareUsers, editing, editorShareLoaded, modalVisible]);
+
+  const updateGoalEditorShares = (nextDraft) => {
+    editorShareDirtyRef.current = true;
+    setEditorShareDraft(nextDraft);
+  };
+
+  const persistGoalEditorShares = async (goalId) => {
+    if (!goalId || !editorShareLoaded || !editorShareDirtyRef.current) return true;
+    setEditorShareSaving(true);
+    try {
+      await goalsApi.saveShares(goalId, draftToShares(editorShareDraft));
+      editorShareDirtyRef.current = false;
+      return true;
+    } finally {
+      setEditorShareSaving(false);
+    }
   };
 
   const openGoalShare = async (record) => {
@@ -705,10 +751,14 @@ function Goals() {
           ? { base_updated_at: goalBaseSnapshotRef.current.updated_at }
           : {}),
         revision_action: 'manual_save',
+        ...(!editing && (defaultShareUsers.length || editorShareDirtyRef.current) ? {
+          shares: draftToShares(editorShareDraft),
+        } : {}),
       };
 
       if (editing) {
         const saved = await goalsApi.update(editing.id, payload);
+        await persistGoalEditorShares(editing.id);
         goalBaseSnapshotRef.current = buildGoalContentSnapshot(saved);
         goalLastSavedSignatureRef.current = getGoalContentSignature(getGoalEditorValues(saved));
         goalDirtyRef.current = false;
@@ -738,6 +788,14 @@ function Goals() {
       const saved = await persistGoalContent({ silent: true });
       if (!saved) {
         message.error('目标内容尚未保存，请重试后再关闭');
+        return;
+      }
+    }
+    if (editing?.id && editorShareDirtyRef.current) {
+      try {
+        await persistGoalEditorShares(editing.id);
+      } catch (error) {
+        message.error(error?.response?.data?.error || '目标共享范围尚未保存，请重试后再关闭');
         return;
       }
     }
@@ -1108,6 +1166,8 @@ function Goals() {
         open={modalVisible}
         onOk={handleSubmit}
         onCancel={closeGoalEditor}
+        confirmLoading={goalSaveState.phase === 'saving' || editorShareSaving}
+        okButtonProps={{ disabled: editorShareLoading }}
         width={isMobile ? '100%' : 680}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
@@ -1321,6 +1381,22 @@ function Goals() {
               style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 8px 14px' }}
             />
           </Form.Item>
+
+          <div style={{ borderTop: '1px solid #edf0f3', marginTop: 8, paddingTop: 20 }}>
+            <Typography.Text strong>共享范围</Typography.Text>
+            <div style={{ marginTop: 14 }}>
+              <ContentShareEditor
+                draft={editorShareDraft}
+                onChange={updateGoalEditorShares}
+                loading={editorShareLoading}
+                users={users}
+                defaultUsers={defaultShareUsers}
+                projectGroups={projectGroups}
+                departments={ORGANIZATION_DEPARTMENT_OPTIONS}
+                teams={teams}
+              />
+            </div>
+          </div>
         </Form>
       </Modal>
 
@@ -1496,13 +1572,14 @@ function Goals() {
       <ContentHistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        title="目标历史版本"
+        title="改动历史"
+        entityTitle={historyGoalRecord?.title || '目标'}
         revisions={historyRevisions}
         loading={historyLoading}
         restoringId={restoringRevisionId}
         canRestore={historyCanRestore}
         onRestore={restoreGoalHistory}
-        width={isMobile ? '100%' : 460}
+        width={isMobile ? '100%' : 520}
       />
     </div>
   );

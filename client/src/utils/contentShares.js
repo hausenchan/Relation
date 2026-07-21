@@ -19,6 +19,13 @@ export function createEmptyShareDraft() {
   };
 }
 
+export function createDefaultShareDraft(defaultUsers = []) {
+  return {
+    ...createEmptyShareDraft(),
+    user_ids: uniqueIds((Array.isArray(defaultUsers) ? defaultUsers : []).map(user => user?.id)),
+  };
+}
+
 function uniqueIds(values = []) {
   return [...new Set((values || []).map(Number).filter(Boolean))];
 }

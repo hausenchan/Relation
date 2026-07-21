@@ -127,6 +127,135 @@ test('goal and weekly report sharing supports user, department, team, and projec
   assert.equal(projectResponse.status, 200, JSON.stringify(projectResponse.payload));
   const projectGroupId = Number(projectResponse.payload.id);
 
+  const defaultPeople = [
+    { username: 'default_ceo', display_name: '陈锦标', role: 'ceo' },
+    { username: 'default_coo', display_name: '陈豪赞', role: 'coo' },
+    { username: 'default_cmo', display_name: '林璐韵', role: 'cmo' },
+    { username: 'default_cto', display_name: '贺敏', role: 'cto' },
+  ];
+  for (const person of defaultPeople) {
+    person.id = await createUser(baseUrl, adminToken, person);
+  }
+  const defaultPersonIds = defaultPeople.map(person => person.id);
+
+  const defaultDocument = await request(baseUrl, '/api/documents', {
+    method: 'POST',
+    token: adminToken,
+    body: { title: '默认共享验证文档', content: { blocks: [] } },
+  });
+  assert.equal(defaultDocument.status, 200, JSON.stringify(defaultDocument.payload));
+  const migrationDb = new Database(databasePath);
+  migrationDb.prepare('DELETE FROM document_shares WHERE document_id = ?').run(defaultDocument.payload.id);
+  migrationDb.prepare('UPDATE documents SET default_shares_initialized = 1 WHERE id = ?')
+    .run(defaultDocument.payload.id);
+  migrationDb.close();
+  const migratedDocumentShares = await request(
+    baseUrl,
+    `/api/documents/${defaultDocument.payload.id}/shares`,
+    { token: adminToken },
+  );
+  assert.deepEqual(
+    migratedDocumentShares.payload.map(share => Number(share.target_id)),
+    defaultPersonIds,
+  );
+  const documentSharesWithoutCeo = await request(
+    baseUrl,
+    `/api/documents/${defaultDocument.payload.id}/shares`,
+    {
+      method: 'PUT',
+      token: adminToken,
+      body: {
+        shares: defaultPersonIds.slice(1)
+          .map(id => ({ target_type: 'user', target_id: id })),
+      },
+    },
+  );
+  assert.equal(documentSharesWithoutCeo.status, 200, JSON.stringify(documentSharesWithoutCeo.payload));
+  const documentSharesAfterRemoval = await request(
+    baseUrl,
+    `/api/documents/${defaultDocument.payload.id}/shares`,
+    { token: adminToken },
+  );
+  assert.deepEqual(
+    documentSharesAfterRemoval.payload.map(share => Number(share.target_id)),
+    defaultPersonIds.slice(1),
+  );
+
+  const defaultGoal = await request(baseUrl, '/api/goals', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      title: '默认共享验证目标',
+      owner_id: adminId,
+      scope_type: 'company',
+      goal_type: 'quarter',
+      period: '2028-Q1',
+    },
+  });
+  assert.equal(defaultGoal.status, 200, JSON.stringify(defaultGoal.payload));
+  const defaultGoalShares = await request(baseUrl, `/api/goals/${defaultGoal.payload.id}/shares`, {
+    token: adminToken,
+  });
+  assert.deepEqual(defaultGoalShares.payload.map(share => Number(share.target_id)), defaultPersonIds);
+  const goalSharesWithoutCeo = await request(baseUrl, `/api/goals/${defaultGoal.payload.id}/shares`, {
+    method: 'PUT',
+    token: adminToken,
+    body: {
+      shares: defaultPersonIds.slice(1)
+        .map(id => ({ target_type: 'user', target_id: id })),
+    },
+  });
+  assert.equal(goalSharesWithoutCeo.status, 200, JSON.stringify(goalSharesWithoutCeo.payload));
+  const goalSharesAfterRemoval = await request(baseUrl, `/api/goals/${defaultGoal.payload.id}/shares`, {
+    token: adminToken,
+  });
+  assert.deepEqual(
+    goalSharesAfterRemoval.payload.map(share => Number(share.target_id)),
+    defaultPersonIds.slice(1),
+  );
+
+  const defaultWeeklyReport = await request(baseUrl, '/api/weekly-reports', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      user_id: adminId,
+      week_start: '2028-01-03',
+      week_end: '2028-01-09',
+      completed: documentBody('default-weekly', '默认共享周报'),
+      next_week_plan: documentBody('default-weekly-plan', '下周计划'),
+      risks: documentBody('default-weekly-risk', ''),
+    },
+  });
+  assert.equal(defaultWeeklyReport.status, 200, JSON.stringify(defaultWeeklyReport.payload));
+  const defaultWeeklyShares = await request(
+    baseUrl,
+    `/api/weekly-reports/${defaultWeeklyReport.payload.id}/shares`,
+    { token: adminToken },
+  );
+  assert.deepEqual(defaultWeeklyShares.payload.map(share => Number(share.target_id)), defaultPersonIds);
+  const weeklySharesWithoutCeo = await request(
+    baseUrl,
+    `/api/weekly-reports/${defaultWeeklyReport.payload.id}/shares`,
+    {
+      method: 'PUT',
+      token: adminToken,
+      body: {
+        shares: defaultPersonIds.slice(1)
+          .map(id => ({ target_type: 'user', target_id: id })),
+      },
+    },
+  );
+  assert.equal(weeklySharesWithoutCeo.status, 200, JSON.stringify(weeklySharesWithoutCeo.payload));
+  const weeklySharesAfterRemoval = await request(
+    baseUrl,
+    `/api/weekly-reports/${defaultWeeklyReport.payload.id}/shares`,
+    { token: adminToken },
+  );
+  assert.deepEqual(
+    weeklySharesAfterRemoval.payload.map(share => Number(share.target_id)),
+    defaultPersonIds.slice(1),
+  );
+
   const actors = [
     {
       key: 'user',

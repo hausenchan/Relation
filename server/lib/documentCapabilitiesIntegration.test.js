@@ -139,6 +139,11 @@ test('goal and weekly report APIs preserve large content, conflicts, and encrypt
   assert.equal(goalHistory.status, 200, JSON.stringify(goalHistory.payload));
   assert.equal(goalHistory.payload.can_restore, 1);
   assert.ok(goalHistory.payload.revisions.length >= 2);
+  assert.equal('snapshot_json' in goalHistory.payload.revisions[0], false);
+  assert.deepEqual(
+    goalHistory.payload.revisions[0].change_items.map(item => item.label),
+    ['目标标题', '目标描述'],
+  );
   const initialGoalRevision = goalHistory.payload.revisions.at(-1);
   const restoredGoal = await request(
     baseUrl,
@@ -217,6 +222,9 @@ test('goal and weekly report APIs preserve large content, conflicts, and encrypt
   const weeklyHistory = await request(baseUrl, `/api/weekly-reports/${weeklyReportId}/history`, { token });
   assert.equal(weeklyHistory.status, 200, JSON.stringify(weeklyHistory.payload));
   assert.ok(weeklyHistory.payload.revisions.length >= 2);
+  assert.ok(weeklyHistory.payload.revisions[0].change_items.some(item => (
+    item.label === '本周完成' && item.after === '第二版周报'
+  )));
   const initialWeeklyRevision = weeklyHistory.payload.revisions.at(-1);
   const restoredWeeklyReport = await request(
     baseUrl,

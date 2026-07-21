@@ -4,45 +4,62 @@
 
 ## 当前任务
 
-状态：已完成
+状态：已完成，尚未提交（本轮用户未要求提交）
 
-目标：目标管理和周报管理复用文档中心共享逻辑，支持项目组、部门、小组、个人共享；
-文档默认共享人按陈锦标、陈豪赞、林璐韵、贺敏的顺序默认选中，并允许移除后保持。
+目标：修正文档默认共享人的选中状态；在目标管理和周报管理编辑页直接提供完整共享范围；
+目标、周报和经营周会复用文档中心的版本记录、页面编辑记录及历史恢复能力。
 
 ## 已完成
 
-- [x] 新增通用 `content_shares`，目标和周报统一支持四类共享对象。
-- [x] 列表、详情、历史版本、实时协作和保存接口统一应用共享可见性与编辑权限。
-- [x] 共享协作者可编辑并继续授权，但不能删除记录；目标管理字段和历史恢复仍受原管理权限限制。
-- [x] 文档默认人员优先按四个指定姓名匹配，角色仅作回退，显示顺序固定。
-- [x] 旧文档一次性补默认共享；手动移除并保存后不会在重启时重新回填。
-- [x] 新建文档、目标和周报默认共享四人，也可在保存前或共享弹窗中移除。
-- [x] 删除目标、周报、用户、小组或项目组时同步清理相关共享记录。
-- [x] 更新 `AGENTS.md` 的共享功能地图、权限边界和高风险耦合说明。
+- [x] 文档默认共享初始化改为版本化迁移，旧文档补齐缺失的默认 CXO；用户明确移除并保存后不再自动补回。
+- [x] 文档、目标和周报默认共享人按陈锦标、陈豪赞、林璐韵、贺敏顺序显示为已选标签。
+- [x] 目标和周报编辑弹窗内嵌完整共享编辑器，支持默认人员、项目组、部门、小组和个人。
+- [x] 目标和周报新建时随主记录一次保存共享范围；编辑、关闭和自动保存时正确等待共享保存完成。
+- [x] 通用历史抽屉新增“版本记录 / 页面编辑记录”，显示编辑人、时间、字段及修改前后值。
+- [x] 服务端为目标、周报、经营周会准备、会议提纲和会议结论生成可读差异，且不返回原始历史快照。
+- [x] 三个模块均可恢复旧版本；恢复会生成新版本，并立即同步列表和当前编辑器。
+- [x] 周报恢复按钮服从服务端 `can_restore`，避免只读共享用户误看到恢复操作。
 
 ## 待完成
 
-- 无代码、测试或提交遗留项。
-- 本轮提交信息：`优化目标周报共享逻辑`，目标远端：Gitee `main`。
+- 无代码或测试遗留项。
+- 本轮尚未提交；提交时只纳入下方列出的任务文件，避免夹带其他会话改动。
 
 ## 已验证
 
-- 前端全量测试：14 个测试套件、66 条测试全部通过。
-- 后端全量测试：35 条测试全部通过。
-- 共享集成测试：个人、部门、小组、项目组可见和编辑，未共享隔离，继续授权、删除限制、
-  目标管理字段及历史恢复权限均通过。
-- 浏览器：文档、目标、周报共享弹窗均展示四类共享对象，四位默认人员按指定顺序选中。
-- 浏览器：文档移除默认人员、保存并重新打开后保持移除状态。
-- 隔离生产构建：通过，输出到 `/tmp/relation-content-sharing-final-build`。
-- `node --check server/index.js`、`git diff --check`：通过。
+- 前端全量测试：14 个测试套件、67 条测试全部通过。
+- 后端全量测试：38 条测试全部通过。
+- 浏览器：文档新建并保存后页头显示“共 4 人”，共享弹窗四位默认人员均为已选状态。
+- 浏览器：目标和周报新建页均直接显示四类共享对象及四位默认人员，保存后共享关系落库。
+- 浏览器：目标和周报二次编辑产生可读页面编辑记录，恢复旧版本后列表与编辑器同步更新。
+- 浏览器：经营周会准备、会议提纲、会议结论三个 scope 均产生可读历史并成功恢复。
+- 浏览器移动端：目标共享区域与历史抽屉在 390 x 844 视口无重叠、截断或不可达控件。
+- 隔离生产构建：通过，输出到 `/tmp/relation-sharing-history-final-build`。
+- `node --check server/index.js`、`git diff --check`：收尾时通过。
 
 ## 工作区提醒
 
 - 存在其他会话的未提交修改；不要纳入本任务：`client/build/*`、`data.db`、
   `documentFolderPermissions*`、`server/lib/wolaiMcpImport.test.js`、`data-local.db*`、
   `.codex/skills/yyz-dashboard-analysis/`、`dataAnalysis/` 和若干业务 Markdown。
-- `client/src/pages/Documents.js` 同时含其他会话的文件夹权限与 Wolai 引用改动；本任务只暂存
-  新建文档默认共享表单的精确 hunk。
+- `client/src/pages/Documents.js` 当前差异属于其他会话的文件夹权限与 Wolai 引用改动，本轮不要暂存。
+- 文档默认共享人的本轮修复位于 `server/index.js` 的版本化迁移和共享初始化逻辑。
+
+## 本轮任务文件
+
+- `AGENTS.md`
+- `handoff.md`
+- `client/src/components/ContentHistoryDrawer.js`
+- `client/src/pages/Goals.js`
+- `client/src/pages/OperationalMeeting.js`
+- `client/src/pages/WeeklyReports.js`
+- `client/src/utils/contentShares.js`
+- `client/src/utils/contentShares.test.js`
+- `server/index.js`
+- `server/lib/contentRevisionDiff.js`
+- `server/lib/contentRevisionDiff.test.js`
+- `server/lib/contentSharingIntegration.test.js`
+- `server/lib/documentCapabilitiesIntegration.test.js`
 
 ## 资产管理-媒体管理（2026-07-21）
 

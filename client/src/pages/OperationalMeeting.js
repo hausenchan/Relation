@@ -1563,12 +1563,14 @@ export default function OperationalMeeting() {
       <ContentHistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        title={historyTitle}
+        title="改动历史"
+        entityTitle={historyTitle.replace(/历史版本$/, '')}
         revisions={historyRevisions}
         loading={historyLoading}
         restoringId={restoringRevisionId}
         canRestore={historyCanRestore}
         onRestore={restoreOperationalHistory}
+        width={isMobile ? '100%' : 520}
       />
 
     </div>

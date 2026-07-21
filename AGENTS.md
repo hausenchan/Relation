@@ -182,6 +182,9 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 - 可见页面每 5 秒拉取一次更新，后台轮询错误保持静默，恢复可见时立即同步。
 - 通用历史表为 `content_revisions`，键为 `entity_type + entity_id + scope_key`；快照加密、
   去重并限制大小。恢复历史前先保存当前草稿，恢复动作本身再生成新版本。
+- 目标、周报和经营周会的历史界面统一展示“版本记录 / 页面编辑记录”两个页签；页面编辑记录
+  必须用字段名称和修改前后值描述变化，不得向前端暴露原始快照 JSON。恢复按钮必须服从历史
+  接口返回的 `can_restore`，只读用户即使能查看历史也不得看到可执行的恢复操作。
 - 经营周会历史 scope：准备 `section:<id>`、会议提纲 `agenda`、会议结论 `decision`。
 
 ### 5.4 高风险耦合矩阵

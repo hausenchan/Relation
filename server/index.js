@@ -14,6 +14,7 @@ const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
 const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
 const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
+const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
 const {
   decodeOssKey,
   deleteOssObjectByPath,
@@ -2108,7 +2109,8 @@ db.exec(`
     depth       INTEGER DEFAULT 0,
     done_at     DATETIME,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    default_shares_initialized INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS task_shared_users (
@@ -2779,6 +2781,7 @@ db.exec(`
     risks TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    default_shares_initialized INTEGER DEFAULT 0,
     UNIQUE(user_id, week_start)
   );
 
@@ -2810,6 +2813,8 @@ db.exec(`
   );
 `);
 
+addColumnIfMissing('goals', 'default_shares_initialized', 'INTEGER DEFAULT 0');
+addColumnIfMissing('weekly_reports', 'default_shares_initialized', 'INTEGER DEFAULT 0');
 ensureMysqlLongTextColumn('weekly_reports', 'completed', 'NULL');
 ensureMysqlLongTextColumn('weekly_reports', 'next_week_plan', 'NULL');
 ensureMysqlLongTextColumn('weekly_reports', 'risks', 'NULL');
@@ -7107,6 +7112,20 @@ function isContentSharedWithUser(user, entityType, entityId) {
   `).get(entityType, Number(entityId), ...target.params));
 }
 
+const DOCUMENT_DEFAULT_SHARE_VERSION = 2;
+const CONTENT_DEFAULT_SHARE_VERSION = 1;
+const CONTENT_SHARE_ENTITY_TABLES = {
+  goal: 'goals',
+  weekly_report: 'weekly_reports',
+};
+
+function markContentDefaultSharesInitialized(entityType, entityId) {
+  const table = CONTENT_SHARE_ENTITY_TABLES[entityType];
+  if (!table || !Number(entityId)) return;
+  db.prepare(`UPDATE ${table} SET default_shares_initialized = ? WHERE id = ?`)
+    .run(CONTENT_DEFAULT_SHARE_VERSION, Number(entityId));
+}
+
 function replaceContentShares(entityType, entityId, shares, userId) {
   const normalized = normalizeDocumentShares(shares);
   db.prepare('DELETE FROM content_shares WHERE entity_type = ? AND entity_id = ?')
@@ -7124,10 +7143,12 @@ function replaceContentShares(entityType, entityId, shares, userId) {
     share.target_key,
     Number(userId) || null,
   ));
+  markContentDefaultSharesInitialized(entityType, entityId);
   return normalized;
 }
 
 function getContentShares(entityType, entityId) {
+  ensureContentDefaultShares(entityType, entityId);
   return db.prepare(`
     SELECT content_share.*,
       u.display_name as user_name,
@@ -7167,26 +7188,36 @@ function replaceDocumentShares(documentId, shares, userId) {
     VALUES (?, ?, ?, ?, ?)
   `);
   normalized.forEach(share => insert.run(documentId, share.target_type, share.target_id, share.target_key, userId));
-  db.prepare('UPDATE documents SET default_shares_initialized = 1 WHERE id = ?').run(documentId);
+  db.prepare('UPDATE documents SET default_shares_initialized = ? WHERE id = ?')
+    .run(DOCUMENT_DEFAULT_SHARE_VERSION, documentId);
   return normalized;
 }
 
-function initializeLegacyDocumentDefaultShares() {
+function initializeLegacyDefaultShares() {
   const defaultShares = getDefaultDocumentShares();
   if (!defaultShares.length) return;
   const documents = db.prepare(`
-    SELECT id
-    FROM documents
-    WHERE COALESCE(default_shares_initialized, 0) = 0
-  `).all();
-  if (!documents.length) return;
-  const initialize = db.transaction((rows) => {
-    rows.forEach(document => {
+    SELECT id FROM documents
+    WHERE COALESCE(default_shares_initialized, 0) < ?
+  `).all(DOCUMENT_DEFAULT_SHARE_VERSION);
+  const contentEntities = Object.entries(CONTENT_SHARE_ENTITY_TABLES)
+    .flatMap(([entityType, table]) => db.prepare(`
+      SELECT id FROM ${table}
+      WHERE COALESCE(default_shares_initialized, 0) < ?
+    `).all(CONTENT_DEFAULT_SHARE_VERSION).map(row => ({ entityType, id: row.id })));
+  if (!documents.length && !contentEntities.length) return;
+  const initialize = db.transaction(() => {
+    documents.forEach(document => {
       addDocumentShares(document.id, defaultShares, null);
-      db.prepare('UPDATE documents SET default_shares_initialized = 1 WHERE id = ?').run(document.id);
+      db.prepare('UPDATE documents SET default_shares_initialized = ? WHERE id = ?')
+        .run(DOCUMENT_DEFAULT_SHARE_VERSION, document.id);
+    });
+    contentEntities.forEach(({ entityType, id }) => {
+      addContentShares(entityType, id, defaultShares, null);
+      markContentDefaultSharesInitialized(entityType, id);
     });
   });
-  initialize(documents);
+  initialize();
 }
 
 function addDocumentShares(documentId, shares, userId) {
@@ -7212,9 +7243,71 @@ function addDocumentShares(documentId, shares, userId) {
   return { requested: normalized.length, added };
 }
 
-initializeLegacyDocumentDefaultShares();
+function addContentShares(entityType, entityId, shares, userId) {
+  if (!CONTENT_SHARE_ENTITY_TABLES[entityType]) return { requested: 0, added: 0 };
+  const normalized = normalizeDocumentShares(shares);
+  const existing = db.prepare(`
+    SELECT target_type, target_id, target_key
+    FROM content_shares
+    WHERE entity_type = ? AND entity_id = ?
+  `).all(entityType, Number(entityId));
+  const existingKeys = new Set(existing.map(getDocumentShareKey));
+  const insert = db.prepare(`
+    INSERT INTO content_shares (
+      entity_type, entity_id, target_type, target_id, target_key, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  let added = 0;
+  normalized.forEach(share => {
+    const key = getDocumentShareKey(share);
+    if (existingKeys.has(key)) return;
+    insert.run(
+      entityType,
+      Number(entityId),
+      share.target_type,
+      share.target_id,
+      share.target_key,
+      Number(userId) || null,
+    );
+    existingKeys.add(key);
+    added += 1;
+  });
+  return { requested: normalized.length, added };
+}
+
+function ensureContentDefaultShares(entityType, entityId) {
+  const table = CONTENT_SHARE_ENTITY_TABLES[entityType];
+  if (!table || !Number(entityId)) return;
+  const row = db.prepare(`SELECT default_shares_initialized FROM ${table} WHERE id = ?`)
+    .get(Number(entityId));
+  if (!row || Number(row.default_shares_initialized || 0) >= CONTENT_DEFAULT_SHARE_VERSION) return;
+  const defaultShares = getDefaultDocumentShares();
+  if (!defaultShares.length) return;
+  const initialize = db.transaction(() => {
+    addContentShares(entityType, entityId, defaultShares, null);
+    markContentDefaultSharesInitialized(entityType, entityId);
+  });
+  initialize();
+}
+
+function ensureDocumentDefaultShares(documentId) {
+  const document = db.prepare('SELECT id, default_shares_initialized FROM documents WHERE id = ?')
+    .get(Number(documentId));
+  if (!document || Number(document.default_shares_initialized || 0) >= DOCUMENT_DEFAULT_SHARE_VERSION) return;
+  const defaultShares = getDefaultDocumentShares();
+  if (!defaultShares.length) return;
+  const initialize = db.transaction(() => {
+    addDocumentShares(document.id, defaultShares, null);
+    db.prepare('UPDATE documents SET default_shares_initialized = ? WHERE id = ?')
+      .run(DOCUMENT_DEFAULT_SHARE_VERSION, document.id);
+  });
+  initialize();
+}
+
+initializeLegacyDefaultShares();
 
 function getDocumentShares(documentId) {
+  ensureDocumentDefaultShares(documentId);
   return db.prepare(`
     SELECT ds.*,
       u.display_name as user_name,
@@ -18493,7 +18586,8 @@ function recordContentRevisionChange({ entityType, entityId, scopeKey = 'main', 
 
 function listContentRevisions(entityType, entityId, scopeKey = 'main') {
   const rows = db.prepare(`
-    SELECT r.id, r.entity_type, r.entity_id, r.scope_key, r.action, r.created_by, r.created_at,
+    SELECT r.id, r.entity_type, r.entity_id, r.scope_key, r.snapshot_json,
+      r.action, r.created_by, r.created_at,
       u.display_name as created_by_name, u.username as created_by_username
     FROM content_revisions r
     LEFT JOIN users u ON u.id = r.created_by
@@ -18501,12 +18595,24 @@ function listContentRevisions(entityType, entityId, scopeKey = 'main') {
     ORDER BY r.id DESC
     LIMIT 100
   `).all(entityType, Number(entityId), scopeKey);
-  return rows.map((row, index) => ({
-    ...row,
-    version_label: `V${rows.length - index}`,
-    action_label: CONTENT_REVISION_ACTION_LABELS[row.action] || row.action || '保存',
-    can_restore: 1,
-  }));
+  const snapshots = rows.map(parseContentRevisionSnapshot);
+  return rows.map((row, index) => {
+    const { snapshot_json: _snapshotJson, ...publicRow } = row;
+    const changeItems = buildContentRevisionChanges(
+      entityType,
+      scopeKey,
+      snapshots[index + 1] || null,
+      snapshots[index],
+    );
+    return {
+      ...publicRow,
+      version_label: `V${rows.length - index}`,
+      action_label: CONTENT_REVISION_ACTION_LABELS[row.action] || row.action || '保存',
+      can_restore: index > 0 ? 1 : 0,
+      change_items: changeItems,
+      change_summary: changeItems.map(item => item.label).join('、'),
+    };
+  });
 }
 
 function getContentRevision(revisionId, entityType, entityId, scopeKey = null) {

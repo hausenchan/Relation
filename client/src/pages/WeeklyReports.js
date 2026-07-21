@@ -19,6 +19,7 @@ import {
 } from '../utils/weeklyReportContent';
 import { getDefaultDocumentCxoUsers } from '../utils/documentDefaultShares';
 import {
+  createDefaultShareDraft,
   createEmptyShareDraft,
   draftToShares,
   ORGANIZATION_DEPARTMENT_OPTIONS,
@@ -115,6 +116,10 @@ export default function WeeklyReports() {
   const [shareDraft, setShareDraft] = useState(createEmptyShareDraft());
   const [shareLoading, setShareLoading] = useState(false);
   const [shareSaving, setShareSaving] = useState(false);
+  const [editorShareDraft, setEditorShareDraft] = useState(createEmptyShareDraft());
+  const [editorShareLoading, setEditorShareLoading] = useState(false);
+  const [editorShareLoaded, setEditorShareLoaded] = useState(false);
+  const [editorShareSaving, setEditorShareSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [writerModalVisible, setWriterModalVisible] = useState(false);
@@ -127,6 +132,7 @@ export default function WeeklyReports() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyRevisions, setHistoryRevisions] = useState([]);
+  const [historyCanRestore, setHistoryCanRestore] = useState(false);
   const [restoringRevisionId, setRestoringRevisionId] = useState(null);
   const [form] = Form.useForm();
   const reportAutoSaveTimerRef = useRef(null);
@@ -138,7 +144,14 @@ export default function WeeklyReports() {
   const reportBaseSnapshotRef = useRef(null);
   const reportDirtyRef = useRef(false);
   const reportLiveSyncPendingRef = useRef(false);
+  const editorShareDirtyRef = useRef(false);
   const defaultShareUsers = useMemo(() => getDefaultDocumentCxoUsers(users), [users]);
+  const historyWeeklyReport = reports.find(item => (
+    Number(item?.id) === Number(editingReportId || editingReportIdRef.current)
+  ));
+  const historyWeeklyReportTitle = historyWeeklyReport
+    ? `${historyWeeklyReport.user_name || '成员'}周报（${historyWeeklyReport.week_start} ~ ${historyWeeklyReport.week_end}）`
+    : '周报';
 
   // 筛选
   const [filters, setFilters] = useState({
@@ -224,8 +237,49 @@ export default function WeeklyReports() {
       ? { phase: 'saved', savedAt: record.updated_at || record.created_at || null, error: '' }
       : { phase: 'idle', savedAt: null, error: '' });
     setRemoteUpdateHint('');
+    editorShareDirtyRef.current = false;
+    if (record?.id) {
+      setEditorShareDraft(createEmptyShareDraft());
+      setEditorShareLoading(true);
+      setEditorShareLoaded(false);
+      weeklyReportsApi.listShares(record.id).then((shares) => {
+        setEditorShareDraft(sharesToDraft(shares));
+        setEditorShareLoaded(true);
+      }).catch((error) => {
+        message.error(error?.response?.data?.error || '加载周报共享范围失败');
+      }).finally(() => {
+        setEditorShareLoading(false);
+      });
+    } else {
+      setEditorShareDraft(createDefaultShareDraft(defaultShareUsers));
+      setEditorShareLoading(false);
+      setEditorShareLoaded(true);
+    }
     setModalVisible(true);
     reportAutoSaveReadyRef.current = true;
+  };
+
+  useEffect(() => {
+    if (!modalVisible || editingReportId || editorShareDirtyRef.current || !editorShareLoaded) return;
+    setEditorShareDraft(createDefaultShareDraft(defaultShareUsers));
+  }, [defaultShareUsers, editingReportId, editorShareLoaded, modalVisible]);
+
+  const updateWeeklyReportEditorShares = (nextDraft) => {
+    editorShareDirtyRef.current = true;
+    setEditorShareDraft(nextDraft);
+  };
+
+  const persistWeeklyReportEditorShares = async () => {
+    const reportId = editingReportIdRef.current;
+    if (!reportId || !editorShareLoaded || !editorShareDirtyRef.current) return true;
+    setEditorShareSaving(true);
+    try {
+      await weeklyReportsApi.saveShares(reportId, draftToShares(editorShareDraft));
+      editorShareDirtyRef.current = false;
+      return true;
+    } finally {
+      setEditorShareSaving(false);
+    }
   };
 
   const handleAdd = () => {
@@ -345,6 +399,9 @@ export default function WeeklyReports() {
         risks: serializeWeeklyReportContent(values.risks),
         base_updated_at: reportBaseSnapshotRef.current?.updated_at || null,
         revision_action: silent ? 'save' : 'manual_save',
+        ...(!editingReportIdRef.current && (defaultShareUsers.length || editorShareDirtyRef.current) ? {
+          shares: draftToShares(editorShareDraft),
+        } : {}),
       };
 
       setReportSaveState(prev => ({ ...prev, phase: 'saving', error: '' }));
@@ -381,6 +438,7 @@ export default function WeeklyReports() {
           ? prev.map(item => (Number(item.id) === Number(result.id) ? { ...item, ...result } : item))
           : [result, ...prev];
       });
+      if (payload.shares) editorShareDirtyRef.current = false;
       if (!silent) message.success('周报已保存');
       return true;
     } catch (err) {
@@ -416,6 +474,12 @@ export default function WeeklyReports() {
     if (reportAutoSaveTimerRef.current) window.clearTimeout(reportAutoSaveTimerRef.current);
     const saved = await persistWeeklyReport({ silent: false, validate: true });
     if (!saved) return;
+    try {
+      await persistWeeklyReportEditorShares();
+    } catch (error) {
+      message.error(error?.response?.data?.error || '周报共享范围保存失败');
+      return;
+    }
     reportAutoSaveReadyRef.current = false;
     reportDirtyRef.current = false;
     setModalVisible(false);
@@ -427,6 +491,14 @@ export default function WeeklyReports() {
       const saved = await persistWeeklyReport({ silent: true });
       if (!saved) {
         message.error('周报尚未保存，请重试后再关闭');
+        return;
+      }
+    }
+    if (editorShareDirtyRef.current) {
+      try {
+        await persistWeeklyReportEditorShares();
+      } catch (error) {
+        message.error(error?.response?.data?.error || '周报共享范围尚未保存，请重试后再关闭');
         return;
       }
     }
@@ -489,7 +561,9 @@ export default function WeeklyReports() {
     try {
       const result = await weeklyReportsApi.history(reportId);
       setHistoryRevisions(Array.isArray(result?.revisions) ? result.revisions : []);
+      setHistoryCanRestore(Boolean(result?.can_restore));
     } catch (error) {
+      setHistoryCanRestore(false);
       message.error(error.response?.data?.error || '加载历史版本失败');
     } finally {
       setHistoryLoading(false);
@@ -962,7 +1036,8 @@ export default function WeeklyReports() {
         open={modalVisible}
         onCancel={closeReportEditor}
         onOk={handleSubmit}
-        confirmLoading={reportSaveState.phase === 'saving'}
+        confirmLoading={reportSaveState.phase === 'saving' || editorShareSaving}
+        okButtonProps={{ disabled: editorShareLoading }}
         width={isMobile ? '100%' : 'min(1120px, 92vw)'}
         style={isMobile
           ? { top: 0, maxWidth: '100%', paddingBottom: 0 }
@@ -1019,6 +1094,22 @@ export default function WeeklyReports() {
               onSave={() => persistWeeklyReport({ silent: false })}
             />
           </Form.Item>
+
+          <div style={{ borderTop: '1px solid #edf0f3', marginTop: 8, paddingTop: 20 }}>
+            <Typography.Text strong>共享范围</Typography.Text>
+            <div style={{ marginTop: 14 }}>
+              <ContentShareEditor
+                draft={editorShareDraft}
+                onChange={updateWeeklyReportEditorShares}
+                loading={editorShareLoading}
+                users={users}
+                defaultUsers={defaultShareUsers}
+                projectGroups={projectGroups}
+                departments={ORGANIZATION_DEPARTMENT_OPTIONS}
+                teams={teams}
+              />
+            </div>
+          </div>
         </Form>
       </Modal>
 
@@ -1138,12 +1229,14 @@ export default function WeeklyReports() {
       <ContentHistoryDrawer
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        title="周报历史版本"
+        title="改动历史"
+        entityTitle={historyWeeklyReportTitle}
         revisions={historyRevisions}
         loading={historyLoading}
         restoringId={restoringRevisionId}
+        canRestore={historyCanRestore}
         onRestore={restoreWeeklyReportHistory}
-        width={isMobile ? '100%' : 460}
+        width={isMobile ? '100%' : 520}
       />
     </div>
   );
