@@ -35,6 +35,11 @@ const {
 const { createAiTrainingExternalConnectorRuntime } = require('./lib/aiTrainingConnectors');
 const { createAiTrainingEventStream } = require('./lib/aiTrainingEventStream');
 const {
+  createMediaManagementRouter,
+  deleteMediaAssetByDocumentId,
+  resolveMediaDocumentTitle,
+} = require('./lib/mediaManagement');
+const {
   enhanceAiTrainingSkillResponse,
   estimateTokenCount,
   generateAiTrainingAgentResponse,
@@ -3459,6 +3464,7 @@ const OPERATION_LOG_NAME_FIELDS = [
   'display_name',
   'username',
   'app_name',
+  'media_name',
   'company_entity',
   'destinations',
 ];
@@ -3499,6 +3505,7 @@ const OPERATION_LOG_BUSINESS_MAP = {
   'company-subject-attachments': '主体附件',
   'product-assets': '产品资产',
   'product-asset-reductions': '产品核减',
+  'media-management': '媒体管理',
   documents: '文档中心',
   'document-folders': '文档目录',
   'document-attachments': '文档附件',
@@ -3551,6 +3558,7 @@ const OPERATION_LOG_TABLE_MAP = {
   'company-subject-attachments': 'company_subject_attachments',
   'product-assets': 'product_assets',
   'product-asset-reductions': 'product_asset_reductions',
+  'media-management': 'media_assets',
   documents: 'documents',
   'document-folders': 'document_folders',
   'document-attachments': 'document_attachments',
@@ -7396,6 +7404,24 @@ function createDocumentRecord(body, user) {
 
 ensureDocumentDirectoryBlueprint();
 
+app.use('/api/media-management', createMediaManagementRouter({
+  db,
+  canWrite,
+  isAdmin,
+  getUserMenuPerms,
+  getUserModulePerms,
+  buildDocumentVisibilityFilter,
+  getVisibleDocument,
+  canEditDocument,
+  canManageDocument,
+  createDocumentRecord,
+  getDefaultDocumentShares,
+  addDocumentShares,
+  insertDocumentEditRecord,
+  encryptRow,
+  decryptRow,
+}));
+
 app.get('/api/document-folders', (req, res) => {
   const rows = db.prepare(`
     SELECT f.*, pg.name as project_group_name
@@ -8388,9 +8414,10 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   const contentText = canEditCurrentDocument && hasBodyField('content_text')
     ? extractDocumentText(content, req.body.content_text)
     : extractDocumentText(content, doc.content_text);
-  const nextTitle = canEditCurrentDocument && hasBodyField('title')
-    ? (req.body.title || doc.title)
-    : doc.title;
+  const nextTitle = resolveMediaDocumentTitle(
+    doc,
+    canEditCurrentDocument && hasBodyField('title') ? req.body.title : doc.title,
+  );
   const beforeSnapshot = {
     title: doc.title,
     content: doc.content,
@@ -8450,7 +8477,10 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
     });
   }
   const hasBodyField = (key) => Object.prototype.hasOwnProperty.call(req.body || {}, key);
-  const nextTitle = hasBodyField('title') ? (req.body.title || doc.title) : doc.title;
+  const nextTitle = resolveMediaDocumentTitle(
+    doc,
+    hasBodyField('title') ? req.body.title : doc.title,
+  );
   const content = hasBodyField('content') ? req.body.content : doc.content;
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
   const contentText = extractDocumentText(
@@ -8498,7 +8528,7 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
   const restoreSnapshot = resolveDocumentEditRecordRestoreSnapshot(record, doc);
   if (!restoreSnapshot) return res.status(400).json({ error: '该页面编辑记录缺少可恢复快照，无法恢复' });
 
-  const targetTitle = restoreSnapshot.title;
+  const targetTitle = resolveMediaDocumentTitle(doc, restoreSnapshot.title);
   const targetContent = restoreSnapshot.content;
   const targetContentText = restoreSnapshot.content_text;
   const beforeSnapshot = {
@@ -8587,7 +8617,12 @@ app.delete('/api/documents/:id', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canManageDocument(req.user, doc)) return res.status(403).json({ error: '只有创建人或超级管理员可以删除文档' });
-  db.prepare('UPDATE documents SET is_deleted = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(req.user.id, doc.id);
+  const removeDocument = db.transaction(() => {
+    deleteMediaAssetByDocumentId(db, doc.id);
+    db.prepare('UPDATE documents SET is_deleted = 1, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(req.user.id, doc.id);
+  });
+  removeDocument();
   res.json({ success: true });
 });
 

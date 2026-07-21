@@ -469,6 +469,14 @@ export const productAssetsApi = {
   reductionsSimple: () => api.get('/product-asset-reductions/simple').then(r => r.data),
 };
 
+export const mediaManagementApi = {
+  list: (params) => api.get('/media-management', { params }).then(r => r.data),
+  get: (id) => api.get(`/media-management/${id}`).then(r => r.data),
+  create: (data) => api.post('/media-management', data).then(r => r.data),
+  update: (id, data) => api.put(`/media-management/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/media-management/${id}`).then(r => r.data),
+};
+
 export const companySubjectsApi = {
   list: (params) => api.get('/company-subjects', { params }).then(r => r.data),
   simple: () => api.get('/company-subjects/simple').then(r => r.data),

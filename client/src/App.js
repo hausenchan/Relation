@@ -45,6 +45,7 @@ const PAGE_TITLE_MAP = {
   '/company-subjects': '主体管理',
   '/product-assets': '产品资产',
   '/product-templates': '产品模版',
+  '/media-management': '媒体管理',
   '/documents': '文档中心',
   '/network-capture': '网络抓包',
   '/persons': '人脉管理',
@@ -375,6 +376,7 @@ import Strategies from './pages/Strategies';
 import DevTasks from './pages/DevTasks';
 import ProductAssets from './pages/ProductAssets';
 import ProductTemplates from './pages/ProductTemplates';
+import MediaManagement from './pages/MediaManagement';
 import CompanySubjects from './pages/CompanySubjects';
 import Documents from './pages/Documents';
 import NetworkCapture from './pages/NetworkCapture';
@@ -772,6 +774,9 @@ function AppLayout() {
     },
     canAccessMenu('/product-templates') && {
       key: '/product-templates', icon: <FileTextOutlined />, label: <Link to="/product-templates">产品模版</Link>,
+    },
+    canAccessMenu('/media-management') && {
+      key: '/media-management', icon: <AppstoreOutlined />, label: <Link to="/media-management">媒体管理</Link>,
     },
     canAccessMenu('/documents') && {
       key: '/documents', icon: <FileTextOutlined />, label: <Link to="/documents">文档中心</Link>,
@@ -1230,6 +1235,7 @@ function AppLayout() {
             <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />
             <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
             <Route path="/product-templates" element={<PrivateRoute module="product_assets"><ProductTemplates /></PrivateRoute>} />
+            <Route path="/media-management" element={<PrivateRoute module="product_assets"><MediaManagement /></PrivateRoute>} />
             <Route path="/documents" element={<PrivateRoute><Documents /></PrivateRoute>} />
             <Route path="/network-capture" element={<PrivateRoute><NetworkCapture /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}

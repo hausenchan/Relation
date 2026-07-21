@@ -43,3 +43,48 @@
   `.codex/skills/yyz-dashboard-analysis/`、`dataAnalysis/` 和若干业务 Markdown。
 - `client/src/pages/Documents.js` 同时含其他会话的文件夹权限与 Wolai 引用改动；本任务只暂存
   新建文档默认共享表单的精确 hunk。
+
+## 资产管理-媒体管理（2026-07-21）
+
+状态：开发和自动化验证已完成；本节随提交“增加资产管理-媒体管理”交付到 `gitee/main`。
+
+已完成：
+
+- 新增 `/media-management` 菜单、路由、菜单权限配置和前后端 API。
+- 新增 `media_assets` SQLite/MySQL 兼容表，CID 以文本保存 1-8 位数字并保留前导零。
+- 完整支持媒体字段、枚举、预算多选、负责人、日期和长文本校验；敏感自由文本走统一 AES-GCM 字段加密。
+- 列表展示全部字段，支持全字段及关联文档正文搜索、所有单选字段筛选、预算多选筛选、列宽拖动和移动端列表。
+- 双击记录打开约 2/3 屏宽详情，上半部分展示媒体信息，下半部分嵌入完整文档中心编辑器。
+- 每条媒体自动关联真实文档，复用块编辑、目录、附件、共享、版本记录、页面编辑记录和历史恢复。
+- 媒体可见和编辑权限沿用关联文档；负责人自动加入共享；访客还需 `product_assets` 模块读权限。
+- 媒体名称是关联文档标题的唯一来源；文档编辑或历史恢复不会造成标题分叉，删除关联文档会同步移除媒体记录。
+- 更新 `资产管理模块PRD.md` 和 `系统需求与权限设计PRD.md`。
+
+已验证：
+
+- 媒体后端单元/无网络路由集成测试：7 条全部通过（含 SQLite 建表与 MySQL 字段翻译）。
+- 暂存区独立代码树前端全量测试：14 个测试套件、67 条测试全部通过。
+- 暂存区独立代码树后端全量测试：38 条中 35 条通过；其余 3 条原有监听端口集成测试因沙箱禁止 `127.0.0.1` 监听而报 `EPERM`，无业务断言失败。
+- `node --check server/index.js`、媒体模块语法检查和 `git diff --check` 通过。
+- 隔离生产构建通过，输出到 `/tmp/relation-media-management-final-build`。
+
+环境限制：
+
+- 当前执行沙箱禁止监听本地端口，因此无法启动前后端进行浏览器截图回归；生产构建和无网络路由集成测试已覆盖本轮可执行的核心链路。
+
+本轮任务文件：
+
+- `client/src/App.js`
+- `client/src/api/index.js`
+- `client/src/pages/Documents.js`（仅嵌入模式及媒体标题只读相关增量）
+- `client/src/pages/MediaManagement.js`
+- `client/src/pages/MenuPerms.js`
+- `client/src/utils/mediaManagement.js`
+- `client/src/utils/mediaManagement.test.js`
+- `server/index.js`（仅媒体模块接入、文档标题保护和删除联动增量）
+- `server/lib/encryptedFields.js`
+- `server/lib/mediaManagement.js`
+- `server/lib/mediaManagement.test.js`
+- `server/lib/mediaManagementRouter.test.js`
+- `资产管理模块PRD.md`
+- `系统需求与权限设计PRD.md`
