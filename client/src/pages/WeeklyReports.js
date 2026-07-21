@@ -1,11 +1,12 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Button, Space, Modal, Form, Input, DatePicker, message, Drawer, Select, Tag, Grid, List, Typography } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, FilterOutlined, HistoryOutlined, SettingOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, FilterOutlined, HistoryOutlined, SettingOutlined, UserAddOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import isoWeek from 'dayjs/plugin/isoWeek';
 import { useAuth } from '../AuthContext';
-import { weeklyReportsApi } from '../api';
+import { projectGroupsApi, teamsApi, usersApi, weeklyReportsApi } from '../api';
 import ContentHistoryDrawer from '../components/ContentHistoryDrawer';
+import ContentShareEditor from '../components/ContentShareEditor';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
 import { mergeCollaborativeDocumentBodies } from '../utils/collaborativeDocument';
@@ -16,6 +17,13 @@ import {
   weeklyReportContentHasValue,
   weeklyReportContentToPlain,
 } from '../utils/weeklyReportContent';
+import { getDefaultDocumentCxoUsers } from '../utils/documentDefaultShares';
+import {
+  createEmptyShareDraft,
+  draftToShares,
+  ORGANIZATION_DEPARTMENT_OPTIONS,
+  sharesToDraft,
+} from '../utils/contentShares';
 
 dayjs.extend(isoWeek);
 
@@ -99,6 +107,14 @@ export default function WeeklyReports() {
   const { user: currentUser } = useAuth();
   const [reports, setReports] = useState([]);
   const [writers, setWriters] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [projectGroups, setProjectGroups] = useState([]);
+  const [teams, setTeams] = useState([]);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareTarget, setShareTarget] = useState(null);
+  const [shareDraft, setShareDraft] = useState(createEmptyShareDraft());
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSaving, setShareSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [writerModalVisible, setWriterModalVisible] = useState(false);
@@ -122,6 +138,7 @@ export default function WeeklyReports() {
   const reportBaseSnapshotRef = useRef(null);
   const reportDirtyRef = useRef(false);
   const reportLiveSyncPendingRef = useRef(false);
+  const defaultShareUsers = useMemo(() => getDefaultDocumentCxoUsers(users), [users]);
 
   // 筛选
   const [filters, setFilters] = useState({
@@ -132,6 +149,20 @@ export default function WeeklyReports() {
   useEffect(() => {
     fetchReports();
   }, [filters]);
+
+  useEffect(() => {
+    Promise.all([
+      usersApi.listSimple(),
+      projectGroupsApi.list(),
+      teamsApi.list(),
+    ]).then(([userRows, groupRows, teamRows]) => {
+      setUsers(userRows);
+      setProjectGroups(groupRows);
+      setTeams(teamRows);
+    }).catch(error => {
+      message.error(error?.response?.data?.error || '加载共享选项失败');
+    });
+  }, []);
 
   useEffect(() => {
     const flushOnHide = () => {
@@ -206,7 +237,47 @@ export default function WeeklyReports() {
     openReportEditor(existingCurrentWeekReport || null);
   };
 
-  const handleEdit = (record) => openReportEditor(record);
+  const handleEdit = (record) => {
+    if (!Number(record?.can_edit)) {
+      message.warning('你没有编辑该周报的权限');
+      return;
+    }
+    openReportEditor(record);
+  };
+
+  const openWeeklyReportShare = async (record) => {
+    if (!Number(record?.can_share)) {
+      message.warning('你没有调整该周报共享范围的权限');
+      return;
+    }
+    setShareTarget(record);
+    setShareDraft(createEmptyShareDraft());
+    setShareOpen(true);
+    setShareLoading(true);
+    try {
+      const shares = await weeklyReportsApi.listShares(record.id);
+      setShareDraft(sharesToDraft(shares));
+    } catch (error) {
+      message.error(error?.response?.data?.error || '加载共享范围失败');
+      setShareOpen(false);
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const saveWeeklyReportShares = async () => {
+    if (!shareTarget?.id) return;
+    setShareSaving(true);
+    try {
+      await weeklyReportsApi.saveShares(shareTarget.id, draftToShares(shareDraft));
+      message.success('共享范围已保存');
+      setShareOpen(false);
+    } catch (error) {
+      message.error(error?.response?.data?.error || '保存共享范围失败');
+    } finally {
+      setShareSaving(false);
+    }
+  };
 
   const handleDelete = (id) => {
     Modal.confirm({
@@ -549,18 +620,19 @@ export default function WeeklyReports() {
     {
       title: '操作',
       key: 'action',
-      width: 150,
+      width: 210,
       fixed: 'right',
       render: (_, record) => (
         <Space size="small" onDoubleClick={(event) => event.stopPropagation()}>
           <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); showDetail(record); }}>详情</Button>
-          {(isAdmin(currentUser?.role) || record.user_id === currentUser?.id) && (
-            <>
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); handleEdit(record); }}>编辑</Button>
-              {isAdmin(currentUser?.role) && (
-                <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDelete(record.id); }}>删除</Button>
-              )}
-            </>
+          {Number(record.can_edit) > 0 && (
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); handleEdit(record); }}>编辑</Button>
+          )}
+          {Number(record.can_share) > 0 && (
+            <Button type="link" size="small" icon={<UserAddOutlined />} onClick={(event) => { event.stopPropagation(); openWeeklyReportShare(record); }}>共享</Button>
+          )}
+          {Number(record.can_delete) > 0 && (
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={(event) => { event.stopPropagation(); handleDelete(record.id); }}>删除</Button>
           )}
         </Space>
       ),
@@ -629,7 +701,7 @@ export default function WeeklyReports() {
             >
               详情
             </Button>
-            {(isAdmin(currentUser?.role) || record.user_id === currentUser?.id) && (
+            {Number(record.can_edit) > 0 && (
               <Button
                 type={isMobile ? 'default' : 'link'}
                 size="small"
@@ -643,7 +715,21 @@ export default function WeeklyReports() {
                 编辑
               </Button>
             )}
-            {isAdmin(currentUser?.role) && (
+            {Number(record.can_share) > 0 && (
+              <Button
+                type={isMobile ? 'default' : 'link'}
+                size="small"
+                icon={<UserAddOutlined />}
+                style={{ width: isMobile ? '100%' : undefined }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openWeeklyReportShare(record);
+                }}
+              >
+                共享
+              </Button>
+            )}
+            {Number(record.can_delete) > 0 && (
               <Button
                 type={isMobile ? 'default' : 'link'}
                 size="small"
@@ -934,6 +1020,30 @@ export default function WeeklyReports() {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      <Modal
+        title="共享周报"
+        open={shareOpen}
+        onCancel={() => setShareOpen(false)}
+        onOk={saveWeeklyReportShares}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={shareSaving}
+        okButtonProps={{ disabled: shareLoading }}
+        width={isMobile ? '100%' : 560}
+        destroyOnClose
+      >
+        <ContentShareEditor
+          draft={shareDraft}
+          onChange={setShareDraft}
+          loading={shareLoading}
+          users={users}
+          defaultUsers={defaultShareUsers}
+          projectGroups={projectGroups}
+          departments={ORGANIZATION_DEPARTMENT_OPTIONS}
+          teams={teams}
+        />
       </Modal>
 
       <Drawer

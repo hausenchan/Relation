@@ -486,6 +486,8 @@ export const goalsApi = {
   live: (id, params) => api.get(`/goals/${id}/live`, { params }).then(r => r.data),
   history: (id) => api.get(`/goals/${id}/history`).then(r => r.data),
   restoreHistory: (id, revisionId) => api.post(`/goals/${id}/history/${revisionId}/restore`).then(r => r.data),
+  listShares: (id) => api.get(`/goals/${id}/shares`).then(r => r.data),
+  saveShares: (id, shares) => api.put(`/goals/${id}/shares`, { shares }).then(r => r.data),
   create: (data) => api.post('/goals', data).then(r => r.data),
   update: (id, data) => api.put(`/goals/${id}`, data).then(r => r.data),
   delete: (id) => api.delete(`/goals/${id}`).then(r => r.data),
@@ -497,6 +499,8 @@ export const weeklyReportsApi = {
   live: (id, params) => api.get(`/weekly-reports/${id}/live`, { params }).then(r => r.data),
   history: (id) => api.get(`/weekly-reports/${id}/history`).then(r => r.data),
   restoreHistory: (id, revisionId) => api.post(`/weekly-reports/${id}/history/${revisionId}/restore`).then(r => r.data),
+  listShares: (id) => api.get(`/weekly-reports/${id}/shares`).then(r => r.data),
+  saveShares: (id, shares) => api.put(`/weekly-reports/${id}/shares`, { shares }).then(r => r.data),
   delete: (id) => api.delete(`/weekly-reports/${id}`).then(r => r.data),
 };
 

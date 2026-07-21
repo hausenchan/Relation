@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -19,11 +19,12 @@ import {
   Typography,
   message,
 } from 'antd';
-import { DeleteOutlined, EditOutlined, EyeOutlined, FilterOutlined, HistoryOutlined, PlusOutlined } from '@ant-design/icons';
+import { DeleteOutlined, EditOutlined, EyeOutlined, FilterOutlined, HistoryOutlined, PlusOutlined, UserAddOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { goalsApi, usersApi, projectGroupsApi, teamsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import ContentHistoryDrawer from '../components/ContentHistoryDrawer';
+import ContentShareEditor from '../components/ContentShareEditor';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
 import { resizableTableComponents, useResizableColumns } from '../components/ResizableTable';
 import {
@@ -35,6 +36,13 @@ import {
   getDocumentBodyValueSignature,
   mergeCollaborativeDocumentBodies,
 } from '../utils/collaborativeDocument';
+import { getDefaultDocumentCxoUsers } from '../utils/documentDefaultShares';
+import {
+  createEmptyShareDraft,
+  draftToShares,
+  ORGANIZATION_DEPARTMENT_OPTIONS,
+  sharesToDraft,
+} from '../utils/contentShares';
 
 const { RangePicker } = DatePicker;
 const { useBreakpoint } = Grid;
@@ -181,6 +189,11 @@ function Goals() {
   const [users, setUsers] = useState([]);
   const [projectGroups, setProjectGroups] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareTarget, setShareTarget] = useState(null);
+  const [shareDraft, setShareDraft] = useState(createEmptyShareDraft());
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSaving, setShareSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [filtersReady, setFiltersReady] = useState(false);
   const [filters, setFilters] = useState({
@@ -217,6 +230,8 @@ function Goals() {
   const persistGoalContentRef = useRef(null);
   const goalType = Form.useWatch('goal_type', form);
   const scopeType = Form.useWatch('scope_type', form);
+  const defaultShareUsers = useMemo(() => getDefaultDocumentCxoUsers(users), [users]);
+  const canManageEditingGoal = !editing || Boolean(Number(editing.can_manage));
 
   useEffect(() => {
     loadUsers();
@@ -383,6 +398,10 @@ function Goals() {
   };
 
   const handleEdit = (record) => {
+    if (!Number(record?.can_edit)) {
+      message.warning('你没有编辑该目标的权限');
+      return;
+    }
     const values = getGoalEditorValues(record);
     setEditing(record);
     form.resetFields();
@@ -393,6 +412,40 @@ function Goals() {
     setGoalSaveState({ phase: 'saved', savedAt: record.updated_at || null, error: '' });
     setRemoteUpdateHint('');
     setModalVisible(true);
+  };
+
+  const openGoalShare = async (record) => {
+    if (!Number(record?.can_share)) {
+      message.warning('你没有调整该目标共享范围的权限');
+      return;
+    }
+    setShareTarget(record);
+    setShareDraft(createEmptyShareDraft());
+    setShareOpen(true);
+    setShareLoading(true);
+    try {
+      const shares = await goalsApi.listShares(record.id);
+      setShareDraft(sharesToDraft(shares));
+    } catch (error) {
+      message.error(error?.response?.data?.error || '加载共享范围失败');
+      setShareOpen(false);
+    } finally {
+      setShareLoading(false);
+    }
+  };
+
+  const saveGoalShares = async () => {
+    if (!shareTarget?.id) return;
+    setShareSaving(true);
+    try {
+      await goalsApi.saveShares(shareTarget.id, draftToShares(shareDraft));
+      message.success('共享范围已保存');
+      setShareOpen(false);
+    } catch (error) {
+      message.error(error?.response?.data?.error || '保存共享范围失败');
+    } finally {
+      setShareSaving(false);
+    }
   };
 
   const handleDelete = (record) => {
@@ -634,18 +687,20 @@ function Goals() {
       const payload = {
         title: values.title,
         description: serializeGoalDocumentContent(values.description),
-        owner_id: values.owner_id,
-        project_group_id: values.project_group_id || null,
-        department: values.department || undefined,
-        team_id: values.team_id || null,
-        scope_type: values.scope_type,
         deadline: values.deadline ? values.deadline.format('YYYY-MM-DD') : null,
         progress: values.progress || 0,
         status: values.status,
         result: serializeGoalDocumentContent(values.result),
-        goal_type: values.goal_type,
-        period,
-        parent_id: values.goal_type === 'quarter' ? null : values.parent_id,
+        ...(!editing || canManageEditingGoal ? {
+          owner_id: values.owner_id,
+          project_group_id: values.project_group_id || null,
+          department: values.department || undefined,
+          team_id: values.team_id || null,
+          scope_type: values.scope_type,
+          goal_type: values.goal_type,
+          period,
+          parent_id: values.goal_type === 'quarter' ? null : values.parent_id,
+        } : {}),
         ...(editing?.id && goalBaseSnapshotRef.current?.updated_at
           ? { base_updated_at: goalBaseSnapshotRef.current.updated_at }
           : {}),
@@ -810,18 +865,27 @@ function Goals() {
     {
       title: '操作',
       key: 'actions',
-      width: 180,
+      width: 240,
       render: (_, record) => (
         <Space size="small">
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => showDetail(record)}>
             详情
           </Button>
-          <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
-            编辑
-          </Button>
-          <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
-            删除
-          </Button>
+          {Number(record.can_edit) > 0 && (
+            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => handleEdit(record)}>
+              编辑
+            </Button>
+          )}
+          {Number(record.can_share) > 0 && (
+            <Button type="link" size="small" icon={<UserAddOutlined />} onClick={() => openGoalShare(record)}>
+              共享
+            </Button>
+          )}
+          {Number(record.can_delete) > 0 && (
+            <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => handleDelete(record)}>
+              删除
+            </Button>
+          )}
         </Space>
       ),
     },
@@ -889,31 +953,49 @@ function Goals() {
           >
             详情
           </Button>
-          <Button
-            type={isMobile ? 'default' : 'link'}
-            size="small"
-            icon={<EditOutlined />}
-            style={{ width: isMobile ? '100%' : undefined }}
-            onClick={(event) => {
-              event.stopPropagation();
-              handleEdit(record);
-            }}
-          >
-            编辑
-          </Button>
-          <Button
-            type={isMobile ? 'default' : 'link'}
-            size="small"
-            danger
-            icon={<DeleteOutlined />}
-            style={{ width: isMobile ? '100%' : undefined }}
-            onClick={(event) => {
-              event.stopPropagation();
-              handleDelete(record);
-            }}
-          >
-            删除
-          </Button>
+          {Number(record.can_edit) > 0 && (
+            <Button
+              type={isMobile ? 'default' : 'link'}
+              size="small"
+              icon={<EditOutlined />}
+              style={{ width: isMobile ? '100%' : undefined }}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleEdit(record);
+              }}
+            >
+              编辑
+            </Button>
+          )}
+          {Number(record.can_share) > 0 && (
+            <Button
+              type={isMobile ? 'default' : 'link'}
+              size="small"
+              icon={<UserAddOutlined />}
+              style={{ width: isMobile ? '100%' : undefined }}
+              onClick={(event) => {
+                event.stopPropagation();
+                openGoalShare(record);
+              }}
+            >
+              共享
+            </Button>
+          )}
+          {Number(record.can_delete) > 0 && (
+            <Button
+              type={isMobile ? 'default' : 'link'}
+              size="small"
+              danger
+              icon={<DeleteOutlined />}
+              style={{ width: isMobile ? '100%' : undefined }}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleDelete(record);
+              }}
+            >
+              删除
+            </Button>
+          )}
         </Space>
       </Space>
     </Card>
@@ -1072,13 +1154,14 @@ function Goals() {
           </Form.Item>
 
           <Form.Item name="scope_type" label="归属颗粒度" rules={[{ required: true, message: '请选择归属颗粒度' }]}>
-            <Select options={scopeTypeOptions} />
+            <Select options={scopeTypeOptions} disabled={!!editing && !canManageEditingGoal} />
           </Form.Item>
 
           {goalType === 'quarter' && (
             <Space style={{ width: '100%', flexDirection: isMobile ? 'column' : 'row' }} size={12}>
               <Form.Item name="period_year" label="年份" rules={[{ required: true, message: '请选择年份' }]} style={{ flex: 1 }}>
                 <Select
+                  disabled={!!editing && !canManageEditingGoal}
                   options={Array.from({ length: 7 }, (_, index) => {
                     const year = dayjs().year() - 2 + index;
                     return { value: year, label: `${year}年` };
@@ -1087,6 +1170,7 @@ function Goals() {
               </Form.Item>
               <Form.Item name="period_quarter" label="季度" rules={[{ required: true, message: '请选择季度' }]} style={{ flex: 1 }}>
                 <Select
+                  disabled={!!editing && !canManageEditingGoal}
                   options={[
                     { value: 'Q1', label: 'Q1' },
                     { value: 'Q2', label: 'Q2' },
@@ -1106,6 +1190,7 @@ function Goals() {
               >
                 <Select
                   allowClear
+                  disabled={!!editing && !canManageEditingGoal}
                   showSearch
                   optionFilterProp="label"
                   options={getParentOptions()}
@@ -1113,7 +1198,7 @@ function Goals() {
                 />
               </Form.Item>
               <Form.Item name="period_month" label="周期" rules={[{ required: true, message: '请选择月份' }]}>
-                <DatePicker picker="month" style={{ width: '100%' }} />
+                <DatePicker picker="month" style={{ width: '100%' }} disabled={!!editing && !canManageEditingGoal} />
               </Form.Item>
             </>
           )}
@@ -1126,6 +1211,7 @@ function Goals() {
               >
                 <Select
                   allowClear
+                  disabled={!!editing && !canManageEditingGoal}
                   showSearch
                   optionFilterProp="label"
                   options={getParentOptions()}
@@ -1133,7 +1219,7 @@ function Goals() {
                 />
               </Form.Item>
               <Form.Item name="period_range" label="周期" rules={[{ required: true, message: '请选择日期范围' }]}>
-                <RangePicker style={{ width: '100%' }} />
+                <RangePicker style={{ width: '100%' }} disabled={!!editing && !canManageEditingGoal} />
               </Form.Item>
             </>
           )}
@@ -1154,6 +1240,7 @@ function Goals() {
           <Form.Item name="owner_id" label="负责人" rules={[{ required: true, message: '请选择负责人' }]}>
             <Select
               showSearch
+              disabled={!!editing && !canManageEditingGoal}
               optionFilterProp="label"
               options={ownerOptions}
               placeholder="请选择负责人"
@@ -1167,6 +1254,7 @@ function Goals() {
           >
             <Select
               allowClear
+              disabled={!!editing && !canManageEditingGoal}
               showSearch
               optionFilterProp="label"
               options={projectGroups.map(group => ({ value: group.id, label: group.name }))}
@@ -1181,6 +1269,7 @@ function Goals() {
           >
             <Select
               allowClear
+              disabled={!!editing && !canManageEditingGoal}
               options={departmentOptions}
               placeholder="请选择部门"
             />
@@ -1201,11 +1290,11 @@ function Goals() {
                 >
                   <Select
                     allowClear
+                    disabled={!selectedDepartment || (!!editing && !canManageEditingGoal)}
                     showSearch
                     optionFilterProp="label"
                     options={filteredTeams.map(team => ({ value: team.id, label: team.name }))}
                     placeholder={selectedDepartment ? '请选择小组' : '请先选择部门'}
-                    disabled={!selectedDepartment}
                   />
                 </Form.Item>
               );
@@ -1235,6 +1324,30 @@ function Goals() {
         </Form>
       </Modal>
 
+      <Modal
+        title={`共享目标${shareTarget?.title ? ` · ${shareTarget.title}` : ''}`}
+        open={shareOpen}
+        onCancel={() => setShareOpen(false)}
+        onOk={saveGoalShares}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={shareSaving}
+        okButtonProps={{ disabled: shareLoading }}
+        width={isMobile ? '100%' : 560}
+        destroyOnClose
+      >
+        <ContentShareEditor
+          draft={shareDraft}
+          onChange={setShareDraft}
+          loading={shareLoading}
+          users={users}
+          defaultUsers={defaultShareUsers}
+          projectGroups={projectGroups}
+          departments={ORGANIZATION_DEPARTMENT_OPTIONS}
+          teams={teams}
+        />
+      </Modal>
+
       <Drawer
         title="目标详情"
         placement="right"
@@ -1247,16 +1360,23 @@ function Goals() {
             <Button size="small" icon={<HistoryOutlined />} onClick={() => openGoalHistory(detailRecord.id)}>
               历史
             </Button>
-            <Button
-              size="small"
-              icon={<EditOutlined />}
-              onClick={() => {
-                setDetailVisible(false);
-                handleEdit(detailRecord);
-              }}
-            >
-              编辑目标
-            </Button>
+            {Number(detailRecord.can_share) > 0 && (
+              <Button size="small" icon={<UserAddOutlined />} onClick={() => openGoalShare(detailRecord)}>
+                共享
+              </Button>
+            )}
+            {Number(detailRecord.can_edit) > 0 && (
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => {
+                  setDetailVisible(false);
+                  handleEdit(detailRecord);
+                }}
+              >
+                编辑目标
+              </Button>
+            )}
           </Space>
         ) : null}
       >

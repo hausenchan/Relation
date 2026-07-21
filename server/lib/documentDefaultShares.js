@@ -1,4 +1,10 @@
-const DOCUMENT_DEFAULT_CXO_ROLES = ['ceo', 'coo', 'cto', 'cmo'];
+const DOCUMENT_DEFAULT_CXO_SLOTS = [
+  { name: '陈锦标', role: 'ceo' },
+  { name: '陈豪赞', role: 'coo' },
+  { name: '林璐韵', role: 'cmo' },
+  { name: '贺敏', role: 'cto' },
+];
+const DOCUMENT_DEFAULT_CXO_ROLES = DOCUMENT_DEFAULT_CXO_SLOTS.map(item => item.role);
 
 function getDocumentCxoRole(user) {
   const roles = [user?.role, user?.executive_role]
@@ -8,16 +14,23 @@ function getDocumentCxoRole(user) {
 }
 
 function getDefaultDocumentCxoUsers(users = []) {
-  const selectedByRole = new Map();
-  (Array.isArray(users) ? users : []).forEach((user) => {
-    if (String(user?.account_status || 'active') !== 'active') return;
-    const role = getDocumentCxoRole(user);
-    const userId = Number(user?.id);
-    if (!role || !userId) return;
-    const selected = selectedByRole.get(role);
-    if (!selected || userId < Number(selected.id)) selectedByRole.set(role, user);
-  });
-  return DOCUMENT_DEFAULT_CXO_ROLES.map(role => selectedByRole.get(role)).filter(Boolean);
+  const activeUsers = (Array.isArray(users) ? users : [])
+    .filter(user => String(user?.account_status || 'active') === 'active' && Number(user?.id));
+  const selectedIds = new Set();
+
+  return DOCUMENT_DEFAULT_CXO_SLOTS.map(({ name, role }) => {
+    const namedUser = activeUsers.find(user => (
+      !selectedIds.has(Number(user.id))
+      && [user?.display_name, user?.username]
+        .map(value => String(value || '').trim())
+        .includes(name)
+    ));
+    const roleUser = namedUser || activeUsers
+      .filter(user => !selectedIds.has(Number(user.id)) && getDocumentCxoRole(user) === role)
+      .sort((left, right) => Number(left.id) - Number(right.id))[0];
+    if (roleUser) selectedIds.add(Number(roleUser.id));
+    return roleUser;
+  }).filter(Boolean);
 }
 
 function buildDefaultDocumentShares(users = []) {
@@ -28,6 +41,7 @@ function buildDefaultDocumentShares(users = []) {
 }
 
 module.exports = {
+  DOCUMENT_DEFAULT_CXO_SLOTS,
   DOCUMENT_DEFAULT_CXO_ROLES,
   buildDefaultDocumentShares,
   getDefaultDocumentCxoUsers,

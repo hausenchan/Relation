@@ -63,6 +63,8 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 - 经营周会 `/executive/operational`：周记录、准备/会议页签、准备人员、AI 提纲、会议结论、
   年度汇总。
 - 三个模块的正文统一采用块编辑器，支持自动保存、手动保存、历史版本和多人更新。
+- 目标和周报与文档中心共用共享对象口径，支持项目组、部门、小组和个人；共享记录统一
+  存储在 `content_shares`。
 
 ### 3.3 业务流转与 Agent
 
@@ -121,6 +123,10 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 - `readonly`、`guest` 不得通过直接调用 API 获得写权限。
 - 小组、负责人、共享人、跨团队授权是不同维度，不能用前端过滤代替 SQL/API 过滤。
 - 任何详情、历史、附件和导出接口都要复用与列表一致的数据可见性规则。
+- 文档、目标和周报的默认共享人按固定顺序为陈锦标、陈豪赞、林璐韵、贺敏；优先按姓名
+  精确匹配，角色只作兼容回退。界面必须显示为已选标签并允许逐个移除，保存后不得自动回填。
+- 目标或周报的共享协作者可查看、编辑和继续调整共享范围，但不能删除原记录；目标的负责人、
+  组织归属、层级和周期仍只允许原管理者调整，历史恢复也不得绕过该限制。
 
 ### 4.2 经营周会
 
@@ -188,6 +194,7 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 | `collaborativeDocument.js` | 稳定块 ID、删除冲突、顺序合并、三模块 409 重试 |
 | `content_revisions` | `encryptedFields.js`、SQLite/MySQL schema、恢复权限、删除级联 |
 | 目标/周报字段 | 权限 SQL、列表筛选、工作台汇总、加密字段、MySQL `LONGTEXT` |
+| 目标/周报共享 | `content_shares`、列表/详情/历史/实时协作权限、默认 CXO、删除清理 |
 | 经营周会参与人 | 两道门、准备可见性、提交统计、AI 输入、年度汇总 |
 | `App.js` 菜单/路由 | `MenuPerms.js` 菜单树、后端菜单 key、工作区标签标题 |
 | 附件路径 | 本地与 OSS 兼容、权限、预览、下载、删除、历史迁移 |
@@ -203,6 +210,8 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
   冲突 `409`、正文过大 `413`、服务错误 `500`。
 - 自动保存 API 应返回完整或足够更新基线的记录，至少包含 `id`、`updated_at`。
 - 删除主数据时同步处理历史、共享、附件及关联记录，且先做权限检查。
+- `content_shares` 的实体类型当前仅使用 `goal`、`weekly_report`；目标类型必须在服务端固定，
+  共享目标仅允许 `user`、`department`、`team`、`project_group`，不得接受任意表名或 SQL 片段。
 
 ## 7. 前端规范
 

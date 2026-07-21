@@ -2334,6 +2334,7 @@ db.exec(`
     custom_width INTEGER,
     small_font_enabled INTEGER DEFAULT 0,
     title_numbering_enabled INTEGER DEFAULT 0,
+    default_shares_initialized INTEGER DEFAULT 0,
     pinned_at DATETIME,
     created_by INTEGER,
     updated_by INTEGER,
@@ -2495,6 +2496,7 @@ addColumnIfMissing('documents', 'import_batch_no', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'import_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'quality_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'icon_key', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'default_shares_initialized', 'INTEGER DEFAULT 0');
 const documentsMissingContentText = db.prepare(`
   SELECT id, content
   FROM documents
@@ -2774,6 +2776,22 @@ db.exec(`
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(user_id, week_start)
   );
+
+  CREATE TABLE IF NOT EXISTS content_shares (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type TEXT NOT NULL,
+    entity_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER,
+    target_key TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_content_shares_entity
+    ON content_shares(entity_type, entity_id);
+  CREATE INDEX IF NOT EXISTS idx_content_shares_target
+    ON content_shares(target_type, target_id, target_key);
 
   CREATE TABLE IF NOT EXISTS content_revisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3581,6 +3599,8 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/documents\/(\d+)\/page-options$/, businessType: '文档中心', table: 'documents', idGroup: 1, action: '保存页面选项' },
   { pattern: /^\/documents\/bulk-shares$/, businessType: '文档共享', table: 'document_shares', action: '批量追加共享范围' },
   { pattern: /^\/documents\/(\d+)\/shares$/, businessType: '文档共享', table: 'document_shares', idGroup: 1, action: '保存共享范围' },
+  { pattern: /^\/goals\/(\d+)\/shares$/, businessType: '目标共享', table: 'content_shares', idGroup: 1, action: '保存共享范围' },
+  { pattern: /^\/weekly-reports\/(\d+)\/shares$/, businessType: '周报共享', table: 'content_shares', idGroup: 1, action: '保存共享范围' },
   { pattern: /^\/documents\/(\d+)\/attachments$/, businessType: '文档附件', table: 'document_attachments', responseId: true, action: '上传附件' },
   { pattern: /^\/documents\/(\d+)\/blocks\/([^/]+)\/comments$/, businessType: '文档块评论', table: 'document_block_comments', responseId: true, action: '新增块评论' },
   { pattern: /^\/documents\/(\d+)\/change-logs$/, businessType: '文档改动历史', table: 'document_change_logs', responseId: true, action: '新增改动历史' },
@@ -4627,6 +4647,7 @@ function isOperationTeamGoal(goal) {
 }
 
 function buildGoalVisibilityFilter(user) {
+  if (isAdmin(user?.role) || isAdmin(user?.executive_role)) return { sql: '', params: [] };
   const visibleOwnerIds = getVisibleGoalOwnerIds(user.id, user.role);
   if (visibleOwnerIds === null) return { sql: '', params: [] };
 
@@ -4641,15 +4662,27 @@ function buildGoalVisibilityFilter(user) {
     conditions.push("(g.scope_type = 'team' AND COALESCE(g.department, tm.department, u.department) = 'operation')");
   }
 
+  const shared = buildContentShareVisibilityClause(user, 'goal', 'g.id', 'goal_share');
+  conditions.push(shared.sql);
+  params.push(...shared.params);
+
   if (!conditions.length) return { sql: ' AND 1=0', params: [] };
   return { sql: ` AND (${conditions.join(' OR ')})`, params };
 }
 
 function canAccessGoal(user, goal) {
+  if (isAdmin(user?.role) || isAdmin(user?.executive_role)) return true;
   const visibleOwnerIds = getVisibleGoalOwnerIds(user.id, user.role);
   if (visibleOwnerIds === null) return true;
   if (visibleOwnerIds.includes(Number(goal.owner_id))) return true;
-  return canViewOperationTeamGoals(user) && isOperationTeamGoal(goal);
+  if (canViewOperationTeamGoals(user) && isOperationTeamGoal(goal)) return true;
+  return isContentSharedWithUser(user, 'goal', goal.id);
+}
+
+function canEditGoal(user, goal) {
+  if (!user || !goal || ['readonly', 'guest'].includes(user.role)) return false;
+  return canManageGoalForOwner(user, goal.owner_id)
+    || isContentSharedWithUser(user, 'goal', goal.id);
 }
 
 function canManageGoalForOwner(actor, ownerId) {
@@ -5513,6 +5546,7 @@ app.delete('/api/users/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_teams WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_departments WHERE user_id = ?').run(req.params.id);
   db.prepare('DELETE FROM user_project_groups WHERE user_id = ?').run(req.params.id);
+  db.prepare("DELETE FROM content_shares WHERE target_type = 'user' AND target_id = ?").run(req.params.id);
   db.prepare('DELETE FROM users WHERE id = ?').run(req.params.id);
   clearRuntimeCache();
   res.json({ success: true });
@@ -5556,6 +5590,7 @@ app.delete('/api/teams/:id', auth, adminOnly, (req, res) => {
     db.prepare('UPDATE users SET team_id = ? WHERE id = ?').run(nextTeam?.team_id || null, userId);
   });
   db.prepare('DELETE FROM director_teams WHERE team_id = ?').run(req.params.id);
+  db.prepare("DELETE FROM content_shares WHERE target_type = 'team' AND target_id = ?").run(req.params.id);
   db.prepare('DELETE FROM teams WHERE id = ?').run(req.params.id);
   clearRuntimeCache();
   res.json({ success: true });
@@ -5610,6 +5645,7 @@ app.put('/api/project-groups/:id', auth, adminOnly, (req, res) => {
 app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
   db.prepare('DELETE FROM user_project_groups WHERE project_group_id = ?').run(req.params.id);
   db.prepare('UPDATE goals SET project_group_id = NULL WHERE project_group_id = ?').run(req.params.id);
+  db.prepare("DELETE FROM content_shares WHERE target_type = 'project_group' AND target_id = ?").run(req.params.id);
   db.prepare('DELETE FROM project_groups WHERE id = ?').run(req.params.id);
   clearRuntimeCache();
   res.json({ success: true });
@@ -7012,9 +7048,98 @@ function normalizeDocumentShares(shares) {
   return rows;
 }
 
+function buildShareTargetMatch(user, alias) {
+  const clauses = [`${alias}.target_type = 'user' AND ${alias}.target_id = ?`];
+  const params = [Number(user.id)];
+
+  const departmentKeys = getDepartmentKeysForUser(user);
+  if (departmentKeys.length) {
+    clauses.push(`${alias}.target_type = 'department' AND ${alias}.target_key IN (${departmentKeys.map(() => '?').join(',')})`);
+    params.push(...departmentKeys);
+  }
+
+  const teamIds = getUserTeamIds(user.id);
+  if (teamIds.length) {
+    clauses.push(`${alias}.target_type = 'team' AND ${alias}.target_id IN (${teamIds.map(() => '?').join(',')})`);
+    params.push(...teamIds);
+  }
+
+  const projectGroupIds = getUserProjectGroupIds(user.id);
+  if (projectGroupIds.length) {
+    clauses.push(`${alias}.target_type = 'project_group' AND ${alias}.target_id IN (${projectGroupIds.map(() => '?').join(',')})`);
+    params.push(...projectGroupIds);
+  }
+
+  return { sql: clauses.map(clause => `(${clause})`).join(' OR '), params };
+}
+
+function buildContentShareVisibilityClause(user, entityType, entityIdExpression, alias = 'content_share') {
+  const target = buildShareTargetMatch(user, alias);
+  return {
+    sql: `EXISTS (
+      SELECT 1 FROM content_shares ${alias}
+      WHERE ${alias}.entity_type = ?
+        AND ${alias}.entity_id = ${entityIdExpression}
+        AND (${target.sql})
+    )`,
+    params: [entityType, ...target.params],
+  };
+}
+
+function isContentSharedWithUser(user, entityType, entityId) {
+  if (!user?.id || !entityType || !Number(entityId)) return false;
+  const target = buildShareTargetMatch(user, 'content_share');
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM content_shares content_share
+    WHERE content_share.entity_type = ?
+      AND content_share.entity_id = ?
+      AND (${target.sql})
+    LIMIT 1
+  `).get(entityType, Number(entityId), ...target.params));
+}
+
+function replaceContentShares(entityType, entityId, shares, userId) {
+  const normalized = normalizeDocumentShares(shares);
+  db.prepare('DELETE FROM content_shares WHERE entity_type = ? AND entity_id = ?')
+    .run(entityType, Number(entityId));
+  const insert = db.prepare(`
+    INSERT INTO content_shares (
+      entity_type, entity_id, target_type, target_id, target_key, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `);
+  normalized.forEach(share => insert.run(
+    entityType,
+    Number(entityId),
+    share.target_type,
+    share.target_id,
+    share.target_key,
+    Number(userId) || null,
+  ));
+  return normalized;
+}
+
+function getContentShares(entityType, entityId) {
+  return db.prepare(`
+    SELECT content_share.*,
+      u.display_name as user_name,
+      t.name as team_name,
+      pg.name as project_group_name
+    FROM content_shares content_share
+    LEFT JOIN users u
+      ON content_share.target_type = 'user' AND content_share.target_id = u.id
+    LEFT JOIN teams t
+      ON content_share.target_type = 'team' AND content_share.target_id = t.id
+    LEFT JOIN project_groups pg
+      ON content_share.target_type = 'project_group' AND content_share.target_id = pg.id
+    WHERE content_share.entity_type = ? AND content_share.entity_id = ?
+    ORDER BY content_share.target_type, content_share.id
+  `).all(entityType, Number(entityId));
+}
+
 function getDefaultDocumentShares() {
   const users = db.prepare(`
-    SELECT id, role, executive_role, account_status
+    SELECT id, username, display_name, role, executive_role, account_status
     FROM users
     WHERE COALESCE(account_status, 'active') = 'active'
     ORDER BY id ASC
@@ -7034,7 +7159,26 @@ function replaceDocumentShares(documentId, shares, userId) {
     VALUES (?, ?, ?, ?, ?)
   `);
   normalized.forEach(share => insert.run(documentId, share.target_type, share.target_id, share.target_key, userId));
+  db.prepare('UPDATE documents SET default_shares_initialized = 1 WHERE id = ?').run(documentId);
   return normalized;
+}
+
+function initializeLegacyDocumentDefaultShares() {
+  const defaultShares = getDefaultDocumentShares();
+  if (!defaultShares.length) return;
+  const documents = db.prepare(`
+    SELECT id
+    FROM documents
+    WHERE COALESCE(default_shares_initialized, 0) = 0
+  `).all();
+  if (!documents.length) return;
+  const initialize = db.transaction((rows) => {
+    rows.forEach(document => {
+      addDocumentShares(document.id, defaultShares, null);
+      db.prepare('UPDATE documents SET default_shares_initialized = 1 WHERE id = ?').run(document.id);
+    });
+  });
+  initialize(documents);
 }
 
 function addDocumentShares(documentId, shares, userId) {
@@ -7059,6 +7203,8 @@ function addDocumentShares(documentId, shares, userId) {
   });
   return { requested: normalized.length, added };
 }
+
+initializeLegacyDocumentDefaultShares();
 
 function getDocumentShares(documentId) {
   return db.prepare(`
@@ -18345,6 +18491,10 @@ const GOAL_REVISION_FIELDS = [
   'title', 'description', 'owner_id', 'department', 'team_id', 'project_group_id',
   'scope_type', 'deadline', 'progress', 'status', 'result', 'goal_type', 'period', 'parent_id',
 ];
+const GOAL_MANAGEMENT_FIELDS = [
+  'owner_id', 'project_group_id', 'department', 'team_id',
+  'scope_type', 'goal_type', 'period', 'parent_id',
+];
 
 function getGoalRecord(goalId) {
   return db.prepare('SELECT * FROM goals WHERE id = ?').get(Number(goalId)) || null;
@@ -18359,13 +18509,26 @@ function buildGoalRevisionSnapshot(row) {
   }, {});
 }
 
-function serializeGoalLiveRecord(row) {
+function getGoalPermissionFlags(row, user) {
+  const canWriteGoal = Boolean(user && !['readonly', 'guest'].includes(user.role));
+  const canManage = canWriteGoal && canManageGoalForOwner(user, row?.owner_id);
+  const canEdit = canEditGoal(user, row);
+  return {
+    can_edit: canEdit ? 1 : 0,
+    can_share: canEdit ? 1 : 0,
+    can_manage: canManage ? 1 : 0,
+    can_delete: canManage ? 1 : 0,
+  };
+}
+
+function serializeGoalLiveRecord(row, user = null) {
   if (!row) return null;
   return {
     id: Number(row.id),
     ...buildGoalRevisionSnapshot(row),
     created_at: row.created_at,
     updated_at: row.updated_at,
+    ...(user ? getGoalPermissionFlags(row, user) : {}),
   };
 }
 
@@ -18465,6 +18628,7 @@ app.get('/api/goals', (req, res) => {
   const goals = decryptRows('goals', db.prepare(q).all(...params)).map(g => ({
     ...g,
     parent_title: safeDecrypt(g.parent_title),
+    ...getGoalPermissionFlags(g, req.user),
   }));
 
   // 为每个目标加载子目标数量
@@ -18517,7 +18681,10 @@ app.get('/api/goals/:id', (req, res) => {
     WHERE g.parent_id = ?
     ORDER BY g.period DESC, g.created_at DESC
   `).all(id);
-  const children = decryptRows('goals', childrenRaw);
+  const children = decryptRows(
+    'goals',
+    childrenRaw.filter(child => canAccessGoal(req.user, child)),
+  ).map(child => ({ ...child, ...getGoalPermissionFlags(child, req.user) }));
 
   const decGoal = decryptRow('goals', goal);
   decGoal.parent_title = safeDecrypt(decGoal.parent_title);
@@ -18525,6 +18692,7 @@ app.get('/api/goals/:id', (req, res) => {
     ...decGoal,
     department: decGoal.department || decGoal.team_department || decGoal.owner_department || null,
     children,
+    ...getGoalPermissionFlags(goal, req.user),
   });
 });
 
@@ -18536,7 +18704,7 @@ app.get('/api/goals/:id/live', (req, res) => {
   if (since && since === String(goal.updated_at || '')) {
     return res.json({ id: Number(goal.id), has_changes: false, updated_at: goal.updated_at });
   }
-  return res.json({ ...serializeGoalLiveRecord(goal), has_changes: true });
+  return res.json({ ...serializeGoalLiveRecord(goal, req.user), has_changes: true });
 });
 
 app.get('/api/goals/:id/history', (req, res) => {
@@ -18551,7 +18719,7 @@ app.get('/api/goals/:id/history', (req, res) => {
     userId: goal.owner_id,
   });
   return res.json({
-    can_restore: canManageGoalForOwner(req.user, goal.owner_id) ? 1 : 0,
+    can_restore: canEditGoal(req.user, goal) ? 1 : 0,
     revisions: listContentRevisions('goal', goal.id),
   });
 });
@@ -18559,14 +18727,23 @@ app.get('/api/goals/:id/history', (req, res) => {
 app.post('/api/goals/:id/history/:revisionId/restore', (req, res) => {
   const goal = getGoalRecord(req.params.id);
   if (!goal) return res.status(404).json({ error: '目标不存在' });
-  if (!canManageGoalForOwner(req.user, goal.owner_id)) {
+  if (!canEditGoal(req.user, goal)) {
     return res.status(403).json({ error: '无权恢复该目标版本' });
   }
   const revision = getContentRevision(req.params.revisionId, 'goal', goal.id, 'main');
   if (!revision?.snapshot) return res.status(404).json({ error: '历史版本不存在' });
   const snapshot = revision.snapshot;
-  if (!canManageGoalForOwner(req.user, snapshot.owner_id)) {
+  if (Number(snapshot.owner_id) !== Number(goal.owner_id)
+      && !canManageGoalForOwner(req.user, snapshot.owner_id)) {
     return res.status(403).json({ error: '无权恢复为该负责人名下的目标' });
+  }
+  if (!canManageGoalForOwner(req.user, goal.owner_id)) {
+    const changesManagementField = GOAL_MANAGEMENT_FIELDS.some(field => (
+      String(snapshot[field] ?? '') !== String(goal[field] ?? '')
+    ));
+    if (changesManagementField) {
+      return res.status(403).json({ error: '共享协作者不能通过历史版本变更目标归属和负责人' });
+    }
   }
   const encrypted = encryptRow('goals', {
     title: snapshot.title,
@@ -18607,7 +18784,7 @@ app.post('/api/goals/:id/history/:revisionId/restore', (req, res) => {
     action: 'restore',
     userId: req.user.id,
   });
-  return res.json(serializeGoalLiveRecord(restored));
+  return res.json(serializeGoalLiveRecord(restored, req.user));
 });
 
 // 创建目标
@@ -18636,6 +18813,12 @@ app.post('/api/goals', (req, res) => {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(enc.title, enc.description, owner_id, normalizedDepartment, team_id || null, project_group_id || null, normalizedScopeType, deadline, progress || 0, normalizedStatus, enc.result || null, goal_type, period, parent_id || null);
   const created = getGoalRecord(insertResult.lastInsertRowid);
+  replaceContentShares(
+    'goal',
+    created.id,
+    Array.isArray(req.body?.shares) ? req.body.shares : getDefaultDocumentShares(),
+    req.user.id,
+  );
   insertContentRevision({
     entityType: 'goal',
     entityId: created.id,
@@ -18643,7 +18826,7 @@ app.post('/api/goals', (req, res) => {
     action: 'create',
     userId: req.user.id,
   });
-  res.json(serializeGoalLiveRecord(created));
+  res.json(serializeGoalLiveRecord(created, req.user));
 });
 
 // 更新目标
@@ -18654,16 +18837,29 @@ app.put('/api/goals/:id', (req, res) => {
   if (!existing) return res.status(404).json({ error: '目标不存在' });
   const hasField = field => Object.prototype.hasOwnProperty.call(body, field);
   const targetOwnerId = hasField('owner_id') ? Number(body.owner_id) : Number(existing.owner_id);
-  if (!canManageGoalForOwner(req.user, existing.owner_id)
-      || !canManageGoalForOwner(req.user, targetOwnerId)) {
+  const canManageExistingGoal = canManageGoalForOwner(req.user, existing.owner_id);
+  if (!canEditGoal(req.user, existing)) {
     return res.status(403).json({ error: '无权编辑该目标' });
+  }
+  if (targetOwnerId !== Number(existing.owner_id)
+      && (!canManageExistingGoal || !canManageGoalForOwner(req.user, targetOwnerId))) {
+    return res.status(403).json({ error: '无权变更该目标负责人' });
+  }
+  if (!canManageExistingGoal) {
+    const changesManagementField = GOAL_MANAGEMENT_FIELDS.some(field => (
+      hasField(field)
+      && String(body[field] ?? '') !== String(existing[field] ?? '')
+    ));
+    if (changesManagementField) {
+      return res.status(403).json({ error: '共享协作者不能变更目标归属和负责人' });
+    }
   }
   const baseUpdatedAt = String(body.base_updated_at || '');
   if (baseUpdatedAt && baseUpdatedAt !== String(existing.updated_at || '')) {
     return res.status(409).json({
       error: '目标已被其他协作者更新，请先同步最新内容',
       code: 'CONTENT_CONFLICT',
-      latest: serializeGoalLiveRecord(existing),
+      latest: serializeGoalLiveRecord(existing, req.user),
     });
   }
   const mergedScope = {
@@ -18697,7 +18893,7 @@ app.put('/api/goals/:id', (req, res) => {
   });
   Object.assign(patch, encryptRow('goals', contentPatch));
   const fields = Object.keys(patch);
-  if (!fields.length) return res.json(serializeGoalLiveRecord(existing));
+  if (!fields.length) return res.json(serializeGoalLiveRecord(existing, req.user));
   const updatedAt = new Date().toISOString();
   db.prepare(`
     UPDATE goals
@@ -18714,7 +18910,22 @@ app.put('/api/goals/:id', (req, res) => {
     action: body.revision_action === 'manual_save' ? 'manual_save' : 'save',
     userId: req.user.id,
   });
-  res.json(serializeGoalLiveRecord(updated));
+  res.json(serializeGoalLiveRecord(updated, req.user));
+});
+
+app.get('/api/goals/:id/shares', (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canAccessGoal(req.user, goal)) return res.status(403).json({ error: '无权限查看该目标' });
+  return res.json(getContentShares('goal', goal.id));
+});
+
+app.put('/api/goals/:id/shares', canWrite, (req, res) => {
+  const goal = getGoalRecord(req.params.id);
+  if (!goal) return res.status(404).json({ error: '目标不存在' });
+  if (!canEditGoal(req.user, goal)) return res.status(403).json({ error: '无权调整该目标共享范围' });
+  const shares = replaceContentShares('goal', goal.id, req.body?.shares || [], req.user.id);
+  return res.json({ success: true, shares });
 });
 
 // 删除目标（级联删除子目标）
@@ -18730,6 +18941,7 @@ app.delete('/api/goals/:id', (req, res) => {
     const children = db.prepare('SELECT id FROM goals WHERE parent_id = ?').all(goalId);
     children.forEach(c => deleteGoalAndChildren(c.id));
     db.prepare("DELETE FROM content_revisions WHERE entity_type = 'goal' AND entity_id = ?").run(goalId);
+    db.prepare("DELETE FROM content_shares WHERE entity_type = 'goal' AND entity_id = ?").run(goalId);
     db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
   }
   deleteGoalAndChildren(id);
@@ -18750,14 +18962,62 @@ function getWeeklyReportRecord(reportId) {
   `).get(Number(reportId)) || null;
 }
 
+function getWeeklyReportVisibleOwnerIds(user) {
+  const userId = Number(user?.id);
+  const role = user?.role;
+  if (!userId) return [];
+  if (isAdmin(role) || isAdmin(user?.executive_role)) return null;
+
+  if (role === 'member') {
+    const visibleIds = new Set([userId]);
+    const me = db.prepare('SELECT leader_id FROM users WHERE id = ?').get(userId);
+    if (me?.leader_id) visibleIds.add(Number(me.leader_id));
+    getUserTeamIds(userId).forEach(teamId => {
+      const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(teamId);
+      if (team?.leader_id) visibleIds.add(Number(team.leader_id));
+    });
+    db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'weekly_reports')
+      .flatMap(row => getUsersByTeamIds([row.target_team_id]))
+      .forEach(id => visibleIds.add(Number(id)));
+    return [...visibleIds];
+  }
+
+  if (role === 'leader') {
+    const managedTeamIds = getManagedTeamIds(userId, role) || [];
+    const crossTeamIds = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
+      .all(userId, 'weekly_reports').map(row => row.target_team_id);
+    const teamIds = [...new Set([...managedTeamIds, ...crossTeamIds])];
+    return teamIds.length
+      ? [...new Set([userId, ...getUsersByTeamIds(teamIds)])]
+      : [userId];
+  }
+
+  if (role === 'sales_director') {
+    const managedTeamIds = getManagedTeamIds(userId, role) || [];
+    return managedTeamIds.length ? getUsersByTeamIds(managedTeamIds) : null;
+  }
+
+  return null;
+}
+
+function canAccessWeeklyReport(user, report) {
+  if (!user || !report) return false;
+  const visibleOwnerIds = getWeeklyReportVisibleOwnerIds(user);
+  if (visibleOwnerIds === null || visibleOwnerIds.includes(Number(report.user_id))) return true;
+  return isContentSharedWithUser(user, 'weekly_report', report.id);
+}
+
 function canEditWeeklyReport(user, report) {
   return Boolean(
     user?.id
     && report
+    && !['readonly', 'guest'].includes(user.role)
     && (
       isAdmin(user.role)
       || isAdmin(user.executive_role)
       || Number(user.id) === Number(report.user_id)
+      || isContentSharedWithUser(user, 'weekly_report', report.id)
     )
   );
 }
@@ -18771,20 +19031,24 @@ function buildWeeklyReportRevisionSnapshot(row) {
   }, {});
 }
 
-function serializeWeeklyReportRecord(row) {
+function serializeWeeklyReportRecord(row, user = null) {
   if (!row) return null;
   const decrypted = decryptRow('weekly_reports', row);
   return {
     ...decrypted,
     id: Number(decrypted.id),
     user_id: Number(decrypted.user_id),
+    ...(user ? {
+      can_edit: canEditWeeklyReport(user, row) ? 1 : 0,
+      can_share: canEditWeeklyReport(user, row) ? 1 : 0,
+      can_delete: isAdmin(user.role) ? 1 : 0,
+    } : {}),
   };
 }
 
 // 获取周报列表
 app.get('/api/weekly-reports', (req, res) => {
   const { week_start, department } = req.query;
-  const { id: userId, role } = req.user;
 
   let q = `
     SELECT wr.*, u.display_name as user_name, u.department, u.role as user_role
@@ -18794,55 +19058,20 @@ app.get('/api/weekly-reports', (req, res) => {
   `;
   const params = [];
 
-  // 角色过滤
-  if (role === 'member') {
-    const visibleIds = new Set([userId]);
-    const me = db.prepare('SELECT leader_id FROM users WHERE id = ?').get(userId);
-    if (me?.leader_id) visibleIds.add(me.leader_id);
-
-    const myTeamIds = getUserTeamIds(userId);
-    myTeamIds.forEach(teamId => {
-      const team = db.prepare('SELECT leader_id FROM teams WHERE id = ?').get(teamId);
-      if (team?.leader_id) visibleIds.add(team.leader_id);
-    });
-
-    // 获取跨团队访问权限
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'weekly_reports').map(r => r.target_team_id);
-    if (crossTeams.length > 0) {
-      const crossMembers = getUsersByTeamIds(crossTeams);
-      crossMembers.forEach(id => visibleIds.add(id));
-    }
-
-    const ids = [...visibleIds];
-    q += ` AND wr.user_id IN (${ids.map(() => '?').join(',')})`;
-    params.push(...ids);
-  } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    // 获取跨团队访问权限
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'weekly_reports').map(r => r.target_team_id);
-
-    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
-
-    if (allTeamIds.length) {
-      const members = getUsersByTeamIds(allTeamIds);
-      q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
-    } else {
-      q += ' AND wr.user_id = ?';
-      params.push(userId);
-    }
-  } else if (role === 'sales_director') {
-    // 总监看辖区内的周报
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      q += ` AND wr.user_id IN (${members.map(() => '?').join(',')})`;
-      params.push(...members);
-    }
+  const visibleOwnerIds = getWeeklyReportVisibleOwnerIds(req.user);
+  if (visibleOwnerIds !== null) {
+    const shared = buildContentShareVisibilityClause(
+      req.user,
+      'weekly_report',
+      'wr.id',
+      'weekly_report_share',
+    );
+    const ownerSql = visibleOwnerIds.length
+      ? `wr.user_id IN (${visibleOwnerIds.map(() => '?').join(',')})`
+      : '1=0';
+    q += ` AND (${ownerSql} OR ${shared.sql})`;
+    params.push(...visibleOwnerIds, ...shared.params);
   }
-  // admin 看全部，不加过滤
 
   if (week_start) { q += ' AND wr.week_start = ?'; params.push(week_start); }
   if (department) {
@@ -18857,7 +19086,7 @@ app.get('/api/weekly-reports', (req, res) => {
   }
 
   q += ' ORDER BY wr.week_start DESC, u.display_name ASC';
-  res.json(decryptRows('weekly_reports', db.prepare(q).all(...params)));
+  res.json(db.prepare(q).all(...params).map(row => serializeWeeklyReportRecord(row, req.user)));
 });
 
 app.get('/api/weekly-reports/:id/live', (req, res) => {
@@ -18868,13 +19097,13 @@ app.get('/api/weekly-reports/:id/live', (req, res) => {
   if (since && since === String(report.updated_at || '')) {
     return res.json({ id: Number(report.id), has_changes: false, updated_at: report.updated_at });
   }
-  return res.json({ ...serializeWeeklyReportRecord(report), has_changes: true });
+  return res.json({ ...serializeWeeklyReportRecord(report, req.user), has_changes: true });
 });
 
 app.get('/api/weekly-reports/:id/history', (req, res) => {
   const report = getWeeklyReportRecord(req.params.id);
   if (!report) return res.status(404).json({ error: '周报不存在' });
-  if (!canEditWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权查看该周报历史' });
+  if (!canAccessWeeklyReport(req.user, report)) return res.status(403).json({ error: '无权查看该周报历史' });
   insertContentRevision({
     entityType: 'weekly_report',
     entityId: report.id,
@@ -18882,7 +19111,10 @@ app.get('/api/weekly-reports/:id/history', (req, res) => {
     action: 'baseline',
     userId: report.user_id,
   });
-  return res.json({ revisions: listContentRevisions('weekly_report', report.id) });
+  return res.json({
+    can_restore: canEditWeeklyReport(req.user, report) ? 1 : 0,
+    revisions: listContentRevisions('weekly_report', report.id),
+  });
 });
 
 app.post('/api/weekly-reports/:id/history/:revisionId/restore', (req, res) => {
@@ -18918,7 +19150,7 @@ app.post('/api/weekly-reports/:id/history/:revisionId/restore', (req, res) => {
     action: 'restore',
     userId: req.user.id,
   });
-  return res.json(serializeWeeklyReportRecord(restored));
+  return res.json(serializeWeeklyReportRecord(restored, req.user));
 });
 
 // 创建或更新周报
@@ -18931,20 +19163,24 @@ app.post('/api/weekly-reports', (req, res) => {
     return res.status(400).json({ error: '用户、周起止日期必填' });
   }
 
-  // 权限检查：只能写自己的周报，除非是 admin
-  if (!isAdmin(role) && !isAdmin(req.user.executive_role) && normalizedUserId !== Number(currentUserId)) {
-    return res.status(403).json({ error: '无权限' });
-  }
-
   // 检查是否已存在
   const existingId = db.prepare('SELECT id FROM weekly_reports WHERE user_id = ? AND week_start = ?').get(normalizedUserId, week_start)?.id;
   const existing = existingId ? getWeeklyReportRecord(existingId) : null;
+  if (existing) {
+    if (!canEditWeeklyReport(req.user, existing)) {
+      return res.status(403).json({ error: '无权编辑该周报' });
+    }
+  } else if (!isAdmin(role)
+      && !isAdmin(req.user.executive_role)
+      && normalizedUserId !== Number(currentUserId)) {
+    return res.status(403).json({ error: '无权限为该用户创建周报' });
+  }
   const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
   if (existing && hasBaseUpdatedAt && String(existing.updated_at || '') !== String(base_updated_at || '')) {
     return res.status(409).json({
       error: '周报已被其他协作者更新，请先同步最新内容',
       code: 'CONTENT_CONFLICT',
-      latest: serializeWeeklyReportRecord(existing),
+      latest: serializeWeeklyReportRecord(existing, req.user),
     });
   }
 
@@ -18967,6 +19203,14 @@ app.post('/api/weekly-reports', (req, res) => {
       reportId = result.lastInsertRowid;
     }
     const saved = getWeeklyReportRecord(reportId);
+    if (!existing) {
+      replaceContentShares(
+        'weekly_report',
+        reportId,
+        Array.isArray(req.body?.shares) ? req.body.shares : getDefaultDocumentShares(),
+        req.user.id,
+      );
+    }
     recordContentRevisionChange({
       entityType: 'weekly_report',
       entityId: reportId,
@@ -18975,13 +19219,37 @@ app.post('/api/weekly-reports', (req, res) => {
       action: req.body?.revision_action === 'manual_save' ? 'manual_save' : (existing ? 'save' : 'create'),
       userId: req.user.id,
     });
-    return res.json(serializeWeeklyReportRecord(saved));
+    return res.json(serializeWeeklyReportRecord(saved, req.user));
   } catch (error) {
     if (/too long|packet|max_allowed_packet|data size/i.test(String(error?.message || ''))) {
       return res.status(413).json({ error: '周报内容过大，服务端存储列或请求大小配置不足' });
     }
     throw error;
   }
+});
+
+app.get('/api/weekly-reports/:id/shares', (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canAccessWeeklyReport(req.user, report)) {
+    return res.status(403).json({ error: '无权限查看该周报' });
+  }
+  return res.json(getContentShares('weekly_report', report.id));
+});
+
+app.put('/api/weekly-reports/:id/shares', canWrite, (req, res) => {
+  const report = getWeeklyReportRecord(req.params.id);
+  if (!report) return res.status(404).json({ error: '周报不存在' });
+  if (!canEditWeeklyReport(req.user, report)) {
+    return res.status(403).json({ error: '无权调整该周报共享范围' });
+  }
+  const shares = replaceContentShares(
+    'weekly_report',
+    report.id,
+    req.body?.shares || [],
+    req.user.id,
+  );
+  return res.json({ success: true, shares });
 });
 
 // 删除周报
@@ -18994,6 +19262,7 @@ app.delete('/api/weekly-reports/:id', (req, res) => {
   }
 
   db.prepare("DELETE FROM content_revisions WHERE entity_type = 'weekly_report' AND entity_id = ?").run(id);
+  db.prepare("DELETE FROM content_shares WHERE entity_type = 'weekly_report' AND entity_id = ?").run(id);
   db.prepare('DELETE FROM weekly_reports WHERE id = ?').run(id);
   res.json({ success: true });
 });

@@ -4653,8 +4653,10 @@ export default function Documents() {
         .map(user => Number(user.id))
         .filter(Boolean);
     }
-    createForm.setFieldsValue(initialValues);
     setCreateOpen(true);
+    window.setTimeout(() => {
+      createForm.setFieldsValue(initialValues);
+    }, 0);
   };
 
   const validateDocumentImportFile = (file) => {
