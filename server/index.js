@@ -42,6 +42,7 @@ const { createAiTrainingEventStream } = require('./lib/aiTrainingEventStream');
 const {
   createMediaManagementRouter,
   deleteMediaAssetByDocumentId,
+  ensureMediaDocumentPlacement,
   resolveMediaDocumentTitle,
 } = require('./lib/mediaManagement');
 const {
@@ -7022,12 +7023,14 @@ function getVisibleDocument(id, user) {
       updater.display_name as updated_by_name,
       pg.name as project_group_name,
       f.name as folder_name,
+      media_link.id as media_asset_id,
       CASE WHEN fav.user_id IS NULL THEN 0 ELSE 1 END as is_favorite
     FROM documents d
     LEFT JOIN users creator ON d.created_by = creator.id
     LEFT JOIN users updater ON d.updated_by = updater.id
     LEFT JOIN project_groups pg ON d.project_group_id = pg.id
     LEFT JOIN document_folders f ON d.folder_id = f.id
+    LEFT JOIN media_assets media_link ON media_link.document_id = d.id
     LEFT JOIN document_favorites fav ON fav.document_id = d.id AND fav.user_id = ?
     WHERE d.id = ? AND COALESCE(d.is_deleted, 0) = 0
     ${visibility.sql}
@@ -7516,6 +7519,20 @@ app.use('/api/media-management', createMediaManagementRouter({
   insertDocumentEditRecord,
   encryptRow,
   decryptRow,
+  prepareMediaDocumentPlacement: () => {
+    const startedAt = Date.now();
+    console.log('[startup] media document placement started');
+    const placement = ensureMediaDocumentPlacement(db);
+    console.log(
+      `[startup] media document placement finished elapsed_ms=${Date.now() - startedAt}`,
+      {
+        folder_id: placement.document_defaults.folder_id,
+        documents_scanned: placement.documents_scanned,
+        documents_updated: placement.documents_updated,
+      },
+    );
+    return placement;
+  },
 }));
 
 app.get('/api/document-folders', (req, res) => {

@@ -80,6 +80,9 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
 - 主体管理 `/company-subjects`：公司主体及导入。
 - 产品资产 `/product-assets`：产品资料、状态、核减和批量导入。
 - 产品模版 `/product-templates`：产品模板入口与配置。
+- 媒体管理 `/media-management`：媒体接入台账及关联文档；关联文档固定归档到
+  `国内项目 / 产运 / 落地 / YYZ / 媒体对接`，使用普通文档图标和 `IMP` 类型，媒体身份以
+  `media_assets.document_id` 关系判断，不得再依赖 `doc_type=MEDIA`。
 - 文档中心 `/documents`：文件夹树、多标签、块编辑、表格、图片/附件、共享、Wolai/TAPD
   导入、历史、多人更新、收藏和搜索。
 - 网络抓包 `/network-capture`：采集与入库辅助能力。
@@ -195,9 +198,10 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
 | `documentBodyBlocks.js` | 历史数据兼容、Wolai 导入、签名、纯文本转换、AI 输入 |
 | `Documents.js` 编辑行为 | 共享编辑器是否也需同步；文档表格/附件是否使用独立事件链 |
 | `collaborativeDocument.js` | 稳定块 ID、删除冲突、顺序合并、三模块 409 重试 |
-| `content_revisions` | `encryptedFields.js`、SQLite/MySQL schema、恢复权限、删除级联 |
+| `content_revisions` | `encryptedFields.js`、MySQL schema、恢复权限、删除级联 |
 | 目标/周报字段 | 权限 SQL、列表筛选、工作台汇总、加密字段、MySQL `LONGTEXT` |
 | 目标/周报共享 | `content_shares`、列表/详情/历史/实时协作权限、默认 CXO、删除清理 |
+| 媒体关联文档 | 固定目录、`DOMESTIC-OPS-IMP` 编号、默认图标、标题保护、收藏列表和旧数据迁移 |
 | 经营周会参与人 | 两道门、准备可见性、提交统计、AI 输入、年度汇总 |
 | `App.js` 菜单/路由 | `MenuPerms.js` 菜单树、后端菜单 key、工作区标签标题 |
 | 附件路径 | 本地与 OSS 兼容、权限、预览、下载、删除、历史迁移 |

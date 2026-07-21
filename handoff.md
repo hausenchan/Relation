@@ -4,12 +4,46 @@
 
 ## 当前任务
 
-状态：生产启动故障已定位、已修复并通过真实 MySQL 压测，尚未提交或推送。
+状态：媒体关联文档归档与图标优化已完成验证，随本次提交交付到 `gitee/main`。
 
-目标：修复 `7b6545f` 上线后新 Pod 一直未监听 `3001`、被 Kubernetes 探针反复重启，
-导致线上继续由旧 Pod 提供旧前端的问题。
+目标：媒体管理新建及已有媒体关联文档统一归档到
+`国内项目 / 产运 / 落地 / YYZ / 媒体对接`，替换 `GEN/ALL/MEDIA` 元数据，并在文档中心
+收藏列表使用普通文档默认图标。
 
-## 生产启动故障（2026-07-21）
+## 媒体关联文档归档优化（2026-07-21）
+
+### 已完成
+
+- 媒体模块启动时确保 `产运 / 落地 / YYZ / 媒体对接` 文件夹路径存在并复用已有同名目录。
+- 已有媒体关联文档幂等迁移到目标目录，编号重算为
+  `D{序号}-DOMESTIC-OPS-IMP-{年份}`，同时更新为国内项目、产运、落地元数据。
+- 新建媒体直接使用目标目录和 `DOMESTIC-OPS-IMP` 文档属性，不再创建 `GEN-ALL-MEDIA` 文档。
+- 媒体关联文档的 `icon_key` 统一为空，因此收藏后在文档中心显示普通文档默认图标，不再显示
+  播放箭头。
+- 媒体身份和标题保护改为依据 `media_assets.document_id` 关系，兼容旧 `doc_type=MEDIA` 数据；
+  类型迁移为 `IMP` 后仍不能从文档中心绕过媒体管理改名。
+- 正文、附件、共享、收藏、历史记录及文档 ID 均原位保留。
+
+### 已验证
+
+- 真实 MySQL 旧数据验证：`D000470-GEN-ALL-MEDIA-2026` 成功迁移为
+  `D000470-DOMESTIC-OPS-IMP-2026`，完整目录路径和 `icon_key=NULL` 均正确。
+- MySQL 迁移扫描 1 条、更新 1 条耗时 `21ms`，服务总启动耗时 `2.53s`。
+- 媒体目标测试 8 条通过；后端全量 45 条、前端全量 70 条全部通过。
+- `node --check server/index.js`、`node --check server/lib/mediaManagement.js` 通过。
+- 隔离生产构建通过，输出到 `/tmp/relation-media-document-placement-build`。
+
+### 本轮任务文件
+
+- `AGENTS.md`
+- `handoff.md`
+- `server/index.js`
+- `server/lib/mediaManagement.js`
+- `server/lib/mediaManagement.test.js`
+- `server/lib/mediaManagementRouter.test.js`
+- `资产管理模块PRD.md`
+
+## 上一轮：生产启动故障（2026-07-21）
 
 ### 根因
 
@@ -37,11 +71,11 @@
 - `node --check server/index.js` 通过。
 - 默认共享迁移单测 3 条通过；共享、历史两组后端集成测试及差异单测共 8 条通过。
 
-### 待完成
+### 交付
 
-- 本轮尚未提交、推送或重新部署；线上仍是旧版本行为，需用户明确要求后提交到 `gitee/main`。
-- 部署后先看日志顺序：`process started` -> `legacy default-share migration finished` ->
-  `server listening`，再确认新 Pod 探针健康和线上前端 bundle 已切换。
+- 已随提交 `1ae5997 修复服务启动迁移阻塞` 推送到 `gitee/main`。
+- 部署观察日志顺序：`process started` -> `legacy default-share migration finished` ->
+  `server listening`，并确认新 Pod 探针健康。
 
 ## 上一轮：共享与页面编辑记录
 
@@ -56,10 +90,9 @@
 - [x] 三个模块均可恢复旧版本；恢复会生成新版本，并立即同步列表和当前编辑器。
 - [x] 周报恢复按钮服从服务端 `can_restore`，避免只读共享用户误看到恢复操作。
 
-### 待完成
+### 交付
 
-- 无代码或测试遗留项。
-- 本轮尚未提交；提交时只纳入下方列出的任务文件，避免夹带其他会话改动。
+- 已随提交 `7b6545f 优化共享与页面编辑记录` 推送到 `gitee/main`，无代码或测试遗留项。
 
 ### 已验证
 

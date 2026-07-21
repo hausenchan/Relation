@@ -1,6 +1,18 @@
 const express = require('express');
 
 const MEDIA_MENU_KEY = '/media-management';
+const MEDIA_DOCUMENT_DIRECTORY = Object.freeze({
+  domain: 'domestic_project',
+  projectCode: 'DOMESTIC',
+  departmentKey: 'OPS',
+  docType: 'IMP',
+  folders: Object.freeze([
+    Object.freeze({ name: '产运', docType: 'PLAN', sortOrder: 10 }),
+    Object.freeze({ name: '落地', docType: 'IMP', sortOrder: 20 }),
+    Object.freeze({ name: 'YYZ', docType: 'IMP', sortOrder: 10 }),
+    Object.freeze({ name: '媒体对接', docType: 'IMP', sortOrder: 10 }),
+  ]),
+});
 
 const MEDIA_ENUMS = Object.freeze({
   importance: ['key', 'medium', 'general'],
@@ -161,6 +173,139 @@ function parseBudgetTypes(value) {
   }
 }
 
+function getMediaDocumentYear(document = {}) {
+  const year = String(document.created_at || '').slice(0, 4);
+  return /^\d{4}$/.test(year) ? year : String(new Date().getFullYear());
+}
+
+function formatMediaDocumentNo(globalSeq, year) {
+  return [
+    `D${String(globalSeq).padStart(6, '0')}`,
+    MEDIA_DOCUMENT_DIRECTORY.projectCode,
+    MEDIA_DOCUMENT_DIRECTORY.departmentKey,
+    MEDIA_DOCUMENT_DIRECTORY.docType,
+    String(year || new Date().getFullYear()),
+  ].join('-');
+}
+
+function findMediaDocumentFolder(db, parentId, name) {
+  if (parentId) {
+    return db.prepare(`
+      SELECT * FROM document_folders
+      WHERE parent_id = ? AND name = ?
+      ORDER BY id ASC
+      LIMIT 1
+    `).get(Number(parentId), name);
+  }
+  return db.prepare(`
+    SELECT * FROM document_folders
+    WHERE parent_id IS NULL AND name = ? AND domain = ?
+    ORDER BY id ASC
+    LIMIT 1
+  `).get(name, MEDIA_DOCUMENT_DIRECTORY.domain);
+}
+
+function ensureMediaDocumentFolder(db, parentId, definition, createdBy) {
+  const existing = findMediaDocumentFolder(db, parentId, definition.name);
+  if (existing) {
+    const metadataChanged = String(existing.domain || '') !== MEDIA_DOCUMENT_DIRECTORY.domain
+      || Number(existing.project_group_id || 0) !== 0
+      || String(existing.department_key || '') !== MEDIA_DOCUMENT_DIRECTORY.departmentKey
+      || String(existing.default_doc_type || '') !== definition.docType;
+    if (metadataChanged) {
+      db.prepare(`
+        UPDATE document_folders SET
+          domain = ?, project_group_id = NULL, department_key = ?, default_doc_type = ?
+        WHERE id = ?
+      `).run(
+        MEDIA_DOCUMENT_DIRECTORY.domain,
+        MEDIA_DOCUMENT_DIRECTORY.departmentKey,
+        definition.docType,
+        existing.id,
+      );
+    }
+    return Number(existing.id);
+  }
+
+  const result = db.prepare(`
+    INSERT INTO document_folders (
+      name, parent_id, domain, project_group_id, department_key,
+      default_doc_type, sort_order, created_by
+    ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+  `).run(
+    definition.name,
+    parentId || null,
+    MEDIA_DOCUMENT_DIRECTORY.domain,
+    MEDIA_DOCUMENT_DIRECTORY.departmentKey,
+    definition.docType,
+    definition.sortOrder,
+    Number(createdBy) || 1,
+  );
+  return Number(result.lastInsertRowid);
+}
+
+function ensureMediaDocumentPlacement(db, { createdBy = 1 } = {}) {
+  const ensure = db.transaction(() => {
+    let folderId = null;
+    MEDIA_DOCUMENT_DIRECTORY.folders.forEach(definition => {
+      folderId = ensureMediaDocumentFolder(db, folderId, definition, createdBy);
+    });
+
+    const documentDefaults = {
+      folder_id: folderId,
+      domain: MEDIA_DOCUMENT_DIRECTORY.domain,
+      project_group_id: null,
+      project_code: MEDIA_DOCUMENT_DIRECTORY.projectCode,
+      department_key: MEDIA_DOCUMENT_DIRECTORY.departmentKey,
+      doc_type: MEDIA_DOCUMENT_DIRECTORY.docType,
+      icon_key: null,
+    };
+    const documents = db.prepare(`
+      SELECT d.id, d.global_seq, d.created_at, d.folder_id, d.domain,
+        d.project_group_id, d.project_code, d.department_key, d.doc_type,
+        d.document_no, d.icon_key
+      FROM documents d
+      INNER JOIN media_assets m ON m.document_id = d.id
+      WHERE COALESCE(d.is_deleted, 0) = 0
+    `).all();
+    const pending = documents.map(document => ({
+      ...document,
+      expectedDocumentNo: formatMediaDocumentNo(document.global_seq, getMediaDocumentYear(document)),
+    })).filter(document => (
+      Number(document.folder_id || 0) !== Number(folderId)
+      || String(document.domain || '') !== MEDIA_DOCUMENT_DIRECTORY.domain
+      || Number(document.project_group_id || 0) !== 0
+      || String(document.project_code || '') !== MEDIA_DOCUMENT_DIRECTORY.projectCode
+      || String(document.department_key || '') !== MEDIA_DOCUMENT_DIRECTORY.departmentKey
+      || String(document.doc_type || '') !== MEDIA_DOCUMENT_DIRECTORY.docType
+      || String(document.document_no || '') !== document.expectedDocumentNo
+      || Boolean(String(document.icon_key || '').trim())
+    ));
+    const updateDocument = db.prepare(`
+      UPDATE documents SET
+        folder_id = ?, domain = ?, project_group_id = NULL, project_code = ?,
+        department_key = ?, doc_type = ?, document_no = ?, icon_key = NULL
+      WHERE id = ?
+    `);
+    pending.forEach(document => updateDocument.run(
+      folderId,
+      MEDIA_DOCUMENT_DIRECTORY.domain,
+      MEDIA_DOCUMENT_DIRECTORY.projectCode,
+      MEDIA_DOCUMENT_DIRECTORY.departmentKey,
+      MEDIA_DOCUMENT_DIRECTORY.docType,
+      document.expectedDocumentNo,
+      document.id,
+    ));
+
+    return {
+      document_defaults: documentDefaults,
+      documents_scanned: documents.length,
+      documents_updated: pending.length,
+    };
+  });
+  return ensure();
+}
+
 function ensureMediaManagementSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS media_assets (
@@ -210,7 +355,10 @@ function enumLabel(field, value) {
 }
 
 function resolveMediaDocumentTitle(document, requestedTitle) {
-  if (String(document?.doc_type || '').toUpperCase() === 'MEDIA') return document.title;
+  if (
+    Number(document?.media_asset_id || 0) > 0
+    || String(document?.doc_type || '').toUpperCase() === 'MEDIA'
+  ) return document.title;
   return requestedTitle || document?.title || '未命名文档';
 }
 
@@ -235,8 +383,21 @@ function createMediaManagementRouter(deps) {
     insertDocumentEditRecord,
     encryptRow,
     decryptRow,
+    prepareMediaDocumentPlacement,
   } = deps;
   ensureMediaManagementSchema(db);
+  const preparedPlacement = typeof prepareMediaDocumentPlacement === 'function'
+    ? prepareMediaDocumentPlacement()
+    : null;
+  const mediaDocumentDefaults = {
+    domain: MEDIA_DOCUMENT_DIRECTORY.domain,
+    project_group_id: null,
+    project_code: MEDIA_DOCUMENT_DIRECTORY.projectCode,
+    department_key: MEDIA_DOCUMENT_DIRECTORY.departmentKey,
+    doc_type: MEDIA_DOCUMENT_DIRECTORY.docType,
+    icon_key: null,
+    ...(preparedPlacement?.document_defaults || {}),
+  };
   const router = express.Router();
 
   const hasProductAssetModuleAccess = (user) => {
@@ -413,13 +574,11 @@ function createMediaManagementRouter(deps) {
       const shares = [...getDefaultDocumentShares()];
       if (input.owner_id) shares.push({ target_type: 'user', target_id: input.owner_id });
       documentId = Number(createDocumentRecord({
+        ...mediaDocumentDefaults,
         title: input.media_name,
         content: { blocks: [] },
         content_text: '',
-        domain: 'general',
-        department_key: 'ALL',
-        doc_type: 'MEDIA',
-        icon_key: 'media',
+        icon_key: null,
         tags: ['媒体管理', input.cid],
         shares,
       }, req.user));
@@ -574,7 +733,10 @@ module.exports = {
   MEDIA_MENU_KEY,
   createMediaManagementRouter,
   deleteMediaAssetByDocumentId,
+  ensureMediaDocumentPlacement,
   ensureMediaManagementSchema,
+  formatMediaDocumentNo,
+  MEDIA_DOCUMENT_DIRECTORY,
   normalizeMediaInput,
   parseBudgetTypes,
   resolveMediaDocumentTitle,

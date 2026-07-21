@@ -5,6 +5,7 @@ const { createMediaManagementRouter } = require('./mediaManagement');
 
 function createHarness() {
   const db = new Database(':memory:');
+  let createdDocumentInput = null;
   db.exec(`
     CREATE TABLE users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,6 +109,7 @@ function createHarness() {
     canEditDocument,
     canManageDocument,
     createDocumentRecord: (input, user) => {
+      createdDocumentInput = { ...input };
       const result = db.prepare(`
         INSERT INTO documents (title, content, content_text, created_by, updated_by, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -125,6 +127,11 @@ function createHarness() {
     },
     encryptRow: (table, row) => ({ ...row }),
     decryptRow: (table, row) => ({ ...row }),
+    prepareMediaDocumentPlacement: () => ({
+      document_defaults: { folder_id: 44 },
+      documents_scanned: 0,
+      documents_updated: 0,
+    }),
   });
 
   const users = {
@@ -160,7 +167,12 @@ function createHarness() {
     return res;
   };
 
-  return { db, dispatch, users };
+  return {
+    db,
+    dispatch,
+    users,
+    getCreatedDocumentInput: () => createdDocumentInput,
+  };
 }
 
 function input(overrides = {}) {
@@ -179,7 +191,7 @@ function input(overrides = {}) {
 }
 
 test('router enforces menu access and supports linked-document CRUD, search, and filters without a network listener', () => {
-  const { db, dispatch, users } = createHarness();
+  const { db, dispatch, users, getCreatedDocumentInput } = createHarness();
   try {
     const blocked = dispatch({ user: users.blocked });
     assert.equal(blocked.statusCode, 403);
@@ -195,6 +207,24 @@ test('router enforces menu access and supports linked-document CRUD, search, and
     const mediaId = Number(created.payload.id);
     const documentId = Number(created.payload.document_id);
     assert.ok(documentId > 0);
+    assert.deepEqual(
+      {
+        folder_id: getCreatedDocumentInput().folder_id,
+        domain: getCreatedDocumentInput().domain,
+        project_code: getCreatedDocumentInput().project_code,
+        department_key: getCreatedDocumentInput().department_key,
+        doc_type: getCreatedDocumentInput().doc_type,
+        icon_key: getCreatedDocumentInput().icon_key,
+      },
+      {
+        folder_id: 44,
+        domain: 'domestic_project',
+        project_code: 'DOMESTIC',
+        department_key: 'OPS',
+        doc_type: 'IMP',
+        icon_key: null,
+      },
+    );
     assert.ok(db.prepare(`
       SELECT 1 FROM document_shares
       WHERE document_id = ? AND target_type = 'user' AND target_id = 2
