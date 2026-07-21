@@ -396,9 +396,9 @@ const roleLabel = { admin: '管理员', leader: '组长', member: '成员', read
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
 
 // 路由守卫
-function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
+function PrivateRoute({ children, module, menuKey, executiveOnly, adminOnly }) {
   const location = useLocation();
-  const { user, loading, canAccessModule, isExecutive } = useAuth();
+  const { user, loading, canAccessModule, canAccessMenu, isExecutive } = useAuth();
   if (loading) return null;
   if (!user) {
     const redirectPath = getLocationPath(location);
@@ -425,6 +425,14 @@ function PrivateRoute({ children, module, executiveOnly, adminOnly }) {
       <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
         <div style={{ fontSize: 48, marginBottom: 16 }}>🚫</div>
         <div>您没有访问该模块的权限，请联系管理员</div>
+      </div>
+    );
+  }
+  if (menuKey && !canAccessMenu(menuKey)) {
+    return (
+      <div style={{ padding: 48, textAlign: 'center', color: '#888' }}>
+        <div style={{ fontSize: 48, marginBottom: 16 }}>🚫</div>
+        <div>您没有访问该菜单的权限，请联系管理员</div>
       </div>
     );
   }
@@ -1233,7 +1241,7 @@ function AppLayout() {
             <Route path="/strategies" element={<PrivateRoute><Strategies /></PrivateRoute>} />
             <Route path="/dev-tasks" element={<PrivateRoute><DevTasks /></PrivateRoute>} />
             <Route path="/company-subjects" element={<PrivateRoute module="product_assets"><CompanySubjects /></PrivateRoute>} />
-            <Route path="/product-assets" element={<PrivateRoute module="product_assets"><ProductAssets /></PrivateRoute>} />
+            <Route path="/product-assets" element={<PrivateRoute menuKey="/product-assets"><ProductAssets /></PrivateRoute>} />
             <Route path="/product-templates" element={<PrivateRoute module="product_assets"><ProductTemplates /></PrivateRoute>} />
             <Route path="/media-management" element={<PrivateRoute module="product_assets"><MediaManagement /></PrivateRoute>} />
             <Route path="/documents" element={<PrivateRoute><Documents /></PrivateRoute>} />

@@ -105,3 +105,28 @@
 - `server/lib/mediaManagementRouter.test.js`
 - `资产管理模块PRD.md`
 - `系统需求与权限设计PRD.md`
+
+## 产品资产权限优化（2026-07-21）
+
+状态：开发和验证已完成；本节随提交“优化产品资产入口用户可见权限”交付到 `gitee/main`。
+
+已完成：
+
+- 产品资产路由从模块权限门调整为菜单入口门：拥有 `/product-assets` 菜单入口的登录用户可以进入页面。
+- 产品资产列表和详情取消负责人、创建人、小组、跨团队范围裁剪，改为拥有产品资产菜单入口即可查看全部产品资产内容。
+- 产品资产、导入、核减新增/编辑/删除等写接口补充 `/product-assets` 菜单校验和 `canWrite` 校验，`readonly/guest` 只能查看。
+- 产品资产页面按写权限隐藏新增、CSV 导入、编辑、删除、新增核减和新增关联策略等按钮，只保留详情查看。
+
+已验证：
+
+- `node --check server/index.js` 通过。
+- 前端全量测试：15 个测试套件、70 条测试全部通过。
+- 隔离生产构建通过，输出到 `/tmp/relation-product-assets-permission-build`。
+- 后端 `node --test server/lib/*.test.js`：45 条中 42 条通过；3 条监听本地端口的既有集成测试因沙箱禁止 `127.0.0.1` 监听报 `EPERM`，无业务断言失败。
+
+本轮任务文件：
+
+- `client/src/App.js`
+- `client/src/pages/ProductAssets.js`
+- `server/index.js`
+- `handoff.md`

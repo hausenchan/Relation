@@ -19601,57 +19601,17 @@ app.delete('/api/leads/:id', (req, res) => {
 });
 
 // =========== 产品资产 API ===========
-function applyProductAssetVisibility(q, params, userId, role) {
-  if (role === 'member') {
-    const teamIds = getUserTeamIds(userId);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...teamIds, ...crossTeams])];
+function canAccessProductAssetsMenu(user) {
+  if (!user) return false;
+  if (isAdmin(user.role)) return true;
+  return getUserMenuPerms(user.id).includes('/product-assets');
+}
 
-    if (allTeamIds.length > 0) {
-      const visibleMembers = getUsersByTeamIds(allTeamIds);
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?';
-      params.push(userId, userId);
-      if (visibleMembers.length > 0) {
-        q += ' OR pa.owner_id IN (' + visibleMembers.map(() => '?').join(',') + ') OR pa.created_by IN (' + visibleMembers.map(() => '?').join(',') + ')';
-        params.push(...visibleMembers, ...visibleMembers);
-      }
-      q += ')';
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
-
-    if (allTeamIds.length) {
-      const members = getUsersByTeamIds(allTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      } else {
-        q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-        params.push(userId, userId);
-      }
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'sales_director') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      }
-    }
+function requireProductAssetsMenu(req, res, next) {
+  if (!canAccessProductAssetsMenu(req.user)) {
+    return res.status(403).json({ error: '无产品资产菜单权限' });
   }
-
-  return q;
+  next();
 }
 
 function getReductionSourceInfo(reductionId) {
@@ -19935,9 +19895,8 @@ app.delete('/api/company-subject-attachments/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/product-assets', (req, res) => {
+app.get('/api/product-assets', requireProductAssetsMenu, (req, res) => {
   const { budget_type, platform, launch_status, owner_id, has_reduction, reduction_status, company_entity, company_subject_id, group_name, appid } = req.query;
-  const { id: userId, role } = req.user;
 
   let q = `
     SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name,
@@ -19950,7 +19909,6 @@ app.get('/api/product-assets', (req, res) => {
     WHERE 1=1
   `;
   const params = [];
-  q = applyProductAssetVisibility(q, params, userId, role);
 
   if (budget_type) { q += ' AND pa.budget_type = ?'; params.push(budget_type); }
   if (platform) { q += ' AND pa.platform = ?'; params.push(platform); }
@@ -19994,7 +19952,7 @@ app.get('/api/product-assets', (req, res) => {
   res.json(rows);
 });
 
-app.get('/api/product-assets/:id', (req, res) => {
+app.get('/api/product-assets/:id', requireProductAssetsMenu, (req, res) => {
   const { id } = req.params;
   const asset = db.prepare(`
     SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name
@@ -20031,7 +19989,7 @@ app.get('/api/product-assets/:id', (req, res) => {
   res.json({ ...decryptRow('product_assets', asset), reductions: decodedReductions });
 });
 
-app.post('/api/product-assets', (req, res) => {
+app.post('/api/product-assets', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id: userId } = req.user;
   const payload = parseProductAssetPayload(req.body);
   if (payload.error) return res.status(400).json({ error: payload.error });
@@ -20064,7 +20022,7 @@ app.post('/api/product-assets', (req, res) => {
   res.json({ id: result.lastInsertRowid });
 });
 
-app.put('/api/product-assets/:id', (req, res) => {
+app.put('/api/product-assets/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT id FROM product_assets WHERE id = ?').get(id);
   if (!existing) return res.status(404).json({ error: '产品资产不存在' });
@@ -20439,7 +20397,7 @@ function updateImportedProductAsset(assetId, patch) {
   return true;
 }
 
-app.post('/api/product-assets/import/preview', (req, res) => {
+app.post('/api/product-assets/import/preview', requireProductAssetsMenu, canWrite, (req, res) => {
   const rows = getProductAssetImportRows(req.body);
   if (!Array.isArray(rows) || rows.length === 0) {
     return res.status(400).json({ error: '数据为空' });
@@ -20453,7 +20411,7 @@ app.post('/api/product-assets/import/preview', (req, res) => {
   });
 });
 
-app.post('/api/product-assets/import', (req, res) => {
+app.post('/api/product-assets/import', requireProductAssetsMenu, canWrite, (req, res) => {
   const rows = getProductAssetImportRows(req.body);
   if (!Array.isArray(rows) || rows.length === 0) {
     return res.status(400).json({ error: '数据为空' });
@@ -20513,14 +20471,14 @@ app.post('/api/product-assets/import', (req, res) => {
   res.json(result);
 });
 
-app.delete('/api/product-assets/:id', (req, res) => {
+app.delete('/api/product-assets/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   db.prepare('DELETE FROM product_asset_reductions WHERE asset_id = ?').run(id);
   db.prepare('DELETE FROM product_assets WHERE id = ?').run(id);
   res.json({ success: true });
 });
 
-app.post('/api/product-assets/:assetId/reductions', (req, res) => {
+app.post('/api/product-assets/:assetId/reductions', requireProductAssetsMenu, canWrite, (req, res) => {
   const { assetId } = req.params;
   const {
     reduction_date, upstream, before_budget, after_budget, reduction_amount,
@@ -20557,7 +20515,7 @@ app.post('/api/product-assets/:assetId/reductions', (req, res) => {
   res.json({ id: result.lastInsertRowid });
 });
 
-app.put('/api/product-asset-reductions/:id', (req, res) => {
+app.put('/api/product-asset-reductions/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   const {
     reduction_date, upstream, before_budget, after_budget, reduction_amount,
@@ -20602,7 +20560,7 @@ app.put('/api/product-asset-reductions/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.delete('/api/product-asset-reductions/:id', (req, res) => {
+app.delete('/api/product-asset-reductions/:id', requireProductAssetsMenu, canWrite, (req, res) => {
   const { id } = req.params;
   const existing = db.prepare('SELECT asset_id FROM product_asset_reductions WHERE id = ?').get(id);
   db.prepare('DELETE FROM product_asset_reductions WHERE id = ?').run(id);
@@ -20610,7 +20568,7 @@ app.delete('/api/product-asset-reductions/:id', (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/api/product-asset-reductions/simple', (req, res) => {
+app.get('/api/product-asset-reductions/simple', requireProductAssetsMenu, (req, res) => {
   const rows = db.prepare(`
     SELECT r.id, r.reduction_date, r.reason_type, r.status, pa.app_name, pa.budget_type
     FROM product_asset_reductions r
