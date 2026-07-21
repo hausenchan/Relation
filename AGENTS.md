@@ -23,8 +23,8 @@
 - 产品：幂动增长中台，覆盖目标计划、业务流转、资产、商务协作、团队和公司经营。
 - 前端：React 18、Create React App、Ant Design 5、React Router 6、Axios。
 - 后端：Node.js、Express 5，主体接口集中在 `server/index.js`。
-- 数据库：本地默认 SQLite；生产可通过 `DB_CLIENT=mysql` 使用 MySQL，统一适配在
-  `server/lib/database.js`。
+- 数据库：统一使用 MySQL，运行时必须配置 `DB_CLIENT=mysql`；连接与 SQL 执行封装在
+  `server/lib/database.js`。新功能和迁移不再承担 SQLite 兼容要求。
 - 附件：本地 `server/uploads` 或阿里云 OSS，适配在 `server/lib/ossStorage.js`。
 - 默认端口：前端 `3000`，后端 `3001`，网络抓包服务 `8888`。
 - 主要入口：`client/src/App.js`、`client/src/api/index.js`、`server/index.js`。
@@ -32,8 +32,8 @@
 常用命令：
 
 ```bash
-npm run dev
-npm run server
+DB_CLIENT=mysql npm run dev
+DB_CLIENT=mysql npm run server
 npm run client
 cd client && CI=true npx react-scripts test --watchAll=false --runInBand
 cd client && BUILD_PATH=/tmp/relation-build npm run build
@@ -41,10 +41,10 @@ node --test server/lib/*.test.js
 node --check server/index.js
 ```
 
-验证数据库初始化时必须使用临时库，不得改动仓库中的业务数据库：
+验证数据库初始化时必须使用隔离的 MySQL 测试库，不得连接或改动生产业务库：
 
 ```bash
-RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index.js
+DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server/index.js
 ```
 
 ## 3. 功能地图
@@ -204,10 +204,12 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 
 ## 6. 数据库与 API 约束
 
-- 所有 SQL 必须通过 `server/lib/database.js` 同时兼容 SQLite 与 MySQL。
+- 所有业务运行、数据库结构和迁移以 MySQL 为唯一目标，并通过 `server/lib/database.js`
+  访问；不得再为 SQLite 引入分支、兼容层或迁移负担。
 - 使用参数化查询；禁止拼接用户输入。动态 SQL 仅允许受控列名/固定片段。
-- 新表、列和索引要支持旧库增量启动；MySQL 大正文用现有 `ensureMysqlLongTextColumn`。
-- 不得依赖 SQLite 隐式类型、秒级时间戳或仅 SQLite 支持的语法而不经过适配层。
+- 新表、列和索引必须支持现有 MySQL 旧库增量启动；大正文使用 `LONGTEXT`，并复用现有
+  `ensureMysqlLongTextColumn`。
+- 数据库相关测试必须覆盖真实 MySQL 方言与旧库升级路径；SQLite 测试通过不能作为上线依据。
 - 协作字段使用同一请求产生的 ISO 时间戳，不能随后被 `CURRENT_TIMESTAMP` 覆盖。
 - API 错误需有明确状态码：参数 `400`、无认证 `401`、无权限 `403`、不存在 `404`、
   冲突 `409`、正文过大 `413`、服务错误 `500`。
@@ -232,7 +234,8 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 3. 先改共享层，再改调用页；避免复制实现。
 4. 每个缺陷至少补一条能在修复前失败的回归测试。共享行为覆盖所有调用模块。
 5. 先跑目标测试和 `node --check`，再跑前端全量测试、后端测试、隔离生产构建。
-6. 涉及 schema 时用 `/tmp` 临时数据库启动服务；涉及 UI 时用浏览器走核心路径。
+6. 涉及 schema 或启动迁移时，用隔离的 MySQL 测试库启动服务并记录迁移耗时；涉及 UI 时
+   用浏览器走核心路径。
 7. 完成后更新 `handoff.md`，列出验证结果和遗留风险。
 8. 只精确暂存本任务文件，审查 `git diff --cached --check` 与
    `git diff --cached --stat` 后提交。
@@ -246,7 +249,7 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 - 协作：两端改不同块、同块冲突、远端删除、本地新增、隐藏/恢复页面。
 - 历史：初始版本、重复内容去重、保存版本、权限隔离、恢复后再生成版本。
 - 权限：管理员/CXO、普通指定人、非准备人、readonly/guest、无菜单、无敏感权限。
-- 数据库：空库初始化、旧库增量、SQLite、涉及方言的 MySQL 路径。
+- 数据库：MySQL 空库初始化、旧库增量迁移、索引与字段类型、生产模式启动及启动耗时。
 - 构建：使用 `/tmp` 下的 `BUILD_PATH`，不要覆盖已跟踪的 `client/build`。
 
 ## 10. Git 与提交清单
@@ -258,7 +261,7 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 - 提交前清单：
   - 需求逐项完成，权限在前后端一致。
   - 自动保存不会在关闭/完成时丢失最后一次输入。
-  - schema 同时兼容 SQLite/MySQL。
+  - schema 和迁移已在隔离 MySQL 测试库验证，且不会长时间阻塞服务监听。
   - 目标测试、全量测试、构建和临时库启动通过。
   - `git diff --cached` 仅包含本任务文件，无凭据、数据库和构建产物。
   - Commit 文案严格使用用户指定文本。
@@ -283,6 +286,8 @@ RELATION_DB_PATH=/tmp/relation-test.db NODE_ENV=test PORT=3101 node server/index
 
 - `server/index.js` 和 `Documents.js` 体积很大。修改应保持局部，新增复杂能力优先抽到
   `server/lib`、`client/src/components` 或 `client/src/utils` 并加测试。
+- `server/lib/database.js` 和部分旧测试仍保留 SQLite 遗留路径，仅用于历史代码过渡；
+  新功能、迁移和上线验收统一以 MySQL 为准，不再扩展 SQLite 兼容能力。
 - 文档中心完整编辑器与 `DocumentBodyEditor` 仍有双实现，键盘/剪贴板行为容易漂移。
 - 当前服务端字段加密尚未满足“持有服务器与密钥的运维不可见”的端到端安全目标。
 - PRD 中部分安全等级与恢复方案属于规划，不得误判为已经上线。

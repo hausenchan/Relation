@@ -1,3 +1,6 @@
+const SERVER_STARTUP_STARTED_AT = Date.now();
+console.log(`[startup] process started pid=${process.pid} node=${process.version}`);
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -15,6 +18,7 @@ const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
 const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
 const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
 const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
+const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
 const {
   decodeOssKey,
   deleteOssObjectByPath,
@@ -2109,8 +2113,7 @@ db.exec(`
     depth       INTEGER DEFAULT 0,
     done_at     DATETIME,
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    default_shares_initialized INTEGER DEFAULT 0
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
   CREATE TABLE IF NOT EXISTS task_shared_users (
@@ -2768,7 +2771,8 @@ db.exec(`
     progress    INTEGER DEFAULT 0,
     status      TEXT DEFAULT 'pending',
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    default_shares_initialized INTEGER DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS weekly_reports (
@@ -7194,30 +7198,29 @@ function replaceDocumentShares(documentId, shares, userId) {
 }
 
 function initializeLegacyDefaultShares() {
-  const defaultShares = getDefaultDocumentShares();
-  if (!defaultShares.length) return;
-  const documents = db.prepare(`
-    SELECT id FROM documents
-    WHERE COALESCE(default_shares_initialized, 0) < ?
-  `).all(DOCUMENT_DEFAULT_SHARE_VERSION);
-  const contentEntities = Object.entries(CONTENT_SHARE_ENTITY_TABLES)
-    .flatMap(([entityType, table]) => db.prepare(`
-      SELECT id FROM ${table}
-      WHERE COALESCE(default_shares_initialized, 0) < ?
-    `).all(CONTENT_DEFAULT_SHARE_VERSION).map(row => ({ entityType, id: row.id })));
-  if (!documents.length && !contentEntities.length) return;
-  const initialize = db.transaction(() => {
-    documents.forEach(document => {
-      addDocumentShares(document.id, defaultShares, null);
-      db.prepare('UPDATE documents SET default_shares_initialized = ? WHERE id = ?')
-        .run(DOCUMENT_DEFAULT_SHARE_VERSION, document.id);
+  const startedAt = Date.now();
+  console.log('[startup] legacy default-share migration started');
+  try {
+    const defaultShares = getDefaultDocumentShares();
+    const stats = initializeLegacyDefaultSharesBulk({
+      db,
+      defaultShares,
+      documentVersion: DOCUMENT_DEFAULT_SHARE_VERSION,
+      contentVersion: CONTENT_DEFAULT_SHARE_VERSION,
+      contentEntityTables: CONTENT_SHARE_ENTITY_TABLES,
     });
-    contentEntities.forEach(({ entityType, id }) => {
-      addContentShares(entityType, id, defaultShares, null);
-      markContentDefaultSharesInitialized(entityType, id);
-    });
-  });
-  initialize();
+    console.log(
+      `[startup] legacy default-share migration finished elapsed_ms=${Date.now() - startedAt}`,
+      stats,
+    );
+    return stats;
+  } catch (error) {
+    console.error(
+      `[startup] legacy default-share migration failed elapsed_ms=${Date.now() - startedAt}; continuing startup`,
+      error,
+    );
+    return null;
+  }
 }
 
 function addDocumentShares(documentId, shares, userId) {
@@ -23408,6 +23411,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[startup] server listening elapsed_ms=${Date.now() - SERVER_STARTUP_STARTED_AT}`);
   console.log(`服务器启动在 http://localhost:${PORT}`);
   console.log(`局域网访问: http://[你的IP]:${PORT}`);
 });
