@@ -18,7 +18,8 @@
   },
   "scripts": {
     "start": "GENERATE_SOURCEMAP=false react-scripts start",
-    "build": "GENERATE_SOURCEMAP=false react-scripts build"
+    "build": "GENERATE_SOURCEMAP=false react-scripts build",
+    "performance:budget": "node ../scripts/check-frontend-performance-budget.js"
   },
   "proxy": "http://localhost:3001",
   "browserslist": {

@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom';
-import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message, Watermark, Drawer, Grid } from 'antd';
+import { Layout, Menu, Badge, ConfigProvider, theme, Space, Avatar, Dropdown, Modal, Form, Input, message, Watermark, Drawer, Grid, Spin } from 'antd';
 import {
   DashboardOutlined, TeamOutlined, MessageOutlined, BellOutlined,
   BankOutlined, UserOutlined, LogoutOutlined, SettingOutlined,
@@ -344,53 +344,102 @@ const appTheme = {
 const { Header, Sider, Content } = Layout;
 const { useBreakpoint } = Grid;
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Persons from './pages/Persons';
-import Interactions from './pages/Interactions';
-import Reminders from './pages/Reminders';
-import Companies from './pages/Companies';
-import Users from './pages/Users';
-import Teams from './pages/Teams';
-import ProjectGroups from './pages/ProjectGroups';
-import SystemSettings from './pages/SystemSettings';
-import Gifts from './pages/Gifts';
-import GiftPlans from './pages/GiftPlans';
-import GiftReview from './pages/GiftReview';
-import Trips from './pages/Trips';
-import TripCollaboration from './pages/TripCollaboration';
-import TripStats from './pages/TripStats';
-import Budgets from './pages/Budgets';
-import MenuPerms from './pages/MenuPerms';
-import CrossTeamAccess from './pages/CrossTeamAccess';
-import OperationLogs from './pages/OperationLogs';
-import MobileTaskCenter from './pages/MobileTaskCenter';
-import FollowUpTasks from './pages/FollowUpTasks';
-import MyTasks from './pages/MyTasks';
-import TaskBoard from './pages/TaskBoard';
-import Goals from './pages/Goals';
-import WeeklyReports from './pages/WeeklyReports';
-import Leads from './pages/Leads';
-import AgentOperations from './pages/AgentOperations';
-import AiTrainingWorkbench from './pages/AiTrainingWorkbench';
-import Strategies from './pages/Strategies';
-import DevTasks from './pages/DevTasks';
-import ProductAssets from './pages/ProductAssets';
-import ProductTemplates from './pages/ProductTemplates';
-import MediaManagement from './pages/MediaManagement';
-import CompanySubjects from './pages/CompanySubjects';
-import Documents from './pages/Documents';
-import NetworkCapture from './pages/NetworkCapture';
-import ExecutiveDashboard from './pages/ExecutiveDashboard';
-import ExecutiveTalents from './pages/ExecutiveTalents';
-import ExecutiveDynamics from './pages/ExecutiveDynamics';
-import ExecutiveCustomers from './pages/ExecutiveCustomers';
-import StrategicMeeting from './pages/StrategicMeeting';
-import OperationalMeeting from './pages/OperationalMeeting';
-import RecruitRadar from './pages/RecruitRadar';
-import RecruitRadarConfig from './pages/RecruitRadarConfig';
 import NotificationBell from './components/NotificationBell';
 import { remindersApi, giftRequestsApi, tripsApi, authApi, followUpTasksApi, tasksApi } from './api';
 import { buildLoginPath, getAuthorizedRedirectPath, getLocationPath, getSafeInternalPath } from './utils/redirect';
+
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Persons = lazy(() => import('./pages/Persons'));
+const Interactions = lazy(() => import('./pages/Interactions'));
+const Reminders = lazy(() => import('./pages/Reminders'));
+const Companies = lazy(() => import('./pages/Companies'));
+const Users = lazy(() => import('./pages/Users'));
+const Teams = lazy(() => import('./pages/Teams'));
+const ProjectGroups = lazy(() => import('./pages/ProjectGroups'));
+const SystemSettings = lazy(() => import('./pages/SystemSettings'));
+const Gifts = lazy(() => import('./pages/Gifts'));
+const GiftPlans = lazy(() => import('./pages/GiftPlans'));
+const GiftReview = lazy(() => import('./pages/GiftReview'));
+const Trips = lazy(() => import('./pages/Trips'));
+const TripCollaboration = lazy(() => import('./pages/TripCollaboration'));
+const TripStats = lazy(() => import('./pages/TripStats'));
+const Budgets = lazy(() => import('./pages/Budgets'));
+const MenuPerms = lazy(() => import('./pages/MenuPerms'));
+const CrossTeamAccess = lazy(() => import('./pages/CrossTeamAccess'));
+const OperationLogs = lazy(() => import('./pages/OperationLogs'));
+const MobileTaskCenter = lazy(() => import('./pages/MobileTaskCenter'));
+const FollowUpTasks = lazy(() => import('./pages/FollowUpTasks'));
+const MyTasks = lazy(() => import('./pages/MyTasks'));
+const TaskBoard = lazy(() => import('./pages/TaskBoard'));
+const Goals = lazy(() => import('./pages/Goals'));
+const WeeklyReports = lazy(() => import('./pages/WeeklyReports'));
+const Leads = lazy(() => import('./pages/Leads'));
+const AgentOperations = lazy(() => import('./pages/AgentOperations'));
+const AiTrainingWorkbench = lazy(() => import('./pages/AiTrainingWorkbench'));
+const Strategies = lazy(() => import('./pages/Strategies'));
+const DevTasks = lazy(() => import('./pages/DevTasks'));
+const ProductAssets = lazy(() => import('./pages/ProductAssets'));
+const ProductTemplates = lazy(() => import('./pages/ProductTemplates'));
+const MediaManagement = lazy(() => import('./pages/MediaManagement'));
+const CompanySubjects = lazy(() => import('./pages/CompanySubjects'));
+const Documents = lazy(() => import('./pages/Documents'));
+const NetworkCapture = lazy(() => import('./pages/NetworkCapture'));
+const ExecutiveDashboard = lazy(() => import('./pages/ExecutiveDashboard'));
+const ExecutiveTalents = lazy(() => import('./pages/ExecutiveTalents'));
+const ExecutiveDynamics = lazy(() => import('./pages/ExecutiveDynamics'));
+const ExecutiveCustomers = lazy(() => import('./pages/ExecutiveCustomers'));
+const StrategicMeeting = lazy(() => import('./pages/StrategicMeeting'));
+const OperationalMeeting = lazy(() => import('./pages/OperationalMeeting'));
+const RecruitRadar = lazy(() => import('./pages/RecruitRadar'));
+const RecruitRadarConfig = lazy(() => import('./pages/RecruitRadarConfig'));
+
+function PageRouteFallback() {
+  return (
+    <div style={{ minHeight: 240, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      <Spin size="large" />
+    </div>
+  );
+}
+
+function PageLoadPerformanceMarker() {
+  const location = useLocation();
+
+  useEffect(() => {
+    const route = location.pathname || '/';
+    const root = document.documentElement;
+    const budgetMs = Number(process.env.REACT_APP_PAGE_LOAD_BUDGET_MS || 1000);
+    const initialPageLoad = root.dataset.relationInitialRouteMeasured !== '1';
+    root.dataset.relationRoutePending = route;
+    delete root.dataset.relationRouteReady;
+    delete root.dataset.relationRouteReadyMs;
+    let completed = false;
+    let secondFrame = 0;
+    const markReady = () => {
+      if (completed) return;
+      completed = true;
+      const elapsedMs = initialPageLoad ? (window.performance?.now?.() || 0) : 0;
+      root.dataset.relationRouteReady = route;
+      root.dataset.relationRouteReadyMs = initialPageLoad ? elapsedMs.toFixed(1) : 'spa';
+      root.dataset.relationInitialRouteMeasured = '1';
+      delete root.dataset.relationRoutePending;
+      if (initialPageLoad && elapsedMs > budgetMs) {
+        console.warn(`[page:slow] ${route} ${elapsedMs.toFixed(1)}ms budget=${budgetMs}ms`);
+      }
+    };
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(markReady);
+    });
+    const backgroundFallback = window.setTimeout(markReady, 100);
+    return () => {
+      completed = true;
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(backgroundFallback);
+    };
+  }, [location.pathname]);
+
+  return null;
+}
 
 const roleLabel = { admin: '管理员', leader: '组长', member: '成员', readonly: '只读', guest: '访客', sales_director: '商务总监' };
 const roleColor = { admin: '#EF4444', leader: '#F97316', member: '#4F46E5', readonly: '#9CA3AF', guest: '#F59E0B', sales_director: '#8B5CF6' };
@@ -1208,7 +1257,8 @@ function AppLayout() {
             overflowX: 'hidden',
           }}
         >
-          <Routes>
+          <Suspense fallback={<PageRouteFallback />}>
+            <Routes>
             <Route path="/" element={<PrivateRoute><Dashboard /></PrivateRoute>} />
             <Route path="/persons" element={<PrivateRoute module="persons"><Persons /></PrivateRoute>} />
             <Route path="/interactions" element={<PrivateRoute module="interactions"><Interactions /></PrivateRoute>} />
@@ -1256,7 +1306,9 @@ function AppLayout() {
             <Route path="/executive/strategic" element={<PrivateRoute><StrategicMeeting /></PrivateRoute>} />
             <Route path="/executive/operational" element={<PrivateRoute><OperationalMeeting /></PrivateRoute>} />
             <Route path="/executive/operational/:meetingId" element={<PrivateRoute><OperationalMeeting /></PrivateRoute>} />
-          </Routes>
+            </Routes>
+            <PageLoadPerformanceMarker />
+          </Suspense>
         </Content>
       </Layout>
     </Layout>
@@ -1286,5 +1338,10 @@ function LoginGuard() {
   const redirectPath = getSafeInternalPath(new URLSearchParams(location.search).get('redirect'));
   if (loading) return null;
   if (user) return <Navigate to={getAuthorizedRedirectPath(redirectPath, user)} replace />;
-  return <Login />;
+  return (
+    <>
+      <Login />
+      <PageLoadPerformanceMarker />
+    </>
+  );
 }

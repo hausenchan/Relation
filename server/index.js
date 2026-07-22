@@ -31,6 +31,7 @@ const {
 const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
 const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
 const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
+const { createRequestPerformanceMiddleware } = require('./lib/performanceBudget');
 const {
   decodeOssKey,
   deleteOssObjectByPath,
@@ -690,6 +691,9 @@ async function geocodeAddress(city, address) {
   return { lat: null, lng: null, geocode_address: null };
 }
 
+app.use(createRequestPerformanceMiddleware({
+  budgetMs: process.env.RELATION_API_RESPONSE_BUDGET_MS || 300,
+}));
 app.use(cors());
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: JSON_BODY_LIMIT }));
@@ -750,7 +754,9 @@ app.use('/api', (req, res, next) => {
   return auth(req, res, next);
 });
 
-const CLIENT_BUILD_DIR = path.join(__dirname, '../client/build');
+const CLIENT_BUILD_DIR = path.resolve(
+  process.env.RELATION_CLIENT_BUILD_DIR || path.join(__dirname, '../client/build'),
+);
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(CLIENT_BUILD_DIR, {
@@ -759,6 +765,10 @@ if (process.env.NODE_ENV === 'production') {
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
+      } else if (filePath.includes(`${path.sep}static${path.sep}`)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'public, max-age=3600');
       }
     },
   }));
@@ -19212,31 +19222,60 @@ app.get('/api/trips/stats/summary', (req, res) => {
     GROUP BY u.group_id ORDER BY total_amount DESC
   `).all();
 
-  // 重点客户预警：relationship_level in (vip,key)，超过60天未有出差互动
-  const alertsRaw = db.prepare(`
-    SELECT p.id, p.name, p.company, p.current_company, p.relationship_level,
-           MAX(t.end_date) as last_trip_date,
-           CAST(julianday('now') - julianday(MAX(t.end_date)) AS INTEGER) as days_since
+  // related_persons 是加密字段，不能在 SQL 中做 LIKE；先按权限取目标人员，再在内存中关联出差记录。
+  const alertPeople = db.prepare(`
+    SELECT p.id, p.name, p.company, p.current_company, p.relationship_level
     FROM persons p
-    LEFT JOIN business_trips t ON (
-      t.related_persons LIKE '%,' || p.id || ',%'
-      OR t.related_persons LIKE p.id || ',%'
-      OR t.related_persons LIKE '%,' || p.id
-      OR t.related_persons = CAST(p.id AS TEXT)
-    ) AND t.status IN ('approved','completed')
     WHERE p.relationship_level IN ('vip','key')
     ${personPrivacy.sql}
-    GROUP BY p.id
-    HAVING last_trip_date IS NULL OR days_since > 60
-    ORDER BY days_since DESC
-    LIMIT 20
   `).all(...personPrivacy.params);
-  const alerts = alertsRaw.map(r => ({
-    ...r,
-    name: safeDecrypt(r.name),
-    company: safeDecrypt(r.company),
-    current_company: safeDecrypt(r.current_company),
-  }));
+  const alertPersonIds = new Set(alertPeople.map(person => Number(person.id)));
+  const latestTripByPerson = new Map();
+  if (alertPersonIds.size) {
+    const relatedTrips = db.prepare(`
+      SELECT related_persons, end_date
+      FROM business_trips
+      WHERE status IN ('approved','completed') AND related_persons IS NOT NULL
+    `).all();
+    relatedTrips.forEach(row => {
+      const relatedValue = safeDecrypt(row.related_persons);
+      let relatedIds = [];
+      try {
+        const parsed = JSON.parse(relatedValue);
+        relatedIds = Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        relatedIds = String(relatedValue || '').split(',');
+      }
+      relatedIds.forEach(value => {
+        const personId = Number(value);
+        if (!alertPersonIds.has(personId)) return;
+        const previousDate = latestTripByPerson.get(personId);
+        if (!previousDate || String(row.end_date || '') > previousDate) {
+          latestTripByPerson.set(personId, String(row.end_date || ''));
+        }
+      });
+    });
+  }
+  const today = Date.now();
+  const alerts = alertPeople
+    .map(person => {
+      const lastTripDate = latestTripByPerson.get(Number(person.id)) || null;
+      const lastTripTime = lastTripDate ? Date.parse(lastTripDate) : NaN;
+      const daysSince = Number.isFinite(lastTripTime)
+        ? Math.max(0, Math.floor((today - lastTripTime) / 86400000))
+        : null;
+      return {
+        ...person,
+        name: safeDecrypt(person.name),
+        company: safeDecrypt(person.company),
+        current_company: safeDecrypt(person.current_company),
+        last_trip_date: lastTripDate,
+        days_since: daysSince,
+      };
+    })
+    .filter(person => person.days_since === null || person.days_since > 60)
+    .sort((a, b) => (b.days_since ?? -1) - (a.days_since ?? -1))
+    .slice(0, 20);
 
   res.json({ monthly, byType, byUser, byGroup, alerts });
 });

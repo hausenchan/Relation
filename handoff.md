@@ -4,6 +4,55 @@
 
 ## 当前任务
 
+状态：全系统性能优化与自动门禁已完成，待提交推送 `gitee/main`。
+
+目标：在既有响应变慢修复基础上，将主要 API 的预热 p95 控制在 `300ms` 内，并让生产构建全部
+一级页面首次可用时间控制在 `1s` 内，同时建立可持续执行的性能回归门禁。
+
+## 全系统性能门禁（2026-07-22）
+
+### 已完成
+
+- `client/src/App.js` 将 43 个一级页面改为 `React.lazy` 路由懒加载，路由切换统一使用轻量加载态；
+  首屏不再同步打包全部业务页面。
+- 页面首次完成路由权限校验、异步 chunk 加载并提交渲染后，写入
+  `data-relation-route-ready` / `data-relation-route-ready-ms`；首次加载超过 `1000ms` 时输出
+  `[page:slow]`，SPA 后续导航不混入页面生命周期累计耗时。
+- 新增前端构建体积门禁：首屏 JavaScript gzip `<=400KB`、单个异步 chunk gzip `<=500KB`、
+  首屏仅一个 JS 入口且至少 10 个异步 chunk；命令为
+  `BUILD_PATH=/tmp/relation-build npm run performance:frontend`。
+- 新增 API 性能审计，覆盖 49 个主要只读接口，每个接口先预热再采样，任一 `5xx` 或 p95 超过
+  `300ms` 即失败；命令为 `npm run performance:api`。
+- 所有服务端响应增加 `Server-Timing` 和 `X-Response-Time`，超过
+  `RELATION_API_RESPONSE_BUDGET_MS`（默认 `300ms`）记录 `[http:slow]`，不记录请求正文。
+- 生产静态资源按内容哈希长期缓存：`static/*` 使用一年 immutable，`index.html` 禁止缓存；新增
+  `RELATION_CLIENT_BUILD_DIR` 支持从 `/tmp` 挂载隔离构建。
+- 修复 `/api/trips/stats/summary` 在 MySQL 使用 SQLite `julianday`、对密文
+  `related_persons` 做 SQL `LIKE` 导致的稳定 `500`：改为按权限读取目标人员、解密关联人员并在
+  内存计算最近出差日期。新增真实隔离 MySQL/HTTP 回归测试。
+
+### 已验证
+
+- 隔离 MySQL `relation_test`、独立生产服务 `3103`：49/49 个主要 API 通过 p95 `300ms` 门禁；
+  最慢 `/users?limit=100` 为 `19.8ms`，`/stats` 为 `18.5ms`，
+  `/trips/stats/summary` 为 `15.3ms`。
+- 生产构建体积门禁通过：首屏 JS `323.6KB gzip`，75 个异步 chunk，最大异步 chunk
+  `419.9KB gzip`；优化前首屏约 `1.33MB gzip`。
+- 浏览器直达登录页及 44 个登录后静态路由：登录页约 `96.5ms`，登录后页面最慢约 `128ms`，
+  均低于 `1000ms`；累积 44 个工作区标签后的文档中心压力复测为 `877.7ms`。该指标来自页面内
+  路由可用标记，不包含浏览器控制通道的外部遥测等待。
+- `index.html` 返回 `no-store, no-cache`；带哈希主包返回
+  `public, max-age=31536000, immutable`；API 计时头实测正常。
+- 性能单元测试 7/7、出差统计隔离 MySQL 集成测试 1/1、前端全量测试 22 个套件 117 条、
+  后端全量测试 80 条通过（另 2 条显式 MySQL 测试按环境开关跳过）；生产构建和所有
+  `node --check` 通过。
+
+### 边界
+
+- `300ms` / `1s` 是隔离 MySQL、预热服务、当前测试数据和生产构建下的工程门禁，不是对生产
+  网络、冷启动、客户端硬件、第三方服务或无限数据量的绝对保证；上线后仍需持续观察慢请求日志
+  和真实用户页面指标。
+
 ## 文档中心附件上传 413 修复（2026-07-22）
 
 ### 已完成

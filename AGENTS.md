@@ -38,6 +38,8 @@ DB_CLIENT=mysql npm run server
 npm run client
 cd client && CI=true npx react-scripts test --watchAll=false --runInBand
 cd client && BUILD_PATH=/tmp/relation-build npm run build
+BUILD_PATH=/tmp/relation-build npm run performance:frontend
+RELATION_PERF_USERNAME=<test-user> RELATION_PERF_PASSWORD=<test-password> npm run performance:api
 node --test server/lib/*.test.js
 node --check server/index.js
 ```
@@ -60,6 +62,22 @@ RELATION_RUN_MYSQL_TESTS=1 \
   RELATION_TEST_MYSQL_PASSWORD="$TEST_MYSQL_PASSWORD" \
   node --test server/lib/spreadsheetDocumentPermissionsIntegration.test.js
 ```
+
+### 性能门禁
+
+- API 门禁以隔离 MySQL、预热后的主要只读接口 p95 不超过 `300ms` 为准；运行
+  `npm run performance:api`，可用 `RELATION_PERF_BASE_URL`、`RELATION_PERF_SAMPLES` 和
+  `RELATION_API_RESPONSE_BUDGET_MS` 覆盖测试地址、样本数和预算。新增主要页面或高频查询时，
+  必须同步扩展 `scripts/performance-audit.js` 的接口清单。
+- 服务端统一返回 `Server-Timing` 和 `X-Response-Time`，超过预算时记录 `[http:slow]`；性能日志
+  只记录方法、路由、状态和耗时，不得记录请求正文或凭据。
+- 页面门禁以生产构建的首次可用时间不超过 `1000ms` 为目标。一级页面必须使用路由懒加载；
+  首屏 JavaScript gzip 上限为 `400KB`，单个异步 chunk gzip 上限为 `500KB`，由
+  `npm run performance:frontend` 校验。
+- 隔离生产构建必须写入 `/tmp` 并通过 `RELATION_CLIENT_BUILD_DIR` 挂载，禁止为了性能测试覆盖
+  已跟踪的 `client/build`。带哈希的 `static/*` 使用一年 immutable 缓存，`index.html` 禁止缓存。
+- 上述门禁是可复现的工程基线，不代表外部网络、浏览器硬件、第三方依赖、冷启动或极端数据量下
+  的绝对 SLA；生产环境仍需按 `Server-Timing`、慢请求日志和真实用户页面指标持续监控。
 
 ## 3. 功能地图
 
@@ -349,6 +367,8 @@ RELATION_RUN_MYSQL_TESTS=1 \
   虚拟滚动、Excel 往返、operation 幂等与原子冲突、派生检索文本、历史恢复、SSE/presence、只读
   导出与写入拒绝；权限接口必须在真实隔离 MySQL/HTTP 环境执行。
 - 数据库：MySQL 空库初始化、旧库增量迁移、索引与字段类型、生产模式启动及启动耗时。
+- 性能：隔离 MySQL 运行 API p95 `300ms` 门禁；生产构建运行首屏/异步 chunk 体积门禁，并在浏览器
+  直达全部一级路由核对首次可用时间不超过 `1000ms`。
 - 构建：使用 `/tmp` 下的 `BUILD_PATH`，不要覆盖已跟踪的 `client/build`。
 
 ## 10. Git 与提交清单
