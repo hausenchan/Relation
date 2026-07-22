@@ -1678,6 +1678,14 @@ function getDocumentSaveErrorMessage(err, fallback = '保存失败') {
   return err?.response?.data?.error || err?.message || fallback;
 }
 
+function getDocumentAttachmentUploadErrorMessage(err, fallback = '附件上传失败') {
+  if (err?.response?.status === 413) {
+    return err?.response?.data?.error
+      || '附件过大，上传失败。请联系运维确认服务端 RELATION_UPLOAD_FILE_SIZE_LIMIT 和反向代理 client_max_body_size 已配置为足够大小。';
+  }
+  return err?.response?.data?.error || err?.message || fallback;
+}
+
 function cloneBlocksForSync(blocks = []) {
   return contentToBlocks(blocksToContent(Array.isArray(blocks) ? blocks : []));
 }
@@ -6706,7 +6714,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           patchAttachmentBlockFromAttachment(block.id, uploaded);
           successCount += 1;
         } catch (err) {
-          markAttachmentBlockFailed(block.id, file, err.response?.data?.error || err.message || '附件上传失败');
+          markAttachmentBlockFailed(block.id, file, getDocumentAttachmentUploadErrorMessage(err));
         } finally {
           setAttachmentBlockUploading(block.id, false);
         }
@@ -6746,8 +6754,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       patchAttachmentBlockFromAttachment(block.id, uploaded);
       message.success('附件已上传');
     } catch (err) {
-      markAttachmentBlockFailed(block.id, file, err.response?.data?.error || err.message || '附件上传失败');
-      message.error(err.response?.data?.error || err.message || '附件上传失败');
+      const errorText = getDocumentAttachmentUploadErrorMessage(err);
+      markAttachmentBlockFailed(block.id, file, errorText);
+      message.error(errorText);
     } finally {
       setAttachmentBlockUploading(block.id, false);
     }

@@ -4,6 +4,31 @@
 
 ## 当前任务
 
+## 文档中心附件上传 413 修复（2026-07-22）
+
+### 已完成
+
+- 将服务端单文件上传默认上限从 100MB 提升到 500MB，支持通过
+  `RELATION_UPLOAD_FILE_SIZE_LIMIT` 或 `RELATION_MAX_UPLOAD_FILE_SIZE` 覆盖，便于上传较大的
+  APK/AAB/IPA 安装包。
+- `multer` 文件超限统一返回 `413 UPLOAD_FILE_TOO_LARGE`，附带当前限制，文档中心附件块上传
+  失败时显示明确中文提示，不再只展示 Axios 的 `Request failed with status code 413`。
+- Wolai MCP 远程图片抓取限制从通用附件上传上限中解耦，默认继续按 100MB 兜底，避免放大服务端
+  远程下载风险。
+
+### 已验证
+
+- `node --check server/index.js` 通过。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand src/utils/documentHistory.test.js src/utils/documentKind.test.js` 通过。
+- `node --test server/lib/wolaiMcpImport.test.js server/lib/wolaiMcpImportFoldState.test.js` 通过，6/6。
+- `cd client && BUILD_PATH=/tmp/relation-document-attachment-upload-build npm run build` 通过。
+
+### 本轮任务文件
+
+- `server/index.js`
+- `client/src/pages/Documents.js`
+- `handoff.md`
+
 ## 响应变慢排查与修复（2026-07-22）
 
 ### 已完成

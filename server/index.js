@@ -76,6 +76,37 @@ const {
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const JSON_BODY_LIMIT = process.env.RELATION_JSON_BODY_LIMIT || process.env.RELATION_BODY_LIMIT || '50mb';
+const DEFAULT_UPLOAD_FILE_SIZE_BYTES = 500 * 1024 * 1024;
+
+function parseUploadFileSizeLimit(value, fallback = DEFAULT_UPLOAD_FILE_SIZE_BYTES) {
+  if (value === undefined || value === null || value === '') return fallback;
+  const text = String(value).trim().toLowerCase();
+  const match = text.match(/^(\d+(?:\.\d+)?)\s*(b|kb|k|mb|m|gb|g)?$/);
+  if (!match) return fallback;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  const unit = match[2] || 'b';
+  const multiplier = {
+    b: 1,
+    kb: 1024,
+    k: 1024,
+    mb: 1024 * 1024,
+    m: 1024 * 1024,
+    gb: 1024 * 1024 * 1024,
+    g: 1024 * 1024 * 1024,
+  }[unit] || 1;
+  return Math.floor(number * multiplier);
+}
+
+function formatUploadFileSizeLimit(bytes) {
+  const size = Number(bytes) || DEFAULT_UPLOAD_FILE_SIZE_BYTES;
+  const gb = 1024 * 1024 * 1024;
+  const mb = 1024 * 1024;
+  if (size >= gb && size % gb === 0) return `${size / gb}GB`;
+  if (size >= mb && size % mb === 0) return `${size / mb}MB`;
+  if (size >= mb) return `${Math.round(size / mb)}MB`;
+  return `${size}B`;
+}
 
 function normalizeUploadedFilename(filename) {
   if (typeof filename !== 'string' || !filename) return filename;
@@ -180,8 +211,10 @@ const documentImportFileExtensions = new Set([
   'vsdx', 'drawio', 'xmind', 'mind', 'mm',
   'eml', 'msg',
 ]);
-const MAX_UPLOAD_FILE_SIZE_BYTES = 100 * 1024 * 1024;
-const MAX_UPLOAD_FILE_SIZE_LABEL = '100MB';
+const MAX_UPLOAD_FILE_SIZE_BYTES = parseUploadFileSizeLimit(
+  process.env.RELATION_UPLOAD_FILE_SIZE_LIMIT || process.env.RELATION_MAX_UPLOAD_FILE_SIZE,
+);
+const MAX_UPLOAD_FILE_SIZE_LABEL = formatUploadFileSizeLimit(MAX_UPLOAD_FILE_SIZE_BYTES);
 const upload = multer({
   storage,
   limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
@@ -424,7 +457,11 @@ function uploadAttachments(req, res, next) {
     }
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: `单个文件不能超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}` });
+        return res.status(413).json({
+          error: `单个文件不能超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}`,
+          code: 'UPLOAD_FILE_TOO_LARGE',
+          limit: MAX_UPLOAD_FILE_SIZE_BYTES,
+        });
       }
       if (err.code === 'LIMIT_FILE_COUNT') {
         return res.status(400).json({ error: '最多只能上传 10 个文件' });
@@ -6689,7 +6726,11 @@ function createDocumentAttachmentRecord(docId, file, userId, { blockId = null, d
   return serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid));
 }
 
-const WOLAI_REMOTE_IMAGE_MAX_BYTES = MAX_UPLOAD_FILE_SIZE_BYTES;
+const WOLAI_REMOTE_IMAGE_MAX_BYTES = parseUploadFileSizeLimit(
+  process.env.WOLAI_MCP_IMAGE_MAX_SIZE || process.env.WOLAI_MCP_IMAGE_MAX_BYTES,
+  Math.min(MAX_UPLOAD_FILE_SIZE_BYTES, 100 * 1024 * 1024),
+);
+const WOLAI_REMOTE_IMAGE_MAX_LABEL = formatUploadFileSizeLimit(WOLAI_REMOTE_IMAGE_MAX_BYTES);
 const WOLAI_REMOTE_IMAGE_TIMEOUT_MS = Number(process.env.WOLAI_MCP_IMAGE_FETCH_TIMEOUT_MS || 20000);
 const WOLAI_REMOTE_IMAGE_LIMIT = Number(process.env.WOLAI_MCP_IMAGE_IMPORT_LIMIT || 80);
 const remoteImageMimeExtMap = {
@@ -6802,7 +6843,7 @@ async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0, 
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const contentLength = Number(response.headers.get('content-length') || 0);
-    if (contentLength > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error(`图片超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}`);
+    if (contentLength > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error(`图片超过 ${WOLAI_REMOTE_IMAGE_MAX_LABEL}`);
     const contentType = response.headers.get('content-type') || '';
     const contentMime = contentType.split(';')[0].trim().toLowerCase();
     if (contentMime && !contentMime.startsWith('image/') && contentMime !== 'application/octet-stream') {
@@ -6810,7 +6851,7 @@ async function downloadRemoteImageAsUploadFile(url, { filename = '', index = 0, 
     }
     const buffer = Buffer.from(await response.arrayBuffer());
     if (!buffer.length) throw new Error('图片内容为空');
-    if (buffer.length > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error(`图片超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}`);
+    if (buffer.length > WOLAI_REMOTE_IMAGE_MAX_BYTES) throw new Error(`图片超过 ${WOLAI_REMOTE_IMAGE_MAX_LABEL}`);
     const originalname = normalizeRemoteImageFilename({ filename, url, mimetype: contentType, index });
     const ext = getRemoteImageExt(contentType, url, originalname);
     const mimetype = getRemoteImageMime(contentType, ext);
@@ -8988,7 +9029,13 @@ function handleDocumentAttachmentUpload(req, res, next) {
   upload.single('file')(req, res, (err) => {
     if (!err) return next();
     if (err instanceof multer.MulterError) {
-      if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ error: `单个文件不能超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}` });
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          error: `单个文件不能超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}`,
+          code: 'UPLOAD_FILE_TOO_LARGE',
+          limit: MAX_UPLOAD_FILE_SIZE_BYTES,
+        });
+      }
       return res.status(400).json({ error: err.message || '附件上传失败' });
     }
     return res.status(400).json({ error: err.message || '附件上传失败' });
