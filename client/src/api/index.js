@@ -606,6 +606,7 @@ export const documentsApi = {
   deleteChangeLog: (logId) => api.delete(`/document-change-logs/${logId}`).then(r => r.data),
   restoreEditRecord: (recordId) => api.post(`/document-edit-records/${recordId}/restore`).then(r => r.data),
   uploadAttachment: (id, formData, config = {}) => api.post(`/documents/${id}/attachments`, formData, config).then(r => r.data),
+  uploadAttachmentChunk: (id, formData, config = {}) => api.post(`/documents/${id}/attachments/chunk`, formData, config).then(r => r.data),
   listAttachments: (id) => api.get(`/documents/${id}/attachments`).then(r => r.data),
   previewAttachment: (id) => api.get(`/document-attachments/${id}/preview`).then(r => r.data),
   renameAttachment: (id, data) => api.put(`/document-attachments/${id}/rename`, data).then(r => r.data),

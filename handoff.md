@@ -15,6 +15,10 @@
   失败时显示明确中文提示，不再只展示 Axios 的 `Request failed with status code 413`。
 - Wolai MCP 远程图片抓取限制从通用附件上传上限中解耦，默认继续按 100MB 兜底，避免放大服务端
   远程下载风险。
+- 文档中心附件新增分片上传兜底：超过 8MB 的附件按 768KB 顺序分片上传，再由服务端校验总大小、
+  合并并写入原附件表，避免 25MB APK 因代理单请求体限制直接返回 413。
+- 分片临时目录按文档、用户和上传 ID 隔离，合并成功或异常失败后自动清理。
+
 
 ### 已验证
 
@@ -22,6 +26,7 @@
 - `cd client && CI=true npx react-scripts test --watchAll=false --runInBand src/utils/documentHistory.test.js src/utils/documentKind.test.js` 通过。
 - `node --test server/lib/wolaiMcpImport.test.js server/lib/wolaiMcpImportFoldState.test.js` 通过，6/6。
 - `cd client && BUILD_PATH=/tmp/relation-document-attachment-upload-build npm run build` 通过。
+- `cd client && BUILD_PATH=/tmp/relation-document-attachment-chunk-build npm run build` 通过。
 
 ### 本轮任务文件
 

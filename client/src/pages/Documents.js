@@ -394,6 +394,8 @@ const documentImportFileExts = [
 ];
 const documentImportAccept = documentImportFileExts.map(ext => `.${ext}`).join(',');
 const documentImportMaxSize = 100 * 1024 * 1024;
+const documentAttachmentChunkThreshold = 8 * 1024 * 1024;
+const documentAttachmentChunkSize = 768 * 1024;
 const clipboardImagePasteLimit = 10;
 const clipboardImageExtByMime = {
   'image/jpeg': 'jpg',
@@ -7095,6 +7097,40 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   };
 
   const uploadDocumentAttachmentFile = async (file, blockId, displayName) => {
+    const totalSize = Number(file?.size || 0);
+    if (totalSize > documentAttachmentChunkThreshold && typeof file.slice === 'function') {
+      const uploadId = (
+        window.crypto?.randomUUID?.()
+        || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      ).replace(/[^A-Za-z0-9_-]/g, '');
+      const chunkCount = Math.ceil(totalSize / documentAttachmentChunkSize);
+      let uploadedBytes = 0;
+      for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+        const start = chunkIndex * documentAttachmentChunkSize;
+        const end = Math.min(totalSize, start + documentAttachmentChunkSize);
+        const chunk = file.slice(start, end, file.type || 'application/octet-stream');
+        const formData = new FormData();
+        formData.append('file', chunk, file.name);
+        formData.append('upload_id', uploadId);
+        formData.append('chunk_index', String(chunkIndex));
+        formData.append('chunk_count', String(chunkCount));
+        formData.append('total_size', String(totalSize));
+        formData.append('filename', file.name || '');
+        formData.append('mimetype', file.type || '');
+        formData.append('block_id', blockId);
+        if (displayName) formData.append('display_name', displayName);
+        const result = await documentsApi.uploadAttachmentChunk(selectedDoc.id, formData, {
+          onUploadProgress: (progressEvent) => {
+            const chunkLoaded = Math.min(Number(progressEvent.loaded || 0), end - start);
+            setAttachmentUploadProgress(blockId, ((uploadedBytes + chunkLoaded) / totalSize) * 100);
+          },
+        });
+        uploadedBytes = end;
+        setAttachmentUploadProgress(blockId, (uploadedBytes / totalSize) * 100);
+        if (result?.done) return result.attachment || result;
+      }
+      throw new Error('附件分片上传未完成，请重试');
+    }
     const formData = new FormData();
     formData.append('file', file);
     formData.append('block_id', blockId);

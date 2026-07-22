@@ -89,6 +89,8 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const JSON_BODY_LIMIT = process.env.RELATION_JSON_BODY_LIMIT || process.env.RELATION_BODY_LIMIT || '50mb';
 const DEFAULT_UPLOAD_FILE_SIZE_BYTES = 500 * 1024 * 1024;
+const DOCUMENT_ATTACHMENT_CHUNK_DIR = path.join(UPLOADS_DIR, 'document-attachment-chunks');
+if (!fs.existsSync(DOCUMENT_ATTACHMENT_CHUNK_DIR)) fs.mkdirSync(DOCUMENT_ATTACHMENT_CHUNK_DIR, { recursive: true });
 
 function parseUploadFileSizeLimit(value, fallback = DEFAULT_UPLOAD_FILE_SIZE_BYTES) {
   if (value === undefined || value === null || value === '') return fallback;
@@ -227,6 +229,7 @@ const MAX_UPLOAD_FILE_SIZE_BYTES = parseUploadFileSizeLimit(
   process.env.RELATION_UPLOAD_FILE_SIZE_LIMIT || process.env.RELATION_MAX_UPLOAD_FILE_SIZE,
 );
 const MAX_UPLOAD_FILE_SIZE_LABEL = formatUploadFileSizeLimit(MAX_UPLOAD_FILE_SIZE_BYTES);
+const MAX_DOCUMENT_ATTACHMENT_CHUNK_COUNT = 2000;
 const upload = multer({
   storage,
   limits: { fileSize: MAX_UPLOAD_FILE_SIZE_BYTES },
@@ -385,6 +388,70 @@ function cleanupStoredUploadedFiles(files = []) {
     if (isOssPath(file?.filename)) deleteStoredFileBestEffort(file.filename);
   });
   cleanupUploadedFiles(files);
+}
+
+function normalizeDocumentAttachmentChunkMeta(body = {}) {
+  const uploadId = String(body.upload_id || '').trim();
+  if (!/^[A-Za-z0-9_-]{8,80}$/.test(uploadId)) {
+    throw Object.assign(new Error('分片上传 ID 不合法'), { statusCode: 400 });
+  }
+  const chunkIndex = Number(body.chunk_index);
+  const chunkCount = Number(body.chunk_count);
+  const totalSize = Number(body.total_size);
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    throw Object.assign(new Error('分片序号不合法'), { statusCode: 400 });
+  }
+  if (!Number.isInteger(chunkCount) || chunkCount <= 0 || chunkCount > MAX_DOCUMENT_ATTACHMENT_CHUNK_COUNT) {
+    throw Object.assign(new Error('分片总数不合法'), { statusCode: 400 });
+  }
+  if (chunkIndex >= chunkCount) {
+    throw Object.assign(new Error('分片序号超出范围'), { statusCode: 400 });
+  }
+  if (!Number.isFinite(totalSize) || totalSize <= 0 || totalSize > MAX_UPLOAD_FILE_SIZE_BYTES) {
+    throw Object.assign(new Error(`单个文件不能超过 ${MAX_UPLOAD_FILE_SIZE_LABEL}`), {
+      statusCode: 413,
+      code: 'UPLOAD_FILE_TOO_LARGE',
+    });
+  }
+  return { uploadId, chunkIndex, chunkCount, totalSize };
+}
+
+function getDocumentAttachmentChunkUploadDir(docId, userId, uploadId) {
+  const dir = path.join(
+    DOCUMENT_ATTACHMENT_CHUNK_DIR,
+    `${Number(docId) || 0}-${Number(userId) || 0}-${uploadId}`,
+  );
+  if (!dir.startsWith(DOCUMENT_ATTACHMENT_CHUNK_DIR + path.sep)) {
+    throw Object.assign(new Error('分片上传路径不合法'), { statusCode: 400 });
+  }
+  return dir;
+}
+
+function cleanupDocumentAttachmentChunkDir(dir) {
+  if (!dir || !dir.startsWith(DOCUMENT_ATTACHMENT_CHUNK_DIR + path.sep)) return;
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+}
+
+async function assembleDocumentAttachmentChunks(dir, chunkCount, targetPath) {
+  await new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(targetPath);
+    let index = 0;
+    const pipeNext = () => {
+      if (index >= chunkCount) {
+        output.end(resolve);
+        return;
+      }
+      const input = fs.createReadStream(path.join(dir, `${index}.part`));
+      input.on('error', reject);
+      output.on('error', reject);
+      input.on('end', () => {
+        index += 1;
+        pipeNext();
+      });
+      input.pipe(output, { end: false });
+    };
+    pipeNext();
+  });
 }
 
 async function persistUploadedFile(file, prefix = 'attachments', options = {}) {
@@ -9445,6 +9512,99 @@ function handleDocumentAttachmentUpload(req, res, next) {
     return res.status(400).json({ error: err.message || '附件上传失败' });
   });
 }
+
+app.post('/api/documents/:id/attachments/chunk', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  let chunkDir = '';
+  let assembledFile = null;
+  if (!doc) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(404).json({ error: '文档不存在或无权限访问' });
+  }
+  if (!canEditDocument(req.user, doc)) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(403).json({ error: '只有创建人、超级管理员或被共享用户可以编辑文档' });
+  }
+  if (!req.file) return res.status(400).json({ error: '未收到文件分片' });
+
+  try {
+    const { uploadId, chunkIndex, chunkCount, totalSize } = normalizeDocumentAttachmentChunkMeta(req.body);
+    const filename = normalizeUploadedFilename(req.body.filename || req.file.originalname);
+    const fileExt = getFileExtFromName(filename);
+    if (!allowedUploadExtensions.has(fileExt)) {
+      cleanupUploadedFiles([req.file]);
+      return res.status(400).json({ error: '不支持的文件类型' });
+    }
+
+    chunkDir = getDocumentAttachmentChunkUploadDir(doc.id, req.user.id, uploadId);
+    fs.mkdirSync(chunkDir, { recursive: true });
+    const chunkPath = path.join(chunkDir, `${chunkIndex}.part`);
+    fs.renameSync(getUploadedLocalPath(req.file), chunkPath);
+
+    const presentChunks = [];
+    for (let index = 0; index < chunkCount; index += 1) {
+      const currentPath = path.join(chunkDir, `${index}.part`);
+      if (fs.existsSync(currentPath)) presentChunks.push(currentPath);
+    }
+    if (presentChunks.length < chunkCount) {
+      return res.json({
+        done: false,
+        upload_id: uploadId,
+        received: presentChunks.length,
+        chunk_count: chunkCount,
+      });
+    }
+
+    const receivedSize = presentChunks.reduce((sum, chunkPath) => sum + fs.statSync(chunkPath).size, 0);
+    if (receivedSize !== totalSize) {
+      cleanupDocumentAttachmentChunkDir(chunkDir);
+      return res.status(400).json({ error: '附件分片大小校验失败，请重新上传' });
+    }
+
+    const storedFilename = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${path.extname(filename)}`;
+    const storedPath = path.join(UPLOADS_DIR, storedFilename);
+    await assembleDocumentAttachmentChunks(chunkDir, chunkCount, storedPath);
+    assembledFile = {
+      originalname: filename,
+      filename: storedFilename,
+      path: storedPath,
+      mimetype: String(req.body.mimetype || req.file.mimetype || 'application/octet-stream').slice(0, 255),
+      size: totalSize,
+    };
+    await persistUploadedFile(assembledFile, 'documents');
+
+    const displayName = String(req.body.display_name || filename).trim() || filename;
+    const result = db.prepare(`
+      INSERT INTO document_attachments (
+        document_id, block_id, filename, display_name, filepath, mimetype, file_ext, size, preview_status, created_by, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      doc.id,
+      req.body.block_id || null,
+      filename,
+      displayName,
+      assembledFile.filename,
+      assembledFile.mimetype,
+      fileExt,
+      totalSize,
+      getDocumentAttachmentPreviewStatus(assembledFile.mimetype, filename),
+      req.user.id
+    );
+    cleanupDocumentAttachmentChunkDir(chunkDir);
+    return res.json({
+      done: true,
+      attachment: serializeDocumentAttachment(getDocumentAttachment(result.lastInsertRowid)),
+    });
+  } catch (error) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    if (assembledFile) cleanupStoredUploadedFiles([assembledFile]);
+    if (chunkDir) cleanupDocumentAttachmentChunkDir(chunkDir);
+    return res.status(error?.statusCode || 500).json({
+      error: error?.message || '附件分片上传失败',
+      ...(error?.code ? { code: error.code } : {}),
+    });
+  }
+});
 
 app.post('/api/documents/:id/attachments', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
