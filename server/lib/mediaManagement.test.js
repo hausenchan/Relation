@@ -65,6 +65,7 @@ test('creates the media schema and its document relationship columns on SQLite',
     assert.ok(columns.includes('task_config_requirements'));
     const indexes = db.prepare("PRAGMA index_list('media_assets')").all().map(index => index.name);
     assert.ok(indexes.includes('idx_media_assets_progress'));
+    assert.ok(indexes.includes('idx_media_assets_document'));
   } finally {
     db.close();
   }

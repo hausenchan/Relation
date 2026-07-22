@@ -3688,6 +3688,24 @@ function truncateLogText(value, max = 500) {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
 
+function summarizeLargeLogPayload(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') {
+    return `[已省略大字段，字符数=${value.length}]`;
+  }
+  if (Buffer.isBuffer(value)) {
+    return `[已省略二进制字段，字节数=${value.length}]`;
+  }
+  if (Array.isArray(value)) {
+    return `[已省略数组字段，条目数=${value.length}]`;
+  }
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+    return `[已省略对象字段，字段数=${keys.length}]`;
+  }
+  return value;
+}
+
 function sanitizeLogPayload(value, depth = 0) {
   if (value === null || value === undefined) return value;
   if (depth > 4) return '[Object]';
@@ -3700,6 +3718,8 @@ function sanitizeLogPayload(value, depth = 0) {
   for (const [key, raw] of Object.entries(value)) {
     if (/(password|passwd|pwd|token|secret|authorization|jwt|hash|master_key|hmac_key)/i.test(key)) {
       out[key] = '[已脱敏]';
+    } else if (/(^content$|content_json|content_before|content_after|snapshot_json|workbook|blocks|cells|html|markdown|payload|^file$|file_data|file_content|blob)/i.test(key)) {
+      out[key] = summarizeLargeLogPayload(raw);
     } else {
       out[key] = sanitizeLogPayload(raw, depth + 1);
     }

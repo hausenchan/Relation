@@ -1,8 +1,26 @@
 # 开发交接
 
-最后更新：2026-07-21
+最后更新：2026-07-22
 
 ## 当前任务
+
+## 响应变慢排查与修复（2026-07-22）
+
+### 已完成
+
+- 排查 2026-07-21 提交后全系统响应变慢，定位到操作日志中间件会对所有写请求的 `req.body`
+  递归清洗并 JSON 序列化；文档/在线表格自动保存携带大 `content` 工作簿时，会在 Node 主线程
+  遍历大量 `blocks/cells`，导致写请求和同进程其他响应变慢。
+- 修复 `server/index.js` 的日志清洗逻辑：对 `content`、`content_json`、历史快照、workbook、
+  blocks、cells、html、markdown、payload 和二进制文件字段只记录摘要，不再深度遍历正文。
+- 同步处理 2026-07-21 媒体文档归档改动的启动扫描风险：`media_assets.document_id` 补充显式索引，
+  降低启动归档检查和媒体文档关联查询成本。
+
+### 已验证
+
+- `node --check server/index.js` 通过。
+- `node --test server/lib/mediaManagement.test.js` 通过，7/7。
+- `git diff --check -- server/index.js server/lib/mediaManagement.js server/lib/mediaManagement.test.js` 通过。
 
 状态：媒体管理列表字段体验优化已完成，准备随本次提交交付到 `gitee/main`。
 

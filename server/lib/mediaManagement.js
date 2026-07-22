@@ -349,6 +349,7 @@ function ensureMediaManagementSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_media_assets_display_style ON media_assets(display_style);
     CREATE INDEX IF NOT EXISTS idx_media_assets_progress ON media_assets(integration_progress);
     CREATE INDEX IF NOT EXISTS idx_media_assets_owner ON media_assets(owner_id);
+    CREATE INDEX IF NOT EXISTS idx_media_assets_document ON media_assets(document_id);
     CREATE INDEX IF NOT EXISTS idx_media_assets_release_date ON media_assets(latest_release_date);
     CREATE INDEX IF NOT EXISTS idx_media_assets_launch_date ON media_assets(launch_date);
   `);
