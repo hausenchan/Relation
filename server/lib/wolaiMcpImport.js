@@ -3443,6 +3443,7 @@ function inferWolaiRecordType(record = {}) {
   if (isTableRowTypeHint(hint)) return 'table-row';
   if (isDatabaseLikeRecord(record)) return 'database-embed';
   if (isTableLikeTypeHint(hint) || record.tableMeta) return 'table-simple';
+  if (/callout|notice|admonition|提示|标注/.test(hint)) return 'emphasis';
   if (/quote/.test(hint)) return 'quote';
   if (/code/.test(hint)) return 'code';
   if (/divider|hr|separator/.test(hint)) return 'divider';
@@ -3468,6 +3469,11 @@ function isDatabaseLikeRecord(record = {}) {
 
 function isWolaiTableRecord(record = {}) {
   return inferWolaiRecordType(record) === 'table-simple';
+}
+
+function isWolaiCalloutRecord(record = {}) {
+  const hint = `${record.type || ''} ${record.inferredType || ''} ${record.parentType || ''}`.toLowerCase();
+  return /callout|notice|admonition|提示|标注/.test(hint);
 }
 
 function hasRenderableWolaiRecord(record = {}) {
@@ -3553,6 +3559,28 @@ function buildFoldBodyHtml(records = [], getDepth = () => 0, rootDepth = 0) {
     if (type === 'numbered') prefix = `${index + 1}. `;
     const line = `${indent}${escapeHtml(prefix)}${text}`;
     lines.push(/^heading/.test(type) || /^fold-heading/.test(type) ? `<strong>${line}</strong>` : line);
+  });
+  return lines.join('<br/>');
+}
+
+function buildCalloutContentHtml(record = {}, records = [], getDepth = () => 0) {
+  const rootDepth = getDepth(record);
+  const title = String(record.html || '').trim();
+  const lines = [];
+  if (stripHtml(title)) {
+    const titleText = stripHtml(title);
+    lines.push(/^📌/.test(titleText) ? title : `📌 ${title}`);
+  }
+  records.forEach(recordItem => {
+    const type = inferWolaiRecordType(recordItem);
+    if (type === 'table-row') return;
+    const text = recordItem.media?.url
+      ? `<a href="${escapeHtml(recordItem.media.url)}" target="_blank" rel="noreferrer">${escapeHtml(recordItem.media.filename || recordItem.media.name || recordItem.media.url)}</a>`
+      : (recordItem.html || '');
+    if (!stripHtml(text)) return;
+    const depth = Math.max(0, getDepth(recordItem) - rootDepth - 1);
+    const indent = '&nbsp;'.repeat(depth * 4);
+    lines.push(`${indent}${text}`);
   });
   return lines.join('<br/>');
 }
@@ -3688,6 +3716,17 @@ function recordsToBlocks(records = [], seed) {
     stack.delete(record.id);
     return result;
   };
+  const isWolaiTodoTreeRecord = (record, stack = new Set()) => {
+    if (!record || stack.has(record.id)) return false;
+    const type = inferWolaiRecordType(record);
+    if (type === 'todo') return true;
+    const parent = byId.get(record.parentId);
+    if (!parent) return false;
+    stack.add(record.id);
+    const result = isWolaiTodoTreeRecord(parent, stack);
+    stack.delete(record.id);
+    return result;
+  };
   const tableRows = ordered.filter(isWolaiTableRowRecord);
   const tableRowsByParentId = new Map();
   tableRows.forEach(row => {
@@ -3766,7 +3805,13 @@ function recordsToBlocks(records = [], seed) {
     };
     const depth = getDepth(record);
     if (type === 'numbered' || type === 'bullet' || type === 'fold-list') meta.indent = depth;
-    else if (depth > 0 && isWolaiListTreeRecord(record)) meta.indent = depth;
+    else if (depth > 0 && (isWolaiListTreeRecord(record) || isWolaiTodoTreeRecord(record))) meta.indent = depth;
+    if (type === 'emphasis' && isWolaiCalloutRecord(record)) {
+      const descendants = getDescendantRecords(record);
+      descendants.forEach(item => consumedRecordIds.add(item.id));
+      blocks.push(makeBlock('emphasis', buildCalloutContentHtml(record, descendants, getDepth), { meta }));
+      return;
+    }
     if (type === 'fold-list') {
       const derivedHasChildren = hasRenderableDescendantRecords(record);
       const explicitHasChildren = getWolaiHasChildrenState(record.raw || {}, undefined);
