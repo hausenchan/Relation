@@ -66,8 +66,10 @@ export const mediaOptionMaps = {
   porn_api_status: optionMap(mediaPornApiOptions),
 };
 
+export const MEDIA_CID_MAX_LENGTH = 20;
+
 export function isValidMediaCid(value) {
-  return /^\d{1,8}$/.test(String(value || '').trim());
+  return new RegExp(`^\\d{1,${MEDIA_CID_MAX_LENGTH}}$`).test(String(value || '').trim());
 }
 
 export function normalizeMediaFormPayload(values = {}) {

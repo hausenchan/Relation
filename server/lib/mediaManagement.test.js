@@ -14,7 +14,7 @@ const {
 
 function validInput(overrides = {}) {
   return {
-    cid: '00001234',
+    cid: '00000000000000001234',
     media_name: '趣头条',
     importance: 'key',
     category: 'news',
@@ -30,10 +30,10 @@ function validInput(overrides = {}) {
   };
 }
 
-test('normalizes media input while preserving an eight-digit CID and optional values', () => {
+test('normalizes media input while preserving a twenty-digit CID and optional values', () => {
   const result = normalizeMediaInput(validInput({ budget_types: ['h5', 'h5', 'self_app'] }));
 
-  assert.equal(result.cid, '00001234');
+  assert.equal(result.cid, '00000000000000001234');
   assert.equal(result.media_name, '趣头条');
   assert.deepEqual(result.budget_types, ['h5', 'self_app']);
   assert.equal(result.porn_api_status, null);
@@ -41,8 +41,8 @@ test('normalizes media input while preserving an eight-digit CID and optional va
 });
 
 test('rejects invalid CID, enum, date, budget, and APPID values', () => {
-  assert.throws(() => normalizeMediaInput(validInput({ cid: '123456789' })), /1-8 位数字/);
-  assert.throws(() => normalizeMediaInput(validInput({ cid: '12A' })), /1-8 位数字/);
+  assert.throws(() => normalizeMediaInput(validInput({ cid: '123456789012345678901' })), /1-20 位数字/);
+  assert.throws(() => normalizeMediaInput(validInput({ cid: '12A' })), /1-20 位数字/);
   assert.throws(() => normalizeMediaInput(validInput({ category: 'video' })), /枚举值不合法/);
   assert.throws(() => normalizeMediaInput(validInput({ latest_release_date: '2026-02-30' })), /不是有效日期/);
   assert.throws(() => normalizeMediaInput(validInput({ budget_types: ['unknown'] })), /不合法/);

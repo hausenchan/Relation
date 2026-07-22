@@ -80,6 +80,8 @@ const MEDIA_TEXT_LIMITS = Object.freeze({
   other_notes: 20000,
 });
 
+const MEDIA_CID_MAX_LENGTH = 20;
+
 function mediaError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -129,7 +131,9 @@ function normalizeBudgetTypes(value) {
 
 function normalizeMediaInput(input = {}) {
   const cid = String(input.cid ?? '').trim();
-  if (!/^\d{1,8}$/.test(cid)) throw mediaError(400, 'cid 必须是 1-8 位数字');
+  if (!new RegExp(`^\\d{1,${MEDIA_CID_MAX_LENGTH}}$`).test(cid)) {
+    throw mediaError(400, `cid 必须是 1-${MEDIA_CID_MAX_LENGTH} 位数字`);
+  }
   const mediaName = normalizeOptionalText(input.media_name, 'media_name');
   if (!mediaName) throw mediaError(400, '媒体必填');
   const ownerId = input.owner_id === undefined || input.owner_id === null || input.owner_id === ''

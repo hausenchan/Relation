@@ -6,10 +6,11 @@ import {
 } from './mediaManagement';
 
 describe('media management utilities', () => {
-  test('validates one-to-eight digit CIDs without dropping leading zeroes', () => {
+  test('validates one-to-twenty digit CIDs without dropping leading zeroes', () => {
     expect(isValidMediaCid('0')).toBe(true);
     expect(isValidMediaCid('00001234')).toBe(true);
-    expect(isValidMediaCid('123456789')).toBe(false);
+    expect(isValidMediaCid('00000000000000000001')).toBe(true);
+    expect(isValidMediaCid('123456789012345678901')).toBe(false);
     expect(isValidMediaCid('12A')).toBe(false);
   });
 

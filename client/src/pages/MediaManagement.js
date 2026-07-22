@@ -45,6 +45,7 @@ import {
   mediaCategoryOptions,
   mediaDisplayStyleOptions,
   mediaImportanceOptions,
+  MEDIA_CID_MAX_LENGTH,
   mediaOptionMaps,
   mediaPornApiOptions,
   mediaProgressOptions,
@@ -570,10 +571,10 @@ export default function MediaManagement() {
                 label="CID"
                 rules={[
                   { required: true, message: '请输入 CID' },
-                  { validator: (_, value) => isValidMediaCid(value) ? Promise.resolve() : Promise.reject(new Error('CID 必须是 1-8 位数字')) },
+                  { validator: (_, value) => isValidMediaCid(value) ? Promise.resolve() : Promise.reject(new Error(`CID 必须是 1-${MEDIA_CID_MAX_LENGTH} 位数字`)) },
                 ]}
               >
-                <Input inputMode="numeric" maxLength={8} placeholder="1-8 位数字" />
+                <Input inputMode="numeric" maxLength={MEDIA_CID_MAX_LENGTH} placeholder={`1-${MEDIA_CID_MAX_LENGTH} 位数字`} />
               </Form.Item>
             </Col>
             <Col span={fieldCol}>
