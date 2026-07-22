@@ -3770,13 +3770,13 @@ function recordsToBlocks(records = [], seed) {
     if (type === 'fold-list') {
       const derivedHasChildren = hasRenderableDescendantRecords(record);
       const explicitHasChildren = getWolaiHasChildrenState(record.raw || {}, undefined);
-      meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+      meta.collapsed = getWolaiCollapsedState(record.raw || {}, false);
       meta.hasChildren = derivedHasChildren || explicitHasChildren === true;
     }
     if (type?.startsWith('fold-heading')) {
       const descendants = getDescendantRecords(record);
       descendants.forEach(item => consumedRecordIds.add(item.id));
-      meta.collapsed = getWolaiCollapsedState(record.raw || {}, true);
+      meta.collapsed = getWolaiCollapsedState(record.raw || {}, false);
       meta.body = buildFoldBodyHtml(descendants, getDepth, getDepth(record));
     }
     if (record.language) meta.language = record.language;
