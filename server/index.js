@@ -655,6 +655,13 @@ const RUNTIME_CACHE_TTL_MS = Number(process.env.RELATION_RUNTIME_CACHE_TTL_MS ||
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.RELATION_AUTH_USER_CACHE_TTL_MS || 5000);
 const runtimeCache = new Map();
 
+function parseBoundedPositiveInt(value, fallback, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  const normalized = Math.round(parsed);
+  return Math.min(normalized, max);
+}
+
 function isPlainObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) && !Buffer.isBuffer(value) && !(value instanceof Date);
 }
@@ -1040,6 +1047,9 @@ db.exec(`
     done INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE INDEX IF NOT EXISTS idx_reminders_done_date ON reminders(done, remind_date);
+  CREATE INDEX IF NOT EXISTS idx_reminders_person ON reminders(person_id);
 `);
 
 // =========== 数据迁移：clients → persons ===========
@@ -2048,6 +2058,12 @@ db.exec(`
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE INDEX IF NOT EXISTS idx_follow_up_tasks_assigned_created ON follow_up_tasks(assigned_to, created_at);
+  CREATE INDEX IF NOT EXISTS idx_follow_up_tasks_assigned_status ON follow_up_tasks(assigned_to, status);
+  CREATE INDEX IF NOT EXISTS idx_follow_up_tasks_assigned_by_created ON follow_up_tasks(assigned_by, created_at);
+  CREATE INDEX IF NOT EXISTS idx_follow_up_tasks_interaction ON follow_up_tasks(interaction_id);
+  CREATE INDEX IF NOT EXISTS idx_follow_up_tasks_competitor ON follow_up_tasks(competitor_research_id);
 `);
 
 // follow_up_tasks 自动迁移
@@ -2127,6 +2143,11 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_task_shared_task ON task_shared_users(task_id);
   CREATE INDEX IF NOT EXISTS idx_task_shared_user ON task_shared_users(user_id);
+  CREATE INDEX IF NOT EXISTS idx_tasks_assigned_status_created ON tasks(assigned_to, status, created_at);
+  CREATE INDEX IF NOT EXISTS idx_tasks_created_by_created ON tasks(created_by, created_at);
+  CREATE INDEX IF NOT EXISTS idx_tasks_team_created ON tasks(team_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_tasks_parent_created ON tasks(parent_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_tasks_date_status ON tasks(date, status);
 `);
 
 // tasks 表动态补全 result 字段
@@ -2192,6 +2213,7 @@ db.exec(`
 createIndexesIfColumnsExist('lead_watchers', [
   { name: 'idx_lead_watchers_user', columnsSql: 'user_id', columns: ['user_id'] },
   { name: 'idx_lead_watchers_source_user', columnsSql: 'source_type, source_id, user_id', columns: ['source_type', 'source_id', 'user_id'] },
+  { name: 'idx_lead_watchers_user_source', columnsSql: 'user_id, source_type, source_id', columns: ['user_id', 'source_type', 'source_id'] },
 ]);
 
 // =========== 策略表 ===========
@@ -2508,19 +2530,29 @@ addColumnIfMissing('documents', 'import_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'quality_status', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'icon_key', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'default_shares_initialized', 'INTEGER DEFAULT 0');
-const documentsMissingContentText = db.prepare(`
-  SELECT id, content
-  FROM documents
-  WHERE (content_text IS NULL OR content_text = '')
-    AND content IS NOT NULL
-    AND content != ''
-`).all();
-if (documentsMissingContentText.length) {
+function fillMissingDocumentContentTextBatch(options = {}) {
+  const limit = parseBoundedPositiveInt(options.limit, 20, 100);
+  const documentColumns = db.prepare('PRAGMA table_info(documents)').all().map(column => column.name);
+  const skipSpreadsheetSql = documentColumns.includes('document_kind')
+    ? "AND COALESCE(document_kind, 'rich_text') != 'spreadsheet'"
+    : '';
+  const rows = db.prepare(`
+    SELECT id, content
+    FROM documents
+    WHERE (content_text IS NULL OR content_text = '')
+      ${skipSpreadsheetSql}
+      AND content IS NOT NULL
+      AND content != ''
+    ORDER BY id ASC
+    LIMIT ?
+  `).all(limit);
+  if (!rows.length) return { scanned: 0, updated: 0 };
   const updateDocumentContentText = db.prepare('UPDATE documents SET content_text = ? WHERE id = ?');
-  const fillDocumentContentText = db.transaction((rows) => {
-    rows.forEach(row => updateDocumentContentText.run(extractDocumentText(row.content), row.id));
+  const fillDocumentContentText = db.transaction((items) => {
+    items.forEach(row => updateDocumentContentText.run(extractDocumentText(row.content), row.id));
   });
-  fillDocumentContentText(documentsMissingContentText);
+  fillDocumentContentText(rows);
+  return { scanned: rows.length, updated: rows.length };
 }
 createIndexIfColumnExists('documents', 'pinned_at', 'idx_documents_pinned_at', 'pinned_at');
 createIndexIfColumnExists('documents', 'source_record_key', 'idx_documents_source_record', 'source_system, source_record_key');
@@ -6186,6 +6218,20 @@ function buildDocumentSummary(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 100);
 }
 
+const DOCUMENT_EDIT_RECORD_SNAPSHOT_MAX_BYTES = parseBoundedPositiveInt(
+  process.env.RELATION_DOCUMENT_EDIT_RECORD_SNAPSHOT_MAX_BYTES,
+  512 * 1024,
+  5 * 1024 * 1024
+);
+
+function serializeDocumentSnapshotForEditRecord(content) {
+  if (content === undefined || content === null) return null;
+  const serialized = typeof content === 'string' ? content : JSON.stringify(content);
+  return Buffer.byteLength(serialized, 'utf8') <= DOCUMENT_EDIT_RECORD_SNAPSHOT_MAX_BYTES
+    ? serialized
+    : null;
+}
+
 function normalizeDocumentChangeLogDetail(body = {}, fallbackDetail = null, fallbackDetailText = null) {
   const hasDetail = Object.prototype.hasOwnProperty.call(body, 'detail');
   const rawDetail = hasDetail ? body.detail : fallbackDetail;
@@ -6368,12 +6414,8 @@ function buildDocumentEditDiff(before, after) {
 function insertDocumentEditRecord(documentId, userId, actionType, before, after) {
   const diff = buildDocumentEditDiff(before, after);
   if (!diff) return;
-  const beforeContent = before?.content === undefined || before?.content === null
-    ? null
-    : (typeof before.content === 'string' ? before.content : JSON.stringify(before.content));
-  const afterContent = after?.content === undefined || after?.content === null
-    ? null
-    : (typeof after.content === 'string' ? after.content : JSON.stringify(after.content));
+  const beforeContent = serializeDocumentSnapshotForEditRecord(before?.content);
+  const afterContent = serializeDocumentSnapshotForEditRecord(after?.content);
   db.prepare(`
     INSERT INTO document_edit_records (
       document_id, edited_by, action_type, title_before, title_after,
@@ -6398,6 +6440,14 @@ function insertDocumentEditRecord(documentId, userId, actionType, before, after)
 
 function hasDocumentSnapshotContent(value) {
   return value !== undefined && value !== null && String(value) !== '';
+}
+
+function canRestoreDocumentEditRecord(row) {
+  if (!row) return false;
+  if (row.has_content_after !== undefined || row.has_content_before !== undefined) {
+    return Boolean(row.has_content_after || row.has_content_before);
+  }
+  return hasDocumentSnapshotContent(row.content_after) || hasDocumentSnapshotContent(row.content_before);
 }
 
 function resolveDocumentEditRecordRestoreSnapshot(record, documentRow) {
@@ -7463,7 +7513,7 @@ function serializeDocumentEditRecord(row, options = {}) {
   } = row;
   return {
     ...rest,
-    can_restore: Boolean(resolveDocumentEditRecordRestoreSnapshot(row, options.document)),
+    can_restore: canRestoreDocumentEditRecord(row),
     diff: parseMaybeJson(row.diff_json, { items: [] }),
   };
 }
@@ -8439,7 +8489,13 @@ app.get('/api/documents/:id', (req, res) => {
       ORDER BY datetime(COALESCE(l.changed_at, l.created_at)) DESC, l.id DESC
     `).all(row.id),
     edit_records: db.prepare(`
-      SELECT e.*, u.display_name as edited_by_name
+      SELECT
+        e.id, e.document_id, e.edited_by, e.action_type, e.title_before, e.title_after,
+        e.content_text_before, e.content_text_after, e.diff_json, e.diff_text,
+        e.edited_at, e.created_at,
+        CASE WHEN e.content_after IS NOT NULL AND e.content_after != '' THEN 1 ELSE 0 END as has_content_after,
+        CASE WHEN e.content_before IS NOT NULL AND e.content_before != '' THEN 1 ELSE 0 END as has_content_before,
+        u.display_name as edited_by_name
       FROM document_edit_records e
       LEFT JOIN users u ON e.edited_by = u.id
       WHERE e.document_id = ?
@@ -10549,7 +10605,7 @@ app.put('/api/opportunities/:id', (req, res) => {
 
 // =========== 待跟进任务 API ===========
 app.get('/api/follow-up-tasks', (req, res) => {
-  const { status, all } = req.query;
+  const { status, all, limit } = req.query;
   const { id: me, role, executive_role } = req.user;
   let query = `
     SELECT f.*,
@@ -10585,6 +10641,10 @@ app.get('/api/follow-up-tasks', (req, res) => {
   }
   if (status) { query += ' AND f.status = ?'; params.push(status); }
   query += ' ORDER BY f.created_at DESC';
+  if (limit !== undefined && limit !== '') {
+    query += ' LIMIT ?';
+    params.push(parseBoundedPositiveInt(limit, 100, 500));
+  }
   const rows = db.prepare(query).all(...params);
   res.json(decryptRows('follow_up_tasks', rows).map(r => ({
     ...r,
@@ -10613,7 +10673,7 @@ app.get('/api/follow-up-tasks/count', (req, res) => {
 });
 
 app.get('/api/follow-up-tasks/watch', (req, res) => {
-  const { status } = req.query;
+  const { status, limit } = req.query;
   const { id: me } = req.user;
   let query = `
     SELECT DISTINCT
@@ -10644,6 +10704,10 @@ app.get('/api/follow-up-tasks/watch', (req, res) => {
     params.push(status);
   }
   query += ' ORDER BY f.created_at DESC';
+  if (limit !== undefined && limit !== '') {
+    query += ' LIMIT ?';
+    params.push(parseBoundedPositiveInt(limit, 100, 500));
+  }
   const watchRows = db.prepare(query).all(...params);
   res.json(decryptRows('follow_up_tasks', watchRows).map(r => ({
     ...r,
@@ -10715,7 +10779,7 @@ function normalizeTaskEstimatedHours(value) {
 
 // 获取可见任务（按角色过滤）
 app.get('/api/tasks', (req, res) => {
-  const { date, assigned_to, team_id, status, parent_id, mine } = req.query;
+  const { date, assigned_to, team_id, status, parent_id, mine, limit } = req.query;
   const { id: me, role, executive_role } = req.user;
 
   let q = `
@@ -10762,6 +10826,10 @@ app.get('/api/tasks', (req, res) => {
   else if (parent_id) { q += ' AND t.parent_id = ?'; params.push(parent_id); }
 
   q += ' ORDER BY CASE t.priority WHEN \'high\' THEN 1 WHEN \'medium\' THEN 2 ELSE 3 END, t.created_at ASC';
+  if (limit !== undefined && limit !== '') {
+    q += ' LIMIT ?';
+    params.push(parseBoundedPositiveInt(limit, 200, 1000));
+  }
   // parent_title 来自 tasks.title（加密）
   res.json(decryptRows('tasks', db.prepare(q).all(...params)).map(r => normalizeTaskRow({
     ...r,
@@ -15768,7 +15836,7 @@ app.delete('/api/budgets/:id', canWrite, (req, res) => {
 
 // =========== 提醒 API ===========
 app.get('/api/reminders', (req, res) => {
-  const { done, person_id } = req.query;
+  const { done, person_id, limit } = req.query;
   const { id: me, role } = req.user;
   let query = `
     SELECT r.*, p.name as person_name, p.company as person_company, p.current_company
@@ -15788,6 +15856,10 @@ app.get('/api/reminders', (req, res) => {
   if (done !== undefined && done !== '') { query += ' AND r.done = ?'; params.push(parseInt(done)); }
   if (person_id) { query += ' AND r.person_id = ?'; params.push(person_id); }
   query += ' ORDER BY r.remind_date ASC';
+  if (limit !== undefined && limit !== '') {
+    query += ' LIMIT ?';
+    params.push(parseBoundedPositiveInt(limit, 100, 500));
+  }
   const rows = decryptRows('reminders', db.prepare(query).all(...params)).map(r => ({
     ...r,
     person_name: safeDecrypt(r.person_name),
@@ -23451,4 +23523,17 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[startup] server listening elapsed_ms=${Date.now() - SERVER_STARTUP_STARTED_AT}`);
   console.log(`服务器启动在 http://localhost:${PORT}`);
   console.log(`局域网访问: http://[你的IP]:${PORT}`);
+  setTimeout(() => {
+    try {
+      const startedAt = Date.now();
+      const result = fillMissingDocumentContentTextBatch({
+        limit: process.env.RELATION_DOCUMENT_CONTENT_TEXT_BACKFILL_LIMIT || 20,
+      });
+      if (result.updated) {
+        console.log(`[startup] document content_text backfill updated=${result.updated} elapsed_ms=${Date.now() - startedAt}`);
+      }
+    } catch (error) {
+      console.warn('[startup] document content_text backfill skipped:', error.message);
+    }
+  }, 1000);
 });

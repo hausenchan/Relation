@@ -792,17 +792,26 @@ export default function Dashboard() {
   const loadData = async () => {
     setLoading(true);
     try {
-      // 基础统计
-      const statsData = await statsApi.get();
-      setStats(statsData);
+      const [
+        statsResult,
+        remindersResult,
+        tasksResult,
+        followUpResult,
+        watchedFollowUpResult,
+      ] = await Promise.allSettled([
+        statsApi.get(),
+        remindersApi.list({ done: 0, limit: 120 }),
+        tasksApi.list({ parent_id: 'null', limit: 300 }),
+        followUpTasksApi.list(canManageTeamTasks ? { all: '1', limit: 300 } : { limit: 300 }),
+        followUpTasksApi.watch({ limit: 200 }),
+      ]);
 
-      // 提醒事项
-      const remindersData = await remindersApi.list({ done: 0 });
-      setReminders(remindersData);
+      if (statsResult.status === 'fulfilled') setStats(statsResult.value);
+      if (remindersResult.status === 'fulfilled') setReminders(remindersResult.value);
 
-      const allTasks = await tasksApi.list({ parent_id: 'null' });
-      const allFollowUpData = await followUpTasksApi.list(canManageTeamTasks ? { all: '1' } : {});
-      const watchedFollowUpData = await followUpTasksApi.watch();
+      const allTasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
+      const allFollowUpData = followUpResult.status === 'fulfilled' ? followUpResult.value : [];
+      const watchedFollowUpData = watchedFollowUpResult.status === 'fulfilled' ? watchedFollowUpResult.value : [];
       setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
       setWatchedTasks(buildWatchedTasks(allTasks, watchedFollowUpData));
