@@ -11,6 +11,7 @@
 3. 与需求直接相关的 PRD：
    - 全局权限：`系统需求与权限设计PRD.md`
    - 文档中心：`文档中心模块PRD.md`
+   - 在线表格文档：`文档中心-在线表格文档PRD.md`
    - 目标：`目标模块PRD.md`
    - 经营周会：`经营周会模块PRD.md`
    - 其他模块：根目录对应的 `*PRD.md` 或设计方案。
@@ -45,6 +46,19 @@ node --check server/index.js
 
 ```bash
 DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server/index.js
+```
+
+在线表格 Excel 导入导出权限接口测试会自行创建并删除随机命名的临时 MySQL 库，必须显式开启，
+并完整传入隔离测试实例的连接参数。测试账号需有该实例的 `CREATE/DROP DATABASE` 权限，不得指向
+生产或共享业务库：
+
+```bash
+RELATION_RUN_MYSQL_TESTS=1 \
+  RELATION_TEST_MYSQL_HOST="$TEST_MYSQL_HOST" \
+  RELATION_TEST_MYSQL_PORT="$TEST_MYSQL_PORT" \
+  RELATION_TEST_MYSQL_USER="$TEST_MYSQL_USER" \
+  RELATION_TEST_MYSQL_PASSWORD="$TEST_MYSQL_PASSWORD" \
+  node --test server/lib/spreadsheetDocumentPermissionsIntegration.test.js
 ```
 
 ## 3. 功能地图
@@ -83,8 +97,8 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
 - 媒体管理 `/media-management`：媒体接入台账及关联文档；关联文档固定归档到
   `国内项目 / 产运 / 落地 / YYZ / 媒体对接`，使用普通文档图标和 `IMP` 类型，媒体身份以
   `media_assets.document_id` 关系判断，不得再依赖 `doc_type=MEDIA`。
-- 文档中心 `/documents`：文件夹树、多标签、块编辑、表格、图片/附件、共享、Wolai/TAPD
-  导入、历史、多人更新、收藏和搜索。
+- 文档中心 `/documents`：文件夹树、多标签、普通文档块编辑、在线表格文档、表格块、
+  图片/附件、共享、Wolai/TAPD 导入、历史、多人更新、收藏和搜索。
 - 网络抓包 `/network-capture`：采集与入库辅助能力。
 
 ### 3.5 商务协作
@@ -156,12 +170,50 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
 
 ### 5.1 统一数据格式
 
+- 文档中心有两种文件形态：`document_kind=rich_text` 为普通文档，复用块编辑器；
+  `document_kind=spreadsheet` 为在线表格文档，复用文档中心标题、文件夹、分享、历史、
+  收藏、权限和多人更新底座，但正文区域必须进入表格工作区。
+- `doc_type` 是业务分类（如 SOP/PRD/IMP/TMP），不得用来判断普通文档或在线表格；文件形态
+  一律使用 `document_kind`。
+- 在线表格文档的工作簿内容不得被普通文档 blocks 保存逻辑覆盖；改标题、关闭标签、自动保存、
+  历史恢复和多人同步时都必须保留 workbook 格式。
+- 在线表格的本地工作簿回调必须在同一同步调用中标记文档 dirty，并先更新活动编辑器快照，
+  不能等待 React effect 后才记录，否则快速轮询或手动保存会把本地工作簿误判为干净数据。
+- 在线表格工作簿模型和公式、排序、筛选、行列迁移等纯逻辑统一放在
+  `client/src/utils/spreadsheetWorkbook.js`；网格交互和虚拟滚动统一放在
+  `client/src/components/SpreadsheetDocumentEditor.js`，不得重新塞回 `Documents.js`。
+- 在线表格公式原文以 `=` 开头存入单元格 `v`，展示值由公式求值器动态计算；禁止使用
+  `eval` 或把计算结果覆盖公式原文。Excel 文件解析与生成统一走
+  `server/lib/spreadsheetWorkbookFile.js`。
+- 插入或删除行列时，必须更新整个工作簿中指向目标 Sheet 的单元格和区域引用，包括绝对引用；
+  不得误改公式字符串字面量、Sheet 名中的数字或名称前缀相似的其他 Sheet。
+- 工作表名称必须非空、最多 31 个字符、避开 Excel 非法字符且在工作簿内不区分大小写唯一；
+  前端重命名与服务端保存都必须校验。重命名工作表时必须同步迁移所有精确匹配的跨 Sheet
+  公式引用，名称和公式迁移作为同一个撤销/重做事务。重命名表单校验失败时必须在弹窗内展示
+  错误并保持弹窗打开，不得用 rejected Promise 制造未捕获运行时异常，也不得只靠输入框
+  `maxLength` 静默截断来代替“超过 31 个字符”的明确校验提示。
+- Sheet ID 是公式迁移、选区状态和三方合并的稳定标识，在同一工作簿内必须唯一；快速连续新增
+  不能只依赖裸 `Date.now()`，生成 ID 时必须对当前工作簿已有 ID 去重，活动 Sheet 要指向实际
+  新增后的唯一 ID。
+- 在线表格维护独立的工作簿撤销/重做栈；公式栏和单元格内连续输入按一次提交记录，排序、合并、
+  行列增删、Sheet 管理等离散操作每次记录一个快照，不能落入普通文档 blocks 撤销栈；仅切换
+  Sheet、移动选区或缩放视图不占用撤销步骤。工作簿历史必须同时限制条数和总内存，不能为
+  大型导入表格长期保留无限完整对象快照。
+- 在线表格轮询遇到本地 dirty 时必须按远端基线、本地工作簿和远端最新工作簿做三方合并；
+  不同单元格自动合并，同一单元格冲突保留本地并提示，本地清空也视为有效本地修改；Sheet 删除
+  与另一端修改冲突时保留有内容的版本。远端更新不得清除本地 dirty，合并后使用远端新基线
+  继续自动保存。同一位置冲突提示必须在工作区内可见，并至少保留 8 秒；合并后的自动保存成功
+  不得立即清空提示。`409 DOCUMENT_CONFLICT` 已返回 `latest` 时直接使用该快照合并，不得因已有
+  轮询请求而跳过本次冲突反馈。冲突提示必须绑定文档 ID，并由工作区稳定层承载，不能因网格
+  workbook 重建、Tab 切换或后续自动保存而丢失或串到其他文档。
+- Excel 导入只允许可编辑用户，导出允许所有可见用户；未登录统一返回 `401`，`readonly/guest`
+  即使被共享也不得通过导入接口修改工作簿。
 - 非文档中心模块统一使用 `relation_document_blocks_v1`，工具位于
   `client/src/utils/documentBodyBlocks.js`。
 - 可复用编辑器是 `client/src/components/DocumentBodyEditor.js`。
 - 目标、周报、经营周会不得重新实现另一套 contenteditable、粘贴、撤销或多块复制逻辑。
-- 文档中心的完整编辑器仍内嵌在 `client/src/pages/Documents.js`，与共享编辑器存在并行
-  实现；改键盘或剪贴板行为时必须同时核对两边并补回归测试。
+- 文档中心普通文档的完整编辑器仍内嵌在 `client/src/pages/Documents.js`，与共享编辑器存在
+  并行实现；改普通文档键盘或剪贴板行为时必须同时核对两边并补回归测试。
 
 ### 5.2 编辑行为不变量
 
@@ -172,6 +224,8 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
 - `Ctrl/Cmd+A` 支持编辑区全选；鼠标可跨块选中；`Ctrl/Cmd+C` 保留可再次粘贴的结构。
 - `Ctrl/Cmd+Z` 使用编辑器历史回退；`Ctrl/Cmd+S` 保存并阻止浏览器默认行为。
 - 键盘事件处理必须忽略输入框、表格单元格、弹窗和其他独立 contenteditable 区域。
+- 虚拟表格滚动处理必须在事件回调内先读取 `scrollTop/scrollLeft`，不得在异步 state updater 中
+  再访问可能已被 React 清空的 `event.currentTarget`。
 
 ### 5.3 保存、协作与历史
 
@@ -182,6 +236,39 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
   `409 CONTENT_CONFLICT` 和最新内容。
 - 客户端按稳定块 ID 做三方合并：基线、本地草稿、远端最新。不同块自动合并；同块冲突
   保留本地并提示用户。
+- 在线表格的 `content_text` 是工作簿派生检索索引。提交新 `content` 但省略 `content_text` 时，
+  服务端必须从新工作簿重建，不能复用数据库旧值；恢复表格历史也必须按目标工作簿重建，避免
+  已删除单元格继续残留在搜索、摘要或 AI 输入中。
+- 在线表格 operation 使用 `before/after` 前置快照，支持 `set_cell`、`set_sheet_property`、
+  `set_workbook_property`、`add_sheet`、`delete_sheet` 和 `reorder_sheets` 原子混合批次。Sheet 属性
+  仅允许名称、行列数量、行高列宽、合并、筛选和冻结；工作簿属性仅允许活动 Sheet、样式与定义名称。
+  旧基线下目标位置或属性未变时可直接合并，已变化时整批返回
+  `409 SPREADSHEET_OPERATION_CONFLICT`；当前值已等于 `after` 时按幂等重试处理。
+- Sheet 新增以稳定 ID、完整 Sheet 快照和前后相邻 Sheet ID 定位，删除以完整旧 Sheet 快照校验，
+  重排只重排 `before/after` ID 集合在当前工作簿中的投影；并发新增的其他 Sheet 必须保留。删除目标
+  Sheet 已被远端修改或参与重排的 Sheet 已被远端删除/重排时整批 `409`，不得部分落库。
+- `add_sheet.after` 是可写完整 Sheet，服务端必须补齐精简快照缺失的尺寸、合并、筛选和冻结默认值，
+  再拒绝未知字段、非规范或超出声明行列的坐标以及超过 16KB 的单格快照；不能利用 256KB Sheet
+  结构上限绕过 `set_cell` 的单元格边界。`delete_sheet.before` 仅作旧快照比较，可保留历史字段。
+- 同一原子批次允许 `add_sheet` 使用将由后续 `set_sheet_property(name)` 释放的名称；如果释放名称的
+  改名操作 `before` 已过期，必须整批返回冲突，新增 Sheet 和同批其他操作均不得部分落库。
+- operation 请求必须在持久化前完成权限、格式、前置快照和整本工作簿校验。任何 `400/403/409`
+  都不得改变 `content`、`content_text`、摘要、`updated_at` 或页面编辑记录；系统操作日志只记录
+  操作类型和条目数等摘要，不得记录单元格 `before/after`、Sheet 快照或完整 operations 数组。
+- 在线表格前端保存前按远端基线与本地工作簿生成 operation 计划。标题未变、只包含受支持结构且
+  总差异不超过 500 项时使用 operation API；未知字段变化、标题变化、单格 16KB、结构/属性 256KB
+  或批次超限继续走文档级保存。Sheet 重命名由服务端同时迁移当前工作簿公式，operation 返回的远端
+  合并工作簿必须成为新的本地与轮询基线。
+- 在线表格页面编辑记录不能只比较 `content_text`。加粗、填充、列宽、行高、冻结、合并等不改变
+  检索文本但实际改变工作簿的操作，也必须生成 `spreadsheet_operations` 记录和可恢复快照。
+- 打开文档“改动历史”前必须等待当前草稿保存完成，并重新读取文档详情；不能只使用自动保存前
+  `selectedDoc` 中缓存的 `edit_records`，否则新生成的页面编辑记录会在刷新整页前不可见。
+- 在线表格实时协作采用带 Bearer Token 的 SSE 加速文档更新通知，现有 5 秒 `/live` 轮询必须继续
+  作为断线兜底。在线成员与选区 presence 只保存在服务端内存，20 秒无心跳自动失效，不写数据库、
+  页面历史或操作日志；SSE 心跳必须定期重新检查文档可见权限。
+- presence 以浏览器标签级 `session_id` 区分，同一用户的其他标签仍作为远端协作者展示；客户端只
+  排除当前标签自身。服务端只广播用户名称、颜色、Sheet ID、选区和文档更新时间，不得广播工作簿
+  正文、角色、Token 或其他用户字段。
 - 可见页面每 5 秒拉取一次更新，后台轮询错误保持静默，恢复可见时立即同步。
 - 通用历史表为 `content_revisions`，键为 `entity_type + entity_id + scope_key`；快照加密、
   去重并限制大小。恢复历史前先保存当前草稿，恢复动作本身再生成新版本。
@@ -197,6 +284,11 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
 | `DocumentBodyEditor.js` | 目标、周报、经营周会；粘贴、删除、多选、撤销和保存测试 |
 | `documentBodyBlocks.js` | 历史数据兼容、Wolai 导入、签名、纯文本转换、AI 输入 |
 | `Documents.js` 编辑行为 | 共享编辑器是否也需同步；文档表格/附件是否使用独立事件链 |
+| `SpreadsheetDocumentEditor.js` | 选区、公式栏、复制粘贴、冻结区、合并区、虚拟滚动、只读权限和自动保存 |
+| `spreadsheetWorkbook.js` | 工作簿旧数据兼容、Sheet 命名与重命名公式迁移、错误传播、排序筛选、行列迁移、合并区域和 `content_text` |
+| `spreadsheetWorkbookFile.js` | `.xlsx` 多 Sheet、公式、样式、冻结、合并、Sheet 名服务端校验、`content_text` 派生、导入限制、导出权限和临时文件清理 |
+| 前后端 `spreadsheetOperations.js` | 单元格、属性与 Sheet 增删重排差异规划、相邻锚点、顺序投影、前置值、批次原子性、公式迁移、幂等重试、坐标/大小限制、远端合并和冲突 |
+| `documentCollaboration.js` / `spreadsheetPresence.js` | SSE 鉴权与重连、权限复查、presence 失效、会话隔离、选区范围、只读协作者、虚拟网格高亮、日志排除和轮询兜底 |
 | `collaborativeDocument.js` | 稳定块 ID、删除冲突、顺序合并、三模块 409 重试 |
 | `content_revisions` | `encryptedFields.js`、MySQL schema、恢复权限、删除级联 |
 | 目标/周报字段 | 权限 SQL、列表筛选、工作台汇总、加密字段、MySQL `LONGTEXT` |
@@ -253,6 +345,9 @@ DB_CLIENT=mysql MYSQL_DATABASE=relation_test NODE_ENV=test PORT=3101 node server
 - 协作：两端改不同块、同块冲突、远端删除、本地新增、隐藏/恢复页面。
 - 历史：初始版本、重复内容去重、保存版本、权限隔离、恢复后再生成版本。
 - 权限：管理员/CXO、普通指定人、非准备人、readonly/guest、无菜单、无敏感权限。
+- 在线表格：普通文档兼容、公式与错误传播、Sheet 命名和公式迁移、撤销重做、排序筛选、冻结合并、
+  虚拟滚动、Excel 往返、operation 幂等与原子冲突、派生检索文本、历史恢复、SSE/presence、只读
+  导出与写入拒绝；权限接口必须在真实隔离 MySQL/HTTP 环境执行。
 - 数据库：MySQL 空库初始化、旧库增量迁移、索引与字段类型、生产模式启动及启动耗时。
 - 构建：使用 `/tmp` 下的 `BUILD_PATH`，不要覆盖已跟踪的 `client/build`。
 

@@ -117,6 +117,56 @@ async function consumeSseResponse(response, onEvent) {
   return completedData;
 }
 
+async function consumeLiveSseResponse(response, onEvent, signal) {
+  if (!response.body?.getReader) {
+    throw createFetchApiError('当前浏览器不支持文档实时协作通道', 501);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const dispatchFrames = (flush = false) => {
+    let match = buffer.match(/\r?\n\r?\n/);
+    while (match) {
+      const event = parseSseFrame(buffer.slice(0, match.index));
+      if (event && typeof onEvent === 'function') onEvent(event);
+      buffer = buffer.slice(match.index + match[0].length);
+      match = buffer.match(/\r?\n\r?\n/);
+    }
+    if (flush && buffer.trim()) {
+      const event = parseSseFrame(buffer);
+      if (event && typeof onEvent === 'function') onEvent(event);
+      buffer = '';
+    }
+  };
+  while (!signal?.aborted) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    dispatchFrames();
+  }
+  buffer += decoder.decode();
+  dispatchFrames(true);
+  if (!signal?.aborted) throw createFetchApiError('文档实时协作通道已断开', 502);
+}
+
+async function getLiveEventStream(path, { onEvent, signal } = {}) {
+  const token = localStorage.getItem('token');
+  const response = await fetch(`/api${path}`, {
+    headers: {
+      Accept: 'text/event-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    signal,
+  });
+  handleFetchUnauthorized(response.status);
+  if (!response.ok) throw await readFetchError(response);
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('text/event-stream')) {
+    throw createFetchApiError('服务端未建立文档实时协作通道', 502);
+  }
+  return consumeLiveSseResponse(response, onEvent, signal);
+}
+
 async function postEventStream(path, data, { onEvent, signal } = {}) {
   const token = localStorage.getItem('token');
   const response = await fetch(`/api${path}`, {
@@ -523,6 +573,17 @@ export const documentsApi = {
   importWolaiMcpToDocument: (id, data) => api.post(`/documents/${id}/import/wolai-mcp`, data).then(r => r.data),
   importFile: (formData, config = {}) => api.post('/documents/import/file', formData, config).then(r => r.data),
   importFileToDocument: (id, formData, config = {}) => api.post(`/documents/${id}/import/file`, formData, config).then(r => r.data),
+  importSpreadsheet: (id, formData, config = {}) => api.post(`/documents/${id}/spreadsheet/import`, formData, config).then(r => r.data),
+  exportSpreadsheet: (id) => api.get(`/documents/${id}/spreadsheet/export`, { responseType: 'blob' }),
+  applySpreadsheetOperations: (id, data) => api.post(`/documents/${id}/spreadsheet/operations`, data).then(r => r.data),
+  subscribeSpreadsheetEvents: (id, sessionId, options = {}) => getLiveEventStream(
+    `/documents/${id}/spreadsheet/events?session_id=${encodeURIComponent(sessionId)}`,
+    options,
+  ),
+  updateSpreadsheetPresence: (id, data) => api.post(`/documents/${id}/spreadsheet/presence`, data).then(r => r.data),
+  leaveSpreadsheetPresence: (id, sessionId) => api.delete(
+    `/documents/${id}/spreadsheet/presence/${encodeURIComponent(sessionId)}`,
+  ).then(r => r.data),
   update: (id, data) => api.put(`/documents/${id}`, data).then(r => r.data),
   updateContent: (id, data) => api.put(`/documents/${id}/content`, data).then(r => r.data),
   updatePageOptions: (id, data) => api.put(`/documents/${id}/page-options`, data).then(r => r.data),

@@ -1,5 +1,6 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Avatar,
   Checkbox,
@@ -61,6 +62,7 @@ import {
   SearchOutlined,
   StarFilled,
   StarOutlined,
+  TableOutlined,
   TeamOutlined,
   UndoOutlined,
   UpOutlined,
@@ -72,11 +74,28 @@ import dayjs from 'dayjs';
 import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
+import SpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
 import {
   getDefaultDocumentCxoUsers,
   updateDefaultDocumentShareUsers,
   updateExplicitDocumentShareUsers,
 } from '../utils/documentDefaultShares';
+import { getDocumentKind, isSpreadsheetDocument } from '../utils/documentKind';
+import { loadFreshDocumentHistoryDetail } from '../utils/documentHistory';
+import {
+  buildSpreadsheetCollaborationHint,
+  getSpreadsheetConflictHintForDocument,
+  trackSpreadsheetDocumentDraft,
+} from '../utils/spreadsheetDocumentDraft';
+import {
+  buildSpreadsheetOperationSavePlan,
+  spreadsheetOperationsAreApplied,
+} from '../utils/spreadsheetOperations';
+import {
+  buildSpreadsheetPresencePayload,
+  createSpreadsheetPresenceSessionId,
+  filterRemoteSpreadsheetCollaborators,
+} from '../utils/spreadsheetPresence';
 import {
   buildCollapsedDocumentBlockIds,
   buildDocumentBlockGuideMap,
@@ -99,6 +118,13 @@ import {
   mergeAdjacentDocumentBlocks,
   shouldIgnoreGlobalDocumentDelete,
 } from '../utils/documentBlockKeyboard';
+import {
+  createDefaultSpreadsheetWorkbook,
+  getDocumentContentSignature,
+  mergeSpreadsheetWorkbookSnapshots,
+  normalizeSpreadsheetWorkbook,
+  spreadsheetWorkbookToText,
+} from '../utils/spreadsheetWorkbook';
 import DOMPurify from 'dompurify';
 
 const { Text, Title } = Typography;
@@ -297,6 +323,11 @@ const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, it
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
+const documentKindOptions = [
+  { value: 'rich_text', label: '普通文档', description: '编写方案、纪要、PRD、SOP 和知识内容' },
+  { value: 'spreadsheet', label: '在线表格', description: '管理预算、名单、数据清单、排期和台账' },
+];
+const documentKindLabel = Object.fromEntries(documentKindOptions.map(item => [item.value, item.label]));
 const defaultDocumentIconFormValue = '__default_document_icon__';
 const documentIconOptions = [
   { value: 'star', label: '重点', symbol: '★' },
@@ -1653,6 +1684,13 @@ function getDocumentSaveSignature(title, blocks) {
   return JSON.stringify(buildDocumentSavePayload(title, blocks));
 }
 
+function getDocumentRawSaveSignature(title, content) {
+  return JSON.stringify({
+    title: title || '未命名文档',
+    content: getDocumentContentSignature(content),
+  });
+}
+
 function assertDocumentSaveApplied(document, expectedSignature) {
   if (!document?.id) throw new Error('服务器未返回已保存的文档');
   const persistedSignature = getDocumentSaveSignature(
@@ -1665,8 +1703,27 @@ function assertDocumentSaveApplied(document, expectedSignature) {
   return document;
 }
 
+function assertRawDocumentSaveApplied(document, expectedSignature) {
+  if (!document?.id) throw new Error('服务器未返回已保存的文档');
+  const persistedSignature = getDocumentRawSaveSignature(document.title || '', document.content);
+  if (persistedSignature !== expectedSignature) {
+    throw new Error('服务器未写入本次文档修改，请重试');
+  }
+  return document;
+}
+
 function buildDocumentWritePayload(title, blocks, baseUpdatedAt) {
   const payload = buildDocumentSavePayload(title, blocks);
+  if (baseUpdatedAt) payload.base_updated_at = baseUpdatedAt;
+  return payload;
+}
+
+function buildRawDocumentWritePayload(title, content, contentText, baseUpdatedAt) {
+  const payload = {
+    title: title || '未命名文档',
+    content,
+    content_text: contentText || '',
+  };
   if (baseUpdatedAt) payload.base_updated_at = baseUpdatedAt;
   return payload;
 }
@@ -2804,6 +2861,9 @@ function getDocumentIconOption(iconKey = '') {
 }
 
 function renderDocumentInlineIcon(doc = {}, style = {}) {
+  if (isSpreadsheetDocument(doc)) {
+    return <TableOutlined style={{ color: '#0f766e', ...style }} />;
+  }
   const icon = getDocumentIconOption(doc.icon_key);
   if (!icon) return <FileTextOutlined style={{ color: '#6b7280', ...style }} />;
   return (
@@ -3130,6 +3190,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [selectedBlockId, setSelectedBlockId] = useState(null);
   const [selectedTableCell, setSelectedTableCell] = useState(null);
   const [selectedTableRange, setSelectedTableRange] = useState(null);
+  const [selectedSpreadsheetCell, setSelectedSpreadsheetCell] = useState({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
+  const [spreadsheetCollaborators, setSpreadsheetCollaborators] = useState([]);
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
@@ -3175,6 +3237,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [bulkShareDocuments, setBulkShareDocuments] = useState([]);
   const [bulkShareDocumentsLoading, setBulkShareDocumentsLoading] = useState(false);
   const [changeLogOpen, setChangeLogOpen] = useState(false);
+  const [changeLogRefreshing, setChangeLogRefreshing] = useState(false);
   const [activeChangeLogTab, setActiveChangeLogTab] = useState('version');
   const [changeLogSaving, setChangeLogSaving] = useState(false);
   const [restoringEditRecordId, setRestoringEditRecordId] = useState(null);
@@ -3215,7 +3278,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [presentationSlideIndex, setPresentationSlideIndex] = useState(0);
   const [shareLinkError, setShareLinkError] = useState(null);
   const [autoSaving, setAutoSaving] = useState(false);
+  const [spreadsheetImporting, setSpreadsheetImporting] = useState(false);
   const [remoteUpdateHint, setRemoteUpdateHint] = useState('');
+  const [spreadsheetConflictNotice, setSpreadsheetConflictNotice] = useState(null);
   const [attachmentDragOver, setAttachmentDragOver] = useState(false);
   const [blockDragState, setBlockDragState] = useState(null);
   const [attachmentUploadingBlockIds, setAttachmentUploadingBlockIds] = useState([]);
@@ -3250,6 +3315,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const activeDetailLoadingRef = useRef(null);
   const lastSavedSignatureRef = useRef({});
   const documentSyncTimerRef = useRef(null);
+  const spreadsheetEventAbortRef = useRef(null);
+  const spreadsheetEventRetryTimerRef = useRef(null);
+  const spreadsheetPresenceIntervalRef = useRef(null);
+  const spreadsheetPresenceDebounceRef = useRef(null);
+  const spreadsheetPresenceSessionIdRef = useRef(null);
+  const spreadsheetSelectionRef = useRef(null);
+  const selectedSpreadsheetCellRef = useRef(selectedSpreadsheetCell);
   const liveSyncPendingDocIdsRef = useRef(new Set());
   const dirtyDocumentIdsRef = useRef(new Set());
   const documentVisibilityStateRef = useRef(typeof document === 'undefined' ? 'visible' : document.visibilityState);
@@ -3269,6 +3341,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const globalSearchInputRef = useRef(null);
   const replaceAttachmentInputRef = useRef(null);
   const replaceAttachmentTargetRef = useRef(null);
+  if (!spreadsheetPresenceSessionIdRef.current) {
+    spreadsheetPresenceSessionIdRef.current = createSpreadsheetPresenceSessionId();
+  }
+  selectedSpreadsheetCellRef.current = selectedSpreadsheetCell;
   const [createForm] = Form.useForm();
   const [wolaiImportForm] = Form.useForm();
   const [changeLogForm] = Form.useForm();
@@ -3566,6 +3642,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const selectedDocProjectGroupTag = getDirectoryProjectGroupLabel(selectedDoc);
   const selectedDocDepartmentTag = departmentLabel[selectedDoc?.department_key] || selectedDoc?.department_key || '';
   const selectedDocTypeTag = docTypeLabel[selectedDoc?.doc_type] || selectedDoc?.doc_type || '';
+  const selectedSpreadsheetContentSignature = isSpreadsheetDocument(selectedDoc)
+    ? getDocumentContentSignature(selectedDoc.content)
+    : '';
   const selectedDocFolder = selectedDoc?.folder_id
     ? folders.find(folder => Number(folder.id) === Number(selectedDoc.folder_id))
     : null;
@@ -3708,6 +3787,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     current_version: doc.current_version,
     access_label: doc.access_summary?.label,
     icon_key: doc.icon_key || '',
+    document_kind: getDocumentKind(doc.document_kind),
   });
 
   const upsertDocTab = (doc) => {
@@ -3737,6 +3817,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setEditorTitle('');
       setEditorBlocks([createBlock()]);
       setSelectedBlockId(null);
+      setSelectedSpreadsheetCell({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
       setHoveredBlockId(null);
       setOpenBlockMenuId(null);
       setTocOpen(true);
@@ -3788,6 +3869,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           editorTitle,
           editorBlocks,
           selectedBlockId,
+          selectedSpreadsheetCell,
           tocOpen,
         },
       };
@@ -3808,6 +3890,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     setEditorTitle(tabState.editorTitle ?? doc.title ?? '');
     setEditorBlocks(blocks);
     setSelectedBlockId(tabState.selectedBlockId ?? (blocks[0]?.id || null));
+    setSelectedSpreadsheetCell(tabState.selectedSpreadsheetCell || { sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
     setHoveredBlockId(null);
     setOpenBlockMenuId(null);
     setTocOpen(tabState.tocOpen ?? asSwitchValue(doc.toc_enabled, true));
@@ -3819,7 +3902,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const setRemoteDocumentSnapshot = (docId, snapshot) => {
     const normalizedId = getDocTabId(docId);
     if (!normalizedId || !snapshot) return;
-    remoteDocumentSnapshotRef.current[normalizedId] = buildDocumentSyncSnapshot(
+    const remoteSnapshot = buildDocumentSyncSnapshot(
       snapshot.title,
       snapshot.blocks,
       {
@@ -3828,6 +3911,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         updated_by_name: snapshot.updated_by_name,
       }
     );
+    if (Object.prototype.hasOwnProperty.call(snapshot, 'content')) {
+      remoteSnapshot.content = snapshot.content;
+    }
+    remoteDocumentSnapshotRef.current[normalizedId] = remoteSnapshot;
   };
 
   const getRemoteDocumentSnapshot = (docId) => (
@@ -3948,10 +4035,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       if (getDocTabId(detail?.id) !== docId) throw new Error('文档详情与当前请求不匹配');
       if (!isLatestRequest()) return detail;
       const blocks = contentToBlocks(detail.content);
-      lastSavedSignatureRef.current[docId] = getDocumentSaveSignature(detail.title || '', blocks);
+      lastSavedSignatureRef.current[docId] = isSpreadsheetDocument(detail)
+        ? getDocumentRawSaveSignature(detail.title || '', detail.content)
+        : getDocumentSaveSignature(detail.title || '', blocks);
       setRemoteDocumentSnapshot(docId, {
         title: detail.title || '',
         blocks,
+        content: detail.content,
         updated_at: detail.updated_at,
         updated_by: detail.updated_by,
         updated_by_name: detail.updated_by_name,
@@ -4046,15 +4136,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     }
   };
 
-  const refreshSelectedDocMeta = async () => {
-    if (!selectedDoc?.id) return;
-    const docId = getDocTabId(selectedDoc.id);
-    const detail = await documentsApi.get(docId);
-    if (getDocTabId(detail?.id) !== docId) return;
+  const applySelectedDocMeta = (detail, docId = getDocTabId(detail?.id)) => {
+    if (!detail?.id || getDocTabId(detail.id) !== getDocTabId(docId)) return null;
     const blocks = contentToBlocks(detail.content);
     setRemoteDocumentSnapshot(detail.id, {
       title: detail.title || '',
       blocks,
+      content: detail.content,
       updated_at: detail.updated_at,
       updated_by: detail.updated_by,
       updated_by_name: detail.updated_by_name,
@@ -4072,6 +4160,14 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         doc: { ...(getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId].doc : {}), ...detail },
       },
     }));
+    return detail;
+  };
+
+  const refreshSelectedDocMeta = async () => {
+    if (!selectedDoc?.id) return null;
+    const docId = getDocTabId(selectedDoc.id);
+    const detail = await documentsApi.get(docId);
+    return applySelectedDocMeta(detail, docId);
   };
 
   const openPresentationMode = () => {
@@ -4283,7 +4379,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const docId = getDocTabId(selectedDocId);
     if (getDocTabId(selectedDoc.id) !== docId || !isActiveDocumentId(docId)) return;
     const docSnapshot = { ...selectedDoc, title: editorTitle || selectedDoc.title || '未命名文档' };
-    const signature = getDocumentSaveSignature(editorTitle, editorBlocks);
+    const signature = isSpreadsheetDocument(selectedDoc)
+      ? getDocumentRawSaveSignature(editorTitle, selectedDoc.content)
+      : getDocumentSaveSignature(editorTitle, editorBlocks);
     if (lastSavedSignatureRef.current[docId] && lastSavedSignatureRef.current[docId] !== signature) {
       dirtyDocumentIdsRef.current.add(docId);
     } else {
@@ -4294,6 +4392,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       editorTitle,
       editorBlocks,
       canEdit: canEditDoc(docSnapshot),
+      selectedSpreadsheetCell,
     };
     setDocTabStates(prev => ({
       ...prev,
@@ -4303,6 +4402,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         editorTitle,
         editorBlocks,
         selectedBlockId,
+        selectedSpreadsheetCell,
         tocOpen,
       },
     }));
@@ -4314,10 +4414,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             document_no: docSnapshot.document_no,
             current_version: docSnapshot.current_version,
             access_label: docSnapshot.access_summary?.label,
+            document_kind: getDocumentKind(docSnapshot.document_kind),
           }
         : tab
     )));
-  }, [selectedDocId, selectedDoc, editorTitle, editorBlocks, selectedBlockId, tocOpen]);
+  }, [selectedDocId, selectedDoc, editorTitle, editorBlocks, selectedBlockId, selectedSpreadsheetCell, tocOpen]);
 
   useEffect(() => {
     setFolderTreeExpandedKeys(prev => {
@@ -4470,7 +4571,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     return () => {
       if (autoSaveTimerRef.current) window.clearTimeout(autoSaveTimerRef.current);
     };
-  }, [selectedDoc?.id, editorTitle, editorBlocks]);
+  }, [selectedDoc?.id, editorTitle, editorBlocks, selectedSpreadsheetContentSignature]);
 
   useEffect(() => {
     autoSaveIntervalRef.current = window.setInterval(() => {
@@ -4517,10 +4618,108 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   }, [selectedDoc?.id, detailLoading, presentationOpen]);
 
   useEffect(() => {
+    const docId = getDocTabId(selectedDoc?.id);
+    if (!docId || !isSpreadsheetDocument(selectedDoc) || detailLoading || presentationOpen) {
+      setSpreadsheetCollaborators([]);
+      return undefined;
+    }
+
+    const sessionId = spreadsheetPresenceSessionIdRef.current;
+    let disposed = false;
+    let streamStopped = false;
+    const applyCollaborators = collaborators => {
+      if (disposed || getDocTabId(selectedDocIdRef.current) !== docId) return;
+      setSpreadsheetCollaborators(filterRemoteSpreadsheetCollaborators(collaborators, sessionId));
+    };
+    const sendPresence = async () => {
+      const payload = buildSpreadsheetPresencePayload({
+        sessionId,
+        selectedCell: selectedSpreadsheetCellRef.current,
+        selectionState: spreadsheetSelectionRef.current,
+      });
+      if (!payload || disposed) return;
+      try {
+        const result = await documentsApi.updateSpreadsheetPresence(docId, payload);
+        applyCollaborators(result?.collaborators);
+      } catch (error) {
+        if ([401, 403, 404].includes(error?.response?.status)) streamStopped = true;
+      }
+    };
+    const handleEvent = event => {
+      if (disposed || !event) return;
+      if (event.type === 'presence') {
+        applyCollaborators(event.collaborators);
+        return;
+      }
+      if (event.type === 'access_revoked') {
+        streamStopped = true;
+        spreadsheetEventAbortRef.current?.abort();
+        setSpreadsheetCollaborators([]);
+        return;
+      }
+      if (
+        event.type === 'document_updated'
+        && Number(event.updated_by) !== Number(currentUser?.id)
+        && getDocTabId(selectedDocIdRef.current) === docId
+      ) {
+        syncDocumentFromRemote(docId).catch(() => {});
+      }
+    };
+    const connect = () => {
+      if (disposed || streamStopped) return;
+      const controller = new AbortController();
+      spreadsheetEventAbortRef.current = controller;
+      documentsApi.subscribeSpreadsheetEvents(docId, sessionId, {
+        signal: controller.signal,
+        onEvent: handleEvent,
+      }).catch(error => {
+        if (controller.signal.aborted || disposed) return;
+        if ([401, 403, 404].includes(error?.response?.status)) streamStopped = true;
+      }).finally(() => {
+        if (disposed || streamStopped || controller.signal.aborted) return;
+        spreadsheetEventRetryTimerRef.current = window.setTimeout(connect, 1500);
+      });
+    };
+
+    connect();
+    sendPresence();
+    spreadsheetPresenceIntervalRef.current = window.setInterval(sendPresence, 8000);
+    return () => {
+      disposed = true;
+      spreadsheetEventAbortRef.current?.abort();
+      spreadsheetEventAbortRef.current = null;
+      if (spreadsheetEventRetryTimerRef.current) window.clearTimeout(spreadsheetEventRetryTimerRef.current);
+      spreadsheetEventRetryTimerRef.current = null;
+      if (spreadsheetPresenceIntervalRef.current) window.clearInterval(spreadsheetPresenceIntervalRef.current);
+      spreadsheetPresenceIntervalRef.current = null;
+      if (spreadsheetPresenceDebounceRef.current) window.clearTimeout(spreadsheetPresenceDebounceRef.current);
+      spreadsheetPresenceDebounceRef.current = null;
+      setSpreadsheetCollaborators([]);
+      documentsApi.leaveSpreadsheetPresence(docId, sessionId).catch(() => {});
+    };
+  }, [
+    selectedDoc?.id,
+    selectedDoc?.document_kind,
+    detailLoading,
+    presentationOpen,
+    currentUser?.id,
+  ]);
+
+  useEffect(() => {
     if (!remoteUpdateHint) return undefined;
-    const timer = window.setTimeout(() => setRemoteUpdateHint(''), 5000);
+    const timer = window.setTimeout(() => setRemoteUpdateHint(''), 8000);
     return () => window.clearTimeout(timer);
   }, [remoteUpdateHint]);
+
+  useEffect(() => {
+    if (!spreadsheetConflictNotice?.text) return undefined;
+    const timer = window.setTimeout(() => {
+      setSpreadsheetConflictNotice(current => (
+        current === spreadsheetConflictNotice ? null : current
+      ));
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [spreadsheetConflictNotice]);
 
   useEffect(() => {
     const saveSnapshotImmediately = (snapshot) => {
@@ -4528,8 +4727,12 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       if (!doc?.id || !canEditDoc(doc)) return;
       const blocks = Array.isArray(snapshot.editorBlocks) ? snapshot.editorBlocks : contentToBlocks(doc.content);
       const title = snapshot.editorTitle ?? doc.title ?? '';
-      const payload = buildDocumentSavePayload(title, blocks);
-      const signature = JSON.stringify(payload);
+      const payload = isSpreadsheetDocument(doc)
+        ? buildRawDocumentWritePayload(title, doc.content, doc.content_text)
+        : buildDocumentSavePayload(title, blocks);
+      const signature = isSpreadsheetDocument(doc)
+        ? getDocumentRawSaveSignature(title, doc.content)
+        : JSON.stringify(payload);
       if (lastSavedSignatureRef.current[doc.id] === signature) return;
       lastSavedSignatureRef.current[doc.id] = signature;
       dirtyDocumentIdsRef.current.delete(getDocTabId(doc.id));
@@ -4641,7 +4844,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
   };
 
-  const openCreate = async () => {
+  const openCreate = async (documentKind = 'rich_text') => {
+    const nextDocumentKind = getDocumentKind(documentKind);
     let shareUsers = users;
     if (!shareUsers.length) {
       try {
@@ -4655,8 +4859,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     setEditingPropertyDoc(null);
     createForm.resetFields();
     const initialValues = {
-      title: '新页面',
-      icon_key: defaultDocumentIconFormValue,
+      title: nextDocumentKind === 'spreadsheet' ? '未命名表格' : '新页面',
+      document_kind: nextDocumentKind,
+      icon_key: nextDocumentKind === 'spreadsheet' ? 'chart' : defaultDocumentIconFormValue,
       ...folderDefaults,
     };
     if (shareUsers.length) {
@@ -4869,6 +5074,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         department_key: doc.department_key || 'ALL',
         folder_id: normalizeDocumentFolderSelectValue(doc.folder_id),
         doc_type: doc.doc_type || 'TMP',
+        document_kind: getDocumentKind(doc.document_kind),
         icon_key: doc.icon_key || defaultDocumentIconFormValue,
       });
       setEditingPropertyDoc(doc);
@@ -4888,8 +5094,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         const wasActiveDoc = isActiveDocumentId(editingPropertyDoc.id);
         const title = documentValues.title || '未命名文档';
         const blocks = wasActiveDoc ? editorBlocks : contentToBlocks(editingPropertyDoc.content);
+        const savePayload = isSpreadsheetDocument(editingPropertyDoc)
+          ? buildRawDocumentWritePayload(title, editingPropertyDoc.content, editingPropertyDoc.content_text)
+          : buildDocumentSavePayload(title, blocks);
         const payload = {
-          ...buildDocumentSavePayload(title, blocks),
+          ...savePayload,
           ...documentValues,
           title,
           project_group_id: documentValues.project_group_id || null,
@@ -4897,8 +5106,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           current_version: editingPropertyDoc.current_version || 'V1.0',
           icon_key: normalizeDocumentIconFormValue(documentValues.icon_key),
         };
+        delete payload.document_kind;
         const updated = await documentsApi.update(editingPropertyDoc.id, payload);
-        lastSavedSignatureRef.current[editingPropertyDoc.id] = getDocumentSaveSignature(payload.title, blocks);
+        lastSavedSignatureRef.current[editingPropertyDoc.id] = isSpreadsheetDocument(updated)
+          ? getDocumentRawSaveSignature(payload.title, updated.content)
+          : getDocumentSaveSignature(payload.title, blocks);
         setCreateOpen(false);
         setEditingPropertyDoc(null);
         const isStillActiveDoc = isActiveDocumentId(updated.id);
@@ -4929,13 +5141,16 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         message.success('文档属性已保存');
         return;
       }
+      const documentKind = getDocumentKind(documentValues.document_kind);
       const doc = await documentsApi.create({
         ...documentValues,
+        document_kind: documentKind,
+        title: documentValues.title || (documentKind === 'spreadsheet' ? '未命名表格' : '未命名文档'),
         project_group_id: documentValues.project_group_id || null,
         folder_id: folderId,
-        content: { blocks: [] },
+        content: documentKind === 'spreadsheet' ? createDefaultSpreadsheetWorkbook() : { blocks: [] },
         icon_key: normalizeDocumentIconFormValue(documentValues.icon_key),
-        content_text: '',
+        ...(documentKind === 'spreadsheet' ? {} : { content_text: '' }),
         ...(Array.isArray(defaultShareUserIds) ? {
           shares: defaultShareUserIds.map(id => ({ target_type: 'user', target_id: Number(id) })),
         } : {}),
@@ -4952,6 +5167,31 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     }
   };
 
+  const renderCreateDocumentButton = (label = '新建') => (
+    <Dropdown.Button
+      type="primary"
+      icon={<DownOutlined />}
+      onClick={() => openCreate('rich_text')}
+      menu={{
+        items: [
+          {
+            key: 'rich_text',
+            icon: <FileTextOutlined />,
+            label: '普通文档',
+          },
+          {
+            key: 'spreadsheet',
+            icon: <TableOutlined />,
+            label: '在线表格',
+          },
+        ],
+        onClick: ({ key }) => openCreate(key),
+      }}
+    >
+      <PlusOutlined /> {label}
+    </Dropdown.Button>
+  );
+
   const saveCurrentDocument = async ({ silent = false, force = false } = {}) => {
     const activeDocId = getDocTabId(selectedDocIdRef.current);
     const snapshot = getDocTabId(activeEditorSnapshotRef.current?.doc?.id) === activeDocId
@@ -4961,23 +5201,55 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot?.editorBlocks) ? snapshot.editorBlocks : editorBlocks;
     const title = snapshot?.editorTitle ?? editorTitle;
-    const payload = buildDocumentWritePayload(title, blocks, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at);
-    const signature = getDocumentSaveSignature(title, blocks);
+    const spreadsheetDoc = isSpreadsheetDocument(doc);
+    const payload = spreadsheetDoc
+      ? buildRawDocumentWritePayload(title, doc.content, doc.content_text, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at)
+      : buildDocumentWritePayload(title, blocks, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at);
+    const signature = spreadsheetDoc
+      ? getDocumentRawSaveSignature(title, doc.content)
+      : getDocumentSaveSignature(title, blocks);
     if (!force && lastSavedSignatureRef.current[doc.id] === signature) return null;
     if (pendingSavePromisesRef.current[doc.id]) return pendingSavePromisesRef.current[doc.id];
 
     if (!silent) setSaving(true);
     try {
-      const savePromise = documentsApi.updateContent(doc.id, payload)
-        .then(updated => assertDocumentSaveApplied(updated, signature));
+      const remoteSnapshot = spreadsheetDoc ? getRemoteDocumentSnapshot(doc.id) : null;
+      const operationPlan = spreadsheetDoc
+        ? buildSpreadsheetOperationSavePlan({
+            baseWorkbook: remoteSnapshot?.content,
+            localWorkbook: doc.content,
+            titleChanged: !remoteSnapshot || String(title || '') !== String(remoteSnapshot.title || ''),
+          })
+        : null;
+      const useSpreadsheetOperations = operationPlan?.mode === 'operations' && operationPlan.operations.length > 0;
+      const savePromise = (useSpreadsheetOperations
+        ? documentsApi.applySpreadsheetOperations(doc.id, {
+            base_updated_at: remoteSnapshot?.updated_at || doc.updated_at,
+            operations: operationPlan.operations,
+          })
+        : documentsApi.updateContent(doc.id, payload))
+        .then(updated => {
+          if (useSpreadsheetOperations) {
+            if (!spreadsheetOperationsAreApplied(updated?.content, operationPlan.operations)) {
+              throw new Error('表格操作保存结果校验失败，请重试');
+            }
+            return updated;
+          }
+          return spreadsheetDoc
+            ? assertRawDocumentSaveApplied(updated, signature)
+            : assertDocumentSaveApplied(updated, signature);
+        });
       pendingSavePromisesRef.current[doc.id] = savePromise;
       const updated = await savePromise;
-      lastSavedSignatureRef.current[doc.id] = signature;
+      lastSavedSignatureRef.current[doc.id] = useSpreadsheetOperations
+        ? getDocumentRawSaveSignature(updated.title || title, updated.content)
+        : signature;
       const docId = getDocTabId(doc.id);
       dirtyDocumentIdsRef.current.delete(docId);
       setRemoteDocumentSnapshot(docId, {
         title,
         blocks,
+        content: updated.content,
         updated_at: updated.updated_at,
         updated_by: updated.updated_by,
         updated_by_name: updated.updated_by_name,
@@ -4986,7 +5258,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         setSelectedDoc(prev => (
           getDocTabId(prev?.id) === docId ? { ...prev, ...updated } : prev
         ));
-        setRemoteUpdateHint('');
+        if (!spreadsheetDoc) setRemoteUpdateHint('');
       }
       upsertDocTab(updated);
       setDocTabStates(prev => {
@@ -5009,8 +5281,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       }
       return updated;
     } catch (err) {
-      if (err?.response?.status === 409 && err?.response?.data?.code === 'DOCUMENT_CONFLICT') {
-        const alreadySaved = await resolveDocumentSaveConflict(doc, title, blocks, err);
+      if (err?.response?.status === 409 && ['DOCUMENT_CONFLICT', 'SPREADSHEET_OPERATION_CONFLICT'].includes(err?.response?.data?.code)) {
+        const alreadySaved = await resolveDocumentSaveConflict(doc, title, blocks, err, { spreadsheetDoc });
         if (!silent && !alreadySaved) {
           message.warning('检测到协作者更新，已自动同步最新内容并保留你的本地修改');
         }
@@ -5035,6 +5307,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     setRemoteDocumentSnapshot(docId, {
       title,
       blocks,
+      content: updated.content,
       updated_at: updated.updated_at,
       updated_by: updated.updated_by,
       updated_by_name: updated.updated_by_name,
@@ -5060,10 +5333,44 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
   };
 
-  const resolveDocumentSaveConflict = async (doc, title, blocks, err) => {
+  const resolveDocumentSaveConflict = async (doc, title, blocks, err, { spreadsheetDoc = false } = {}) => {
     const latest = err?.response?.data?.latest;
     if (!latest?.id) {
       await syncDocumentFromRemote(doc.id);
+      return false;
+    }
+    if (spreadsheetDoc || isSpreadsheetDocument(doc)) {
+      const docId = getDocTabId(doc.id);
+      const activeSnapshot = getDocTabId(activeEditorSnapshotRef.current?.doc?.id) === docId
+        ? activeEditorSnapshotRef.current
+        : null;
+      const previousRemoteSnapshot = getRemoteDocumentSnapshot(docId) || {};
+      const mergedWorkbook = mergeSpreadsheetWorkbookSnapshots(
+        previousRemoteSnapshot.content,
+        activeSnapshot?.doc?.content || doc.content,
+        latest.content,
+      );
+      const mergedTitle = mergeCollaborativeDocumentSnapshots(
+        { title: previousRemoteSnapshot.title || doc.title || '', blocks: [] },
+        { title: activeSnapshot?.editorTitle ?? title ?? doc.title ?? '', blocks: [] },
+        { title: latest.title || '', blocks: [] },
+      );
+      const hadConflicts = mergedWorkbook.hadConflicts || mergedTitle.hadConflicts;
+      const conflictHint = buildSpreadsheetCollaborationHint({
+        updatedByName: latest.updated_by_name,
+        hasLocalDirty: true,
+        hadConflicts,
+      });
+      if (isActiveDocumentId(docId)) {
+        setRemoteUpdateHint('');
+        setSpreadsheetConflictNotice({ docId, text: conflictHint });
+        message.warning({
+          key: `spreadsheet-collaboration-${docId}`,
+          content: conflictHint,
+          duration: 8,
+        });
+      }
+      await syncDocumentFromRemote(doc.id, { remoteDocument: latest });
       return false;
     }
     const latestBlocks = contentToBlocks(latest.content);
@@ -5082,24 +5389,56 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     if (!doc?.id || !canEditDoc(doc)) return null;
     const blocks = Array.isArray(snapshot.editorBlocks) ? snapshot.editorBlocks : contentToBlocks(doc.content);
     const title = snapshot.editorTitle ?? doc.title ?? '';
-    const payload = buildDocumentWritePayload(title, blocks, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at);
-    const signature = getDocumentSaveSignature(title, blocks);
+    const spreadsheetDoc = isSpreadsheetDocument(doc);
+    const payload = spreadsheetDoc
+      ? buildRawDocumentWritePayload(title, doc.content, doc.content_text, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at)
+      : buildDocumentWritePayload(title, blocks, getRemoteDocumentSnapshot(doc.id)?.updated_at || doc.updated_at);
+    const signature = spreadsheetDoc
+      ? getDocumentRawSaveSignature(title, doc.content)
+      : getDocumentSaveSignature(title, blocks);
     const docId = getDocTabId(doc.id);
     if (!force && lastSavedSignatureRef.current[doc.id] === signature) {
       dirtyDocumentIdsRef.current.delete(docId);
       return null;
     }
     if (pendingSavePromisesRef.current[doc.id]) return pendingSavePromisesRef.current[doc.id];
-    const savePromise = documentsApi.updateContent(doc.id, payload)
-      .then(updated => assertDocumentSaveApplied(updated, signature));
+    const remoteSnapshot = spreadsheetDoc ? getRemoteDocumentSnapshot(doc.id) : null;
+    const operationPlan = spreadsheetDoc
+      ? buildSpreadsheetOperationSavePlan({
+          baseWorkbook: remoteSnapshot?.content,
+          localWorkbook: doc.content,
+          titleChanged: !remoteSnapshot || String(title || '') !== String(remoteSnapshot.title || ''),
+        })
+      : null;
+    const useSpreadsheetOperations = operationPlan?.mode === 'operations' && operationPlan.operations.length > 0;
+    const savePromise = (useSpreadsheetOperations
+      ? documentsApi.applySpreadsheetOperations(doc.id, {
+          base_updated_at: remoteSnapshot?.updated_at || doc.updated_at,
+          operations: operationPlan.operations,
+        })
+      : documentsApi.updateContent(doc.id, payload))
+      .then(updated => {
+        if (useSpreadsheetOperations) {
+          if (!spreadsheetOperationsAreApplied(updated?.content, operationPlan.operations)) {
+            throw new Error('表格操作保存结果校验失败，请重试');
+          }
+          return updated;
+        }
+        return spreadsheetDoc
+          ? assertRawDocumentSaveApplied(updated, signature)
+          : assertDocumentSaveApplied(updated, signature);
+      });
     pendingSavePromisesRef.current[doc.id] = savePromise;
     try {
       const updated = await savePromise;
-      lastSavedSignatureRef.current[doc.id] = signature;
+      lastSavedSignatureRef.current[doc.id] = useSpreadsheetOperations
+        ? getDocumentRawSaveSignature(updated.title || title, updated.content)
+        : signature;
       dirtyDocumentIdsRef.current.delete(docId);
       setRemoteDocumentSnapshot(docId, {
         title,
         blocks,
+        content: updated.content,
         updated_at: updated.updated_at,
         updated_by: updated.updated_by,
         updated_by_name: updated.updated_by_name,
@@ -5108,7 +5447,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         setSelectedDoc(prev => (
           getDocTabId(prev?.id) === docId ? { ...prev, ...updated } : prev
         ));
-        setRemoteUpdateHint('');
+        if (!spreadsheetDoc) setRemoteUpdateHint('');
       }
       upsertDocTab(updated);
       setDocTabStates(prev => {
@@ -5125,8 +5464,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       return updated;
     } catch (err) {
-      if (err?.response?.status === 409 && err?.response?.data?.code === 'DOCUMENT_CONFLICT') {
-        await resolveDocumentSaveConflict(doc, title, blocks, err);
+      if (err?.response?.status === 409 && ['DOCUMENT_CONFLICT', 'SPREADSHEET_OPERATION_CONFLICT'].includes(err?.response?.data?.code)) {
+        await resolveDocumentSaveConflict(doc, title, blocks, err, { spreadsheetDoc });
         return null;
       }
       throw err;
@@ -5152,9 +5491,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
 
   saveDirtyDocumentTabsRef.current = saveDirtyDocumentTabs;
 
-  const syncDocumentFromRemote = async (docId) => {
+  const syncDocumentFromRemote = async (docId, { remoteDocument = null } = {}) => {
     const normalizedId = getDocTabId(docId);
-    if (!normalizedId || liveSyncPendingDocIdsRef.current.has(normalizedId)) return;
+    const hasProvidedRemoteDocument = Boolean(remoteDocument?.id);
+    if (!normalizedId || (!hasProvidedRemoteDocument && liveSyncPendingDocIdsRef.current.has(normalizedId))) return;
     const activeDocId = getDocTabId(selectedDocIdRef.current || selectedDocId);
     const isActiveDoc = activeDocId === normalizedId;
     const activeSnapshot = getDocTabId(activeEditorSnapshotRef.current?.doc?.id) === normalizedId
@@ -5176,19 +5516,106 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const localDoc = localState?.doc;
     if (!localDoc?.id) return;
 
-    liveSyncPendingDocIdsRef.current.add(normalizedId);
+    if (!hasProvidedRemoteDocument) liveSyncPendingDocIdsRef.current.add(normalizedId);
     try {
       const latestKnownUpdatedAt = getRemoteDocumentSnapshot(normalizedId)?.updated_at || localDoc.updated_at || '';
-      const liveData = await documentsApi.live(normalizedId, latestKnownUpdatedAt ? { since: latestKnownUpdatedAt } : undefined);
+      const liveData = hasProvidedRemoteDocument
+        ? { ...remoteDocument, has_changes: true }
+        : await documentsApi.live(normalizedId, latestKnownUpdatedAt ? { since: latestKnownUpdatedAt } : undefined);
       if (!liveData?.has_changes) {
         if (liveData?.updated_at && latestKnownUpdatedAt !== liveData.updated_at) {
           setRemoteDocumentSnapshot(normalizedId, {
             title: getRemoteDocumentSnapshot(normalizedId)?.title || localDoc.title || '',
             blocks: getRemoteDocumentSnapshot(normalizedId)?.blocks || (Array.isArray(localState?.editorBlocks) ? localState.editorBlocks : contentToBlocks(localDoc.content)),
+            content: getRemoteDocumentSnapshot(normalizedId)?.content,
             updated_at: liveData.updated_at,
             updated_by: liveData.updated_by,
             updated_by_name: liveData.updated_by_name,
           });
+        }
+        return;
+      }
+      if (isSpreadsheetDocument(liveData) || isSpreadsheetDocument(localDoc)) {
+        const previousRemoteSnapshot = getRemoteDocumentSnapshot(normalizedId) || {};
+        const hasLocalDirty = dirtyDocumentIdsRef.current.has(normalizedId);
+        let nextTitle = liveData.title || '';
+        let nextContent = liveData.content;
+        let hadConflicts = false;
+        if (hasLocalDirty) {
+          const mergedWorkbook = mergeSpreadsheetWorkbookSnapshots(
+            previousRemoteSnapshot.content,
+            localDoc.content,
+            liveData.content,
+          );
+          const mergedTitle = mergeCollaborativeDocumentSnapshots(
+            { title: previousRemoteSnapshot.title || localDoc.title || '', blocks: [] },
+            { title: localState?.editorTitle ?? localDoc.title ?? '', blocks: [] },
+            { title: liveData.title || '', blocks: [] },
+          );
+          nextTitle = mergedTitle.title;
+          nextContent = mergedWorkbook.workbook;
+          hadConflicts = mergedWorkbook.hadConflicts || mergedTitle.hadConflicts;
+        }
+        const nextSpreadsheetDoc = {
+          ...(localDoc || {}),
+          ...liveData,
+          title: nextTitle,
+          content: nextContent,
+          content_text: hasLocalDirty ? spreadsheetWorkbookToText(nextContent) : liveData.content_text,
+          document_kind: 'spreadsheet',
+        };
+        lastSavedSignatureRef.current[normalizedId] = getDocumentRawSaveSignature(
+          hasLocalDirty ? (liveData.title || '') : (nextSpreadsheetDoc.title || ''),
+          hasLocalDirty ? liveData.content : nextSpreadsheetDoc.content,
+        );
+        if (hasLocalDirty) dirtyDocumentIdsRef.current.add(normalizedId);
+        else dirtyDocumentIdsRef.current.delete(normalizedId);
+        setRemoteDocumentSnapshot(normalizedId, {
+          title: liveData.title || '',
+          blocks: Array.isArray(localState?.editorBlocks) ? localState.editorBlocks : contentToBlocks(nextSpreadsheetDoc.content),
+          content: liveData.content,
+          updated_at: nextSpreadsheetDoc.updated_at,
+          updated_by: nextSpreadsheetDoc.updated_by,
+          updated_by_name: nextSpreadsheetDoc.updated_by_name,
+        });
+        setDocTabStates(prev => {
+          const previousState = getDocTabId(prev[normalizedId]?.doc?.id) === normalizedId
+            ? prev[normalizedId]
+            : {};
+          return {
+            ...prev,
+            [normalizedId]: {
+              ...previousState,
+              doc: nextSpreadsheetDoc,
+              editorTitle: nextSpreadsheetDoc.title || '',
+              editorBlocks: previousState.editorBlocks || localState?.editorBlocks || [createBlock()],
+              selectedBlockId: previousState.selectedBlockId ?? localState?.selectedBlockId ?? null,
+              tocOpen: previousState.tocOpen ?? localState?.tocOpen ?? asSwitchValue(nextSpreadsheetDoc.toc_enabled, true),
+            },
+          };
+        });
+        upsertDocTab(nextSpreadsheetDoc);
+        setDocuments(prev => prev.map(item => (getDocTabId(item.id) === normalizedId ? { ...item, ...nextSpreadsheetDoc } : item)));
+        setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === normalizedId ? { ...item, ...nextSpreadsheetDoc } : item)));
+        if (isActiveDocumentId(normalizedId)) {
+          setSelectedDoc(nextSpreadsheetDoc);
+          setEditorTitle(nextSpreadsheetDoc.title || '');
+          const syncHint = buildSpreadsheetCollaborationHint({
+            updatedByName: nextSpreadsheetDoc.updated_by_name,
+            hasLocalDirty,
+            hadConflicts,
+          });
+          if (hasLocalDirty) {
+            setRemoteUpdateHint('');
+            setSpreadsheetConflictNotice({ docId: normalizedId, text: syncHint });
+            message.warning({
+              key: `spreadsheet-collaboration-${normalizedId}`,
+              content: syncHint,
+              duration: 8,
+            });
+          } else {
+            setRemoteUpdateHint(syncHint);
+          }
         }
         return;
       }
@@ -5283,7 +5710,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         console.error(err);
       }
     } finally {
-      liveSyncPendingDocIdsRef.current.delete(normalizedId);
+      if (!hasProvidedRemoteDocument) liveSyncPendingDocIdsRef.current.delete(normalizedId);
     }
   };
 
@@ -5699,15 +6126,30 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     }
   };
 
-  const openChangeLogs = () => {
+  const openChangeLogs = async () => {
     if (!selectedDoc) return;
-    const logs = sortChangeLogsLatestFirst(selectedDoc.change_logs || []);
-    changeLogForm.resetFields();
-    setEditingChangeLog(null);
-    setChangeLogFormOpen(false);
-    setActiveChangeLogTab('version');
-    setExpandedChangeLogIds(logs[0]?.id ? [logs[0].id] : []);
-    setChangeLogOpen(true);
+    const docId = getDocTabId(selectedDoc.id);
+    setChangeLogRefreshing(true);
+    try {
+      const detail = await loadFreshDocumentHistoryDetail({
+        documentId: docId,
+        savePendingChanges: () => saveCurrentDocument({ silent: true }),
+        loadDocument: documentsApi.get,
+      });
+      if (!detail || !isActiveDocumentId(docId)) return;
+      applySelectedDocMeta(detail, docId);
+      const logs = sortChangeLogsLatestFirst(detail.change_logs || []);
+      changeLogForm.resetFields();
+      setEditingChangeLog(null);
+      setChangeLogFormOpen(false);
+      setActiveChangeLogTab('version');
+      setExpandedChangeLogIds(logs[0]?.id ? [logs[0].id] : []);
+      setChangeLogOpen(true);
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '刷新改动历史失败');
+    } finally {
+      setChangeLogRefreshing(false);
+    }
   };
 
   const openCreateChangeLog = () => {
@@ -8503,6 +8945,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 {item.title}
               </Text>
               {item.pinned_at && <Tag color="gold" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>置顶</Tag>}
+              {isSpreadsheetDocument(item) && <Tag color="green" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>在线表格</Tag>}
               <Tag color="blue" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
             </Space>
           }
@@ -12857,6 +13300,46 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const kind = getMediaKind(block.type);
     const url = meta.url || block.content || '';
     const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
+    const wolaiDocumentReference = block.type === 'external-link'
+      && meta.source_system === 'wolai_mcp'
+      && meta.reference_type === 'page';
+    if (wolaiDocumentReference) {
+      const title = meta.title || inlineHtmlToPlain(block.content) || 'Wolai 文档';
+      return (
+        <a
+          href={url || undefined}
+          target={url ? '_blank' : undefined}
+          rel={url ? 'noreferrer' : undefined}
+          onClick={event => event.stopPropagation()}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 8,
+            maxWidth: '100%',
+            color: '#2f3437',
+            fontWeight: 600,
+            lineHeight: 1.6,
+            textDecoration: 'none',
+          }}
+        >
+          <span style={{
+            width: 20,
+            height: 20,
+            minWidth: 20,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: '1px solid #8a8d90',
+            borderRadius: 4,
+            color: '#666a6d',
+            background: '#fff',
+          }}>
+            <FileTextOutlined style={{ fontSize: 13 }} />
+          </span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', borderBottom: '1px solid #d8dadd' }}>{title}</span>
+        </a>
+      );
+    }
     if (kind === 'image' && isWolaiPageCoverBlock(block)) return null;
     const shouldEmbedImageOnly = meta.embedOnly
       || meta.source_system === 'wolai_mcp'
@@ -13312,6 +13795,22 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const url = meta.url || block.content || '';
     const isExternalMedia = ['netease-music', 'bilibili-video', 'tencent-video', 'external-link'].includes(block.type);
     const label = block.content || meta.filename || blockTypeMap[block.type]?.label || '媒体';
+    if (block.type === 'external-link' && meta.source_system === 'wolai_mcp' && meta.reference_type === 'page') {
+      const title = meta.title || inlineHtmlToPlain(block.content) || 'Wolai 文档';
+      return (
+        <a
+          href={url || undefined}
+          target={url ? '_blank' : undefined}
+          rel={url ? 'noreferrer' : undefined}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 10, color: '#2f3437', fontWeight: 600, textDecoration: 'none' }}
+        >
+          <span style={{ width: 24, height: 24, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #8a8d90', borderRadius: 4 }}>
+            <FileTextOutlined style={{ fontSize: 15 }} />
+          </span>
+          <span style={{ borderBottom: '1px solid #d8dadd' }}>{title}</span>
+        </a>
+      );
+    }
     if (kind === 'image' && isWolaiPageCoverBlock(block)) return null;
     const imageItems = kind === 'image' ? getImageBlockItems(block) : [];
     if (kind === 'image' && imageItems.length) {
@@ -13691,6 +14190,156 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     );
   };
 
+  const updateSelectedSpreadsheetWorkbook = (updater) => {
+    if (!selectedDoc?.id || !isSpreadsheetDocument(selectedDoc) || !canEditDoc(selectedDoc)) return;
+    const currentWorkbook = normalizeSpreadsheetWorkbook(selectedDoc.content);
+    const draft = JSON.parse(JSON.stringify(currentWorkbook));
+    const nextWorkbook = normalizeSpreadsheetWorkbook(updater(draft) || draft);
+    const nextContent = JSON.stringify(nextWorkbook);
+    const nextContentText = spreadsheetWorkbookToText(nextWorkbook);
+    const nextDoc = {
+      ...selectedDoc,
+      content: nextContent,
+      content_text: nextContentText,
+      summary: nextContentText.replace(/\s+/g, ' ').trim().slice(0, 100),
+    };
+    const docId = getDocTabId(nextDoc.id);
+    trackSpreadsheetDocumentDraft({
+      dirtyDocumentIds: dirtyDocumentIdsRef.current,
+      activeEditorSnapshotRef,
+      docId,
+      document: {
+        ...nextDoc,
+        title: editorTitle || nextDoc.title || '未命名文档',
+      },
+      editorTitle,
+      editorBlocks,
+      canEdit: canEditDoc(nextDoc),
+      selectedSpreadsheetCell,
+    });
+    setSelectedDoc(nextDoc);
+    setDocTabStates(prev => {
+      const previousState = getDocTabId(prev[docId]?.doc?.id) === docId ? prev[docId] : {};
+      return {
+        ...prev,
+        [docId]: {
+          ...previousState,
+          doc: nextDoc,
+          selectedSpreadsheetCell,
+        },
+      };
+    });
+  };
+
+  const handleSpreadsheetXlsxImport = async (file) => {
+    if (!selectedDoc?.id || !isSpreadsheetDocument(selectedDoc) || !canEditDoc(selectedDoc)) return;
+    const ext = getFileExt(file?.name);
+    if (!['xlsx', 'xlsm'].includes(ext)) {
+      message.error('仅支持导入 .xlsx 或 .xlsm 文件');
+      return;
+    }
+    if (Number(file?.size || 0) > documentImportMaxSize) {
+      message.error('单个文件不能超过 100MB');
+      return;
+    }
+    const formData = new FormData();
+    formData.append('file', file);
+    setSpreadsheetImporting(true);
+    try {
+      const result = await documentsApi.importSpreadsheet(selectedDoc.id, formData);
+      const nextWorkbook = normalizeSpreadsheetWorkbook(result?.workbook);
+      const activeSheet = nextWorkbook.sheets.find(sheet => sheet.id === nextWorkbook.activeSheetId) || nextWorkbook.sheets[0];
+      setSelectedSpreadsheetCell({ sheetId: activeSheet.id, rowIndex: 0, columnIndex: 0 });
+      updateSelectedSpreadsheetWorkbook(() => nextWorkbook);
+      message.success(`已导入 ${result?.filename || file.name}，正在自动保存`);
+    } catch (error) {
+      message.error(error?.response?.data?.error || error?.message || 'Excel 导入失败');
+    } finally {
+      setSpreadsheetImporting(false);
+    }
+  };
+
+  const handleSpreadsheetXlsxExport = async () => {
+    if (!selectedDoc?.id || !isSpreadsheetDocument(selectedDoc)) return;
+    try {
+      if (canEditDoc(selectedDoc)) await saveCurrentDocument({ silent: false, force: true });
+      const response = await documentsApi.exportSpreadsheet(selectedDoc.id);
+      const blob = response?.data instanceof Blob
+        ? response.data
+        : new Blob([response?.data || ''], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${String(editorTitle || selectedDoc.title || '在线表格').replace(/[\\/:*?"<>|\r\n]+/g, '_')}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      message.error(error?.message || 'Excel 导出失败');
+    }
+  };
+
+  const handleSpreadsheetSelectionChange = nextSelectionState => {
+    spreadsheetSelectionRef.current = nextSelectionState;
+    if (spreadsheetPresenceDebounceRef.current) {
+      window.clearTimeout(spreadsheetPresenceDebounceRef.current);
+    }
+    const docId = getDocTabId(selectedDoc?.id);
+    const sessionId = spreadsheetPresenceSessionIdRef.current;
+    if (!docId || !isSpreadsheetDocument(selectedDoc)) return;
+    spreadsheetPresenceDebounceRef.current = window.setTimeout(async () => {
+      const payload = buildSpreadsheetPresencePayload({
+        sessionId,
+        selectedCell: selectedSpreadsheetCellRef.current,
+        selectionState: spreadsheetSelectionRef.current,
+      });
+      if (!payload || getDocTabId(selectedDocIdRef.current) !== docId) return;
+      try {
+        const result = await documentsApi.updateSpreadsheetPresence(docId, payload);
+        if (getDocTabId(selectedDocIdRef.current) !== docId) return;
+        setSpreadsheetCollaborators(filterRemoteSpreadsheetCollaborators(
+          result?.collaborators,
+          sessionId,
+        ));
+      } catch {
+        // The 5-second document poll remains the fallback when presence is unavailable.
+      }
+    }, 150);
+  };
+
+  const activeSpreadsheetConflictHint = getSpreadsheetConflictHintForDocument(
+    spreadsheetConflictNotice,
+    selectedDoc?.id,
+  );
+  const renderSpreadsheetEditor = () => (
+    <>
+      {activeSpreadsheetConflictHint ? (
+        <Alert
+          data-spreadsheet-conflict-notice="true"
+          type="warning"
+          showIcon
+          message={activeSpreadsheetConflictHint}
+          style={{ borderRadius: 0, borderWidth: '1px 1px 0' }}
+        />
+      ) : null}
+      <SpreadsheetDocumentEditor
+        key={selectedDoc?.id || 'spreadsheet'}
+        workbook={selectedDoc?.content}
+        canEdit={canEditDoc(selectedDoc)}
+        isMobile={isMobile}
+        selectedCell={selectedSpreadsheetCell}
+        onSelectedCellChange={setSelectedSpreadsheetCell}
+        onSelectionChange={handleSpreadsheetSelectionChange}
+        onWorkbookChange={nextWorkbook => updateSelectedSpreadsheetWorkbook(() => nextWorkbook)}
+        onImportXlsx={handleSpreadsheetXlsxImport}
+        onExportXlsx={handleSpreadsheetXlsxExport}
+        importing={spreadsheetImporting}
+        collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
+        collaborators={spreadsheetCollaborators}
+      />
+    </>
+  );
   const renderBlockInput = (block, index, heading) => {
     const active = selectedBlockId === block.id;
     const placeholder = (() => {
@@ -14337,7 +14986,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 <Tooltip title="导入">
                   <Button icon={<DownloadOutlined />} aria-label="导入" onClick={openWolaiImport} />
                 </Tooltip>
-                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建</Button>
+                {renderCreateDocumentButton('新建')}
               </Space>
             )}
           </div>
@@ -14632,7 +15281,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                   <Space>
                     {isMobile && <Button icon={<LeftOutlined />} onClick={backToMobileLibrary}>文档列表</Button>}
                     <Button icon={<DownloadOutlined />} onClick={openWolaiImport}>导入</Button>
-                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>新建文档</Button>
+                    {renderCreateDocumentButton('新建文档')}
                   </Space>
                 )}
               </Empty>
@@ -14662,13 +15311,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                     </Text>
                   </div>
                   <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingTop: 8, paddingBottom: 2 }}>
-                    <Button
-                      size="small"
-                      icon={<MenuOutlined />}
-                      onClick={toggleTocPanel}
-                    >
-                      目录
-                    </Button>
+                    {!isSpreadsheetDocument(selectedDoc) && (
+                      <Button
+                        size="small"
+                        icon={<MenuOutlined />}
+                        onClick={toggleTocPanel}
+                      >
+                        目录
+                      </Button>
+                    )}
                     <Dropdown
                       trigger={['click']}
                       open={pageMenuOpen}
@@ -14677,9 +15328,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                     >
                       <Button size="small" icon={<MoreOutlined />}>页面</Button>
                     </Dropdown>
-                    <Button size="small" icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode}>演示</Button>
+                    {!isSpreadsheetDocument(selectedDoc) && <Button size="small" icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode}>演示</Button>}
                     <Button size="small" icon={<UserAddOutlined />} onClick={openShare}>分享</Button>
-                    <Button size="small" icon={<HistoryOutlined />} onClick={openChangeLogs}>历史</Button>
+                    <Button size="small" icon={<HistoryOutlined />} loading={changeLogRefreshing} onClick={openChangeLogs}>历史</Button>
                     <Button
                       size="small"
                       icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
@@ -14694,6 +15345,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
               {!isMobile && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
                 <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
                   <Space size={[8, 8]} wrap>
+                    {isSpreadsheetDocument(selectedDoc) && <Tag icon={<TableOutlined />} color="green">在线表格</Tag>}
                     <Tag color="geekblue">{selectedDoc.document_no}</Tag>
                     <Tag>{selectedDoc.current_version || 'V1.0'}</Tag>
                     <Tag color="cyan">{selectedDoc.access_summary?.label || '仅自己'}</Tag>
@@ -14711,16 +15363,18 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                   </Text>
                 </Space>
                 <Space wrap size={6}>
-                  <Tooltip title="目录">
-                    <span>
-                      <Button
-                        type={tocOpen ? 'primary' : 'default'}
-                        icon={<MenuOutlined />}
-                        onClick={toggleTocPanel}
-                        aria-label="目录"
-                      />
-                    </span>
-                  </Tooltip>
+                  {!isSpreadsheetDocument(selectedDoc) && (
+                    <Tooltip title="目录">
+                      <span>
+                        <Button
+                          type={tocOpen ? 'primary' : 'default'}
+                          icon={<MenuOutlined />}
+                          onClick={toggleTocPanel}
+                          aria-label="目录"
+                        />
+                      </span>
+                    </Tooltip>
+                  )}
                   <Tooltip title="页面">
                     <span>
                       <Dropdown
@@ -14733,14 +15387,16 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                       </Dropdown>
                     </span>
                   </Tooltip>
-                  <Tooltip title="演示模式">
-                    <Button icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode} aria-label="演示模式" />
-                  </Tooltip>
+                  {!isSpreadsheetDocument(selectedDoc) && (
+                    <Tooltip title="演示模式">
+                      <Button icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode} aria-label="演示模式" />
+                    </Tooltip>
+                  )}
                   <Tooltip title={`添加分享人 · ${selectedDoc.access_summary?.label || '仅自己'}`}>
                     <Button icon={<UserAddOutlined />} onClick={openShare} aria-label={`添加分享人 · ${selectedDoc.access_summary?.label || '仅自己'}`} />
                   </Tooltip>
                   <Tooltip title="改动历史">
-                    <Button icon={<HistoryOutlined />} onClick={openChangeLogs} aria-label="改动历史" />
+                    <Button icon={<HistoryOutlined />} loading={changeLogRefreshing} onClick={openChangeLogs} aria-label="改动历史" />
                   </Tooltip>
                   <Tooltip title={selectedDoc.is_favorite ? '取消收藏' : '收藏'}>
                     <Button
@@ -14775,56 +15431,62 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 />
               )}
 
-              <div style={{
-                display: 'flex',
-                gap: isMobile ? 16 : 32,
-                alignItems: 'flex-start',
-                flexDirection: isMobile ? 'column' : 'row',
-              }}>
-                <section
-                  id="document-editor-blocks"
-                  tabIndex={0}
-                  aria-label="文档正文编辑区"
-                  onMouseDown={handleEditorAreaMouseDown}
-                  onPaste={handleEditorPaste}
-                  onDragOver={handleEditorDragOver}
-                  onDragLeave={handleEditorDragLeave}
-                  onDrop={handleEditorDrop}
-                  style={{
-                  flex: 1,
-                  minWidth: 0,
-                  maxWidth: isMobile ? '100%' : getEditorMaxWidth(selectedDoc),
-                  width: '100%',
-                  position: 'relative',
-                  outline: 'none',
-                  paddingBottom: isMobile ? 120 : 96,
-                  minHeight: isMobile ? 'calc(100vh - 260px)' : 420,
-                }}>
-                  {attachmentDragOver && (
-                    <div style={{
-                      position: 'absolute',
-                      inset: 0,
-                      zIndex: 30,
-                      pointerEvents: 'none',
-                      border: '2px dashed #3b82f6',
-                      borderRadius: 10,
-                      background: 'rgba(239, 246, 255, 0.72)',
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      justifyContent: 'center',
-                      paddingTop: 28,
-                      color: '#1d4ed8',
-                      fontWeight: 600,
+              {isSpreadsheetDocument(selectedDoc) ? (
+                renderSpreadsheetEditor()
+              ) : (
+                <>
+                  <div style={{
+                    display: 'flex',
+                    gap: isMobile ? 16 : 32,
+                    alignItems: 'flex-start',
+                    flexDirection: isMobile ? 'column' : 'row',
+                  }}>
+                    <section
+                      id="document-editor-blocks"
+                      tabIndex={0}
+                      aria-label="文档正文编辑区"
+                      onMouseDown={handleEditorAreaMouseDown}
+                      onPaste={handleEditorPaste}
+                      onDragOver={handleEditorDragOver}
+                      onDragLeave={handleEditorDragLeave}
+                      onDrop={handleEditorDrop}
+                      style={{
+                      flex: 1,
+                      minWidth: 0,
+                      maxWidth: isMobile ? '100%' : getEditorMaxWidth(selectedDoc),
+                      width: '100%',
+                      position: 'relative',
+                      outline: 'none',
+                      paddingBottom: isMobile ? 120 : 96,
+                      minHeight: isMobile ? 'calc(100vh - 260px)' : 420,
                     }}>
-                      松开上传附件
-                    </div>
-                  )}
-                  {editorBlocks.map((block, index) => renderEditorBlock(block, index))}
-                  {renderAppendBlockShortcut()}
-                </section>
-                {renderTocPanel()}
-              </div>
-              {renderInlineTextToolbar()}
+                      {attachmentDragOver && (
+                        <div style={{
+                          position: 'absolute',
+                          inset: 0,
+                          zIndex: 30,
+                          pointerEvents: 'none',
+                          border: '2px dashed #3b82f6',
+                          borderRadius: 10,
+                          background: 'rgba(239, 246, 255, 0.72)',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          justifyContent: 'center',
+                          paddingTop: 28,
+                          color: '#1d4ed8',
+                          fontWeight: 600,
+                        }}>
+                          松开上传附件
+                        </div>
+                      )}
+                      {editorBlocks.map((block, index) => renderEditorBlock(block, index))}
+                      {renderAppendBlockShortcut()}
+                    </section>
+                    {renderTocPanel()}
+                  </div>
+                  {renderInlineTextToolbar()}
+                </>
+              )}
             </div>
           </Spin>
         )}
@@ -15314,6 +15976,32 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         <Form form={createForm} layout="vertical">
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
             <Input placeholder="请输入文档标题" />
+          </Form.Item>
+          <Form.Item name="document_kind" label="文件形态" initialValue="rich_text">
+            {editingPropertyDoc ? (
+              <Tag icon={isSpreadsheetDocument(editingPropertyDoc) ? <TableOutlined /> : <FileTextOutlined />}>
+                {documentKindLabel[getDocumentKind(editingPropertyDoc.document_kind)]}
+              </Tag>
+            ) : (
+              <Radio.Group
+                optionType="button"
+                buttonStyle="solid"
+                onChange={event => {
+                  if (event.target.value === 'spreadsheet' && createForm.getFieldValue('title') === '新页面') {
+                    createForm.setFieldValue('title', '未命名表格');
+                  }
+                }}
+              >
+                {documentKindOptions.map(option => (
+                  <Radio.Button key={option.value} value={option.value}>
+                    <Space size={6}>
+                      {option.value === 'spreadsheet' ? <TableOutlined /> : <FileTextOutlined />}
+                      <span>{option.label}</span>
+                    </Space>
+                  </Radio.Button>
+                ))}
+              </Radio.Group>
+            )}
           </Form.Item>
           <Form.Item name="icon_key" label="文档图标">
             <Select

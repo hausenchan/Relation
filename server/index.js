@@ -16,6 +16,18 @@ const NetworkCaptureManager = require('./lib/networkCapture');
 const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
 const { parseDocumentImportFileToBlocks } = require('./lib/documentFileImport');
+const {
+  buildSpreadsheetWorkbookXlsx,
+  isSpreadsheetWorkbookValue,
+  parseSpreadsheetWorkbookFile,
+  spreadsheetWorkbookToSearchText,
+  validateSpreadsheetWorkbookSheetNames,
+} = require('./lib/spreadsheetWorkbookFile');
+const { applySpreadsheetOperations } = require('./lib/spreadsheetOperations');
+const {
+  createDocumentCollaborationHub,
+  normalizePresenceSessionId,
+} = require('./lib/documentCollaboration');
 const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
 const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
 const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
@@ -476,6 +488,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'relation-app-secret-2026';
 const networkCapture = new NetworkCaptureManager();
+const documentCollaborationHub = createDocumentCollaborationHub();
 
 const EXECUTIVE_ROLES = new Set(['ceo', 'coo', 'cto', 'cmo']);
 const ADMIN_ROLES = new Set(['admin', ...EXECUTIVE_ROLES]);
@@ -2396,6 +2409,7 @@ db.exec(`
     project_code TEXT,
     department_key TEXT DEFAULT 'ALL',
     doc_type TEXT DEFAULT 'TMP',
+    document_kind TEXT DEFAULT 'rich_text',
     current_version TEXT DEFAULT 'V1.0',
     folder_id INTEGER,
     tags TEXT,
@@ -2556,6 +2570,8 @@ addColumnIfMissing('document_edit_records', 'content_after', 'TEXT DEFAULT NULL'
 addColumnIfMissing('document_edit_records', 'content_text_before', 'TEXT DEFAULT NULL');
 addColumnIfMissing('document_edit_records', 'content_text_after', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'content_text', 'TEXT DEFAULT NULL');
+addColumnIfMissing('documents', 'document_kind', "TEXT DEFAULT 'rich_text'");
+db.exec('CREATE INDEX IF NOT EXISTS idx_documents_kind ON documents(document_kind)');
 addColumnIfMissing('documents', 'pinned_at', 'DATETIME DEFAULT NULL');
 addColumnIfMissing('documents', 'source_system', 'TEXT DEFAULT NULL');
 addColumnIfMissing('documents', 'source_record_key', 'TEXT DEFAULT NULL');
@@ -3787,7 +3803,7 @@ function sanitizeLogPayload(value, depth = 0) {
   for (const [key, raw] of Object.entries(value)) {
     if (/(password|passwd|pwd|token|secret|authorization|jwt|hash|master_key|hmac_key)/i.test(key)) {
       out[key] = '[已脱敏]';
-    } else if (/(^content$|content_json|content_before|content_after|snapshot_json|workbook|blocks|cells|html|markdown|payload|^file$|file_data|file_content|blob)/i.test(key)) {
+    } else if (/(^content$|content_json|content_before|content_after|snapshot_json|workbook|blocks|cells|operations|html|markdown|payload|^file$|file_data|file_content|blob)/i.test(key)) {
       out[key] = summarizeLargeLogPayload(raw);
     } else {
       out[key] = sanitizeLogPayload(raw, depth + 1);
@@ -3992,6 +4008,7 @@ function writeOperationLog(entry) {
 function operationLogMiddleware(req, res, next) {
   if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
   if (req.path === '/auth/login' || req.path.startsWith('/operation-logs')) return next();
+  if (/^\/(?:api\/)?documents\/\d+\/spreadsheet\/presence(?:\/[^/]+)?$/.test(req.path)) return next();
 
   const config = getOperationRouteConfig(req.path);
   const initialTargetId = getOperationTargetId(config, req, null);
@@ -5843,6 +5860,31 @@ function normalizeDocumentType(value) {
   return normalizeDocumentCode(value, 'TMP', 12);
 }
 
+function normalizeDocumentKind(value) {
+  return String(value || '').trim() === 'spreadsheet' ? 'spreadsheet' : 'rich_text';
+}
+
+function createDefaultSpreadsheetWorkbook() {
+  return {
+    format: 'relation_spreadsheet_workbook_v1',
+    activeSheetId: 'sheet_1',
+    sheets: [{
+      id: 'sheet_1',
+      name: '工作表1',
+      rowCount: 1000,
+      columnCount: 26,
+      cells: {},
+      rowHeights: {},
+      columnWidths: {},
+      mergedCells: [],
+      filters: [],
+      frozen: null,
+    }],
+    styles: {},
+    definedNames: {},
+  };
+}
+
 function getProjectCodeForDocument(projectGroupId, domain, explicitCode) {
   if (explicitCode) return normalizeDocumentCode(explicitCode, DOCUMENT_DOMAIN_CODES[normalizeDocumentDomain(domain)] || 'GEN');
   if (projectGroupId) {
@@ -6251,6 +6293,33 @@ function extractDocumentText(content, explicitText) {
   return collectTextFromValue(parsed).join('\n').slice(0, 20000);
 }
 
+function resolveDocumentContentText({
+  documentKind,
+  content,
+  contentChanged = false,
+  explicitText,
+  explicitTextProvided = false,
+  fallbackText,
+  forceSpreadsheetDerivation = false,
+}) {
+  const isSpreadsheet = normalizeDocumentKind(documentKind) === 'spreadsheet'
+    || isSpreadsheetWorkbookValue(content);
+  if (isSpreadsheet && (forceSpreadsheetDerivation || (contentChanged && !explicitTextProvided))) {
+    return spreadsheetWorkbookToSearchText(content);
+  }
+  return extractDocumentText(content, explicitTextProvided ? explicitText : fallbackText);
+}
+
+function nextDocumentUpdatedAt(currentValue) {
+  const currentText = String(currentValue || '').trim();
+  const normalized = currentText && !/[zZ]|[+-]\d\d:?\d\d$/.test(currentText)
+    ? `${currentText.replace(' ', 'T')}Z`
+    : currentText;
+  const currentTime = Date.parse(normalized);
+  const nextTime = Math.max(Date.now(), Number.isFinite(currentTime) ? currentTime + 1000 : 0);
+  return new Date(nextTime).toISOString();
+}
+
 function buildDocumentSummary(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 100);
 }
@@ -6421,6 +6490,12 @@ function buildDocumentEditDiff(before, after) {
   const afterTitle = String(after?.title || '').trim();
   const beforeText = String(before?.content_text || '').trim();
   const afterText = String(after?.content_text || '').trim();
+  const beforeContent = before?.content === undefined || before?.content === null
+    ? ''
+    : (typeof before.content === 'string' ? before.content : JSON.stringify(before.content));
+  const afterContent = after?.content === undefined || after?.content === null
+    ? ''
+    : (typeof after.content === 'string' ? after.content : JSON.stringify(after.content));
   const items = [];
 
   if (beforeTitle !== afterTitle) {
@@ -6438,6 +6513,19 @@ function buildDocumentEditDiff(before, after) {
   }
 
   items.push(...buildDocumentContentDiffItems(beforeText, afterText));
+  if (!items.length && beforeContent !== afterContent) {
+    const summary = isSpreadsheetWorkbookValue(before?.content) || isSpreadsheetWorkbookValue(after?.content)
+      ? '表格格式或结构已更新'
+      : '页面格式或结构已更新';
+    items.push({
+      label: '更新格式或结构',
+      lines: [{
+        text: summary,
+        changed: true,
+        parts: [{ text: summary, changed: true }],
+      }],
+    });
+  }
   const changedText = items
     .flatMap(item => item.lines || [])
     .filter(line => line.changed)
@@ -7529,6 +7617,7 @@ function serializeDocument(row, options = {}) {
   if (!row) return null;
   const result = {
     ...row,
+    document_kind: normalizeDocumentKind(row.document_kind),
     tags: parseMaybeJson(row.tags, []),
     is_favorite: Number(row.is_favorite || 0),
   };
@@ -7571,24 +7660,34 @@ function createDocumentRecord(body, user) {
     const docType = folderFields
       ? folderFields.doc_type
       : normalizeDocumentType(body.doc_type || 'TMP');
+    const documentKind = normalizeDocumentKind(body.document_kind);
     const projectCode = getProjectCodeForDocument(projectGroupId, domain, body.project_code);
     const globalSeq = getNextDocumentSequence();
     const year = new Date().getFullYear();
     const documentNo = formatDocumentNo(globalSeq, projectCode, departmentKey, docType, year);
-    const content = body.content ?? JSON.stringify({ blocks: [] });
-    const contentText = extractDocumentText(content, body.content_text);
+    const content = body.content ?? (documentKind === 'spreadsheet'
+      ? createDefaultSpreadsheetWorkbook()
+      : { blocks: [] });
+    if (documentKind === 'spreadsheet') validateSpreadsheetWorkbookSheetNames(content);
+    const contentText = resolveDocumentContentText({
+      documentKind,
+      content,
+      contentChanged: true,
+      explicitText: body.content_text,
+      explicitTextProvided: Object.prototype.hasOwnProperty.call(body, 'content_text'),
+    });
     const tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : (body.tags || null);
     const iconKey = normalizeDocumentIconKey(body.icon_key);
     const result = db.prepare(`
       INSERT INTO documents (
         document_no, global_seq, title, content, content_text, summary, domain,
-        project_group_id, project_code, department_key, doc_type, current_version,
+        project_group_id, project_code, department_key, doc_type, document_kind, current_version,
         folder_id, tags, width_mode, icon_key, created_by, updated_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       documentNo,
       globalSeq,
-      body.title || '未命名文档',
+      body.title || (documentKind === 'spreadsheet' ? '未命名表格' : '未命名文档'),
       typeof content === 'string' ? content : JSON.stringify(content),
       contentText,
       buildDocumentSummary(contentText),
@@ -7597,6 +7696,7 @@ function createDocumentRecord(body, user) {
       projectCode,
       departmentKey,
       docType,
+      documentKind,
       body.current_version || 'V1.0',
       folderId,
       tags,
@@ -7811,7 +7911,7 @@ app.get('/api/documents', (req, res) => {
   const visibility = buildDocumentVisibilityFilter(req.user, 'd');
   let q = `
     SELECT d.id, d.document_no, d.global_seq, d.title, d.summary, d.domain, d.project_group_id,
-      d.project_code, d.department_key, d.doc_type, d.current_version, d.folder_id,
+      d.project_code, d.department_key, d.doc_type, d.document_kind, d.current_version, d.folder_id,
       d.tags, d.icon_key, d.pinned_at, d.created_by, d.updated_by, d.created_at, d.updated_at,
       ${searchText ? 'd.content_text as search_content_text,' : ''}
       creator.display_name as created_by_name,
@@ -8516,6 +8616,263 @@ app.post('/api/documents/:id/import/file', canWrite, handleDocumentAttachmentUpl
   }
 });
 
+app.post('/api/documents/:id/spreadsheet/import', canWrite, handleDocumentAttachmentUpload, async (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(404).json({ error: '文档不存在或无权限访问' });
+  }
+  if (!canEditDocument(req.user, doc)) {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(403).json({ error: '只有可编辑该文档的用户才可以导入 Excel' });
+  }
+  if (normalizeDocumentKind(doc.document_kind) !== 'spreadsheet') {
+    cleanupUploadedFiles(req.file ? [req.file] : []);
+    return res.status(400).json({ error: '只有在线表格文档可以导入 Excel 工作簿' });
+  }
+  if (!req.file) return res.status(400).json({ error: '未收到 Excel 文件' });
+  const filename = normalizeUploadedFilename(req.file.originalname);
+  const ext = getFileExtFromName(filename);
+  if (!['xlsx', 'xlsm'].includes(ext)) {
+    cleanupUploadedFiles([req.file]);
+    return res.status(400).json({ error: '仅支持导入 .xlsx 或 .xlsm 文件' });
+  }
+  try {
+    const workbook = await parseSpreadsheetWorkbookFile(path.join(UPLOADS_DIR, req.file.filename));
+    validateSpreadsheetWorkbookSheetNames(workbook);
+    res.json({ workbook, filename });
+  } catch (error) {
+    res.status(400).json({ error: error.message || 'Excel 工作簿解析失败' });
+  } finally {
+    cleanupUploadedFiles([req.file]);
+  }
+});
+
+app.get('/api/documents/:id/spreadsheet/export', async (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (normalizeDocumentKind(doc.document_kind) !== 'spreadsheet') {
+    return res.status(400).json({ error: '只有在线表格文档可以导出 Excel 工作簿' });
+  }
+  try {
+    const buffer = await buildSpreadsheetWorkbookXlsx(doc.content);
+    const filename = `${String(doc.title || '在线表格').replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 100) || '在线表格'}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader('Content-Length', buffer.length);
+    return res.end(buffer);
+  } catch (error) {
+    return res.status(400).json({ error: error.message || 'Excel 工作簿导出失败' });
+  }
+});
+
+function publishDocumentCollaborationUpdate(document, actionType) {
+  if (!document?.id) return;
+  documentCollaborationHub.publishDocumentUpdated(document.id, {
+    updated_at: document.updated_at,
+    updated_by: document.updated_by,
+    updated_by_name: document.updated_by_name,
+    action_type: actionType,
+  });
+}
+
+function spreadsheetDocumentHasSheet(document, sheetId) {
+  try {
+    const workbook = typeof document?.content === 'string'
+      ? JSON.parse(document.content)
+      : document?.content;
+    return Array.isArray(workbook?.sheets)
+      && workbook.sheets.some(sheet => String(sheet?.id || '') === String(sheetId || ''));
+  } catch {
+    return false;
+  }
+}
+
+function writeDocumentCollaborationEvent(res, event) {
+  res.write(`event: ${event.type || 'message'}\n`);
+  res.write(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+app.get('/api/documents/:id/spreadsheet/events', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (normalizeDocumentKind(doc.document_kind) !== 'spreadsheet') {
+    return res.status(400).json({ error: '只有在线表格文档可以建立实时协作连接' });
+  }
+  let sessionId;
+  try {
+    sessionId = normalizePresenceSessionId(req.query?.session_id);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message || '协作会话 ID 不合法' });
+  }
+
+  res.status(200);
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const unsubscribe = documentCollaborationHub.subscribe(doc.id, event => {
+    if (!res.writableEnded) writeDocumentCollaborationEvent(res, event);
+  });
+  writeDocumentCollaborationEvent(res, {
+    type: 'connected',
+    document_id: doc.id,
+    session_id: sessionId,
+    user_id: req.user.id,
+  });
+  writeDocumentCollaborationEvent(res, {
+    type: 'presence',
+    document_id: doc.id,
+    collaborators: documentCollaborationHub.listPresence(doc.id),
+  });
+
+  const heartbeat = setInterval(() => {
+    const visibleDocument = getVisibleDocument(doc.id, req.user);
+    if (!visibleDocument || normalizeDocumentKind(visibleDocument.document_kind) !== 'spreadsheet') {
+      writeDocumentCollaborationEvent(res, {
+        type: 'access_revoked',
+        document_id: doc.id,
+      });
+      clearInterval(heartbeat);
+      unsubscribe();
+      res.end();
+      return;
+    }
+    if (documentCollaborationHub.prunePresence(doc.id)) {
+      documentCollaborationHub.publishPresence(doc.id);
+    }
+    res.write(': heartbeat\n\n');
+  }, 10000);
+  heartbeat.unref?.();
+
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    clearInterval(heartbeat);
+    unsubscribe();
+  };
+  req.on('close', cleanup);
+  res.on('close', cleanup);
+  return undefined;
+});
+
+app.post('/api/documents/:id/spreadsheet/presence', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (normalizeDocumentKind(doc.document_kind) !== 'spreadsheet') {
+    return res.status(400).json({ error: '只有在线表格文档可以更新协作选区' });
+  }
+  if (!spreadsheetDocumentHasSheet(doc, req.body?.sheet_id)) {
+    return res.status(400).json({ error: '协作工作表不存在' });
+  }
+  try {
+    const collaborators = documentCollaborationHub.updatePresence(doc.id, req.user, req.body || {});
+    return res.json({ document_id: doc.id, collaborators });
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message || '协作选区格式不合法' });
+  }
+});
+
+app.delete('/api/documents/:id/spreadsheet/presence/:sessionId', (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (normalizeDocumentKind(doc.document_kind) !== 'spreadsheet') {
+    return res.status(400).json({ error: '只有在线表格文档可以退出实时协作' });
+  }
+  try {
+    documentCollaborationHub.removePresence(doc.id, req.user.id, req.params.sessionId);
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message || '协作会话 ID 不合法' });
+  }
+});
+
+app.post('/api/documents/:id/spreadsheet/operations', canWrite, (req, res) => {
+  const doc = getVisibleDocument(req.params.id, req.user);
+  if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  if (!canEditDocument(req.user, doc)) {
+    return res.status(403).json({ error: '只有可编辑该文档的用户才可以提交表格操作' });
+  }
+  if (normalizeDocumentKind(doc.document_kind) !== 'spreadsheet') {
+    return res.status(400).json({ error: '只有在线表格文档可以提交表格操作' });
+  }
+  const baseUpdatedAt = String(req.body?.base_updated_at || '').trim();
+  if (!baseUpdatedAt) return res.status(400).json({ error: '缺少表格协作基线时间' });
+
+  let operationResult;
+  try {
+    operationResult = applySpreadsheetOperations(doc.content, req.body?.operations);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message || '表格操作格式不合法' });
+  }
+  if (operationResult.conflicts.length) {
+    return res.status(409).json({
+      error: '部分表格位置或属性已被其他协作者更新，请合并后重试',
+      code: 'SPREADSHEET_OPERATION_CONFLICT',
+      conflicts: operationResult.conflicts,
+      latest: serializeDocument(doc, { withAccessSummary: true, user: req.user }),
+    });
+  }
+
+  const mergedRemoteUpdate = baseUpdatedAt !== String(doc.updated_at || '');
+  if (!operationResult.changed) {
+    return res.json({
+      ...serializeDocument(doc, { withAccessSummary: true, user: req.user }),
+      operation_result: {
+        applied_operation_ids: operationResult.operationIds,
+        merged_remote_update: mergedRemoteUpdate,
+        changed: false,
+      },
+    });
+  }
+
+  const storedContent = JSON.stringify(operationResult.workbook);
+  const contentText = spreadsheetWorkbookToSearchText(operationResult.workbook);
+  const updatedAt = nextDocumentUpdatedAt(doc.updated_at);
+  const updateResult = db.prepare(`
+    UPDATE documents SET content = ?, content_text = ?, summary = ?, updated_by = ?, updated_at = ?
+    WHERE id = ? AND updated_at = ?
+  `).run(
+    storedContent,
+    contentText,
+    buildDocumentSummary(contentText),
+    req.user.id,
+    updatedAt,
+    doc.id,
+    doc.updated_at,
+  );
+  if (updateResult.changes !== 1) {
+    const latest = getVisibleDocument(doc.id, req.user);
+    return res.status(409).json({
+      error: '文档已被其他协作者更新，请重新提交表格操作',
+      code: 'DOCUMENT_CONFLICT',
+      latest: serializeDocument(latest, { withAccessSummary: true, user: req.user }),
+    });
+  }
+  insertDocumentEditRecord(doc.id, req.user.id, 'spreadsheet_operations', {
+    title: doc.title,
+    content: doc.content,
+    content_text: doc.content_text,
+  }, {
+    title: doc.title,
+    content: storedContent,
+    content_text: contentText,
+  });
+  const updated = getVisibleDocument(doc.id, req.user);
+  publishDocumentCollaborationUpdate(updated, 'spreadsheet_operations');
+  return res.json({
+    ...serializeDocument(updated, { withAccessSummary: true, user: req.user }),
+    operation_result: {
+      applied_operation_ids: operationResult.operationIds,
+      merged_remote_update: mergedRemoteUpdate,
+      changed: true,
+    },
+  });
+});
+
 app.get('/api/documents/:id', (req, res) => {
   const row = getVisibleDocument(req.params.id, req.user);
   if (!row) return res.status(404).json({ error: '文档不存在或无权限访问' });
@@ -8640,10 +8997,24 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     ? (folderFields?.doc_type || normalizeDocumentType(hasBodyField('doc_type') ? req.body.doc_type : doc.doc_type))
     : doc.doc_type;
   const content = canEditCurrentDocument && hasBodyField('content') ? req.body.content : doc.content;
+  if (canEditCurrentDocument && hasBodyField('content') && (
+    normalizeDocumentKind(doc.document_kind) === 'spreadsheet' || isSpreadsheetWorkbookValue(content)
+  )) {
+    try {
+      validateSpreadsheetWorkbookSheetNames(content);
+    } catch (error) {
+      return res.status(400).json({ error: error.message || '在线表格工作簿格式不合法' });
+    }
+  }
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
-  const contentText = canEditCurrentDocument && hasBodyField('content_text')
-    ? extractDocumentText(content, req.body.content_text)
-    : extractDocumentText(content, doc.content_text);
+  const contentText = resolveDocumentContentText({
+    documentKind: doc.document_kind,
+    content,
+    contentChanged: canEditCurrentDocument && hasBodyField('content'),
+    explicitText: req.body.content_text,
+    explicitTextProvided: canEditCurrentDocument && hasBodyField('content_text'),
+    fallbackText: doc.content_text,
+  });
   const nextTitle = resolveMediaDocumentTitle(
     doc,
     canEditCurrentDocument && hasBodyField('title') ? req.body.title : doc.title,
@@ -8691,7 +9062,9 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     doc.id
   );
   insertDocumentEditRecord(doc.id, req.user.id, 'page_update', beforeSnapshot, afterSnapshot);
-  res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true, user: req.user }));
+  const updatedDocument = getVisibleDocument(doc.id, req.user);
+  publishDocumentCollaborationUpdate(updatedDocument, 'page_update');
+  res.json(serializeDocument(updatedDocument, { withAccessSummary: true, user: req.user }));
 });
 
 app.put('/api/documents/:id/content', canWrite, (req, res) => {
@@ -8712,11 +9085,24 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
     hasBodyField('title') ? req.body.title : doc.title,
   );
   const content = hasBodyField('content') ? req.body.content : doc.content;
+  if (hasBodyField('content') && (
+    normalizeDocumentKind(doc.document_kind) === 'spreadsheet' || isSpreadsheetWorkbookValue(content)
+  )) {
+    try {
+      validateSpreadsheetWorkbookSheetNames(content);
+    } catch (error) {
+      return res.status(400).json({ error: error.message || '在线表格工作簿格式不合法' });
+    }
+  }
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
-  const contentText = extractDocumentText(
+  const contentText = resolveDocumentContentText({
+    documentKind: doc.document_kind,
     content,
-    hasBodyField('content_text') ? req.body.content_text : doc.content_text
-  );
+    contentChanged: hasBodyField('content'),
+    explicitText: req.body.content_text,
+    explicitTextProvided: hasBodyField('content_text'),
+    fallbackText: doc.content_text,
+  });
   const updatedAt = new Date().toISOString();
   const beforeSnapshot = {
     title: doc.title,
@@ -8746,6 +9132,7 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
   if (!updated || updated.title !== nextTitle || updated.content !== storedContent) {
     return res.status(500).json({ error: '文档保存结果校验失败，请重试' });
   }
+  publishDocumentCollaborationUpdate(updated, 'content_update');
   res.json(serializeDocument(updated, { withAccessSummary: true, user: req.user }));
 });
 
@@ -8760,7 +9147,22 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
 
   const targetTitle = resolveMediaDocumentTitle(doc, restoreSnapshot.title);
   const targetContent = restoreSnapshot.content;
-  const targetContentText = restoreSnapshot.content_text;
+  const restoringSpreadsheet = normalizeDocumentKind(doc.document_kind) === 'spreadsheet'
+    || isSpreadsheetWorkbookValue(targetContent);
+  if (restoringSpreadsheet) {
+    try {
+      validateSpreadsheetWorkbookSheetNames(targetContent);
+    } catch (error) {
+      return res.status(400).json({ error: `历史版本无法恢复：${error.message || '在线表格工作簿格式不合法'}` });
+    }
+  }
+  const targetContentText = resolveDocumentContentText({
+    documentKind: doc.document_kind,
+    content: targetContent,
+    explicitText: restoreSnapshot.content_text,
+    explicitTextProvided: true,
+    forceSpreadsheetDerivation: restoringSpreadsheet,
+  });
   const beforeSnapshot = {
     title: doc.title,
     content: doc.content,
@@ -8786,7 +9188,9 @@ app.post('/api/document-edit-records/:recordId/restore', canWrite, (req, res) =>
     doc.id
   );
   insertDocumentEditRecord(doc.id, req.user.id, 'restore_version', beforeSnapshot, afterSnapshot);
-  res.json(serializeDocument(getVisibleDocument(doc.id, req.user), { withAccessSummary: true, user: req.user }));
+  const restoredDocument = getVisibleDocument(doc.id, req.user);
+  publishDocumentCollaborationUpdate(restoredDocument, 'restore_version');
+  res.json(serializeDocument(restoredDocument, { withAccessSummary: true, user: req.user }));
 });
 
 app.put('/api/documents/:id/page-options', canWrite, (req, res) => {
