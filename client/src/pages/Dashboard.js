@@ -948,7 +948,13 @@ export default function Dashboard() {
 
   const canEditTaskRecord = (record) => (
     record?.task_source === 'normal'
-    && (sameId(record.created_by, user?.id) || sameId(record.assigned_to, user?.id) || ['admin', 'sales_director'].includes(user?.role))
+    && !['readonly', 'guest'].includes(user?.role)
+    && (
+      sameId(record.created_by, user?.id)
+      || sameId(record.assigned_to, user?.id)
+      || Number(record.shared_to_me) === 1
+      || ['admin', 'sales_director'].includes(user?.role)
+    )
   );
 
   const handleUpdateStatus = async (id, status) => {
@@ -1587,16 +1593,38 @@ export default function Dashboard() {
     {
       title: '操作',
       key: 'action',
-      width: 100,
-      render: (_, record) => (
-        <Button
-          type="link"
-          size="small"
-          onClick={() => (record.task_source === 'opportunity' ? navigate('/follow-up-tasks') : openTaskDetail(record))}
-        >
-          查看
-        </Button>
-      ),
+      width: 160,
+      render: (_, record) => {
+        const canEdit = canEditTaskRecord(record);
+        return (
+          <Space size={2} wrap={false}>
+            {canEdit && record.status === 'pending' && (
+              <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleUpdateStatus(record.id, 'in_progress')}>
+                开始
+              </Button>
+            )}
+            {canEdit && record.status === 'in_progress' && (
+              <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => openCompleteTask(record)}>
+                完成
+              </Button>
+            )}
+            {canEdit && (
+              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
+                编辑
+              </Button>
+            )}
+            {(!canEdit || record.task_source === 'opportunity') && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => (record.task_source === 'opportunity' ? navigate('/follow-up-tasks') : openTaskDetail(record))}
+              >
+                查看
+              </Button>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -1671,10 +1699,10 @@ export default function Dashboard() {
 
   const renderTaskCard = (record, section) => {
     const showViewButton = record.task_source === 'opportunity' || section === 'watched' || section === 'team';
-    const canEdit = section !== 'team' && section !== 'watched' && canEditTaskRecord(record);
+    const canEdit = section !== 'team' && canEditTaskRecord(record);
     const canDelete = record.task_source === 'normal' && section === 'execution';
-    const canStart = record.task_source === 'normal' && section === 'execution' && record.status === 'pending';
-    const canDone = record.task_source === 'normal' && section === 'execution' && record.status === 'in_progress';
+    const canStart = canEdit && (section === 'execution' || section === 'watched') && record.status === 'pending';
+    const canDone = canEdit && (section === 'execution' || section === 'watched') && record.status === 'in_progress';
 
     return (
       <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>

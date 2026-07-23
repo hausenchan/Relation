@@ -4687,6 +4687,24 @@ function syncTaskSharedUsers(taskId, sharedUserIds = []) {
   return uniqueIds;
 }
 
+function isTaskSharedWithUser(taskId, userId) {
+  return Boolean(db.prepare(`
+    SELECT 1 AS ok
+    FROM task_shared_users
+    WHERE task_id = ? AND user_id = ?
+    LIMIT 1
+  `).get(taskId, userId));
+}
+
+function canEditTaskRecord(user, task) {
+  if (!user || !task) return false;
+  if (['readonly', 'guest'].includes(user.role)) return false;
+  if (isAdmin(user.role) || user.role === 'sales_director') return true;
+  if (Number(task.assigned_to) === Number(user.id)) return true;
+  if (Number(task.created_by) === Number(user.id)) return true;
+  return isTaskSharedWithUser(task.id, user.id);
+}
+
 function buildExecutiveSelfAssignedTaskPrivacyFilter(userId, tableAlias, creatorColumn, assigneeColumn) {
   const prefix = tableAlias ? `${tableAlias}.` : '';
   const executiveRoles = [...EXECUTIVE_ROLES];
@@ -11611,8 +11629,7 @@ app.put('/api/tasks/:id', (req, res) => {
   }
 
   const { id: me, role } = req.user;
-  // 只有被指派人或创建人可修改
-  if (task.assigned_to !== me && task.created_by !== me && !isAdmin(role) && role !== 'sales_director') {
+  if (!canEditTaskRecord(req.user, task)) {
     return res.status(403).json({ error: '无权修改此任务' });
   }
 
