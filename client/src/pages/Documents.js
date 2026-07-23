@@ -14968,8 +14968,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             paddingBottom: isFolderSidebarCollapsed ? 0 : 12,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <Space size={8} align="center" style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', flex: '0 0 32px', width: 32, minWidth: 32 }}>
               {!isMobile && (
                 <Tooltip title={isFolderSidebarCollapsed ? '展开文档目录' : '收起文档目录'}>
                   <Button
@@ -14991,9 +14991,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                   />
                 </Tooltip>
               )}
-            </Space>
+            </div>
             {!isFolderSidebarCollapsed && (
-              <Space size={6}>
+              <Space size={6} style={{ flex: '1 1 220px', minWidth: 0, justifyContent: 'flex-end' }} wrap>
                 <Tooltip title="搜索文档">
                   <Button icon={<SearchOutlined />} aria-label="搜索文档" onClick={openGlobalDocumentSearch} />
                 </Tooltip>
