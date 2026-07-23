@@ -1,0 +1,1 @@
+"use strict";(globalThis.webpackChunkrelation_client=globalThis.webpackChunkrelation_client||[]).push([[9729],{9729(e,i,l){l.r(i),l.d(i,{default:()=>t});l(616);var n=l(3252);function t(){return(0,n.jsx)("div",{})}}}]);
