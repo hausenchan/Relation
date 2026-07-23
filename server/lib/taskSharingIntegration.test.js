@@ -165,3 +165,90 @@ test('task users shared into attention can edit normal task status', { timeout: 
   assert.equal(updated?.status, 'in_progress');
   assert.equal(Number(updated?.shared_to_me), 1);
 });
+
+test('mine task query is not truncated by the dashboard visible task limit', { timeout: 60000 }, async t => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-task-mine-limit-'));
+  const databasePath = path.join(tempDir, 'data.db');
+  const port = await getFreePort();
+  const child = spawn(process.execPath, ['server/index.js'], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: 'test',
+      RELATION_DB_PATH: databasePath,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  t.after(async () => {
+    if (child.exitCode === null) {
+      child.kill('SIGTERM');
+      await Promise.race([once(child, 'exit'), new Promise(resolve => setTimeout(resolve, 2000))]);
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await waitForServer(child);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const admin = await login(baseUrl, 'admin', 'admin123');
+  const adminToken = admin.token;
+  const adminId = Number(admin.user.id);
+  const suffix = `${process.pid}_${Date.now()}`;
+  const password = 'task-mine-test-123';
+  const workerUsername = `task_worker_${suffix}`;
+  const workerId = await createUser(baseUrl, adminToken, {
+    username: workerUsername,
+    display_name: '自派任务用户',
+    password,
+  });
+  const worker = await login(baseUrl, workerUsername, password);
+
+  for (let index = 0; index < 300; index += 1) {
+    const filler = await request(baseUrl, '/api/tasks', {
+      method: 'POST',
+      token: adminToken,
+      body: {
+        title: `共享占位任务 ${index + 1}`,
+        description: '用于占满工作台可见任务首屏限制',
+        date: '2026-07-23',
+        estimated_completion_date: '2026-07-24',
+        status: 'pending',
+        priority: 'high',
+        assigned_to: adminId,
+        shared_to: [workerId],
+      },
+    });
+    assert.equal(filler.status, 200, JSON.stringify(filler.payload));
+  }
+
+  const ownTask = await request(baseUrl, '/api/tasks', {
+    method: 'POST',
+    token: worker.token,
+    body: {
+      title: '低优先级自派任务',
+      description: '即使不在普通可见任务前 300，也必须进入我执行',
+      date: '2026-07-23',
+      estimated_completion_date: '2026-07-24',
+      status: 'pending',
+      priority: 'low',
+      assigned_to: workerId,
+      shared_to: [],
+    },
+  });
+  assert.equal(ownTask.status, 200, JSON.stringify(ownTask.payload));
+  const ownTaskId = Number(ownTask.payload.id);
+
+  const limitedVisibleTasks = await request(baseUrl, '/api/tasks?parent_id=null&limit=300', {
+    token: worker.token,
+  });
+  assert.equal(limitedVisibleTasks.status, 200, JSON.stringify(limitedVisibleTasks.payload));
+  assert.equal(limitedVisibleTasks.payload.length, 300);
+  assert.equal(limitedVisibleTasks.payload.some(task => Number(task.id) === ownTaskId), false);
+
+  const myTasks = await request(baseUrl, '/api/tasks?parent_id=null&mine=1', {
+    token: worker.token,
+  });
+  assert.equal(myTasks.status, 200, JSON.stringify(myTasks.payload));
+  assert.equal(myTasks.payload.some(task => Number(task.id) === ownTaskId), true);
+});

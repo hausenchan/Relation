@@ -488,6 +488,14 @@ export default function Dashboard() {
     if (timeDiff !== 0) return timeDiff;
     return priorityRank(a.priority) - priorityRank(b.priority);
   });
+  const mergeTaskRowsById = (...groups) => {
+    const merged = new Map();
+    groups.flat().forEach(task => {
+      if (!task?.id) return;
+      merged.set(String(task.id), { ...(merged.get(String(task.id)) || {}), ...task });
+    });
+    return [...merged.values()];
+  };
 
   const loadAiSuggestions = useCallback(async ({ silent = false } = {}) => {
     if (!canViewAiSuggestions) return null;
@@ -797,12 +805,14 @@ export default function Dashboard() {
         statsResult,
         remindersResult,
         tasksResult,
+        myTasksResult,
         followUpResult,
         watchedFollowUpResult,
       ] = await Promise.allSettled([
         statsApi.get(),
         remindersApi.list({ done: 0, limit: 120 }),
         tasksApi.list({ parent_id: 'null', limit: 300 }),
+        tasksApi.list({ parent_id: 'null', mine: '1' }),
         followUpTasksApi.list(canManageTeamTasks ? { all: '1', limit: 300 } : { limit: 300 }),
         followUpTasksApi.watch({ limit: 200 }),
       ]);
@@ -810,7 +820,9 @@ export default function Dashboard() {
       if (statsResult.status === 'fulfilled') setStats(statsResult.value);
       if (remindersResult.status === 'fulfilled') setReminders(remindersResult.value);
 
-      const allTasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
+      const visibleTasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
+      const myTasks = myTasksResult.status === 'fulfilled' ? myTasksResult.value : [];
+      const allTasks = mergeTaskRowsById(visibleTasks, myTasks);
       const allFollowUpData = followUpResult.status === 'fulfilled' ? followUpResult.value : [];
       const watchedFollowUpData = watchedFollowUpResult.status === 'fulfilled' ? watchedFollowUpResult.value : [];
       setAssignedTasks(buildAssignedTasks(allTasks, allFollowUpData));
