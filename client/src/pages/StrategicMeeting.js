@@ -5,6 +5,7 @@ import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 import axios from 'axios';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -157,7 +158,7 @@ export default function StrategicMeeting() {
       title: '最后编辑',
       key: 'last_edit',
       width: 150,
-      render: (_, record) => `${record.last_edited_by || ''} ${record.last_edited_at || ''}`
+      render: (_, record) => `${record.last_edited_by || ''} ${formatBusinessDateTime(record.last_edited_at, 'YYYY-MM-DD HH:mm:ss')}`
     },
     {
       title: '操作',

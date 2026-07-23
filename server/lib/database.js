@@ -1,5 +1,10 @@
 const BetterSqliteDatabase = require('better-sqlite3');
 const ENCRYPTED_FIELDS = require('./encryptedFields');
+const {
+  DEFAULT_MYSQL_TIMEZONE,
+  normalizeMysqlDateTimeValue,
+  normalizeMysqlTimezone,
+} = require('./businessTime');
 
 const MYSQL_DIALECTS = new Set(['mysql', 'mysql2']);
 
@@ -17,11 +22,11 @@ function isPlainObject(value) {
 
 function normalizeValue(value) {
   if (value === undefined) return null;
-  if (value instanceof Date) return value.toISOString().slice(0, 19).replace('T', ' ');
-  if (typeof value === 'string') {
-    const text = value.trim();
-    const isoMatch = text.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:\.\d+)?Z?$/);
-    if (isoMatch) return `${isoMatch[1]} ${isoMatch[2]}`;
+  if (value instanceof Date || typeof value === 'string') {
+    return normalizeMysqlDateTimeValue(
+      value,
+      process.env.MYSQL_TIMEZONE || process.env.RELATION_MYSQL_TIMEZONE || DEFAULT_MYSQL_TIMEZONE,
+    );
   }
   if (typeof value === 'bigint') return Number(value);
   if (Buffer.isBuffer(value)) return value.toString('base64');
@@ -403,7 +408,9 @@ class MysqlCompatDatabase {
       password: process.env.MYSQL_PASSWORD || process.env.RELATION_MYSQL_PASSWORD || '',
       database: process.env.MYSQL_DATABASE || process.env.RELATION_MYSQL_DATABASE || 'relation',
       charset: process.env.MYSQL_CHARSET || 'utf8mb4',
-      timezone: process.env.MYSQL_TIMEZONE || '+08:00',
+      timezone: normalizeMysqlTimezone(
+        process.env.MYSQL_TIMEZONE || process.env.RELATION_MYSQL_TIMEZONE || DEFAULT_MYSQL_TIMEZONE,
+      ),
       multipleStatements: false,
     });
     this.profileQueries = isTruthyEnv(process.env.RELATION_DB_PROFILE);
@@ -508,6 +515,7 @@ Database.isMysql = isMysqlDialect;
 Database.mysqlCompat = {
   columnDefinitionToMysql,
   isLikelyLongTextColumn,
+  normalizeValue,
 };
 
 module.exports = Database;

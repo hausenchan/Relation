@@ -7,8 +7,8 @@ import {
   CheckCircleOutlined, CloseCircleOutlined, EyeOutlined,
   ReloadOutlined, SearchOutlined,
 } from '@ant-design/icons';
-import dayjs from 'dayjs';
 import { operationLogsApi } from '../api';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { RangePicker } = DatePicker;
 const { Text, Paragraph } = Typography;
@@ -27,7 +27,7 @@ const actionColorMap = {
 };
 
 function formatTime(value) {
-  return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-';
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm:ss');
 }
 
 function getActionColor(action = '') {

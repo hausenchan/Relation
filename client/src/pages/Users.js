@@ -6,6 +6,7 @@ import {
 import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, LockOutlined, StopOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { usersApi, teamsApi, projectGroupsApi } from '../api';
 import { useAuth } from '../AuthContext';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -250,7 +251,7 @@ export default function UsersPage() {
         ? values.map(name => <Tag key={name} color="blue" style={{ marginBottom: 2 }}>{name}</Tag>)
         : <Text type="secondary" style={{ fontSize: 12 }}>-</Text>,
     },
-    { title: '最近登录', dataIndex: 'last_login', render: v => v?.slice(0, 16) || '从未登录' },
+    { title: '最近登录', dataIndex: 'last_login', render: v => formatBusinessDateTime(v, 'YYYY-MM-DD HH:mm', '从未登录') },
     {
       title: '操作',
       render: (_, r) => {
@@ -304,7 +305,7 @@ export default function UsersPage() {
                 <Text type="secondary">部门：</Text>
                 {renderDepartmentTags(normalizeDepartments(record, teams))}
               </Space>
-              <Text type="secondary">最近登录：{record.last_login?.slice(0, 16) || '从未登录'}</Text>
+              <Text type="secondary">最近登录：{formatBusinessDateTime(record.last_login, 'YYYY-MM-DD HH:mm', '从未登录')}</Text>
             </div>
             <div>
               <Text type="secondary">所属小组：</Text>

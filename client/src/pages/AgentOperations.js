@@ -9,10 +9,10 @@ import {
   PlayCircleOutlined, PlusOutlined, ReloadOutlined, RobotOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
 import { agentsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -65,7 +65,7 @@ const departmentOptions = [
 ];
 
 function formatTime(value) {
-  return value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '-';
+  return formatBusinessDateTime(value);
 }
 
 function statusTag(value) {

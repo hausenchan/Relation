@@ -9,6 +9,7 @@ import {
 import { budgetsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -403,10 +404,10 @@ export default function Budgets() {
             <Descriptions.Item label="开始测试时间">{detailRecord.test_start_date || '-'}</Descriptions.Item>
             <Descriptions.Item label="创建人">{detailRecord.created_by_name}</Descriptions.Item>
             <Descriptions.Item label="创建时间">
-              {dayjs(detailRecord.created_at).format('YYYY-MM-DD HH:mm')}
+              {formatBusinessDateTime(detailRecord.created_at)}
             </Descriptions.Item>
             <Descriptions.Item label="更新时间">
-              {dayjs(detailRecord.updated_at).format('YYYY-MM-DD HH:mm')}
+              {formatBusinessDateTime(detailRecord.updated_at)}
             </Descriptions.Item>
             <Descriptions.Item label="更新情况">
               <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.update_notes || '-'}</div>

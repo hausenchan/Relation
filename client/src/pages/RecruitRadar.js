@@ -4,6 +4,7 @@ import { ReloadOutlined, RadarChartOutlined, SettingOutlined, CheckOutlined, Sto
 import { Link, useSearchParams } from 'react-router-dom';
 import { Line } from '@ant-design/plots';
 import axios from 'axios';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Option } = Select;
 
@@ -330,7 +331,7 @@ export default function RecruitRadar() {
     { title: '最新动态', key: 'latest', width: 160, render: (_, g) => (
       <Space direction="vertical" size={0}>
         {eventTypeTag(g.latest.event_type)}
-        <Typography.Text type="secondary" style={{ fontSize: 11 }}>{g.latest.created_at}</Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: 11 }}>{formatBusinessDateTime(g.latest.created_at, 'YYYY-MM-DD HH:mm:ss')}</Typography.Text>
       </Space>
     ) }
   ];
@@ -353,7 +354,7 @@ export default function RecruitRadar() {
     { title: '关联岗位', dataIndex: 'position_title', key: 'position_title', width: 150, ellipsis: true },
     { title: '处理', key: 'handle_status', width: 90, render: (_, r) => handleStatusTag(r) },
     { title: '操作', key: 'action', width: 130, render: (_, r) => renderActions(r) },
-    { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 160 }
+    { title: '时间', dataIndex: 'created_at', key: 'created_at', width: 160, render: value => formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm:ss') }
   ];
 
   const renderEventCard = (record) => (
@@ -362,7 +363,7 @@ export default function RecruitRadar() {
         <Space direction="vertical" size={8} style={{ width: '100%' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <Space size={4}>{eventTypeTag(record.event_type)}{handleStatusTag(record)}</Space>
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{record.created_at}</Typography.Text>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>{formatBusinessDateTime(record.created_at, 'YYYY-MM-DD HH:mm:ss')}</Typography.Text>
           </div>
           <Typography.Text strong>{record.candidate_name}</Typography.Text>
           <Typography.Text>{record.candidate_title} · {record.candidate_city}</Typography.Text>
@@ -438,7 +439,9 @@ export default function RecruitRadar() {
     if (latest.status === 'skipped') return `跳过(${latest.error || '已跳过'})`;
     return '进行中';
   })();
-  const lastRunText = latest ? `${latest.finished_at || latest.started_at} · ${statusText}` : '暂无记录';
+  const lastRunText = latest
+    ? `${formatBusinessDateTime(latest.finished_at || latest.started_at, 'YYYY-MM-DD HH:mm:ss')} · ${statusText}`
+    : '暂无记录';
 
   return (
     <Watermark content="仅限内部参考">
@@ -449,7 +452,7 @@ export default function RecruitRadar() {
               type="info"
               showIcon
               message={`抓取进行中：${runningJob.progress || '启动中'}`}
-              description={`任务 #${runningJob.id} 于 ${runningJob.started_at} 开始`}
+              description={`任务 #${runningJob.id} 于 ${formatBusinessDateTime(runningJob.started_at, 'YYYY-MM-DD HH:mm:ss')} 开始`}
             />
           )}
 
@@ -548,7 +551,7 @@ export default function RecruitRadar() {
                 <Descriptions.Item label="城市">{detailRecord.candidate_city}</Descriptions.Item>
                 <Descriptions.Item label="活跃状态">{renderStatusCell(detailRecord)}</Descriptions.Item>
                 <Descriptions.Item label="关联岗位">{detailRecord.position_title}</Descriptions.Item>
-                <Descriptions.Item label="抓取时间">{detailRecord.created_at}</Descriptions.Item>
+                <Descriptions.Item label="抓取时间">{formatBusinessDateTime(detailRecord.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
                 <Descriptions.Item label="原始数据">
                   <pre style={{ fontSize: 11, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                     {(() => { try { return JSON.stringify(JSON.parse(detailRecord.detail_json || '{}'), null, 2); } catch { return detailRecord.detail_json; } })()}
@@ -590,7 +593,7 @@ export default function RecruitRadar() {
                         <Space direction="vertical" size={2} style={{ width: '100%' }}>
                           <Space size={6}>
                             {eventTypeTag(item.event_type)}
-                            <Typography.Text style={{ fontSize: 12 }}>{item.created_at}</Typography.Text>
+                            <Typography.Text style={{ fontSize: 12 }}>{formatBusinessDateTime(item.created_at, 'YYYY-MM-DD HH:mm:ss')}</Typography.Text>
                             {item.id === detailRecord.id && <Tag color="blue">当前</Tag>}
                           </Space>
                           <Typography.Text type="secondary" style={{ fontSize: 12 }}>

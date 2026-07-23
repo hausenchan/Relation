@@ -71,6 +71,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/businessTime';
 import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -2928,34 +2929,20 @@ function isDocumentAdminUser(user) {
   return documentAdminRoles.has(user?.role);
 }
 
-function parseSqliteUtcTimestamp(value) {
-  if (!value) return '-';
-  const raw = String(value).trim();
-  const sqliteUtcMatch = raw.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)/);
-  const parseValue = sqliteUtcMatch && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)
-    ? `${sqliteUtcMatch[1]}T${sqliteUtcMatch[2]}Z`
-    : raw;
-  return dayjs(parseValue);
+function parseStoredTimestamp(value) {
+  return parseBusinessDateTime(value);
 }
 
 function formatChangeLogTime(value) {
-  if (!value) return '-';
-  const parsed = dayjs(value);
-  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : String(value).slice(0, 16);
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm', String(value || '').slice(0, 16) || '-');
 }
 
 function formatDocumentTimestamp(value) {
-  if (!value) return '-';
-  const raw = String(value).trim();
-  const parsed = parseSqliteUtcTimestamp(raw);
-  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : raw.slice(0, 16);
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm', String(value || '').slice(0, 16) || '-');
 }
 
 function formatEditRecordTime(value) {
-  if (!value) return '-';
-  const raw = String(value).trim();
-  const parsed = parseSqliteUtcTimestamp(raw);
-  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : raw.slice(0, 16);
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm', String(value || '').slice(0, 16) || '-');
 }
 
 function normalizeInlineComments(comments = []) {
@@ -3159,7 +3146,7 @@ function sortChangeLogsLatestFirst(logs = []) {
 
 function getEditRecordSortTime(record) {
   const rawTime = record?.edited_at || record?.created_at;
-  const timestamp = rawTime ? parseSqliteUtcTimestamp(rawTime).valueOf() : 0;
+  const timestamp = rawTime ? parseStoredTimestamp(rawTime).valueOf() : 0;
   return Number.isFinite(timestamp) ? timestamp : 0;
 }
 

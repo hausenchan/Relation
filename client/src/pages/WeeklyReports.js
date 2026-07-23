@@ -18,6 +18,7 @@ import {
   weeklyReportContentToPlain,
 } from '../utils/weeklyReportContent';
 import { getDefaultDocumentCxoUsers } from '../utils/documentDefaultShares';
+import { formatBusinessDateTime } from '../utils/businessTime';
 import {
   createDefaultShareDraft,
   createEmptyShareDraft,
@@ -964,7 +965,7 @@ export default function WeeklyReports() {
     saving: { color: 'processing', text: '自动保存中' },
     saved: {
       color: 'success',
-      text: reportSaveState.savedAt ? `已自动保存 ${dayjs(reportSaveState.savedAt).format('HH:mm:ss')}` : '已保存',
+      text: reportSaveState.savedAt ? `已自动保存 ${formatBusinessDateTime(reportSaveState.savedAt, 'HH:mm:ss')}` : '已保存',
     },
     error: { color: 'error', text: '自动保存失败' },
   }[reportSaveState.phase] || { color: 'default', text: '尚未保存' };

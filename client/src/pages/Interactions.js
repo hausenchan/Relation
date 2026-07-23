@@ -8,6 +8,7 @@ import AttachmentList from '../components/AttachmentList';
 import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 
 const { Text } = Typography;
@@ -634,7 +635,7 @@ export default function Interactions() {
                 <Descriptions.Item label="创建人">
                   {creator ? (creator.display_name || creator.username) : '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+                <Descriptions.Item label="创建时间">{formatBusinessDateTime(r.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
               </Descriptions>
 
               <div style={{ marginTop: 20 }}>

@@ -11,6 +11,7 @@ import {
 import { tasksApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -209,7 +210,7 @@ export default function MyTasks() {
       title: '开始日期',
       dataIndex: 'started_at',
       width: 110,
-      render: v => v ? dayjs(v).format('YYYY-MM-DD') : '-',
+      render: v => formatBusinessDateTime(v, 'YYYY-MM-DD'),
     },
     {
       title: '操作',
@@ -223,7 +224,7 @@ export default function MyTasks() {
             <Button size="small" type="primary" icon={<CheckOutlined />} onClick={() => handleStatus(r, 'done')}>完成</Button>
           )}
           {r.status === 'done' && (
-            <Tag color="green">✓ {r.done_at ? dayjs(r.done_at).format('HH:mm') : ''}</Tag>
+            <Tag color="green">✓ {r.done_at ? formatBusinessDateTime(r.done_at, 'HH:mm') : ''}</Tag>
           )}
           {r.status !== 'done' && (
             <Tooltip title="拆解子任务">
@@ -287,7 +288,7 @@ export default function MyTasks() {
             <Typography.Text type="secondary">
               预估工时：{(record.estimated_hours === null || record.estimated_hours === undefined || record.estimated_hours === '') ? '-' : `${record.estimated_hours}人时`}
             </Typography.Text>
-            <Typography.Text type="secondary">开始日期：{record.started_at ? dayjs(record.started_at).format('YYYY-MM-DD') : '-'}</Typography.Text>
+            <Typography.Text type="secondary">开始日期：{formatBusinessDateTime(record.started_at, 'YYYY-MM-DD')}</Typography.Text>
             <Typography.Text type="secondary">指派人：{sameId(record.created_by, user?.id) ? '自建' : (record.created_by_name || '-')}</Typography.Text>
           </div>
 
@@ -309,7 +310,7 @@ export default function MyTasks() {
               </Button>
             )}
             {record.status === 'done' && (
-              <Tag color="green">✓ {record.done_at ? dayjs(record.done_at).format('HH:mm') : ''}</Tag>
+              <Tag color="green">✓ {record.done_at ? formatBusinessDateTime(record.done_at, 'HH:mm') : ''}</Tag>
             )}
             {record.status !== 'done' && (
               <Button size="small" icon={<ApartmentOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={(event) => { event.stopPropagation(); openAdd(record); }}>
@@ -496,7 +497,7 @@ export default function MyTasks() {
               <Descriptions.Item label="预估工时">
                 {(detailRecord.estimated_hours === null || detailRecord.estimated_hours === undefined || detailRecord.estimated_hours === '') ? '-' : `${detailRecord.estimated_hours}人时`}
               </Descriptions.Item>
-              <Descriptions.Item label="开始日期">{detailRecord.started_at ? dayjs(detailRecord.started_at).format('YYYY-MM-DD') : '-'}</Descriptions.Item>
+              <Descriptions.Item label="开始日期">{formatBusinessDateTime(detailRecord.started_at, 'YYYY-MM-DD')}</Descriptions.Item>
               <Descriptions.Item label="优先级">
                 <Tag color={priorityMap[detailRecord.priority]?.color}>{priorityMap[detailRecord.priority]?.label}</Tag>
               </Descriptions.Item>
@@ -508,7 +509,7 @@ export default function MyTasks() {
                 <Descriptions.Item label="上级任务">{detailRecord.parent_title}</Descriptions.Item>
               )}
               {detailRecord.done_at && (
-                <Descriptions.Item label="完成时间">{dayjs(detailRecord.done_at).format('YYYY-MM-DD HH:mm')}</Descriptions.Item>
+                <Descriptions.Item label="完成时间">{formatBusinessDateTime(detailRecord.done_at)}</Descriptions.Item>
               )}
             </Descriptions>
 

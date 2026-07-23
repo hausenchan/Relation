@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { List, Tag, Button, Popconfirm, Space, Typography, Empty, Drawer, Descriptions } from 'antd';
 import { DeleteOutlined, EyeOutlined, RiseOutlined } from '@ant-design/icons';
 import AttachmentList from './AttachmentList';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 
@@ -114,7 +115,7 @@ export default function InteractionList({ data, onDelete }) {
                     <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note}</div>
                   </Descriptions.Item>
                 )}
-                <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+                <Descriptions.Item label="创建时间">{formatBusinessDateTime(r.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
               </Descriptions>
 
               <div style={{ marginTop: 20 }}>

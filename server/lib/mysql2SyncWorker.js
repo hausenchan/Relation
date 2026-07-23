@@ -1,4 +1,5 @@
 const mysql = require('mysql2/promise');
+const { normalizeMysqlTimezone } = require('./businessTime');
 
 function normalizeResult(value) {
   if (Array.isArray(value)) return value.map(row => ({ ...row }));
@@ -16,7 +17,13 @@ function normalizeResult(value) {
 function init(config) {
   let connectionPromise = null;
   const getConnection = () => {
-    if (!connectionPromise) connectionPromise = mysql.createConnection(config);
+    if (!connectionPromise) {
+      const timezone = normalizeMysqlTimezone(config.timezone);
+      connectionPromise = mysql.createConnection({ ...config, timezone }).then(async connection => {
+        await connection.query('SET time_zone = ?', [timezone]);
+        return connection;
+      });
+    }
     return connectionPromise;
   };
 

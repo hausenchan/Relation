@@ -10,6 +10,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { companySubjectsApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -27,7 +28,7 @@ const attachmentTypeMap = {
 };
 
 function formatTime(value) {
-  return value?.replace('T', ' ').slice(0, 19) || '-';
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm:ss');
 }
 
 export default function CompanySubjects() {

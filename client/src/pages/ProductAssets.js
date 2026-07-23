@@ -13,6 +13,7 @@ import dayjs from 'dayjs';
 import { companySubjectsApi, productAssetsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -683,7 +684,7 @@ export default function ProductAssets() {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 150,
-      render: v => v?.replace('T', ' ').slice(0, 19) || '-',
+      render: v => formatBusinessDateTime(v, 'YYYY-MM-DD HH:mm:ss'),
     },
     {
       title: '操作',

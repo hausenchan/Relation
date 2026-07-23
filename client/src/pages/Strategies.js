@@ -9,6 +9,7 @@ import { RichTextEditor, RichTextView } from '../components/RichText';
 import { productAssetsApi } from '../api';
 import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Title, Text } = Typography;
 
@@ -697,7 +698,7 @@ export default function Strategies() {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 160,
-      render: (val) => val?.replace('T', ' ').substring(0, 19) || '-',
+      render: val => formatBusinessDateTime(val, 'YYYY-MM-DD HH:mm:ss'),
     },
     {
       title: '操作',
@@ -1215,10 +1216,10 @@ export default function Strategies() {
                         <RichTextView value={selectedStrategy.description} />
                       </Descriptions.Item>
                       <Descriptions.Item label="创建时间">
-                        {selectedStrategy.created_at?.replace('T', ' ').substring(0, 19)}
+                        {formatBusinessDateTime(selectedStrategy.created_at, 'YYYY-MM-DD HH:mm:ss')}
                       </Descriptions.Item>
                       <Descriptions.Item label="更新时间">
-                        {selectedStrategy.updated_at?.replace('T', ' ').substring(0, 19)}
+                        {formatBusinessDateTime(selectedStrategy.updated_at, 'YYYY-MM-DD HH:mm:ss')}
                       </Descriptions.Item>
                     </Descriptions>
                   ),
@@ -1441,10 +1442,10 @@ export default function Strategies() {
               {logDetailRecord.continue_flag ? <Tag color="green">继续</Tag> : <Tag color="orange">暂停</Tag>}
             </Descriptions.Item>
             <Descriptions.Item label="创建时间">
-              {logDetailRecord.created_at?.replace('T', ' ').substring(0, 19) || '-'}
+              {formatBusinessDateTime(logDetailRecord.created_at, 'YYYY-MM-DD HH:mm:ss')}
             </Descriptions.Item>
             <Descriptions.Item label="更新时间">
-              {logDetailRecord.updated_at?.replace('T', ' ').substring(0, 19) || '-'}
+              {formatBusinessDateTime(logDetailRecord.updated_at, 'YYYY-MM-DD HH:mm:ss')}
             </Descriptions.Item>
           </Descriptions>
         )}

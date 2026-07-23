@@ -53,6 +53,7 @@ import {
   mediaYyzVersionOptions,
   normalizeMediaFormPayload,
 } from '../utils/mediaManagement';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -161,9 +162,7 @@ function renderCompactText(value) {
 }
 
 function formatShortDateTime(value) {
-  if (!value) return '-';
-  const text = String(value).replace('T', ' ');
-  return text.length > 16 ? text.slice(0, 16) : text;
+  return formatBusinessDateTime(value);
 }
 
 function readStoredVisibleColumns() {

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Badge, Dropdown, List, Button, Empty, Spin, message, Tag } from 'antd';
 import { BellOutlined, CheckOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 export default function NotificationBell() {
   const [notifications, setNotifications] = useState([]);
@@ -187,7 +188,7 @@ export default function NotificationBell() {
                   <div>
                     <div style={{ marginBottom: 4 }}>{item.content}</div>
                     <div style={{ fontSize: 12, color: '#999' }}>
-                      {new Date(item.created_at).toLocaleString('zh-CN')}
+                      {formatBusinessDateTime(item.created_at, 'YYYY-MM-DD HH:mm:ss')}
                     </div>
                   </div>
                 }

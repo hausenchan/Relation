@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Table, Button, Modal, Form, Select, Space, Tag, message, Popconfirm, Card, Grid, List, Typography } from 'antd';
 import { PlusOutlined, DeleteOutlined, TeamOutlined } from '@ant-design/icons';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Option } = Select;
 const { Text } = Typography;
@@ -174,7 +175,7 @@ export default function CrossTeamAccess() {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 160,
-      render: (val) => val?.replace('T', ' ').substring(0, 19) || '-',
+      render: val => formatBusinessDateTime(val, 'YYYY-MM-DD HH:mm:ss'),
     },
     {
       title: '操作',
@@ -202,7 +203,7 @@ export default function CrossTeamAccess() {
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <Text type="secondary">授权人：{record.granted_by_name || '-'}</Text>
-            <Text type="secondary">创建时间：{record.created_at?.replace('T', ' ').substring(0, 19) || '-'}</Text>
+            <Text type="secondary">创建时间：{formatBusinessDateTime(record.created_at, 'YYYY-MM-DD HH:mm:ss')}</Text>
           </div>
           <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
             <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>

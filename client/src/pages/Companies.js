@@ -19,6 +19,7 @@ import AttachmentList from '../components/AttachmentList';
 import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/businessTime';
 
 const { Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -155,7 +156,7 @@ function splitCompanyTags(value) {
 }
 
 function getRecordTime(value) {
-  const time = value ? dayjs(value).valueOf() : 0;
+  const time = value ? parseBusinessDateTime(value).valueOf() : 0;
   return Number.isFinite(time) ? time : 0;
 }
 
@@ -1524,7 +1525,7 @@ function CompetitorResearchTab({ companyId }) {
                 <Descriptions.Item label="创建人">
                   {creator ? (creator.display_name || creator.username) : '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="创建时间">{r.created_at || '-'}</Descriptions.Item>
+                <Descriptions.Item label="创建时间">{formatBusinessDateTime(r.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
                 <Descriptions.Item label="共享人" span={2}>
                   {sharedUsers.length
                     ? sharedUsers.map(u => (
@@ -1723,7 +1724,7 @@ function DynamicsTab({ companyId }) {
               <Descriptions.Item label="影响分析" span={2}>
                 <div style={{ whiteSpace: 'pre-wrap' }}>{r.impact || '-'}</div>
               </Descriptions.Item>
-              <Descriptions.Item label="创建时间" span={2}>{r.created_at || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间" span={2}>{formatBusinessDateTime(r.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
             </Descriptions>
           );
         })()}
@@ -2410,8 +2411,8 @@ function AllProductsView() {
               <Descriptions.Item label="备注" span={2}>
                 <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.notes || '-'}</div>
               </Descriptions.Item>
-              <Descriptions.Item label="创建时间">{detailRecord.created_at || '-'}</Descriptions.Item>
-              <Descriptions.Item label="更新时间">{detailRecord.updated_at || '-'}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{formatBusinessDateTime(detailRecord.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{formatBusinessDateTime(detailRecord.updated_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
             </Descriptions>
 
             {detailLoading && <Text type="secondary">正在刷新详情...</Text>}

@@ -32,6 +32,8 @@ const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
 const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
 const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
 const { createRequestPerformanceMiddleware } = require('./lib/performanceBudget');
+const { applyBusinessTimeMigration } = require('./lib/businessTimeMigration');
+const { DEFAULT_MYSQL_TIMEZONE, parseMysqlDateTime } = require('./lib/businessTime');
 const {
   decodeOssKey,
   deleteOssObjectByPath,
@@ -6389,10 +6391,10 @@ function resolveDocumentContentText({
 
 function nextDocumentUpdatedAt(currentValue) {
   const currentText = String(currentValue || '').trim();
-  const normalized = currentText && !/[zZ]|[+-]\d\d:?\d\d$/.test(currentText)
-    ? `${currentText.replace(' ', 'T')}Z`
-    : currentText;
-  const currentTime = Date.parse(normalized);
+  const currentTime = parseMysqlDateTime(
+    currentText,
+    process.env.MYSQL_TIMEZONE || process.env.RELATION_MYSQL_TIMEZONE || DEFAULT_MYSQL_TIMEZONE,
+  );
   const nextTime = Math.max(Date.now(), Number.isFinite(currentTime) ? currentTime + 1000 : 0);
   return new Date(nextTime).toISOString();
 }
@@ -7822,6 +7824,11 @@ app.use('/api/media-management', createMediaManagementRouter({
     return placement;
   },
 }));
+
+applyBusinessTimeMigration({
+  db,
+  isMysql: Database.isMysql(),
+});
 
 app.get('/api/document-folders', (req, res) => {
   const rows = db.prepare(`

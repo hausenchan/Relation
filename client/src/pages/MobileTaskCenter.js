@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { mobileTaskCenterApi } from '../api';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -76,7 +77,7 @@ const reviewStatusMap = {
 };
 
 function formatTime(value) {
-  return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-';
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm:ss');
 }
 
 function statusTag(value) {

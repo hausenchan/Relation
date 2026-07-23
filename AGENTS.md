@@ -325,6 +325,11 @@ RELATION_RUN_MYSQL_TESTS=1 \
   `ensureMysqlLongTextColumn`。
 - 数据库相关测试必须覆盖真实 MySQL 方言与旧库升级路径；SQLite 测试通过不能作为上线依据。
 - 协作字段使用同一请求产生的 ISO 时间戳，不能随后被 `CURRENT_TIMESTAMP` 覆盖。
+- 系统业务时区固定为 `Asia/Shanghai`，MySQL 会话通过 `MYSQL_TIMEZONE`（默认 `+08:00`）统一；
+  `Date` 或带 `Z`/时区偏移的 ISO 值必须交给 `server/lib/database.js` 转换后写入，不得手工去掉
+  `Z` 后把 UTC 钟面直接存入 `DATETIME`。无时区 MySQL `DATETIME` 一律表示业务本地时间。
+- 已上线的时间数据修复必须记录在 `relation_migrations`，且只能依据编辑记录、版本记录或操作日志
+  等可验证证据校正，不得对整表时间字段无条件加减 8 小时。
 - API 错误需有明确状态码：参数 `400`、无认证 `401`、无权限 `403`、不存在 `404`、
   冲突 `409`、正文过大 `413`、服务错误 `500`。
 - 自动保存 API 应返回完整或足够更新基线的记录，至少包含 `id`、`updated_at`。
@@ -340,6 +345,9 @@ RELATION_RUN_MYSQL_TESTS=1 \
 - 状态文案与实际业务状态一致，例如准备内容使用“未提交/已提交”，不混用“未填写”。
 - 所有保存流程均展示 `dirty/saving/saved/error`，错误后可重试，不能静默丢内容。
 - 前端权限只负责体验；服务端必须独立拒绝越权请求。
+- 数据库时间、实时事件时间和 ISO 时间统一通过 `client/src/utils/businessTime.js` 展示；不得在页面中
+  用字符串截断冒充时区转换。无时区数据库值按业务本地时间展示，带 `Z`/偏移的绝对时间转换为
+  `Asia/Shanghai`。
 
 ## 8. 开发流程
 
@@ -367,6 +375,8 @@ RELATION_RUN_MYSQL_TESTS=1 \
   虚拟滚动、Excel 往返、operation 幂等与原子冲突、派生检索文本、历史恢复、SSE/presence、只读
   导出与写入拒绝；权限接口必须在真实隔离 MySQL/HTTP 环境执行。
 - 数据库：MySQL 空库初始化、旧库增量迁移、索引与字段类型、生产模式启动及启动耗时。
+- 时间：MySQL 会话时区、`CURRENT_TIMESTAMP` 与显式 ISO 同秒一致、夏令时无关的 `+08:00`
+  转换、历史迁移幂等、文档协作基线和前端业务时间展示。
 - 性能：隔离 MySQL 运行 API p95 `300ms` 门禁；生产构建运行首屏/异步 chunk 体积门禁，并在浏览器
   直达全部一级路由核对首次可用时间不超过 `1000ms`。
 - 构建：使用 `/tmp` 下的 `BUILD_PATH`，不要覆盖已跟踪的 `client/build`。

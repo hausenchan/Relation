@@ -10,6 +10,7 @@ import { followUpTasksApi } from '../api';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -144,7 +145,7 @@ export default function FollowUpTasks() {
           )}
           {r.status === 'done' && (
             <Tooltip title={r.done_note || '无备注'}>
-              <Tag color="green">已完成 {r.done_at ? dayjs(r.done_at).format('MM-DD') : ''}</Tag>
+              <Tag color="green">已完成 {r.done_at ? formatBusinessDateTime(r.done_at, 'MM-DD') : ''}</Tag>
             </Tooltip>
           )}
         </Space>
@@ -228,7 +229,7 @@ export default function FollowUpTasks() {
               )}
               {record.status === 'done' && (
                 <Tooltip title={record.done_note || '无备注'}>
-                  <Tag color="green">已完成 {record.done_at ? dayjs(record.done_at).format('MM-DD') : ''}</Tag>
+                  <Tag color="green">已完成 {record.done_at ? formatBusinessDateTime(record.done_at, 'MM-DD') : ''}</Tag>
                 </Tooltip>
               )}
             </Space>
@@ -326,7 +327,7 @@ export default function FollowUpTasks() {
                 <Descriptions.Item label="完成备注"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.done_note}</div></Descriptions.Item>
               )}
               {detailRecord.done_at && (
-                <Descriptions.Item label="完成时间">{dayjs(detailRecord.done_at).format('YYYY-MM-DD HH:mm')}</Descriptions.Item>
+                <Descriptions.Item label="完成时间">{formatBusinessDateTime(detailRecord.done_at)}</Descriptions.Item>
               )}
             </Descriptions>
 

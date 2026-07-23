@@ -6,8 +6,8 @@ import {
 import {
   ApiOutlined, LockOutlined, ReloadOutlined, SaveOutlined, SettingOutlined, ThunderboltOutlined,
 } from '@ant-design/icons';
-import dayjs from 'dayjs';
 import { systemSettingsApi, usersApi } from '../api';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Title, Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -22,9 +22,7 @@ const AI_MODEL_PROVIDER_OPTIONS = [
 ];
 
 function formatTime(value) {
-  if (!value) return '-';
-  const parsed = dayjs(value);
-  return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : String(value);
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm', String(value || '-'));
 }
 
 function runtimeSourceLabel(source) {

@@ -14,12 +14,12 @@ import {
   Typography,
 } from 'antd';
 import { ClockCircleOutlined, HistoryOutlined, RollbackOutlined } from '@ant-design/icons';
-import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 
 function formatRevisionTime(value) {
-  return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-';
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm:ss');
 }
 
 function getRevisionActor(revision) {

@@ -16,6 +16,7 @@ import { richTextToPlain } from '../components/RichText';
 import DocumentBodyEditor from '../components/DocumentBodyEditor';
 import ContentHistoryDrawer from '../components/ContentHistoryDrawer';
 import { mergeCollaborativeDocumentBodies } from '../utils/collaborativeDocument';
+import { formatBusinessDateTime } from '../utils/businessTime';
 import {
   createDocumentBodyBlock,
   documentBodyHasContent,
@@ -985,7 +986,7 @@ export default function OperationalMeeting() {
       title: '更新时间',
       dataIndex: 'updated_at',
       width: 170,
-      render: value => value ? dayjs(value).format('YYYY-MM-DD HH:mm') : '-',
+      render: value => formatBusinessDateTime(value),
     },
     {
       title: '操作',
@@ -1039,7 +1040,7 @@ export default function OperationalMeeting() {
       if (saveState.phase === 'error') return { text: '自动保存失败', color: '#cf1322' };
       if (saveState.phase === 'saved') {
         return {
-          text: saveState.savedAt ? `已自动保存 ${dayjs(saveState.savedAt).format('HH:mm')}` : '已自动保存',
+          text: saveState.savedAt ? `已自动保存 ${formatBusinessDateTime(saveState.savedAt, 'HH:mm')}` : '已自动保存',
           color: '#389e0d',
         };
       }
@@ -1082,7 +1083,7 @@ export default function OperationalMeeting() {
             <Tag color={status.color} style={{ marginInlineEnd: 0 }}>
               {status.label}
               {localStatus.status === 'submitted' && localStatus.submittedAt
-                ? ` · ${dayjs(localStatus.submittedAt).format('MM-DD HH:mm')}`
+                ? ` · ${formatBusinessDateTime(localStatus.submittedAt, 'MM-DD HH:mm')}`
                 : ''}
             </Tag>
             <Button
@@ -1160,7 +1161,7 @@ export default function OperationalMeeting() {
       saving: { text: '自动保存中...', color: '#1677ff' },
       error: { text: state.error || '自动保存失败', color: '#cf1322' },
       saved: {
-        text: state.savedAt ? `已自动保存 ${dayjs(state.savedAt).format('HH:mm')}` : '已自动保存',
+        text: state.savedAt ? `已自动保存 ${formatBusinessDateTime(state.savedAt, 'HH:mm')}` : '已自动保存',
         color: '#389e0d',
       },
     }[state.phase] || { text: emptyText, color: '#8c8c8c' };

@@ -41,6 +41,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { networkCaptureApi } from '../api';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -48,7 +49,7 @@ const { useBreakpoint } = Grid;
 const diagnosticPath = '/__network_capture_ping';
 
 function formatTime(value) {
-  return value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-';
+  return formatBusinessDateTime(value, 'YYYY-MM-DD HH:mm:ss');
 }
 
 function formatBytes(value) {
@@ -281,7 +282,7 @@ export default function NetworkCapture() {
       title: '时间',
       dataIndex: 'created_at',
       width: 150,
-      render: value => <Text type="secondary" style={{ fontSize: 12 }}>{value ? dayjs(value).format('HH:mm:ss') : '-'}</Text>,
+      render: value => <Text type="secondary" style={{ fontSize: 12 }}>{formatBusinessDateTime(value, 'HH:mm:ss')}</Text>,
     },
     {
       title: '状态',

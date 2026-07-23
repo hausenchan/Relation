@@ -11,6 +11,7 @@ import { statsApi, remindersApi, tasksApi, followUpTasksApi, usersApi, aiSuggest
 import { useAuth } from '../AuthContext';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -536,8 +537,8 @@ export default function Dashboard() {
         task_source_label: '日常指派',
         plan_date: t.date,
         estimated_completion_date: t.estimated_completion_date,
-        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+        complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
         display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
         display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -554,8 +555,8 @@ export default function Dashboard() {
         assigned_to_name: t.assigned_to_name,
         created_by_name: t.assigned_by_name,
         plan_date: t.due_date || null,
-        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+        complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
         display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
         display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -574,8 +575,8 @@ export default function Dashboard() {
         task_source_label: '日常指派',
         plan_date: t.date,
         estimated_completion_date: t.estimated_completion_date,
-        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+        complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
         display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
         display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -592,8 +593,8 @@ export default function Dashboard() {
         assigned_to_name: t.assigned_to_name,
         created_by_name: t.assigned_by_name,
         plan_date: t.due_date || null,
-        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+        complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
         display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
         display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -611,8 +612,8 @@ export default function Dashboard() {
         task_source_label: Number(t.shared_to_me) === 1 && !canManageTeamTasks ? '共享任务' : '日常指派',
         plan_date: t.date,
         estimated_completion_date: t.estimated_completion_date,
-        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+        complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
         display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
         display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -628,8 +629,8 @@ export default function Dashboard() {
         task_source: 'opportunity',
         task_source_label: '商机',
         plan_date: t.due_date || null,
-        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+        complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
         display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
         display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -650,8 +651,8 @@ export default function Dashboard() {
         task_source_label: '共享任务',
         plan_date: t.date,
         estimated_completion_date: t.estimated_completion_date,
-        start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-        complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+        start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+        complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
         display_status: toDisplayStatus(t.status),
         display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
         display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -664,8 +665,8 @@ export default function Dashboard() {
       task_source: 'opportunity',
       task_source_label: '商机',
       plan_date: t.due_date || null,
-      start_date: t.started_at ? dayjs(t.started_at).format('YYYY-MM-DD') : null,
-      complete_date: t.done_at ? dayjs(t.done_at).format('YYYY-MM-DD') : null,
+      start_date: t.started_at ? formatBusinessDateTime(t.started_at, 'YYYY-MM-DD') : null,
+      complete_date: t.done_at ? formatBusinessDateTime(t.done_at, 'YYYY-MM-DD') : null,
       display_status: toDisplayStatus(t.status),
       display_status_label: statusMap[toDisplayStatus(t.status)]?.label || t.status,
       display_status_badge: statusMap[toDisplayStatus(t.status)]?.badge || 'default',
@@ -1090,7 +1091,7 @@ export default function Dashboard() {
   const isCompletedTodayTask = (task) => (
     (task.display_status || task.status) === 'done'
     && (task.done_at || task.complete_date)
-    && dayjs(task.done_at || task.complete_date).isSame(dayjs(), 'day')
+    && parseBusinessDateTime(task.done_at || task.complete_date).isSame(dayjs(), 'day')
   );
   const monthlyTaskCount = new Set(dashboardPersonalTasks.filter(isCurrentMonthTask).map(task => task.id)).size;
   const todayTaskCount = new Set(dashboardPersonalTasks.filter(isTodayTask).map(task => task.id)).size;
@@ -2690,7 +2691,7 @@ export default function Dashboard() {
                   </Descriptions.Item>
                   <Descriptions.Item label="期望跟进日期">{detailRecord.due_date || detailRecord.plan_date || '-'}</Descriptions.Item>
                   {detailRecord.done_at && (
-                    <Descriptions.Item label="完成时间">{dayjs(detailRecord.done_at).format('YYYY-MM-DD HH:mm')}</Descriptions.Item>
+                    <Descriptions.Item label="完成时间">{formatBusinessDateTime(detailRecord.done_at)}</Descriptions.Item>
                   )}
                 </>
               )}

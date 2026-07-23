@@ -9,10 +9,10 @@ import {
   MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, ReadOutlined, ReloadOutlined,
   SendOutlined, SettingOutlined, TeamOutlined, ToolOutlined,
 } from '@ant-design/icons';
-import dayjs from 'dayjs';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { aiTrainingApi } from '../api';
 import { useAuth } from '../AuthContext';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Title, Text, Paragraph } = Typography;
 const { Search, TextArea } = Input;
@@ -78,7 +78,7 @@ const SESSION_CREATE_INITIAL_VALUES = {
 };
 
 function formatTime(value) {
-  return value ? dayjs(value).format('MM-DD HH:mm') : '-';
+  return formatBusinessDateTime(value, 'MM-DD HH:mm');
 }
 
 function formatAmount(value) {

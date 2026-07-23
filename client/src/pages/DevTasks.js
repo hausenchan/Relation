@@ -4,6 +4,7 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, CodeOutlined, FunnelPlotOut
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 import { RichTextEditor, RichTextView } from '../components/RichText';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Title, Text } = Typography;
 import dayjs from 'dayjs';
@@ -765,8 +766,8 @@ export default function DevTasks() {
               <Descriptions.Item label="完成备注">
                 <div style={{ whiteSpace: 'pre-wrap' }}>{selectedTask.completion_note || '-'}</div>
               </Descriptions.Item>
-              <Descriptions.Item label="创建时间">{selectedTask.created_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
-              <Descriptions.Item label="更新时间">{selectedTask.updated_at?.replace('T', ' ').substring(0, 19)}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{formatBusinessDateTime(selectedTask.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{formatBusinessDateTime(selectedTask.updated_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
             </Descriptions>
 
             {selectedTask.source_strategy && (

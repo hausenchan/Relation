@@ -37,6 +37,7 @@ import {
   mergeCollaborativeDocumentBodies,
 } from '../utils/collaborativeDocument';
 import { getDefaultDocumentCxoUsers } from '../utils/documentDefaultShares';
+import { formatBusinessDateTime } from '../utils/businessTime';
 import {
   createDefaultShareDraft,
   createEmptyShareDraft,
@@ -1506,8 +1507,8 @@ function Goals() {
               <Descriptions.Item label="部门">{getDepartmentLabel(detailRecord.department)}</Descriptions.Item>
               <Descriptions.Item label="小组">{detailRecord.team_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="上级目标">{detailRecord.parent_title || '-'}</Descriptions.Item>
-              <Descriptions.Item label="创建时间">{detailRecord.created_at}</Descriptions.Item>
-              <Descriptions.Item label="更新时间">{detailRecord.updated_at}</Descriptions.Item>
+              <Descriptions.Item label="创建时间">{formatBusinessDateTime(detailRecord.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
+              <Descriptions.Item label="更新时间">{formatBusinessDateTime(detailRecord.updated_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
             </Descriptions>
 
             <Card title="目标描述" size="small">

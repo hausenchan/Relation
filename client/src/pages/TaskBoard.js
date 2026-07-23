@@ -11,6 +11,7 @@ import {
 import { tasksApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import dayjs from 'dayjs';
+import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -428,7 +429,7 @@ function TaskItem({ task, currentUser, isMobile, onStatus, onEdit, onDelete, onA
         <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>指派人：{task.created_by_name}</div>
       )}
       <div style={{ fontSize: 11, color: '#888', marginBottom: 2 }}>
-        计划：{task.date || '-'} · 预估完成：{task.estimated_completion_date || '-'} · 预估工时：{(task.estimated_hours === null || task.estimated_hours === undefined || task.estimated_hours === '') ? '-' : `${task.estimated_hours}人时`} · 开始：{task.started_at ? dayjs(task.started_at).format('YYYY-MM-DD') : '-'}
+        计划：{task.date || '-'} · 预估完成：{task.estimated_completion_date || '-'} · 预估工时：{(task.estimated_hours === null || task.estimated_hours === undefined || task.estimated_hours === '') ? '-' : `${task.estimated_hours}人时`} · 开始：{formatBusinessDateTime(task.started_at, 'YYYY-MM-DD')}
       </div>
       {task.result && (
         <div style={{ fontSize: 11, color: '#52c41a', marginBottom: 2, whiteSpace: 'pre-wrap' }}>备注：{task.result}</div>
