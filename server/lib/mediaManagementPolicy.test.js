@@ -33,5 +33,7 @@ test('denies system admins and ordinary users without a CXO identity', () => {
   assert.equal(canDeleteMedia({ role: 'admin' }), false);
   assert.equal(canDeleteMedia({ role: 'sales_director' }), false);
   assert.equal(canDeleteMedia({ role: 'member' }), false);
+  assert.equal(canDeleteMedia({ role: 'readonly', executive_role: 'ceo' }), false);
+  assert.equal(canDeleteMedia({ role: 'guest', executive_role: 'coo' }), false);
   assert.equal(canDeleteMedia(null), false);
 });

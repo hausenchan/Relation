@@ -12,13 +12,15 @@ function isTrafficBusinessTeam(team = {}) {
 
 function canDeleteMedia(user, ledTeams = []) {
   if (!user) return false;
+  const role = normalizeRole(user.role);
+  if (['readonly', 'guest'].includes(role)) return false;
   if (
-    MEDIA_DELETE_EXECUTIVE_ROLES.has(normalizeRole(user.role))
+    MEDIA_DELETE_EXECUTIVE_ROLES.has(role)
     || MEDIA_DELETE_EXECUTIVE_ROLES.has(normalizeRole(user.executive_role))
   ) {
     return true;
   }
-  if (normalizeRole(user.role) !== 'leader') return false;
+  if (role !== 'leader') return false;
   return (Array.isArray(ledTeams) ? ledTeams : []).some(isTrafficBusinessTeam);
 }
 
