@@ -35,7 +35,6 @@ import {
   getOperationalPreparationSubmissionSignature,
   normalizeOperationalPreparationContent,
   operationalPreparationCanSubmit,
-  operationalPreparationToPlain,
 } from '../utils/operationalMeetingPreparation';
 
 const { RangePicker } = DatePicker;
@@ -67,16 +66,6 @@ const sectionStatusMeta = {
   submitted: { color: 'green', label: '已提交' },
   locked: { color: 'gold', label: '已锁定' },
 };
-
-function blocksToPlain(blocks) {
-  return operationalPreparationToPlain(blocks, richTextToPlain);
-}
-
-function sanitizeForAi(value) {
-  return String(value || '')
-    .replace(/(毛利率?|利润率?|利润|gross\s*profit|gross\s*margin|\bGM\b)[^\n。；;]{0,120}/ig, '[已脱敏经营指标]')
-    .replace(/(收入|成本|分成比例|分成后)[^\n。；;]{0,80}(利润|毛利)[^\n。；;]{0,80}/ig, '[已脱敏经营指标]');
-}
 
 function agendaToPlain(agenda) {
   if (!agenda) return '';
@@ -658,14 +647,48 @@ export default function OperationalMeeting() {
 
   const generateAgenda = async () => {
     if (!detail?.meeting?.id) return;
+    if (preparationSubmissionStats.required <= 0
+      || preparationSubmissionStats.submitted < preparationSubmissionStats.required) {
+      const pendingNames = preparationSubmissionStats.pendingOwners.map(item => item.name).join('、');
+      message.warning(pendingNames ? `请先完成准备内容：${pendingNames}` : '请先完成全部必填准备内容');
+      return;
+    }
+    if (detail.agenda) {
+      const confirmed = await new Promise(resolve => {
+        Modal.confirm({
+          title: '重新生成会议提纲？',
+          content: '重新生成会替换当前提纲，当前版本将保留在历史记录中。',
+          okText: '重新生成',
+          cancelText: '取消',
+          onOk: () => resolve(true),
+          onCancel: () => resolve(false),
+        });
+      });
+      if (!confirmed) return;
+    }
     setAgendaLoading(true);
     try {
-      const sections = (detail.sections || []).map(section => ({
-        title: section.title,
-        owner: section.owner_name || section.owner_username || '',
-        content: sanitizeForAi(blocksToPlain(sectionDrafts[section.id])),
-      }));
-      const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, { sections });
+      for (const sectionId of [...dirtySectionIdsRef.current]) {
+        const saved = await persistSection(sectionId, { showError: true });
+        if (!saved) {
+          message.error('准备内容保存失败，未生成会议提纲');
+          return;
+        }
+      }
+      if (agendaDirtyRef.current) {
+        const saved = await saveAgenda({ silent: true });
+        if (!saved) {
+          message.error('当前会议提纲保存失败，未执行重新生成');
+          return;
+        }
+      }
+      const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, {
+        base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
+      });
+      if (result.runtime?.mode !== 'llm' && detail.agenda) {
+        message.error(result.runtime?.error || 'AI服务当前不可用，已保留原会议提纲');
+        return;
+      }
       const agenda = normalizeOperationalAgendaContent(result.agenda);
       const savedAgenda = await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
         agenda,
@@ -996,13 +1019,25 @@ export default function OperationalMeeting() {
     },
   ];
 
-  const canGenerateAgenda = useMemo(() => {
-    return Boolean(detail?.can_generate_agenda);
-  }, [detail?.can_generate_agenda]);
-
   const preparationSubmissionStats = useMemo(() => {
     return getOperationalPreparationSubmissionStats(detail?.sections || [], sectionLocalStatuses);
   }, [detail?.sections, sectionLocalStatuses]);
+
+  const canGenerateAgenda = useMemo(() => (
+    Boolean(detail?.can_generate_agenda)
+    && preparationSubmissionStats.required > 0
+    && preparationSubmissionStats.submitted >= preparationSubmissionStats.required
+  ), [detail?.can_generate_agenda, preparationSubmissionStats]);
+
+  const generateAgendaDisabledReason = useMemo(() => {
+    if (!detail?.can_generate_agenda) return '';
+    if (preparationSubmissionStats.required <= 0) return '当前周会没有可用于生成的必填准备内容';
+    if (preparationSubmissionStats.submitted < preparationSubmissionStats.required) {
+      const pendingNames = preparationSubmissionStats.pendingOwners.map(item => item.name).join('、');
+      return pendingNames ? `等待以下负责人提交：${pendingNames}` : '请先完成全部必填准备内容';
+    }
+    return '';
+  }, [detail?.can_generate_agenda, preparationSubmissionStats]);
 
   const filteredAnnualRows = useMemo(() => {
     const keyword = annualKeyword.trim().toLowerCase();
@@ -1213,15 +1248,19 @@ export default function OperationalMeeting() {
               </Button>
             )}
             {Boolean(detail.can_generate_agenda) && (
-              <Button
-                type="primary"
-                icon={<RobotOutlined />}
-                loading={agendaLoading}
-                disabled={!canGenerateAgenda}
-                onClick={generateAgenda}
-              >
-                {detail.agenda ? '重新生成提纲' : '生成会议提纲'}
-              </Button>
+              <Tooltip title={generateAgendaDisabledReason}>
+                <span>
+                  <Button
+                    type="primary"
+                    icon={<RobotOutlined />}
+                    loading={agendaLoading}
+                    disabled={!canGenerateAgenda}
+                    onClick={generateAgenda}
+                  >
+                    {detail.agenda ? '重新生成提纲' : '生成提纲'}
+                  </Button>
+                </span>
+              </Tooltip>
             )}
           </Space>
         )}

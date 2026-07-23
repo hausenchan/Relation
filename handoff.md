@@ -9,6 +9,39 @@
 目标：修复媒体管理、文档中心及其他模块中显式 ISO 时间比 MySQL `CURRENT_TIMESTAMP` 少 8 小时的
 混合写入问题，统一业务时区，并安全校正有审计证据的历史错误时间。
 
+## 经营周会 AI 会前提纲 v2（2026-07-23）
+
+### 已完成
+
+- “生成提纲 / 重新生成提纲”改为使用完整经营分析提示词，模型返回受控语义 JSON；服务端校验
+  4 项会议目标、5-8 项决策议题、120-150 分钟议程和 5-8 项会前问题后，再转换为
+  `relation_document_blocks_v1`。
+- 输出只保留“经营周会会前提纲”主标题、固定开场语、六段正文和固定结束语；不生成顶部眉题、
+  副标题、材料来源、数据口径、会议重点、敏感数据说明、数据说明、封面或导读。
+- 六段标题、业务模块、决策议题和段内标签使用 `heading1` 至 `heading4`；所有分点使用真实
+  `bullet/numbered` 块，可直接在会议页签的 `DocumentBodyEditor` 中继续编辑。
+- 生成接口不再采信浏览器提交的 `sections`，按选中会议 ID 读取已提交准备块；必填准备未全部提交
+  返回 `409 PREPARATION_INCOMPLETE`；模型返回前及生成结果保存时均复核 `source_hash`，准备内容变化
+  返回 `409 PREPARATION_CHANGED`。
+- 重新生成前提示覆盖，先保存当前未保存提纲；模型不可用时不以规则兜底覆盖已有提纲。
+- 输入和输出继续执行敏感信息扫描，会议提纲保存接口也独立拒绝毛利、利润和毛利率类内容。
+- 旧六字段提纲继续由前端兼容转换，新生成记录使用提示词版本
+  `operational-meeting-agenda-v2`，无需数据库迁移。
+
+### 已验证
+
+- `node --test server/lib/operationalMeetingAgenda.test.js` 通过，8/8；包含历史折叠正文和旧
+  `questions[]` 准备格式兼容。
+- `node --test server/lib/operationalMeetingIntegration.test.js` 通过，1/1；覆盖权限、必填准备门禁、
+  服务端会议数据源、原生列表块和敏感提纲保存阻断。
+- `node --check server/lib/operationalMeetingAgenda.js`、`node --check server/index.js` 通过。
+- 前端全量测试通过，23 个套件、122 条测试全部通过。
+- 后端全量测试通过，100 条通过，3 条显式 MySQL 环境测试按开关跳过。
+- `BUILD_PATH=/tmp/relation-operational-agenda-build npm run build` 通过；首屏 JS 335.81KB gzip，
+  最大异步 chunk 430.88KB gzip，仍满足性能预算。
+- `BUILD_PATH=/tmp/relation-operational-agenda-build npm run performance:frontend` 通过；门禁口径下
+  首屏 JS 327.9KB gzip、75 个异步 chunk、最大异步 chunk 420.8KB gzip。
+
 ## 全系统业务时间统一（2026-07-23）
 
 ### 根因

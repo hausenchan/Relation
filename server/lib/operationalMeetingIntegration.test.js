@@ -315,27 +315,93 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   });
   assert.equal(forbiddenGenerate.status, 403);
 
-  const earlyGenerate = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda/generate`, {
+  const incompleteGenerate = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda/generate`, {
     method: 'POST',
     token: ceoToken,
-    body: { sections: [{ title: '当前准备内容', content: '仅部分负责人完成填写' }] },
+    body: { sections: [{ title: '伪造准备内容', content: '不应被服务端采信' }] },
   });
-  assert.equal(earlyGenerate.status, 200, JSON.stringify(earlyGenerate.payload));
-  assert.ok(earlyGenerate.payload.agenda?.meeting_goal);
+  assert.equal(incompleteGenerate.status, 409, JSON.stringify(incompleteGenerate.payload));
+  assert.equal(incompleteGenerate.payload.code, 'PREPARATION_INCOMPLETE');
 
-  const agendaContent = {
-    format: 'relation_document_body_v1',
-    blocks: [{ id: 'agenda-1', type: 'paragraph', content: '本次会议提纲', meta: {} }],
-  };
+  for (const [index, section] of ceoDetail.payload.sections.entries()) {
+    const updatePreparation = await request(
+      baseUrl,
+      `/api/operational-meeting-sections/${section.id}`,
+      {
+        method: 'PUT',
+        token: ceoToken,
+        body: {
+          content: {
+            format: 'relation_document_blocks_v1',
+            blocks: [{
+              id: `completed-preparation-${index + 1}`,
+              type: 'paragraph',
+              content: `${section.title}本周准备内容完整`,
+              meta: {},
+            }],
+          },
+        },
+      },
+    );
+    assert.equal(updatePreparation.status, 200, JSON.stringify(updatePreparation.payload));
+    const submitCompletedPreparation = await request(
+      baseUrl,
+      `/api/operational-meeting-sections/${section.id}/submit`,
+      { method: 'POST', token: ceoToken },
+    );
+    assert.equal(submitCompletedPreparation.status, 200, JSON.stringify(submitCompletedPreparation.payload));
+  }
+
+  const generatedAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda/generate`, {
+    method: 'POST',
+    token: ceoToken,
+    body: { sections: [{ title: '伪造准备内容', content: '不应被服务端采信' }] },
+  });
+  assert.equal(generatedAgenda.status, 200, JSON.stringify(generatedAgenda.payload));
+  assert.equal(generatedAgenda.payload.agenda?.format, 'relation_document_blocks_v1');
+  assert.ok(generatedAgenda.payload.agenda?.blocks?.some(block => block.type === 'heading2'));
+  assert.ok(generatedAgenda.payload.agenda?.blocks?.some(block => block.type === 'bullet'));
+  assert.equal(
+    generatedAgenda.payload.agenda.blocks.some(block => String(block.content).includes('伪造准备内容')),
+    false,
+  );
+  assert.equal(generatedAgenda.payload.prompt_version, 'operational-meeting-agenda-v2');
+
+  const agendaContent = generatedAgenda.payload.agenda;
+  const sensitiveAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
+    method: 'PUT',
+    token: ceoToken,
+    body: {
+      agenda: {
+        format: 'relation_document_blocks_v1',
+        blocks: [{ id: 'sensitive-agenda', type: 'paragraph', content: '本周利润为100万元', meta: {} }],
+      },
+    },
+  });
+  assert.equal(sensitiveAgenda.status, 422, JSON.stringify(sensitiveAgenda.payload));
+
+  const staleGeneratedAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
+    method: 'PUT',
+    token: ceoToken,
+    body: {
+      agenda: agendaContent,
+      source_hash: 'stale-source-hash',
+      revision_action: 'generate',
+    },
+  });
+  assert.equal(staleGeneratedAgenda.status, 409, JSON.stringify(staleGeneratedAgenda.payload));
+  assert.equal(staleGeneratedAgenda.payload.code, 'PREPARATION_CHANGED');
+
   const saveAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
     method: 'PUT',
     token: ceoToken,
     body: {
       agenda: agendaContent,
-      source_hash: earlyGenerate.payload.source_hash,
+      source_hash: generatedAgenda.payload.source_hash,
       model_provider: 'rule',
-      prompt_version: earlyGenerate.payload.prompt_version,
+      prompt_version: generatedAgenda.payload.prompt_version,
       safety_scan_status: 'passed',
+      revision_action: 'generate',
     },
   });
   assert.equal(saveAgenda.status, 200, JSON.stringify(saveAgenda.payload));

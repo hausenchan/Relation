@@ -87,6 +87,15 @@ const {
   getOperationalPreparationSubmissionSignature,
   operationalPreparationCanSubmit,
 } = require('./lib/operationalMeetingPreparation');
+const {
+  OPERATIONAL_MEETING_PROMPT_VERSION,
+  OperationalMeetingAgendaError,
+  buildOperationalMeetingAiSections,
+  callOperationalMeetingLlm,
+  hashOperationalMeetingSource,
+  operationalMeetingAgendaLooksSensitive,
+  operationalMeetingAgendaToDocumentBody,
+} = require('./lib/operationalMeetingAgenda');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -22254,7 +22263,6 @@ const OPERATIONAL_MEETING_MENU_KEY = '/executive/operational';
 const OPERATIONAL_MEETING_SECTION_RECORD = 'operational_meeting_section';
 const OPERATIONAL_MEETING_AGENDA_RECORD = 'operational_meeting_agenda';
 const OPERATIONAL_MEETING_DECISION_RECORD = 'operational_meeting_decision';
-const OPERATIONAL_MEETING_PROMPT_VERSION = 'operational-meeting-agenda-v1';
 const OPERATIONAL_MEETING_CONTENT_LIMIT = 2 * 1024 * 1024;
 
 function stringifyOperationalMeetingContent(value, fieldLabel) {
@@ -22849,116 +22857,6 @@ function syncOperationalMeetingParticipants(meeting, requestedParticipants = [],
   return { error: '', participants: listOperationalMeetingParticipants(meeting.id) };
 }
 
-function operationalMeetingAgendaLooksSensitive(value) {
-  return /(毛利|毛利率|利润率|利润|gross\s*profit|gross\s*margin|\bGM\b)/i.test(String(value || ''));
-}
-
-function sanitizeOperationalMeetingInput(value) {
-  return String(value || '')
-    .replace(/(毛利率?|利润率?|利润|gross\s*profit|gross\s*margin|\bGM\b)[^\n。；;]{0,120}/ig, '[已脱敏经营指标]')
-    .replace(/(收入|成本|分成比例|分成后)[^\n。；;]{0,80}(利润|毛利)[^\n。；;]{0,80}/ig, '[已脱敏经营指标]')
-    .slice(0, 24000);
-}
-
-function buildFallbackOperationalMeetingAgenda(sections = []) {
-  const titles = sections.map(item => item.title).filter(Boolean).join('、') || '各业务模块';
-  const topics = sections
-    .map(item => {
-      const text = sanitizeOperationalMeetingInput(item.content || item.text || '').replace(/\s+/g, ' ').trim();
-      return text ? `${item.title || '准备内容'}：${text.slice(0, 120)}` : '';
-    })
-    .filter(Boolean)
-    .slice(0, 4);
-  return {
-    meeting_goal: `对齐${titles}本周经营事实、关键判断和需要会上决策的问题。`,
-    weekly_overview: topics.length ? topics.join('\n') : '当前已填写内容较少，建议会上按各业务模块逐项补充本周结果、判断和风险。',
-    key_topics: '优先讨论各模块提出的需决策事项、跨部门协同阻塞点，以及会后需要明确负责人的动作。',
-    agenda: '1. 快速确认本周关键结果\n2. 逐项讨论需决策问题\n3. 明确会后负责人和完成时间\n4. 确认下周重点动作',
-    next_actions: '会后将决策事项拆成明确动作，补充负责人、截止时间和验收口径。',
-    preparation: '请各负责人会前确认准备内容准确性，准备需决策事项的背景、可选方案和推荐判断。',
-  };
-}
-
-async function callOperationalMeetingLlm(sections = []) {
-  const config = getSystemAiModelConfig();
-  if (!config || config.disabled || !config.apiKey) {
-    return {
-      agenda: buildFallbackOperationalMeetingAgenda(sections),
-      runtime: { mode: 'fallback', model_name: null, provider: 'rule' },
-    };
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs || DEFAULT_AI_TIMEOUT_MS);
-  const sanitizedSections = sections.map(section => ({
-    title: section.title || '未命名准备内容',
-    owner: section.owner || '',
-    content: sanitizeOperationalMeetingInput(section.content || section.text || ''),
-  }));
-  try {
-    const response = await fetch(`${String(config.baseUrl || '').replace(/\/+$/g, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        temperature: 0.2,
-        response_format: { type: 'json_object' },
-        messages: [
-          {
-            role: 'system',
-            content: [
-              '你是公司经营周会助手，只能基于已脱敏的准备内容生成会议提纲。',
-              '严禁输出毛利、毛利率、利润、利润率、GM、gross profit、gross margin 等信息。',
-              '严禁猜测、推导或补全被脱敏的数据。',
-              '只输出 JSON，字段为 meeting_goal, weekly_overview, key_topics, agenda, next_actions, preparation。',
-            ].join('\n'),
-          },
-          {
-            role: 'user',
-            content: JSON.stringify({ sections: sanitizedSections }),
-          },
-        ],
-      }),
-      signal: controller.signal,
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(sanitizeAiModelErrorMessage(data?.error?.message || `模型接口失败 ${response.status}`));
-    }
-    const raw = data?.choices?.[0]?.message?.content || '';
-    const parsed = parseJsonSafe(raw, null);
-    if (!parsed || typeof parsed !== 'object') throw new Error('模型返回内容不是 JSON');
-    const agenda = {
-      meeting_goal: String(parsed.meeting_goal || ''),
-      weekly_overview: String(parsed.weekly_overview || ''),
-      key_topics: String(parsed.key_topics || ''),
-      agenda: String(parsed.agenda || ''),
-      next_actions: String(parsed.next_actions || ''),
-      preparation: String(parsed.preparation || ''),
-    };
-    return {
-      agenda,
-      runtime: {
-        mode: 'llm',
-        model_name: data?.model || config.model,
-        provider: config.provider || 'openai_compatible',
-        usage: data?.usage || null,
-      },
-    };
-  } catch (error) {
-    console.error('经营周会 AI 生成失败，使用规则兜底:', sanitizeAiModelErrorMessage(error.message));
-    return {
-      agenda: buildFallbackOperationalMeetingAgenda(sections),
-      runtime: { mode: 'fallback', model_name: null, provider: 'rule', error: sanitizeAiModelErrorMessage(error.message) },
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 app.get('/api/admin/sensitive-modules', auth, systemAdminOnly, (req, res) => {
   const modules = db.prepare(`
     SELECT sm.*,
@@ -23355,26 +23253,83 @@ app.post('/api/operational-meeting-sections/:sectionId/submit', requireOperation
   res.json({ success: true, updated_at: updatedAt });
 });
 
+function getOperationalMeetingAgendaSource(meeting) {
+  const rows = db.prepare(`
+    SELECT s.*,
+      owner.display_name as owner_name,
+      owner.username as owner_username
+    FROM operational_meeting_sections s
+    LEFT JOIN users owner ON owner.id = s.owner_user_id
+    WHERE s.meeting_id = ?
+    ORDER BY s.sort_order ASC, s.id ASC
+  `).all(meeting.id);
+  const pendingRows = rows.filter(row => (
+    Number(row.is_required ?? 1) === 1
+    && !['submitted', 'locked'].includes(String(row.status || 'draft'))
+  ));
+  if (pendingRows.length) {
+    const pendingOwners = [...new Set(pendingRows.map(row => (
+      row.owner_name || row.owner_username || row.title || '未指定负责人'
+    )))];
+    throw new OperationalMeetingAgendaError(
+      `请先完成全部必填准备内容：${pendingOwners.join('、')}`,
+      'PREPARATION_INCOMPLETE',
+      409,
+    );
+  }
+  const submittedRows = rows.filter(row => ['submitted', 'locked'].includes(String(row.status || 'draft')));
+  const sections = buildOperationalMeetingAiSections(submittedRows);
+  if (!sections.length) {
+    throw new OperationalMeetingAgendaError('缺少用于生成提纲的已提交准备内容', 'PREPARATION_EMPTY', 400);
+  }
+  return {
+    sections,
+    sourceHash: hashOperationalMeetingSource(meeting, sections),
+  };
+}
+
 app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeetingAccess, canWrite, async (req, res) => {
   const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
   if (!canGenerateOperationalAgenda(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '只有 CXO 可以汇总准备内容并生成会议提纲' });
   }
-  const sections = Array.isArray(req.body?.sections) ? req.body.sections : [];
-  if (!sections.length) return res.status(400).json({ error: '缺少用于生成提纲的准备内容' });
-  const result = await callOperationalMeetingLlm(sections);
-  const combined = Object.values(result.agenda || {}).join('\n');
-  if (operationalMeetingAgendaLooksSensitive(combined)) {
-    return res.status(422).json({ error: 'AI 提纲疑似包含毛利或利润类敏感信息，已阻断保存' });
+  try {
+    const source = getOperationalMeetingAgendaSource(meeting);
+    const result = await callOperationalMeetingLlm({
+      meeting,
+      sections: source.sections,
+      config: getSystemAiModelConfig(),
+    });
+    const latestSource = getOperationalMeetingAgendaSource(meeting);
+    if (latestSource.sourceHash !== source.sourceHash) {
+      return res.status(409).json({
+        error: 'AI生成期间准备内容发生变化，请重新生成',
+        code: 'PREPARATION_CHANGED',
+      });
+    }
+    const agenda = operationalMeetingAgendaToDocumentBody(result.agenda, source.sourceHash);
+    if (operationalMeetingAgendaLooksSensitive(agenda)) {
+      return res.status(422).json({
+        error: 'AI 提纲疑似包含毛利或利润类敏感信息，已阻断保存',
+        code: 'AI_OUTPUT_SENSITIVE',
+      });
+    }
+    return res.json({
+      agenda,
+      runtime: result.runtime,
+      source_hash: source.sourceHash,
+      prompt_version: OPERATIONAL_MEETING_PROMPT_VERSION,
+    });
+  } catch (error) {
+    const status = error instanceof OperationalMeetingAgendaError ? error.status : 500;
+    const code = error instanceof OperationalMeetingAgendaError ? error.code : 'AI_GENERATION_FAILED';
+    const messageText = error instanceof OperationalMeetingAgendaError
+      ? error.message
+      : sanitizeAiModelErrorMessage(error?.message || '生成会议提纲失败');
+    console.error('[operational-agenda] generate failed', { code, status, message: messageText });
+    return res.status(status).json({ error: messageText, code });
   }
-  const sourceHash = crypto.createHash('sha256').update(JSON.stringify(sections)).digest('hex');
-  res.json({
-    agenda: result.agenda,
-    runtime: result.runtime,
-    source_hash: sourceHash,
-    prompt_version: OPERATIONAL_MEETING_PROMPT_VERSION,
-  });
 });
 
 app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess, canWrite, (req, res) => {
@@ -23382,6 +23337,22 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
   if (!canEditOperationalAgenda(req.user, meeting._accessParticipant)) {
     return res.status(403).json({ error: '无权编辑本周会议提纲' });
+  }
+  if (req.body?.revision_action === 'generate') {
+    try {
+      const latestSource = getOperationalMeetingAgendaSource(meeting);
+      if (!req.body?.source_hash || String(req.body.source_hash) !== latestSource.sourceHash) {
+        return res.status(409).json({
+          error: '准备内容已在AI生成后发生变化，请重新生成会议提纲',
+          code: 'PREPARATION_CHANGED',
+        });
+      }
+    } catch (error) {
+      if (error instanceof OperationalMeetingAgendaError) {
+        return res.status(error.status).json({ error: error.message, code: error.code });
+      }
+      return res.status(500).json({ error: '校验会议准备内容失败', code: 'PREPARATION_CHECK_FAILED' });
+    }
   }
   const existingAgenda = db.prepare('SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id) || null;
   const baseUpdatedAt = String(req.body?.base_updated_at || '');
@@ -23395,6 +23366,12 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
   }
   let agendaJson;
   try {
+    if (operationalMeetingAgendaLooksSensitive(req.body?.agenda)) {
+      return res.status(422).json({
+        error: '会议提纲疑似包含毛利或利润类敏感信息，已阻断保存',
+        code: 'AGENDA_CONTENT_SENSITIVE',
+      });
+    }
     agendaJson = stringifyOperationalMeetingContent(req.body?.agenda, '会议提纲');
   } catch (error) {
     return res.status(400).json({ error: error.message });
