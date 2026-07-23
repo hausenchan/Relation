@@ -152,6 +152,7 @@ function normalizeMediaInput(input = {}) {
     domain_name: normalizeOptionalText(input.domain_name, 'domain_name'),
     version_number: normalizeOptionalText(input.version_number, 'version_number'),
     latest_release_date: normalizeDate(input.latest_release_date, 'latest_release_date'),
+    contract_valid_until: normalizeDate(input.contract_valid_until, 'contract_valid_until'),
     latest_features: normalizeOptionalText(input.latest_features, 'latest_features'),
     display_style: normalizeEnum(input.display_style, 'display_style', { required: true }),
     budget_types: normalizeBudgetTypes(input.budget_types),
@@ -322,6 +323,7 @@ function ensureMediaManagementSchema(db) {
       domain_name TEXT,
       version_number TEXT,
       latest_release_date DATE,
+      contract_valid_until DATE,
       latest_features TEXT,
       display_style TEXT NOT NULL,
       budget_types TEXT,
@@ -353,6 +355,11 @@ function ensureMediaManagementSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_media_assets_release_date ON media_assets(latest_release_date);
     CREATE INDEX IF NOT EXISTS idx_media_assets_launch_date ON media_assets(launch_date);
   `);
+  const columns = new Set(db.prepare('PRAGMA table_info(media_assets)').all().map(column => column.name));
+  if (!columns.has('contract_valid_until')) {
+    db.prepare('ALTER TABLE media_assets ADD COLUMN contract_valid_until DATE').run();
+  }
+  db.prepare('CREATE INDEX IF NOT EXISTS idx_media_assets_contract_valid_until ON media_assets(contract_valid_until)').run();
 }
 
 function enumLabel(field, value) {
@@ -491,6 +498,7 @@ function createMediaManagementRouter(deps) {
       enumLabel('integration_progress', record.integration_progress),
       enumLabel('porn_api_status', record.porn_api_status),
       record.latest_release_date,
+      record.contract_valid_until,
       record.launch_date,
       record.owner_name,
       record.owner_username,
@@ -591,11 +599,11 @@ function createMediaManagementRouter(deps) {
       const result = db.prepare(`
         INSERT INTO media_assets (
           cid, media_name, importance, category, yyz_version, domain_name, version_number,
-          latest_release_date, latest_features, display_style, budget_types, uv_scale,
+          latest_release_date, contract_valid_until, latest_features, display_style, budget_types, uv_scale,
           integration_progress, owner_id, launch_date, porn_api_status, sdk_ui_appid,
           task_config_requirements, special_entry_info, other_notes, document_id,
           created_by, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         encrypted.cid,
         encrypted.media_name,
@@ -605,6 +613,7 @@ function createMediaManagementRouter(deps) {
         encrypted.domain_name,
         encrypted.version_number,
         encrypted.latest_release_date,
+        encrypted.contract_valid_until,
         encrypted.latest_features,
         encrypted.display_style,
         JSON.stringify(input.budget_types),
@@ -654,8 +663,8 @@ function createMediaManagementRouter(deps) {
         db.prepare(`
           UPDATE media_assets SET
             cid = ?, media_name = ?, importance = ?, category = ?, yyz_version = ?,
-            domain_name = ?, version_number = ?, latest_release_date = ?, latest_features = ?,
-            display_style = ?, budget_types = ?, uv_scale = ?, integration_progress = ?,
+            domain_name = ?, version_number = ?, latest_release_date = ?, contract_valid_until = ?,
+            latest_features = ?, display_style = ?, budget_types = ?, uv_scale = ?, integration_progress = ?,
             owner_id = ?, launch_date = ?, porn_api_status = ?, sdk_ui_appid = ?,
             task_config_requirements = ?, special_entry_info = ?, other_notes = ?,
             updated_by = ?, updated_at = ?
@@ -669,6 +678,7 @@ function createMediaManagementRouter(deps) {
           encrypted.domain_name,
           encrypted.version_number,
           encrypted.latest_release_date,
+          encrypted.contract_valid_until,
           encrypted.latest_features,
           encrypted.display_style,
           JSON.stringify(input.budget_types),

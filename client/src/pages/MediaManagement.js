@@ -22,22 +22,27 @@ import {
   Tag,
   Tooltip,
   Typography,
+  Upload,
   message,
 } from 'antd';
 import {
   AppstoreOutlined,
   ColumnHeightOutlined,
   DeleteOutlined,
+  DownloadOutlined,
   EditOutlined,
+  PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
   SearchOutlined,
   SettingOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
-import { mediaManagementApi, usersApi } from '../api';
+import { documentsApi, mediaManagementApi, usersApi } from '../api';
 import Documents from './Documents';
 import ResizableTable from '../components/ResizableTable';
 import { useAuth } from '../AuthContext';
+import { ATTACHMENT_ACCEPT, validateAttachment } from '../utils/attachments';
 import {
   buildMediaListParams,
   isValidMediaCid,
@@ -92,6 +97,7 @@ const columnSettingOptions = [
   { label: '域名', value: 'domain_name' },
   { label: '版本号', value: 'version_number' },
   { label: '最新媒体发版时间', value: 'latest_release_date' },
+  { label: '合同有效期', value: 'contract_valid_until' },
   { label: '最新支持功能', value: 'latest_features' },
   { label: 'UV量级', value: 'uv_scale' },
   { label: '鉴黄API', value: 'porn_api_status' },
@@ -200,8 +206,11 @@ export default function MediaManagement() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailAttachments, setDetailAttachments] = useState([]);
+  const [detailAttachmentsLoading, setDetailAttachmentsLoading] = useState(false);
   const [visibleColumnKeys, setVisibleColumnKeys] = useState(readStoredVisibleColumns);
   const [tableDensity, setTableDensity] = useState(readStoredDensity);
+  const [mediaAttachmentFileList, setMediaAttachmentFileList] = useState([]);
   const [form] = Form.useForm();
 
   useEffect(() => {
@@ -258,6 +267,7 @@ export default function MediaManagement() {
       integration_progress: 'pending',
       budget_types: [],
     });
+    setMediaAttachmentFileList([]);
     setFormOpen(true);
   };
 
@@ -265,8 +275,26 @@ export default function MediaManagement() {
     setEditingRecord(record);
     form.resetFields();
     form.setFieldsValue(mediaRecordToFormValues(record));
+    setMediaAttachmentFileList([]);
     setFormOpen(true);
   };
+
+  const loadDetailAttachments = useCallback(async (documentId) => {
+    if (!documentId) {
+      setDetailAttachments([]);
+      return;
+    }
+    setDetailAttachmentsLoading(true);
+    try {
+      const rows = await documentsApi.listAttachments(documentId);
+      setDetailAttachments(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      setDetailAttachments([]);
+      message.error(error.response?.data?.error || '加载媒体附件失败');
+    } finally {
+      setDetailAttachmentsLoading(false);
+    }
+  }, []);
 
   const saveRecord = async () => {
     try {
@@ -276,10 +304,25 @@ export default function MediaManagement() {
       const saved = editingRecord
         ? await mediaManagementApi.update(editingRecord.id, payload)
         : await mediaManagementApi.create(payload);
+      if (!editingRecord && mediaAttachmentFileList.length && saved?.document_id) {
+        try {
+          for (const file of mediaAttachmentFileList) {
+            const formData = new FormData();
+            formData.append('file', file.originFileObj || file);
+            await documentsApi.uploadAttachment(saved.document_id, formData);
+          }
+        } catch (error) {
+          message.warning(error.response?.data?.error || '媒体已创建，但附件上传失败');
+        }
+      }
       setFormOpen(false);
+      setMediaAttachmentFileList([]);
       message.success(editingRecord ? '媒体已更新' : '媒体已创建');
       await loadRows();
-      if (detailRecord?.id === saved.id) setDetailRecord(saved);
+      if (detailRecord?.id === saved.id) {
+        setDetailRecord(saved);
+        await loadDetailAttachments(saved.document_id);
+      }
     } catch (error) {
       if (error?.errorFields) return;
       message.error(error.response?.data?.error || error.message || '保存媒体失败');
@@ -292,15 +335,57 @@ export default function MediaManagement() {
     setDetailRecord(record);
     setDetailOpen(true);
     setDetailLoading(true);
+    setDetailAttachments([]);
     try {
       const detail = await mediaManagementApi.get(record.id);
       setDetailRecord(detail);
+      await loadDetailAttachments(detail.document_id);
     } catch (error) {
       message.error(error.response?.data?.error || '加载媒体详情失败');
     } finally {
       setDetailLoading(false);
     }
   };
+
+  const renderMediaAttachments = () => (
+    <div style={{ marginTop: 8 }}>
+      {detailAttachmentsLoading ? (
+        <Text type="secondary">附件加载中...</Text>
+      ) : detailAttachments.length ? (
+        <List
+          size="small"
+          dataSource={detailAttachments}
+          rowKey="id"
+          renderItem={attachment => {
+            const displayName = attachment.display_name || attachment.filename;
+            return (
+              <List.Item
+                actions={[
+                  <Button
+                    key="download"
+                    type="link"
+                    size="small"
+                    icon={<DownloadOutlined />}
+                    onClick={() => documentsApi.downloadAttachment(attachment.id, displayName).catch(() => message.error('下载失败'))}
+                  >
+                    下载
+                  </Button>,
+                ]}
+              >
+                <List.Item.Meta
+                  avatar={<PaperClipOutlined style={{ color: '#64748b' }} />}
+                  title={<Text ellipsis={{ tooltip: displayName }}>{displayName}</Text>}
+                  description={`${attachment.file_ext || '文件'} · ${((Number(attachment.size) || 0) / 1024).toFixed(1)} KB`}
+                />
+              </List.Item>
+            );
+          }}
+        />
+      ) : (
+        <Text type="secondary">暂无附件</Text>
+      )}
+    </div>
+  );
 
   const deleteRecord = async (record) => {
     try {
@@ -350,6 +435,7 @@ export default function MediaManagement() {
     { title: '域名', dataIndex: 'domain_name', key: 'domain_name', width: 168, render: renderCompactText },
     { title: '版本号', dataIndex: 'version_number', key: 'version_number', width: 110, render: renderCompactText },
     { title: '最新媒体发版时间', dataIndex: 'latest_release_date', key: 'latest_release_date', width: 150, render: renderCompactText },
+    { title: '合同有效期', dataIndex: 'contract_valid_until', key: 'contract_valid_until', width: 128, render: renderCompactText },
     { title: '最新支持功能', dataIndex: 'latest_features', key: 'latest_features', width: 230, render: renderCompactText },
     { title: 'UV量级', dataIndex: 'uv_scale', key: 'uv_scale', width: 120, render: renderCompactText },
     { title: '鉴黄API', dataIndex: 'porn_api_status', key: 'porn_api_status', width: 190, render: value => value ? renderCompactText(getOptionMeta('porn_api_status', value).label) : <Text type="secondary">-</Text> },
@@ -553,7 +639,10 @@ export default function MediaManagement() {
         title={editingRecord ? '编辑媒体' : '新增媒体'}
         open={formOpen}
         onOk={saveRecord}
-        onCancel={() => setFormOpen(false)}
+        onCancel={() => {
+          setFormOpen(false);
+          setMediaAttachmentFileList([]);
+        }}
         confirmLoading={saving}
         okText="保存"
         cancelText="取消"
@@ -617,6 +706,11 @@ export default function MediaManagement() {
               </Form.Item>
             </Col>
             <Col span={fieldCol}>
+              <Form.Item name="contract_valid_until" label="合同有效期">
+                <DatePicker style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col span={fieldCol}>
               <Form.Item name="launch_date" label="上线时间">
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
@@ -671,6 +765,21 @@ export default function MediaManagement() {
                 <TextArea autoSize={{ minRows: 3, maxRows: 8 }} maxLength={20000} showCount />
               </Form.Item>
             </Col>
+            {!editingRecord && (
+              <Col span={24}>
+                <Form.Item label="附件">
+                  <Upload
+                    fileList={mediaAttachmentFileList}
+                    onChange={({ fileList: nextFileList }) => setMediaAttachmentFileList(nextFileList)}
+                    beforeUpload={validateAttachment}
+                    maxCount={10}
+                    accept={ATTACHMENT_ACCEPT}
+                  >
+                    <Button icon={<UploadOutlined />}>选择文件（最多10个，单个最大100MB）</Button>
+                  </Upload>
+                </Form.Item>
+              </Col>
+            )}
           </Row>
         </Form>
       </Modal>
@@ -699,6 +808,7 @@ export default function MediaManagement() {
               <Descriptions.Item label="版本号">{displayText(detailRecord.version_number)}</Descriptions.Item>
               <Descriptions.Item label="负责人">{displayText(detailRecord.owner_name)}</Descriptions.Item>
               <Descriptions.Item label="最新媒体发版时间">{displayText(detailRecord.latest_release_date)}</Descriptions.Item>
+              <Descriptions.Item label="合同有效期">{displayText(detailRecord.contract_valid_until)}</Descriptions.Item>
               <Descriptions.Item label="上线时间">{displayText(detailRecord.launch_date)}</Descriptions.Item>
               <Descriptions.Item label="UV量级">{displayText(detailRecord.uv_scale)}</Descriptions.Item>
               <Descriptions.Item label="预算" span={isMobile ? 1 : 3}>{renderBudgetTags(detailRecord.budget_types)}</Descriptions.Item>
@@ -709,6 +819,9 @@ export default function MediaManagement() {
               <Descriptions.Item label="特殊入口信息" span={isMobile ? 1 : 3}><div style={{ whiteSpace: 'pre-wrap' }}>{displayText(detailRecord.special_entry_info)}</div></Descriptions.Item>
               <Descriptions.Item label="其他特殊记录" span={isMobile ? 1 : 3}><div style={{ whiteSpace: 'pre-wrap' }}>{displayText(detailRecord.other_notes)}</div></Descriptions.Item>
             </Descriptions>
+
+            <Divider orientation="left" style={{ marginTop: 28 }}>媒体附件</Divider>
+            {renderMediaAttachments()}
 
             <Divider orientation="left" style={{ marginTop: 28 }}>媒体文档</Divider>
             {detailRecord.document_id ? (

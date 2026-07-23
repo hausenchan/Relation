@@ -23,6 +23,7 @@ function validInput(overrides = {}) {
     budget_types: ['alipay_mini', 'h5'],
     integration_progress: 'testing',
     latest_release_date: '2026-07-21',
+    contract_valid_until: '2026-12-31',
     launch_date: '2026-07-01',
     porn_api_status: '',
     sdk_ui_appid: 'sdk-ui-appid',
@@ -36,6 +37,7 @@ test('normalizes media input while preserving a twenty-digit CID and optional va
   assert.equal(result.cid, '00000000000000001234');
   assert.equal(result.media_name, '趣头条');
   assert.deepEqual(result.budget_types, ['h5', 'self_app']);
+  assert.equal(result.contract_valid_until, '2026-12-31');
   assert.equal(result.porn_api_status, null);
   assert.equal(result.owner_id, null);
 });
@@ -45,6 +47,7 @@ test('rejects invalid CID, enum, date, budget, and APPID values', () => {
   assert.throws(() => normalizeMediaInput(validInput({ cid: '12A' })), /1-20 位数字/);
   assert.throws(() => normalizeMediaInput(validInput({ category: 'video' })), /枚举值不合法/);
   assert.throws(() => normalizeMediaInput(validInput({ latest_release_date: '2026-02-30' })), /不是有效日期/);
+  assert.throws(() => normalizeMediaInput(validInput({ contract_valid_until: '2026-13-01' })), /不是有效日期/);
   assert.throws(() => normalizeMediaInput(validInput({ budget_types: ['unknown'] })), /不合法/);
   assert.throws(() => normalizeMediaInput(validInput({ sdk_ui_appid: 'a'.repeat(33) })), /32 个字符/);
 });
@@ -62,10 +65,55 @@ test('creates the media schema and its document relationship columns on SQLite',
     assert.ok(columns.includes('cid'));
     assert.ok(columns.includes('budget_types'));
     assert.ok(columns.includes('document_id'));
+    assert.ok(columns.includes('contract_valid_until'));
     assert.ok(columns.includes('task_config_requirements'));
     const indexes = db.prepare("PRAGMA index_list('media_assets')").all().map(index => index.name);
     assert.ok(indexes.includes('idx_media_assets_progress'));
     assert.ok(indexes.includes('idx_media_assets_document'));
+    assert.ok(indexes.includes('idx_media_assets_contract_valid_until'));
+  } finally {
+    db.close();
+  }
+});
+
+test('adds contract validity date to existing media schema', () => {
+  const db = new Database(':memory:');
+  try {
+    db.exec(`
+      CREATE TABLE media_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cid TEXT NOT NULL,
+        media_name TEXT NOT NULL,
+        importance TEXT NOT NULL DEFAULT 'general',
+        category TEXT NOT NULL,
+        yyz_version TEXT NOT NULL,
+        domain_name TEXT,
+        version_number TEXT,
+        latest_release_date DATE,
+        latest_features TEXT,
+        display_style TEXT NOT NULL,
+        budget_types TEXT,
+        uv_scale TEXT,
+        integration_progress TEXT NOT NULL DEFAULT 'pending',
+        owner_id INTEGER,
+        launch_date DATE,
+        porn_api_status TEXT,
+        sdk_ui_appid TEXT,
+        task_config_requirements TEXT,
+        special_entry_info TEXT,
+        other_notes TEXT,
+        document_id INTEGER NOT NULL,
+        created_by INTEGER NOT NULL,
+        updated_by INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(cid),
+        UNIQUE(document_id)
+      );
+    `);
+    ensureMediaManagementSchema(db);
+    const columns = db.prepare('PRAGMA table_info(media_assets)').all().map(column => column.name);
+    assert.ok(columns.includes('contract_valid_until'));
   } finally {
     db.close();
   }
