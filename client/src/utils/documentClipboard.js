@@ -33,3 +33,9 @@ export function flattenDocumentClipboardHtml(value = '') {
 export function documentClipboardHasEmbeddedBlocks(value = '') {
   return /<(?:audio|embed|iframe|img|object|table|video)\b/i.test(String(value || ''));
 }
+
+export function shouldSkipNestedClipboardListElement(element) {
+  const tag = String(element?.tagName || '').toLowerCase();
+  if (['li', 'table', 'img'].includes(tag)) return false;
+  return Boolean(element?.closest?.('li'));
+}

@@ -108,6 +108,7 @@ import {
 import {
   documentClipboardHasEmbeddedBlocks,
   flattenDocumentClipboardHtml,
+  shouldSkipNestedClipboardListElement,
 } from '../utils/documentClipboard';
 import {
   buildBulkShareTreeCheckState,
@@ -1505,6 +1506,7 @@ function parseClipboardHtmlDocumentBlocks(html) {
       return;
     }
     if (tag !== 'table' && element.closest('table')) return;
+    if (shouldSkipNestedClipboardListElement(element)) return;
     if (tag === 'div' && element.querySelector(pasteHtmlBlockSelector)) return;
 
     if (tag === 'table') {

@@ -1,6 +1,7 @@
 import {
   documentClipboardHasEmbeddedBlocks,
   flattenDocumentClipboardHtml,
+  shouldSkipNestedClipboardListElement,
 } from './documentClipboard';
 
 describe('document clipboard', () => {
@@ -26,5 +27,27 @@ describe('document clipboard', () => {
     expect(documentClipboardHasEmbeddedBlocks('<p>文字</p><img src="demo.png">')).toBe(true);
     expect(documentClipboardHasEmbeddedBlocks('<table><tr><td>数据</td></tr></table>')).toBe(true);
     expect(documentClipboardHasEmbeddedBlocks('<p><strong>普通文本</strong></p>')).toBe(false);
+  });
+
+  test('skips Wolai layout nodes already contained by a list item', () => {
+    const container = document.createElement('div');
+    container.innerHTML = `
+      <ul>
+        <li>
+          <div>6月24日数据比对</div>
+          <p>抖音商城 点击1971</p>
+          <table><tbody><tr><td>保留表格</td></tr></tbody></table>
+          <img src="demo.png" alt="保留图片">
+        </li>
+      </ul>
+      <p>列表外段落</p>
+    `;
+
+    const candidates = Array.from(container.querySelectorAll('li,div,p,table,img'));
+    const kept = candidates
+      .filter(element => !shouldSkipNestedClipboardListElement(element))
+      .map(element => element.tagName.toLowerCase());
+
+    expect(kept).toEqual(['li', 'table', 'img', 'p']);
   });
 });

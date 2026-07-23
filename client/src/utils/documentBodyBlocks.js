@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import { shouldSkipNestedClipboardListElement } from './documentClipboard';
 
 export const DOCUMENT_BODY_FORMAT = 'relation_document_blocks_v1';
 export const DOCUMENT_BODY_CLIPBOARD_MIME = 'application/x-relation-document-blocks';
@@ -288,7 +289,7 @@ function parseClipboardHtml(html = '') {
   Array.from(container.querySelectorAll(CLIPBOARD_BLOCK_SELECTOR)).forEach((element) => {
     const tag = String(element.tagName || '').toLowerCase();
     if (tag !== 'table' && element.closest('table')) return;
-    if (tag !== 'li' && element.closest('li')) return;
+    if (shouldSkipNestedClipboardListElement(element)) return;
     if (tag === 'div' && element.querySelector(CLIPBOARD_BLOCK_SELECTOR)) return;
     if (tag === 'table') {
       const table = parseClipboardTable(element);
