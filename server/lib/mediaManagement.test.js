@@ -119,6 +119,34 @@ test('adds contract validity date to existing media schema', () => {
   }
 });
 
+test('creates the contract validity index through the database DDL compatibility layer', () => {
+  const execSql = [];
+  const preparedSql = [];
+  const db = {
+    exec(sql) {
+      execSql.push(sql);
+    },
+    prepare(sql) {
+      preparedSql.push(sql);
+      if (/^PRAGMA table_info/i.test(sql)) {
+        return { all: () => [{ name: 'id' }, { name: 'cid' }] };
+      }
+      return { run: () => ({ changes: 1 }) };
+    },
+  };
+
+  ensureMediaManagementSchema(db);
+
+  assert.ok(
+    execSql.some(sql => /idx_media_assets_contract_valid_until/i.test(sql)),
+    'contract_valid_until index should use db.exec so MySQL can translate IF NOT EXISTS',
+  );
+  assert.ok(
+    !preparedSql.some(sql => /^CREATE INDEX IF NOT EXISTS idx_media_assets_contract_valid_until/i.test(sql)),
+    'contract_valid_until index should not bypass the DDL compatibility layer',
+  );
+});
+
 test('keeps the media name as the linked document title and removes the link on document deletion', () => {
   assert.equal(resolveMediaDocumentTitle({ doc_type: 'MEDIA', title: '趣头条' }, '其他标题'), '趣头条');
   assert.equal(resolveMediaDocumentTitle({ doc_type: 'IMP', media_asset_id: 8, title: '趣头条' }, '其他标题'), '趣头条');

@@ -361,7 +361,7 @@ function ensureMediaManagementSchema(db) {
   if (!columns.has('contract_valid_until')) {
     db.prepare('ALTER TABLE media_assets ADD COLUMN contract_valid_until DATE').run();
   }
-  db.prepare('CREATE INDEX IF NOT EXISTS idx_media_assets_contract_valid_until ON media_assets(contract_valid_until)').run();
+  db.exec('CREATE INDEX IF NOT EXISTS idx_media_assets_contract_valid_until ON media_assets(contract_valid_until)');
 }
 
 function enumLabel(field, value) {
