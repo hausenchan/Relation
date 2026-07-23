@@ -72,6 +72,10 @@ export function isValidMediaCid(value) {
   return new RegExp(`^\\d{1,${MEDIA_CID_MAX_LENGTH}}$`).test(String(value || '').trim());
 }
 
+export function canShowMediaDelete(record) {
+  return Number(record?.can_delete) === 1;
+}
+
 export function normalizeMediaFormPayload(values = {}) {
   const normalizeDate = value => (value?.format ? value.format('YYYY-MM-DD') : (value || null));
   return {

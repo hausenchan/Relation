@@ -15,6 +15,12 @@ function createHarness() {
       executive_role TEXT,
       account_status TEXT DEFAULT 'active'
     );
+    CREATE TABLE teams (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      department TEXT NOT NULL,
+      leader_id INTEGER
+    );
     CREATE TABLE documents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       title TEXT,
@@ -51,16 +57,28 @@ function createHarness() {
     .run('guest_no_module', '无模块访客', 'guest');
   db.prepare('INSERT INTO users (id, username, display_name, role) VALUES (5, ?, ?, ?)')
     .run('guest_reader', '可读访客', 'guest');
+  db.prepare('INSERT INTO users (id, username, display_name, role, executive_role) VALUES (6, ?, ?, ?, ?)')
+    .run('cxo', 'CXO', 'member', 'cmo');
+  db.prepare('INSERT INTO users (id, username, display_name, role) VALUES (7, ?, ?, ?)')
+    .run('traffic_leader', '流量商务组长', 'leader');
+  db.prepare('INSERT INTO users (id, username, display_name, role) VALUES (8, ?, ?, ?)')
+    .run('other_leader', '其他组长', 'leader');
+  db.prepare('INSERT INTO teams (id, name, department, leader_id) VALUES (1, ?, ?, ?)')
+    .run('流量商务小组', 'commercial', 7);
+  db.prepare('INSERT INTO teams (id, name, department, leader_id) VALUES (2, ?, ?, ?)')
+    .run('流量产品组', 'operation', 8);
 
   const menuByUser = new Map([
     [2, ['/media-management']],
     [4, ['/media-management']],
     [5, ['/media-management']],
+    [7, ['/media-management']],
+    [8, ['/media-management']],
   ]);
   const modulePermsByUser = new Map([
     [5, [{ module: 'product_assets', can_read: 1, can_write: 0 }]],
   ]);
-  const isAdmin = role => role === 'admin';
+  const isAdmin = role => ['admin', 'ceo', 'coo', 'cto', 'cmo'].includes(role);
   const isShared = (documentId, userId) => Boolean(db.prepare(`
     SELECT 1 FROM document_shares
     WHERE document_id = ? AND target_type = 'user' AND target_id = ?
@@ -140,6 +158,9 @@ function createHarness() {
     blocked: { id: 3, username: 'blocked', display_name: '无菜单用户', role: 'member' },
     guestNoModule: { id: 4, username: 'guest_no_module', display_name: '无模块访客', role: 'guest' },
     guestReader: { id: 5, username: 'guest_reader', display_name: '可读访客', role: 'guest' },
+    cxo: { id: 6, username: 'cxo', display_name: 'CXO', role: 'member', executive_role: 'cmo' },
+    trafficLeader: { id: 7, username: 'traffic_leader', display_name: '流量商务组长', role: 'leader' },
+    otherLeader: { id: 8, username: 'other_leader', display_name: '其他组长', role: 'leader' },
   };
 
   const dispatch = ({ method = 'GET', path = '/', params = {}, query = {}, body = {}, user = users.admin }) => {
@@ -203,7 +224,7 @@ test('router enforces menu access and supports linked-document CRUD, search, and
     const created = dispatch({ method: 'POST', body: input() });
     assert.equal(created.statusCode, 200, JSON.stringify(created.payload));
     assert.equal(created.payload.cid, '000123');
-    assert.equal(created.payload.can_delete, 1);
+    assert.equal(created.payload.can_delete, 0);
     const mediaId = Number(created.payload.id);
     const documentId = Number(created.payload.document_id);
     assert.ok(documentId > 0);
@@ -229,6 +250,22 @@ test('router enforces menu access and supports linked-document CRUD, search, and
       SELECT 1 FROM document_shares
       WHERE document_id = ? AND target_type = 'user' AND target_id = 2
     `).get(documentId));
+    const shareDocument = db.prepare(`
+      INSERT INTO document_shares (document_id, target_type, target_id, target_key, created_by)
+      VALUES (?, 'user', ?, NULL, 1)
+    `);
+    [users.cxo.id, users.trafficLeader.id, users.otherLeader.id]
+      .forEach(userId => shareDocument.run(documentId, userId));
+
+    const cxoList = dispatch({ user: users.cxo });
+    assert.equal(cxoList.statusCode, 200);
+    assert.equal(cxoList.payload[0].can_delete, 1);
+    const trafficLeaderList = dispatch({ user: users.trafficLeader });
+    assert.equal(trafficLeaderList.statusCode, 200);
+    assert.equal(trafficLeaderList.payload[0].can_delete, 1);
+    const otherLeaderList = dispatch({ user: users.otherLeader });
+    assert.equal(otherLeaderList.statusCode, 200);
+    assert.equal(otherLeaderList.payload[0].can_delete, 0);
 
     db.prepare('UPDATE documents SET content_text = ? WHERE id = ?').run('文档全文命中词', documentId);
     const searched = dispatch({ query: { search: '全文命中词' }, user: users.editor });
@@ -259,12 +296,31 @@ test('router enforces menu access and supports linked-document CRUD, search, and
       method: 'DELETE', path: '/:id', params: { id: String(mediaId) }, user: users.editor,
     });
     assert.equal(forbiddenDelete.statusCode, 403);
-    const deleted = dispatch({
+    const adminDelete = dispatch({
       method: 'DELETE', path: '/:id', params: { id: String(mediaId) }, user: users.admin,
     });
-    assert.equal(deleted.statusCode, 200);
+    assert.equal(adminDelete.statusCode, 403);
+    const otherLeaderDelete = dispatch({
+      method: 'DELETE', path: '/:id', params: { id: String(mediaId) }, user: users.otherLeader,
+    });
+    assert.equal(otherLeaderDelete.statusCode, 403);
+    const trafficLeaderDelete = dispatch({
+      method: 'DELETE', path: '/:id', params: { id: String(mediaId) }, user: users.trafficLeader,
+    });
+    assert.equal(trafficLeaderDelete.statusCode, 200);
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM media_assets').get().count, 0);
     assert.equal(db.prepare('SELECT is_deleted FROM documents WHERE id = ?').get(documentId).is_deleted, 1);
+
+    const cxoTarget = dispatch({
+      method: 'POST',
+      body: input({ cid: '000124', media_name: 'CXO 删除验证' }),
+    });
+    assert.equal(cxoTarget.statusCode, 200, JSON.stringify(cxoTarget.payload));
+    shareDocument.run(cxoTarget.payload.document_id, users.cxo.id);
+    const cxoDelete = dispatch({
+      method: 'DELETE', path: '/:id', params: { id: String(cxoTarget.payload.id) }, user: users.cxo,
+    });
+    assert.equal(cxoDelete.statusCode, 200);
   } finally {
     db.close();
   }

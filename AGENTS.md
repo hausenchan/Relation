@@ -115,6 +115,9 @@ RELATION_RUN_MYSQL_TESTS=1 \
 - 媒体管理 `/media-management`：媒体接入台账及关联文档；关联文档固定归档到
   `国内项目 / 产运 / 落地 / YYZ / 媒体对接`，使用普通文档图标和 `IMP` 类型，媒体身份以
   `media_assets.document_id` 关系判断，不得再依赖 `doc_type=MEDIA`。
+- 媒体删除仅允许 CEO、COO、CTO、CMO，或 `role=leader` 且在 `teams.leader_id` 中实际负责
+  “流量商务”商务小组的用户；普通管理员、创建人、共享协作者和其他组长均无删除入口，服务端
+  DELETE 接口也必须独立拒绝。
 - 文档中心 `/documents`：文件夹树、多标签、普通文档块编辑、在线表格文档、表格块、
   图片/附件、共享、Wolai/TAPD 导入、历史、多人更新、收藏和搜索。
 - 网络抓包 `/network-capture`：采集与入库辅助能力。

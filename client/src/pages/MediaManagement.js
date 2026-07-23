@@ -45,6 +45,7 @@ import { useAuth } from '../AuthContext';
 import { ATTACHMENT_ACCEPT, validateAttachment } from '../utils/attachments';
 import {
   buildMediaListParams,
+  canShowMediaDelete,
   isValidMediaCid,
   mediaBudgetOptions,
   mediaCategoryOptions,
@@ -457,21 +458,21 @@ export default function MediaManagement() {
             disabled={!Number(record.can_edit)}
             onClick={event => { event.stopPropagation(); openEdit(record); }}
           />
-          <Popconfirm
-            title="确认删除该媒体？"
-            description="关联文档将停止展示，历史和附件会保留。"
-            disabled={!Number(record.can_delete)}
-            onConfirm={() => deleteRecord(record)}
-          >
-            <Button
-              type="text"
-              danger
-              icon={<DeleteOutlined />}
-              aria-label="删除媒体"
-              disabled={!Number(record.can_delete)}
-              onClick={event => event.stopPropagation()}
-            />
-          </Popconfirm>
+          {canShowMediaDelete(record) && (
+            <Popconfirm
+              title="确认删除该媒体？"
+              description="关联文档将停止展示，历史和附件会保留。"
+              onConfirm={() => deleteRecord(record)}
+            >
+              <Button
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                aria-label="删除媒体"
+                onClick={event => event.stopPropagation()}
+              />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },

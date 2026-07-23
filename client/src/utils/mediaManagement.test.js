@@ -1,5 +1,6 @@
 import {
   buildMediaListParams,
+  canShowMediaDelete,
   isValidMediaCid,
   mediaRecordToFormValues,
   normalizeMediaFormPayload,
@@ -12,6 +13,14 @@ describe('media management utilities', () => {
     expect(isValidMediaCid('00000000000000000001')).toBe(true);
     expect(isValidMediaCid('123456789012345678901')).toBe(false);
     expect(isValidMediaCid('12A')).toBe(false);
+  });
+
+  test('shows the delete entry only when the server grants media delete permission', () => {
+    expect(canShowMediaDelete({ can_delete: 1 })).toBe(true);
+    expect(canShowMediaDelete({ can_delete: '1' })).toBe(true);
+    expect(canShowMediaDelete({ can_delete: 0 })).toBe(false);
+    expect(canShowMediaDelete({ can_delete: true })).toBe(true);
+    expect(canShowMediaDelete({})).toBe(false);
   });
 
   test('normalizes form dates, nullable selectors, and budget arrays', () => {

@@ -1,5 +1,7 @@
 const express = require('express');
 
+const { canDeleteMedia } = require('./mediaManagementPolicy');
+
 const MEDIA_MENU_KEY = '/media-management';
 const MEDIA_DOCUMENT_DIRECTORY = Object.freeze({
   domain: 'domestic_project',
@@ -388,7 +390,6 @@ function createMediaManagementRouter(deps) {
     buildDocumentVisibilityFilter,
     getVisibleDocument,
     canEditDocument,
-    canManageDocument,
     createDocumentRecord,
     getDefaultDocumentShares,
     addDocumentShares,
@@ -431,6 +432,17 @@ function createMediaManagementRouter(deps) {
     )
   ));
 
+  const canDeleteMediaForUser = (user) => {
+    if (canDeleteMedia(user)) return true;
+    if (String(user?.role || '').trim().toLowerCase() !== 'leader') return false;
+    const ledTeams = db.prepare(`
+      SELECT name, department
+      FROM teams
+      WHERE leader_id = ?
+    `).all(user.id);
+    return canDeleteMedia(user, ledTeams);
+  };
+
   router.use((req, res, next) => {
     if (!hasMenuAccess(req.user)) return res.status(403).json({ error: '无媒体管理菜单权限' });
     return next();
@@ -459,7 +471,7 @@ function createMediaManagementRouter(deps) {
     `).get(Number(id), ...visibility.params);
   };
 
-  const serializeMedia = (row, user) => {
+  const serializeMedia = (row, user, deleteAllowed = canDeleteMediaForUser(user)) => {
     if (!row) return null;
     const decrypted = decryptRow('media_assets', row);
     const document = {
@@ -478,7 +490,7 @@ function createMediaManagementRouter(deps) {
       owner_id: record.owner_id ? Number(record.owner_id) : null,
       budget_types: parseBudgetTypes(record.budget_types),
       can_edit: canEditDocument(user, document) ? 1 : 0,
-      can_delete: canManageDocument(user, document) ? 1 : 0,
+      can_delete: deleteAllowed ? 1 : 0,
     };
   };
 
@@ -565,7 +577,8 @@ function createMediaManagementRouter(deps) {
       const rows = db.prepare(sql).all(...params)
         .filter(row => !requiredBudgets.length || requiredBudgets.every(value => parseBudgetTypes(row.budget_types).includes(value)))
         .filter(row => mediaMatchesSearch(row, req.query.search));
-      return res.json(rows.map(row => serializeMedia(row, req.user)));
+      const deleteAllowed = canDeleteMediaForUser(req.user);
+      return res.json(rows.map(row => serializeMedia(row, req.user, deleteAllowed)));
     } catch (error) {
       return respondError(res, error, '加载媒体列表失败');
     }
@@ -722,10 +735,11 @@ function createMediaManagementRouter(deps) {
     try {
       const row = getVisibleMediaRow(req.params.id, req.user);
       if (!row) return res.status(404).json({ error: '媒体不存在或无权限访问' });
-      const document = getVisibleDocument(row.document_id, req.user);
-      if (!document || !canManageDocument(req.user, document)) {
-        return res.status(403).json({ error: '只有创建人或管理员可以删除媒体' });
+      if (!canDeleteMediaForUser(req.user)) {
+        return res.status(403).json({ error: '仅 CXO 和流量商务组长可以删除媒体' });
       }
+      const document = getVisibleDocument(row.document_id, req.user);
+      if (!document) return res.status(404).json({ error: '关联文档不存在或无权限访问' });
       const remove = db.transaction(() => {
         db.prepare('DELETE FROM media_assets WHERE id = ?').run(Number(row.id));
         db.prepare(`
