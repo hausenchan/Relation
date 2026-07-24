@@ -32,7 +32,7 @@
 
 ## DAU查询助手菜单（2026-07-25）
 
-状态：实现和自动化验证完成，待提交推送 `gitee/main`。
+状态：菜单已交付；外部页面调试浮层修复完成，随本次提交交付到 `gitee/main`。
 
 ### 需求与实现
 
@@ -41,15 +41,20 @@
   `https://ngwlcg9gyg3i.space.mcode.cn`。
 - 菜单权限页同步新增权限节点；管理员及老板身份默认可见，其他用户按现有菜单权限授权。
 - 目标地址固定在代码中，不接受 URL 参数覆盖；Relation 不代理或存储第三方页面数据。
+- 外部页面在 iframe 中会自动启用 MiniMax 元素检查脚本，造成蓝色 `<div>/<span>` 标签、虚线框和
+  点击拦截；Relation 在 iframe 加载完成后向固定来源发送关闭高亮和清除选中节点消息。
+- 右下角 `Created by MiniMax Agent` 是第三方页面自身品牌标识，不属于元素检查器；目标站点未提供
+  跨域关闭接口，Relation 不使用遮罩覆盖，以免挡住查询内容和交互。
 
 ### 已验证
 
 - DAU查询助手页面测试 1/1 通过，确认页面只渲染一个 iframe，地址、标题、立即加载和 referrer
-  策略正确。
+  策略正确，并覆盖加载后向固定来源发送两个调试浮层关闭消息。
+- 真实跨域 iframe 回归通过：鼠标悬停应用卡片后，高亮框、标签和选中框均保持 `display:none`，
+  查询输入框正常存在。
+- 前端全量测试 26 个套件、129 条测试全部通过；测试输出仅有既有 React `act` 警告。
+- 隔离生产构建输出到 `/tmp/relation-dau-inspector-fix-build` 并编译成功。
 - 目标站点响应 `200`，未返回 `X-Frame-Options` 或 CSP `frame-ancestors`，允许 iframe 嵌入。
-- 前端全量测试 26 个套件中 25 个通过；`DocumentBodyEditor.test.js` 因工作区已有未提交的
-  `MentionPicker.js` 与该测试 Ant Design mock 不兼容而加载失败，与本任务无关，本次未修改该并行改动。
-- 隔离生产构建输出到 `/tmp/relation-dau-query-assistant-build` 并编译成功。
 - 前端性能门禁通过：首屏 JavaScript 328.1KB gzip，75 个异步 chunk，最大异步 chunk 420.8KB gzip。
 - 本机 `3001` 后端未运行，因此未执行登录后的 Relation 菜单浏览器回归。
 

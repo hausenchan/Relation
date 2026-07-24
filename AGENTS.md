@@ -174,6 +174,13 @@ RELATION_RUN_MYSQL_TESTS=1 \
 - 前端菜单隐藏不能替代后端鉴权。新增接口必须应用对应的认证、菜单、模块、读写和
   数据范围检查。
 
+### 3.9 常用工具
+
+- DAU查询助手 `/dau-query-assistant` 通过跨域 iframe 加载固定的 mcode 页面，不接受 URL 参数
+  覆盖，也不在 Relation 中代理或存储第三方页面数据。
+- 目标页面内置的 iframe 元素检查脚本会默认显示 `<div>/<span>` 高亮框；iframe 加载完成后必须向
+  固定来源发送 `disable-iframe-highlight` 和 `clear-selected-element` 消息，避免调试框拦截正常查询。
+
 ## 4. 权限与安全不变量
 
 ### 4.1 通用权限
@@ -341,6 +348,7 @@ RELATION_RUN_MYSQL_TESTS=1 \
 | 媒体关联文档 | 固定目录、`DOMESTIC-OPS-IMP` 编号、默认图标、标题保护、收藏列表和旧数据迁移 |
 | 经营周会参与人 | 两道门、准备可见性、提交统计、AI 输入、年度汇总 |
 | `App.js` 菜单/路由 | `MenuPerms.js` 菜单树、后端菜单 key、工作区标签标题 |
+| `DauQueryAssistant.js` | 固定第三方来源、iframe sandbox、元素检查器关闭消息、跨域加载回归 |
 | 附件路径 | 本地与 OSS 兼容、权限、预览、下载、删除、历史迁移 |
 
 ## 6. 数据库与 API 约束
