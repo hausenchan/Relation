@@ -22271,6 +22271,141 @@ app.delete('/api/notifications/:id', (req, res) => {
   res.json({ success: true });
 });
 
+function getActiveMentionUsers() {
+  return db.prepare(`
+    SELECT id, username, display_name, role, executive_role, department, team_id, account_status
+    FROM users
+    WHERE COALESCE(account_status, 'active') = 'active'
+    ORDER BY COALESCE(display_name, username) ASC, id ASC
+  `).all();
+}
+
+function serializeMentionUser(user) {
+  if (!user) return null;
+  return {
+    id: Number(user.id),
+    username: user.username,
+    display_name: user.display_name,
+    name: user.display_name || user.username || `用户${user.id}`,
+    role: user.role,
+    executive_role: user.executive_role,
+    department: user.department,
+  };
+}
+
+function getMentionEntityContext(entityType, entityId, actor, scope = '') {
+  const id = Number(entityId);
+  if (!id) return { error: '页面不存在', status: 404 };
+  if (entityType === 'document') {
+    const document = getVisibleDocument(id, actor);
+    if (!document) return { error: '文档不存在或无权限访问', status: 404 };
+    return {
+      entity: document,
+      moduleName: '文档中心',
+      title: document.title || '未命名文档',
+      link: `/documents?doc=${document.id}`,
+      canNotify: canEditDocument(actor, document),
+      canUserAccess: user => Boolean(getVisibleDocument(document.id, user)),
+    };
+  }
+  if (entityType === 'goal') {
+    const goal = getGoalRecord(id);
+    if (!goal || !canAccessGoal(actor, goal)) return { error: '目标不存在或无权限访问', status: 404 };
+    const publicGoal = decryptRow('goals', goal);
+    return {
+      entity: goal,
+      moduleName: '目标',
+      title: publicGoal.title || `目标 #${goal.id}`,
+      link: '/goals',
+      canNotify: canEditGoal(actor, goal),
+      canUserAccess: user => canAccessGoal(user, goal),
+    };
+  }
+  if (entityType === 'weekly_report') {
+    const report = getWeeklyReportRecord(id);
+    if (!report || !canAccessWeeklyReport(actor, report)) return { error: '周报不存在或无权限访问', status: 404 };
+    const publicReport = decryptRow('weekly_reports', report);
+    return {
+      entity: report,
+      moduleName: '周报',
+      title: `${publicReport.user_name || report.user_name || '成员'} ${publicReport.week_start || report.week_start || ''} 周报`.trim(),
+      link: '/weekly-reports',
+      canNotify: canEditWeeklyReport(actor, report),
+      canUserAccess: user => canAccessWeeklyReport(user, report),
+    };
+  }
+  if (entityType === 'operational_meeting') {
+    const meeting = getOperationalMeetingForAccess(id, actor);
+    if (!meeting) return { error: '经营周会不存在或无权限访问', status: 404 };
+    const normalizedScope = String(scope || '').trim();
+    const sectionId = Number(normalizedScope.match(/^section:(\d+)$/)?.[1] || 0);
+    const scopedSection = sectionId
+      ? db.prepare('SELECT * FROM operational_meeting_sections WHERE id = ? AND meeting_id = ?').get(sectionId, meeting.id)
+      : null;
+    const actorSection = scopedSection
+      ? { ...scopedSection, _accessParticipant: meeting._accessParticipant }
+      : null;
+    const canNotify = scopedSection
+      ? canEditOperationalSection(actor, actorSection)
+      : normalizedScope === 'decision'
+      ? canEditOperationalDecision(actor, meeting._accessParticipant)
+      : canEditOperationalAgenda(actor, meeting._accessParticipant);
+    const authorizedIds = scopedSection
+      ? listOperationalPreparationAuthorizedUserIds(meeting.id, scopedSection.owner_user_id)
+      : listOperationalMeetingParticipantUserIds(meeting.id);
+    const authorizedSet = new Set(authorizedIds.map(Number));
+    return {
+      entity: meeting,
+      moduleName: '经营周会',
+      title: meeting.title || `经营周会 #${meeting.id}`,
+      link: `/executive/operational/${meeting.id}${normalizedScope === 'agenda' || normalizedScope === 'decision' ? '?tab=meeting' : '?tab=preparation'}`,
+      canNotify,
+      canUserAccess: user => authorizedSet.has(Number(user.id)),
+    };
+  }
+  return { error: '不支持的 @ 场景', status: 400 };
+}
+
+function getMentionCandidates(entityType, entityId, actor, scope = '') {
+  const context = getMentionEntityContext(entityType, entityId, actor, scope);
+  if (context.error) return context;
+  const users = getActiveMentionUsers()
+    .filter(user => Number(user.id) !== Number(actor.id))
+    .filter(user => context.canUserAccess(user))
+    .map(serializeMentionUser)
+    .filter(Boolean);
+  return { ...context, users };
+}
+
+app.get('/api/mentions/candidates', (req, res) => {
+  const entityType = String(req.query?.entity_type || '').trim();
+  const context = getMentionCandidates(entityType, req.query?.entity_id, req.user, req.query?.scope);
+  if (context.error) return res.status(context.status || 400).json({ error: context.error });
+  return res.json({
+    entity_type: entityType,
+    entity_id: Number(req.query?.entity_id),
+    module_name: context.moduleName,
+    title: context.title,
+    users: context.users,
+  });
+});
+
+app.post('/api/mentions/notify', canWrite, (req, res) => {
+  const entityType = String(req.body?.entity_type || '').trim();
+  const targetUserId = Number(req.body?.target_user_id || 0);
+  const context = getMentionCandidates(entityType, req.body?.entity_id, req.user, req.body?.scope);
+  if (context.error) return res.status(context.status || 400).json({ error: context.error });
+  if (!context.canNotify) return res.status(403).json({ error: '无权在该页面发送 @ 通知' });
+  const target = context.users.find(user => Number(user.id) === targetUserId);
+  if (!target) return res.status(403).json({ error: '该成员无当前页面权限，不能 @ 通知' });
+  const actorName = req.user.display_name || req.user.username || '有人';
+  const title = `${actorName} 在 ${context.moduleName} ${context.title} 页面 @ 你`;
+  const rawLine = String(req.body?.line_content || '').replace(/\s+/g, ' ').trim();
+  const lineContent = rawLine ? `相关内容：${rawLine.slice(0, 500)}` : '相关内容：-';
+  createNotification(targetUserId, 'content_mention', title, lineContent, context.link);
+  return res.json({ success: true });
+});
+
 // =========== 经营周会模块 API ===========
 const OPERATIONAL_MEETING_MODULE_KEY = 'operational_meeting';
 const OPERATIONAL_MEETING_MENU_KEY = '/executive/operational';

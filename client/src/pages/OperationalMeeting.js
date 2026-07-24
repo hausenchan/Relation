@@ -1155,6 +1155,13 @@ export default function OperationalMeeting() {
             minHeight={280}
             placeholder="填写本周准备内容"
             readOnly={readOnly}
+            mentionContext={detail?.meeting?.id ? {
+              entity_type: 'operational_meeting',
+              entity_id: detail.meeting.id,
+              module_name: '经营周会',
+              title: detail.meeting.title,
+              scope: `section:${section.id}`,
+            } : null}
           />
         </Space>
       </Collapse.Panel>
@@ -1274,6 +1281,13 @@ export default function OperationalMeeting() {
               minHeight={360}
               placeholder="编辑会议提纲"
               readOnly={!detail.can_edit_agenda}
+              mentionContext={detail?.meeting?.id ? {
+                entity_type: 'operational_meeting',
+                entity_id: detail.meeting.id,
+                module_name: '经营周会',
+                title: detail.meeting.title,
+                scope: 'agenda',
+              } : null}
             />
           </Space>
         ) : (
@@ -1315,6 +1329,13 @@ export default function OperationalMeeting() {
           placeholder="记录会议最终决策、负责人、截止时间和后续动作"
           minHeight={280}
           readOnly={!detail.can_edit_decision}
+          mentionContext={detail?.meeting?.id ? {
+            entity_type: 'operational_meeting',
+            entity_id: detail.meeting.id,
+            module_name: '经营周会',
+            title: detail.meeting.title,
+            scope: 'decision',
+          } : null}
         />
       </Card>
     </Space>

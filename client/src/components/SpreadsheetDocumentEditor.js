@@ -20,6 +20,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Dropdown, Input, Modal, Select, Space, Tooltip, Typography, message } from 'antd';
+import MentionPicker, { scheduleMentionNotification } from './MentionPicker';
 import {
   buildSpreadsheetCellKey,
   createDefaultSpreadsheetSheet,
@@ -183,6 +184,7 @@ export default function SpreadsheetDocumentEditor({
   importing = false,
   collaborationNotice = '',
   collaborators = [],
+  mentionContext,
 }) {
   const workbook = useMemo(() => normalizeSpreadsheetWorkbook(workbookValue), [workbookValue]);
   const activeSheet = workbook.sheets.find(sheet => sheet.id === selectedCell?.sheetId)
@@ -198,6 +200,7 @@ export default function SpreadsheetDocumentEditor({
   const [selectionAnchor, setSelectionAnchor] = useState(null);
   const [isSelecting, setIsSelecting] = useState(false);
   const [editingCellKey, setEditingCellKey] = useState('');
+  const [mentionState, setMentionState] = useState(null);
   const [scrollState, setScrollState] = useState({ top: 0, left: 0, width: 800, height: 500 });
   const [zoom, setZoom] = useState(1);
   const [resizeDrag, setResizeDrag] = useState(null);
@@ -211,6 +214,41 @@ export default function SpreadsheetDocumentEditor({
   const onSelectionChangeRef = useRef(onSelectionChange);
   workbookRef.current = workbook;
   onSelectionChangeRef.current = onSelectionChange;
+
+  const detectInputMention = (event, rowIndex, columnIndex) => {
+    if (!canEdit || !mentionContext?.entity_type || !mentionContext?.entity_id) return;
+    const input = event?.target;
+    if (typeof input?.selectionStart !== 'number') return;
+    const value = String(input.value || '');
+    const offset = input.selectionStart;
+    const before = value.slice(0, offset);
+    const match = before.match(/(^|[\s([{，。；：、“‘])@([\p{L}\p{N}_-]{0,24})$/u);
+    if (!match) return;
+    const rect = input.getBoundingClientRect();
+    setMentionState({
+      rowIndex,
+      columnIndex,
+      query: match[2] || '',
+      atOffset: offset - match[2].length - 1,
+      endOffset: offset,
+      value,
+      lineContent: value,
+      position: { left: rect.left + window.scrollX, top: rect.bottom + window.scrollY + 6 },
+    });
+  };
+
+  const insertSpreadsheetMention = (user) => {
+    if (!mentionState || !user) return;
+    const name = user.name || user.display_name || user.username || '';
+    const nextValue = `${mentionState.value.slice(0, mentionState.atOffset)}@${name} ${mentionState.value.slice(mentionState.endOffset)}`;
+    updateCellValue(mentionState.rowIndex, mentionState.columnIndex, nextValue, { recordHistory: false });
+    setMentionState(null);
+    scheduleMentionNotification({
+      context: mentionContext,
+      user,
+      lineContent: nextValue,
+    });
+  };
 
   useEffect(() => {
     const next = normalizeSpreadsheetRange({ rowIndex: activeRowIndex, columnIndex: activeColumnIndex });
@@ -973,7 +1011,10 @@ export default function SpreadsheetDocumentEditor({
             value={rawValue}
             onMouseDown={event => event.stopPropagation()}
             onFocus={() => beginInputTransaction(`cell:${activeSheet.id}:${buildSpreadsheetCellKey(rowIndex, columnIndex)}`)}
-            onChange={event => updateCellValue(rowIndex, columnIndex, event.target.value, { recordHistory: false })}
+            onChange={event => {
+              updateCellValue(rowIndex, columnIndex, event.target.value, { recordHistory: false });
+              window.setTimeout(() => detectInputMention(event, rowIndex, columnIndex), 0);
+            }}
             onBlur={() => {
               commitInputTransaction();
               setEditingCellKey('');
@@ -1177,6 +1218,7 @@ export default function SpreadsheetDocumentEditor({
           onChange={event => {
             beginInputTransaction(`formula:${activeSheet.id}:${activeCellKey}`);
             updateCellValue(activeRowIndex, activeColumnIndex, event.target.value, { recordHistory: false });
+            window.setTimeout(() => detectInputMention(event, activeRowIndex, activeColumnIndex), 0);
           }}
           onBlur={commitInputTransaction}
           onKeyDown={event => {
@@ -1349,6 +1391,14 @@ export default function SpreadsheetDocumentEditor({
           onChange={setZoom}
         />
       </div>
+      <MentionPicker
+        open={Boolean(mentionState)}
+        context={mentionContext}
+        query={mentionState?.query || ''}
+        position={mentionState?.position}
+        onSelect={insertSpreadsheetMention}
+        onClose={() => setMentionState(null)}
+      />
     </section>
   );
 }

@@ -1294,6 +1294,7 @@ function Goals() {
               placeholder="请输入目标描述..."
               minHeight={180}
               onSave={() => persistGoalContent({ silent: false })}
+              mentionContext={editing?.id ? { entity_type: 'goal', entity_id: editing.id, module_name: '目标', title: editing.title } : null}
               style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 8px 14px' }}
             />
           </Form.Item>
@@ -1379,6 +1380,7 @@ function Goals() {
               placeholder="填写目标完成得怎么样..."
               minHeight={180}
               onSave={() => persistGoalContent({ silent: false })}
+              mentionContext={editing?.id ? { entity_type: 'goal', entity_id: editing.id, module_name: '目标', title: editing.title } : null}
               style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 8px 14px' }}
             />
           </Form.Item>

@@ -76,6 +76,11 @@ import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import SpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
+import MentionPicker, {
+  getContentEditableMentionTrigger,
+  insertMentionIntoContentEditable,
+  scheduleMentionNotification,
+} from '../components/MentionPicker';
 import {
   getDefaultDocumentCxoUsers,
   updateDefaultDocumentShareUsers,
@@ -2987,6 +2992,7 @@ function InlineRichTextEditor({
   onKeyUp,
   onKeyDown,
   onPaste,
+  onMentionTrigger,
   style,
 }) {
   const editorRef = useRef(null);
@@ -3016,6 +3022,12 @@ function InlineRichTextEditor({
 
   const emitChange = () => {
     onChange?.(getEditorHtml());
+  };
+
+  const detectMention = () => {
+    if (composingRef.current) return;
+    const trigger = getContentEditableMentionTrigger(editorRef.current);
+    if (trigger) onMentionTrigger?.(trigger);
   };
 
   return (
@@ -3068,9 +3080,15 @@ function InlineRichTextEditor({
             return;
           }
           emitChange();
+          window.setTimeout(detectMention, 0);
         }}
         onMouseUp={onMouseUp}
-        onKeyUp={onKeyUp}
+        onKeyUp={(event) => {
+          onKeyUp?.(event);
+          if (event.key === '@' || event.key === 'Backspace' || event.key === 'Delete' || event.key.length === 1) {
+            window.setTimeout(detectMention, 0);
+          }
+        }}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
         style={{
@@ -3188,6 +3206,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
   const [blockMenuTargetIds, setBlockMenuTargetIds] = useState([]);
   const [inlineToolbar, setInlineToolbar] = useState(null);
+  const [mentionState, setMentionState] = useState(null);
   const [commentComposer, setCommentComposer] = useState(null);
   const [commentDraft, setCommentDraft] = useState('');
   const [activeCommentBlockId, setActiveCommentBlockId] = useState(null);
@@ -9935,6 +9954,29 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     return null;
   };
 
+  const documentMentionContext = selectedDoc?.id ? {
+    entity_type: 'document',
+    entity_id: selectedDoc.id,
+    module_name: '文档中心',
+    title: editorTitle || selectedDoc.title,
+  } : null;
+
+  const handleDocumentMentionTrigger = (block, trigger) => {
+    if (!documentMentionContext || !canEditDoc(selectedDoc)) return;
+    setMentionState({ ...trigger, blockId: block?.id || null });
+  };
+
+  const handleDocumentMentionSelect = (mentionUser) => {
+    const userName = mentionUser?.name || mentionUser?.display_name || mentionUser?.username || '';
+    const lineContent = insertMentionIntoContentEditable(mentionState, userName) || mentionState?.lineContent || '';
+    setMentionState(null);
+    scheduleMentionNotification({
+      context: documentMentionContext,
+      user: mentionUser,
+      lineContent,
+    });
+  };
+
   const handleInlineTextSelection = (block, event) => {
     const input = getInlineSelectionInput(event);
     if (!input) return;
@@ -14362,6 +14404,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         importing={spreadsheetImporting}
         collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
         collaborators={spreadsheetCollaborators}
+        mentionContext={documentMentionContext}
       />
     </>
   );
@@ -14398,6 +14441,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       onSelect: event => handleInlineTextSelection(block, event),
       onMouseUp: event => handleInlineTextSelection(block, event),
       onKeyUp: event => handleInlineTextSelection(block, event),
+      onMentionTrigger: trigger => handleDocumentMentionTrigger(block, trigger),
       onBlur: () => {
         inlineToolbarHideTimerRef.current = window.setTimeout(() => {
           const activeElement = document.activeElement;
@@ -14945,6 +14989,14 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       flexDirection: 'row',
       overflow: embedded || !isMobile ? 'hidden' : 'visible',
     }}>
+      <MentionPicker
+        open={Boolean(mentionState)}
+        context={documentMentionContext}
+        query={mentionState?.query || ''}
+        position={mentionState?.position}
+        onSelect={handleDocumentMentionSelect}
+        onClose={() => setMentionState(null)}
+      />
       {showDocumentLibrary && (
       <aside style={{
         position: 'relative',

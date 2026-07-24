@@ -1071,6 +1071,12 @@ export default function WeeklyReports() {
               minHeight={220}
               style={weeklyEditorStyle}
               onSave={() => persistWeeklyReport({ silent: false })}
+              mentionContext={editingReportId ? {
+                entity_type: 'weekly_report',
+                entity_id: editingReportId,
+                module_name: '周报',
+                title: `${form.getFieldValue('week_range')?.[0]?.format?.('YYYY-MM-DD') || ''} 周报`,
+              } : null}
             />
           </Form.Item>
           <Form.Item
@@ -1085,6 +1091,12 @@ export default function WeeklyReports() {
               minHeight={220}
               style={weeklyEditorStyle}
               onSave={() => persistWeeklyReport({ silent: false })}
+              mentionContext={editingReportId ? {
+                entity_type: 'weekly_report',
+                entity_id: editingReportId,
+                module_name: '周报',
+                title: `${form.getFieldValue('week_range')?.[0]?.format?.('YYYY-MM-DD') || ''} 周报`,
+              } : null}
             />
           </Form.Item>
           <Form.Item name="risks" label="风险与问题" valuePropName="value" trigger="onChange">
@@ -1093,6 +1105,12 @@ export default function WeeklyReports() {
               minHeight={180}
               style={{ ...weeklyEditorStyle, minHeight: 180 }}
               onSave={() => persistWeeklyReport({ silent: false })}
+              mentionContext={editingReportId ? {
+                entity_type: 'weekly_report',
+                entity_id: editingReportId,
+                module_name: '周报',
+                title: `${form.getFieldValue('week_range')?.[0]?.format?.('YYYY-MM-DD') || ''} 周报`,
+              } : null}
             />
           </Form.Item>
 

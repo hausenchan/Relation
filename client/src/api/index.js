@@ -631,6 +631,11 @@ export const documentsApi = {
   },
 };
 
+export const mentionsApi = {
+  candidates: (params) => api.get('/mentions/candidates', { params }).then(r => r.data),
+  notify: (data) => api.post('/mentions/notify', data).then(r => r.data),
+};
+
 export const attachmentsApi = {
   upload: (formData) => api.post('/attachments/upload', formData).then(r => r.data),
   importUrl: (data) => api.post('/attachments/import-url', data).then(r => r.data),

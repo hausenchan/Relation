@@ -38,6 +38,11 @@ import {
   documentClipboardHasEmbeddedBlocks,
   flattenDocumentClipboardHtml,
 } from '../utils/documentClipboard';
+import MentionPicker, {
+  getContentEditableMentionTrigger,
+  insertMentionIntoContentEditable,
+  scheduleMentionNotification,
+} from './MentionPicker';
 
 const LIST_INDENT_WIDTH = 28;
 const LIST_MARKER_WIDTH = 24;
@@ -335,6 +340,7 @@ function InlineBlockEditor({
   onDelete,
   onIndent,
   onPaste,
+  onMentionTrigger,
 }) {
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
@@ -369,6 +375,12 @@ function InlineBlockEditor({
     const html = sanitizeDocumentBodyInlineHtml(editorRef.current?.innerHTML || '');
     localHtmlRef.current = html;
     onChange?.(html);
+  };
+
+  const detectMention = () => {
+    if (readOnly || composingRef.current) return;
+    const trigger = getContentEditableMentionTrigger(editorRef.current);
+    if (trigger) onMentionTrigger?.(trigger);
   };
 
   const activate = () => {
@@ -417,9 +429,15 @@ function InlineBlockEditor({
         }}
         onInput={() => {
           if (!composingRef.current) emitChange();
+          window.setTimeout(detectMention, 0);
         }}
         onMouseUp={activate}
-        onKeyUp={activate}
+        onKeyUp={(event) => {
+          activate();
+          if (event.key === '@' || event.key === 'Backspace' || event.key === 'Delete' || event.key.length === 1) {
+            window.setTimeout(detectMention, 0);
+          }
+        }}
         onPaste={onPaste}
         onKeyDown={(event) => {
           if (event.key === 'Tab') {
@@ -513,6 +531,7 @@ export default function DocumentBodyEditor({
   onChange,
   onSave,
   onDirtyChange,
+  mentionContext,
   placeholder = '输入内容',
   readOnly = false,
   minHeight = 120,
@@ -541,6 +560,7 @@ export default function DocumentBodyEditor({
   const [focusBlockId, setFocusBlockId] = useState(null);
   const [draggingBlockId, setDraggingBlockId] = useState(null);
   const [clipboardBlockIds, setClipboardBlockIds] = useState([]);
+  const [mentionState, setMentionState] = useState(null);
   const hiddenBlockIds = useMemo(() => buildCollapsedDocumentBlockIds(blocks, MAX_LIST_INDENT), [blocks]);
   const guideMap = useMemo(() => buildDocumentBlockGuideMap(blocks, hiddenBlockIds, MAX_LIST_INDENT), [blocks, hiddenBlockIds]);
   const numberedMarkers = useMemo(() => {
@@ -584,6 +604,24 @@ export default function DocumentBodyEditor({
       setActiveBlockId(nextFocusId);
       setFocusBlockId(nextFocusId);
     }
+  };
+
+  const closeMentionPicker = () => setMentionState(null);
+
+  const handleMentionTrigger = (blockId, trigger) => {
+    if (!mentionContext?.entity_type || !mentionContext?.entity_id || readOnly) return;
+    setMentionState({ ...trigger, blockId });
+  };
+
+  const handleMentionSelect = (user) => {
+    const userName = user?.name || user?.display_name || user?.username || '';
+    const lineContent = insertMentionIntoContentEditable(mentionState, userName) || mentionState?.lineContent || '';
+    closeMentionPicker();
+    scheduleMentionNotification({
+      context: mentionContext,
+      user,
+      lineContent,
+    });
   };
 
   const undoLastChange = () => {
@@ -1292,6 +1330,7 @@ export default function DocumentBodyEditor({
       ),
       onIndent: delta => changeIndent(block.id, delta),
       onPaste: event => handleBlockPaste(event, block.id),
+      onMentionTrigger: trigger => handleMentionTrigger(block.id, trigger),
       style: { fontSize, lineHeight: LIST_LINE_HEIGHT, color: '#202124', fontWeight: 400, padding: 0 },
     };
 
@@ -1619,6 +1658,14 @@ export default function DocumentBodyEditor({
     >
       {inlineToolbar}
       <div ref={blocksRootRef}>{blocks.map(renderBlock)}</div>
+      <MentionPicker
+        open={Boolean(mentionState)}
+        context={mentionContext}
+        query={mentionState?.query || ''}
+        position={mentionState?.position}
+        onSelect={handleMentionSelect}
+        onClose={closeMentionPicker}
+      />
       {!readOnly && !(lastVisibleBlock?.type === 'paragraph' && isBlankBlock(lastVisibleBlock)) && (
         <div style={{ display: 'flex', alignItems: 'center', minHeight: 38, padding: '4px 8px 4px 0', marginTop: 4 }}>
           <div style={{ width: 24, minWidth: 24, display: 'flex', justifyContent: 'center' }}>

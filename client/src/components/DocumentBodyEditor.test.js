@@ -1,8 +1,15 @@
-import React from 'react';
+import React, { act } from 'react';
 import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import DocumentBodyEditor from './DocumentBodyEditor';
 import { DOCUMENT_BODY_CLIPBOARD_MIME, DOCUMENT_BODY_FORMAT } from '../utils/documentBodyBlocks';
+
+jest.mock('../api', () => ({
+  mentionsApi: {
+    candidates: jest.fn(() => Promise.resolve({ users: [{ id: 2, name: '陈豪赞', username: 'chenhaozan' }] })),
+    notify: jest.fn(() => Promise.resolve({ success: true })),
+  },
+}));
 
 jest.mock('antd', () => {
   const ReactModule = require('react');
@@ -11,8 +18,18 @@ jest.mock('antd', () => {
   );
   const Input = props => <input {...props} />;
   Input.TextArea = props => <textarea {...props} />;
+  const List = ({ dataSource = [], renderItem }) => (
+    <div>{dataSource.map((item, index) => ReactModule.cloneElement(renderItem(item), { key: item?.id || index }))}</div>
+  );
+  List.Item = ({ children, onClick, onMouseDown, onKeyDown, role, tabIndex, style }) => (
+    <div role={role} tabIndex={tabIndex} onClick={onClick} onMouseDown={onMouseDown} onKeyDown={onKeyDown} style={style}>{children}</div>
+  );
+  List.Item.Meta = ({ avatar, title, description }) => (
+    <div>{avatar}<div>{title}</div><div>{description}</div></div>
+  );
   return {
     Button,
+    Avatar: ({ children }) => <span>{children}</span>,
     Checkbox: ({ checked, onChange }) => <input type="checkbox" checked={checked} onChange={onChange} />,
     Divider: () => <hr />,
     Dropdown: ({ children, menu }) => (
@@ -31,9 +48,13 @@ jest.mock('antd', () => {
       </>
     ),
     Input,
+    Empty: ({ description }) => <div>{description}</div>,
+    List,
+    Spin: () => <span>loading</span>,
     Space: ({ children }) => <div>{children}</div>,
     Tooltip: ({ children }) => ReactModule.createElement(ReactModule.Fragment, null, children),
-    message: { error: jest.fn(), info: jest.fn(), success: jest.fn() },
+    Typography: { Text: ({ children }) => <span>{children}</span> },
+    message: { destroy: jest.fn(), error: jest.fn(), info: jest.fn(), open: jest.fn(), success: jest.fn() },
   };
 });
 
@@ -43,11 +64,14 @@ jest.mock('@ant-design/icons', () => ({
   ArrowRightOutlined: () => null,
   ArrowUpOutlined: () => null,
   CopyOutlined: () => null,
+  CloseOutlined: () => null,
   DeleteOutlined: () => null,
   LinkOutlined: () => null,
   PlusOutlined: () => null,
   SnippetsOutlined: () => null,
 }));
+
+const { mentionsApi } = require('../api');
 
 function createClipboardData() {
   const values = new Map();
@@ -80,6 +104,8 @@ describe('DocumentBodyEditor block copy', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
+    mentionsApi.candidates.mockResolvedValue({ users: [{ id: 2, name: '陈豪赞', username: 'chenhaozan' }] });
+    mentionsApi.notify.mockResolvedValue({ success: true });
   });
 
   afterEach(() => {
@@ -192,6 +218,59 @@ describe('DocumentBodyEditor block copy', () => {
     expect(nextValue.blocks[3].id).not.toBe('two');
     expect(nextValue.blocks[2].meta).toEqual(value.blocks[0].meta);
     expect(nextValue.blocks[3].meta).toEqual(value.blocks[1].meta);
+  });
+
+  test('inserts a styled mention and sends notification after undo window', async () => {
+    jest.useFakeTimers();
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{ blocks: [{ id: 'mention-line', type: 'paragraph', content: '', meta: {} }] }}
+          onChange={onChange}
+          mentionContext={{ entity_type: 'goal', entity_id: 5, module_name: '目标', title: '增长目标' }}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    inlineEditor.focus();
+    inlineEditor.textContent = '@';
+    const range = document.createRange();
+    range.selectNodeContents(inlineEditor);
+    range.collapse(false);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(0);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const memberButton = Array.from(container.querySelectorAll('[role="button"]'))
+      .find(node => node.textContent.includes('陈豪赞'));
+    expect(memberButton).toBeTruthy();
+
+    flushSync(() => {
+      memberButton.click();
+    });
+
+    expect(inlineEditor.innerHTML).toContain('@陈豪赞');
+    expect(onChange.mock.calls.at(-1)[0].blocks[0].content).toContain('background-color');
+
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+    expect(mentionsApi.notify).toHaveBeenCalledWith(expect.objectContaining({
+      entity_type: 'goal',
+      entity_id: 5,
+      target_user_id: 2,
+    }));
+    jest.useRealTimers();
   });
 
   test('copies only the blocks intersected by a native mouse-style selection', () => {
