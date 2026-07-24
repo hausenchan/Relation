@@ -200,6 +200,7 @@ function input(overrides = {}) {
   return {
     cid: '000123',
     media_name: '趣头条',
+    endpoint_description: '安卓-000123/iOS-000124',
     importance: 'key',
     category: 'news',
     yyz_version: 'sdk_data_ui',
@@ -224,6 +225,7 @@ test('router enforces menu access and supports linked-document CRUD, search, and
     const created = dispatch({ method: 'POST', body: input() });
     assert.equal(created.statusCode, 200, JSON.stringify(created.payload));
     assert.equal(created.payload.cid, '000123');
+    assert.equal(created.payload.endpoint_description, '安卓-000123/iOS-000124');
     assert.equal(created.payload.can_delete, 0);
     const mediaId = Number(created.payload.id);
     const documentId = Number(created.payload.document_id);
@@ -274,6 +276,10 @@ test('router enforces menu access and supports linked-document CRUD, search, and
     assert.equal(searched.payload[0].can_edit, 1);
     assert.equal(searched.payload[0].can_delete, 0);
 
+    const endpointSearched = dispatch({ query: { search: 'iOS-000124' }, user: users.editor });
+    assert.equal(endpointSearched.statusCode, 200);
+    assert.deepEqual(endpointSearched.payload.map(record => record.id), [mediaId]);
+
     const filtered = dispatch({
       query: { category: 'news', budget_types: 'h5,alipay_mini', integration_progress: 'testing' },
       user: users.editor,
@@ -284,11 +290,17 @@ test('router enforces menu access and supports linked-document CRUD, search, and
       method: 'PUT',
       path: '/:id',
       params: { id: String(mediaId) },
-      body: input({ cid: '123', media_name: '趣头条媒体', integration_progress: 'scaling' }),
+      body: input({
+        cid: '123',
+        media_name: '趣头条媒体',
+        endpoint_description: '安卓-123/极速版-125',
+        integration_progress: 'scaling',
+      }),
       user: users.editor,
     });
     assert.equal(updated.statusCode, 200, JSON.stringify(updated.payload));
     assert.equal(updated.payload.integration_progress, 'scaling');
+    assert.equal(updated.payload.endpoint_description, '安卓-123/极速版-125');
     assert.equal(db.prepare('SELECT title FROM documents WHERE id = ?').get(documentId).title, '趣头条媒体');
     assert.equal(db.prepare('SELECT COUNT(*) AS count FROM document_edit_records').get().count, 1);
 

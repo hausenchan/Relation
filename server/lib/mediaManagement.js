@@ -60,6 +60,7 @@ const MEDIA_ENUM_LABELS = Object.freeze({
 
 const ENCRYPTED_MEDIA_FIELDS = [
   'media_name',
+  'endpoint_description',
   'domain_name',
   'version_number',
   'latest_features',
@@ -72,6 +73,7 @@ const ENCRYPTED_MEDIA_FIELDS = [
 
 const MEDIA_TEXT_LIMITS = Object.freeze({
   media_name: 120,
+  endpoint_description: 500,
   domain_name: 255,
   version_number: 80,
   latest_features: 5000,
@@ -148,6 +150,7 @@ function normalizeMediaInput(input = {}) {
   return {
     cid,
     media_name: mediaName,
+    endpoint_description: normalizeOptionalText(input.endpoint_description, 'endpoint_description'),
     importance: normalizeEnum(input.importance, 'importance', { required: true, fallback: 'general' }),
     category: normalizeEnum(input.category, 'category', { required: true }),
     yyz_version: normalizeEnum(input.yyz_version, 'yyz_version', { required: true }),
@@ -319,6 +322,7 @@ function ensureMediaManagementSchema(db) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       cid TEXT NOT NULL,
       media_name TEXT NOT NULL,
+      endpoint_description TEXT,
       importance TEXT NOT NULL DEFAULT 'general',
       category TEXT NOT NULL,
       yyz_version TEXT NOT NULL,
@@ -360,6 +364,9 @@ function ensureMediaManagementSchema(db) {
   const columns = new Set(db.prepare('PRAGMA table_info(media_assets)').all().map(column => column.name));
   if (!columns.has('contract_valid_until')) {
     db.prepare('ALTER TABLE media_assets ADD COLUMN contract_valid_until DATE').run();
+  }
+  if (!columns.has('endpoint_description')) {
+    db.prepare('ALTER TABLE media_assets ADD COLUMN endpoint_description TEXT').run();
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_media_assets_contract_valid_until ON media_assets(contract_valid_until)');
 }
@@ -611,15 +618,16 @@ function createMediaManagementRouter(deps) {
       const encrypted = encryptRow('media_assets', input);
       const result = db.prepare(`
         INSERT INTO media_assets (
-          cid, media_name, importance, category, yyz_version, domain_name, version_number,
+          cid, media_name, endpoint_description, importance, category, yyz_version, domain_name, version_number,
           latest_release_date, contract_valid_until, latest_features, display_style, budget_types, uv_scale,
           integration_progress, owner_id, launch_date, porn_api_status, sdk_ui_appid,
           task_config_requirements, special_entry_info, other_notes, document_id,
           created_by, updated_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         encrypted.cid,
         encrypted.media_name,
+        encrypted.endpoint_description,
         encrypted.importance,
         encrypted.category,
         encrypted.yyz_version,
@@ -675,7 +683,7 @@ function createMediaManagementRouter(deps) {
       const update = db.transaction(() => {
         db.prepare(`
           UPDATE media_assets SET
-            cid = ?, media_name = ?, importance = ?, category = ?, yyz_version = ?,
+            cid = ?, media_name = ?, endpoint_description = ?, importance = ?, category = ?, yyz_version = ?,
             domain_name = ?, version_number = ?, latest_release_date = ?, contract_valid_until = ?,
             latest_features = ?, display_style = ?, budget_types = ?, uv_scale = ?, integration_progress = ?,
             owner_id = ?, launch_date = ?, porn_api_status = ?, sdk_ui_appid = ?,
@@ -685,6 +693,7 @@ function createMediaManagementRouter(deps) {
         `).run(
           encrypted.cid,
           encrypted.media_name,
+          encrypted.endpoint_description,
           encrypted.importance,
           encrypted.category,
           encrypted.yyz_version,

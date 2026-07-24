@@ -16,6 +16,7 @@ function validInput(overrides = {}) {
   return {
     cid: '00000000000000001234',
     media_name: '趣头条',
+    endpoint_description: '安卓-100035/iOS-100036/极速版-100047',
     importance: 'key',
     category: 'news',
     yyz_version: 'sdk_data_ui',
@@ -36,6 +37,7 @@ test('normalizes media input while preserving a twenty-digit CID and optional va
 
   assert.equal(result.cid, '00000000000000001234');
   assert.equal(result.media_name, '趣头条');
+  assert.equal(result.endpoint_description, '安卓-100035/iOS-100036/极速版-100047');
   assert.deepEqual(result.budget_types, ['h5', 'self_app']);
   assert.equal(result.contract_valid_until, '2026-12-31');
   assert.equal(result.porn_api_status, null);
@@ -50,6 +52,7 @@ test('rejects invalid CID, enum, date, budget, and APPID values', () => {
   assert.throws(() => normalizeMediaInput(validInput({ contract_valid_until: '2026-13-01' })), /不是有效日期/);
   assert.throws(() => normalizeMediaInput(validInput({ budget_types: ['unknown'] })), /不合法/);
   assert.throws(() => normalizeMediaInput(validInput({ sdk_ui_appid: 'a'.repeat(33) })), /32 个字符/);
+  assert.throws(() => normalizeMediaInput(validInput({ endpoint_description: 'a'.repeat(501) })), /500 个字符/);
 });
 
 test('parses JSON and comma-separated budget values', () => {
@@ -65,6 +68,7 @@ test('creates the media schema and its document relationship columns on SQLite',
     assert.ok(columns.includes('cid'));
     assert.ok(columns.includes('budget_types'));
     assert.ok(columns.includes('document_id'));
+    assert.ok(columns.includes('endpoint_description'));
     assert.ok(columns.includes('contract_valid_until'));
     assert.ok(columns.includes('task_config_requirements'));
     const indexes = db.prepare("PRAGMA index_list('media_assets')").all().map(index => index.name);
@@ -76,7 +80,7 @@ test('creates the media schema and its document relationship columns on SQLite',
   }
 });
 
-test('adds contract validity date to existing media schema', () => {
+test('adds contract validity date and endpoint description to existing media schema', () => {
   const db = new Database(':memory:');
   try {
     db.exec(`
@@ -114,6 +118,7 @@ test('adds contract validity date to existing media schema', () => {
     ensureMediaManagementSchema(db);
     const columns = db.prepare('PRAGMA table_info(media_assets)').all().map(column => column.name);
     assert.ok(columns.includes('contract_valid_until'));
+    assert.ok(columns.includes('endpoint_description'));
   } finally {
     db.close();
   }
@@ -253,5 +258,9 @@ test('translates media identifiers and encrypted text safely for MySQL', () => {
   assert.match(
     columnDefinitionToMysql('media_name TEXT NOT NULL', new Set(), 'media_assets'),
     /media_name LONGTEXT NOT NULL/i,
+  );
+  assert.match(
+    columnDefinitionToMysql('endpoint_description TEXT', new Set(), 'media_assets'),
+    /endpoint_description LONGTEXT/i,
   );
 });

@@ -518,8 +518,12 @@ export default function MediaManagement() {
             >
               <Text ellipsis={{ tooltip: value }}>{value}</Text>
             </Button>
-            <Text type="secondary" className="media-management-document-id">
-              文档 #{record.document_id || '-'}
+            <Text
+              type="secondary"
+              className="media-management-endpoint-description"
+              ellipsis={{ tooltip: record.endpoint_description || '-' }}
+            >
+              {record.endpoint_description || '-'}
             </Text>
           </div>
         </div>
@@ -585,6 +589,9 @@ export default function MediaManagement() {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
             <div style={{ minWidth: 0 }}>
               <Text strong ellipsis style={{ display: 'block' }}>{record.media_name}</Text>
+              <Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>
+                {record.endpoint_description || '-'}
+              </Text>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 CID {record.cid} · {getOptionMeta('category', record.category).label} · {record.owner_name || '-'}
               </Text>
@@ -760,6 +767,15 @@ export default function MediaManagement() {
                 <Input maxLength={120} />
               </Form.Item>
             </Col>
+            <Col span={24}>
+              <Form.Item name="endpoint_description" label="端描述">
+                <Input
+                  maxLength={500}
+                  showCount
+                  placeholder="例如：安卓-100035/iOS-100036/极速版-100047"
+                />
+              </Form.Item>
+            </Col>
             <Col span={fieldCol}>
               <Form.Item name="importance" label="重要程度" rules={[{ required: true, message: '请选择重要程度' }]}>
                 <Select options={mediaImportanceOptions} />
@@ -911,6 +927,7 @@ export default function MediaManagement() {
               styles={{ label: { width: isMobile ? 110 : 128 } }}
             >
               <Descriptions.Item label="CID"><Text code>{detailRecord.cid}</Text></Descriptions.Item>
+              <Descriptions.Item label="端描述" span={isMobile ? 1 : 2}>{displayText(detailRecord.endpoint_description)}</Descriptions.Item>
               <Descriptions.Item label="重要程度">{renderEnumTag('importance', detailRecord.importance)}</Descriptions.Item>
               <Descriptions.Item label="对接进度">{renderEnumTag('integration_progress', detailRecord.integration_progress)}</Descriptions.Item>
               <Descriptions.Item label="类目">{getOptionMeta('category', detailRecord.category).label}</Descriptions.Item>
@@ -923,7 +940,7 @@ export default function MediaManagement() {
               <Descriptions.Item label="合同有效期">{displayText(detailRecord.contract_valid_until)}</Descriptions.Item>
               <Descriptions.Item label="上线时间">{displayText(detailRecord.launch_date)}</Descriptions.Item>
               <Descriptions.Item label="UV量级">{displayText(detailRecord.uv_scale)}</Descriptions.Item>
-              <Descriptions.Item label="预算" span={isMobile ? 1 : 2}>{renderBudgetTags(detailRecord.budget_types)}</Descriptions.Item>
+              <Descriptions.Item label="预算" span={isMobile ? 1 : 3}>{renderBudgetTags(detailRecord.budget_types)}</Descriptions.Item>
               <Descriptions.Item label="最新支持功能" span={isMobile ? 1 : 3}>{displayText(detailRecord.latest_features)}</Descriptions.Item>
               <Descriptions.Item label="是否有鉴黄API功能">{detailRecord.porn_api_status ? getOptionMeta('porn_api_status', detailRecord.porn_api_status).label : '-'}</Descriptions.Item>
               <Descriptions.Item label="APPID-SDK UI版" span={isMobile ? 1 : 2}><Text copyable={Boolean(detailRecord.sdk_ui_appid)}>{displayText(detailRecord.sdk_ui_appid)}</Text></Descriptions.Item>

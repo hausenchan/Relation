@@ -35,6 +35,7 @@ describe('media management utilities', () => {
     const payload = normalizeMediaFormPayload({
       cid: ' 00081 ',
       media_name: ' 趣头条 ',
+      endpoint_description: ' 安卓-100035/iOS-100036 ',
       latest_release_date: { format: () => '2026-07-21' },
       launch_date: null,
       budget_types: ['h5', 'alipay_mini'],
@@ -45,6 +46,7 @@ describe('media management utilities', () => {
     expect(payload).toMatchObject({
       cid: '00081',
       media_name: '趣头条',
+      endpoint_description: '安卓-100035/iOS-100036',
       latest_release_date: '2026-07-21',
       launch_date: null,
       budget_types: ['h5', 'alipay_mini'],

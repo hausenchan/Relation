@@ -90,6 +90,7 @@ export function normalizeMediaFormPayload(values = {}) {
     ...values,
     cid: String(values.cid || '').trim(),
     media_name: String(values.media_name || '').trim(),
+    endpoint_description: String(values.endpoint_description || '').trim() || null,
     budget_types: Array.isArray(values.budget_types) ? values.budget_types : [],
     latest_release_date: normalizeDate(values.latest_release_date),
     contract_valid_until: normalizeDate(values.contract_valid_until),

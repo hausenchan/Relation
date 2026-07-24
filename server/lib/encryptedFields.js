@@ -72,7 +72,7 @@ module.exports = {
 
   media_assets: {
     fields: [
-      'media_name', 'domain_name', 'version_number', 'latest_features', 'uv_scale',
+      'media_name', 'endpoint_description', 'domain_name', 'version_number', 'latest_features', 'uv_scale',
       'sdk_ui_appid', 'task_config_requirements', 'special_entry_info', 'other_notes',
     ],
     indexed: [],

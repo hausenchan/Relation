@@ -74,6 +74,7 @@ test('moves row operations into a leading contextual menu column', async () => {
       id: 7,
       cid: '100026',
       media_name: '小蚕惠生活-安卓',
+      endpoint_description: '安卓-100026/iOS-100027',
       can_edit: 1,
       can_delete: 1,
       budget_types: [],
@@ -104,6 +105,8 @@ test('moves row operations into a leading contextual menu column', async () => {
   expect(editableMoreButton).not.toBeNull();
   expect(editableMoreButton.closest('td')?.className).toContain('media-management-row-action-cell');
   expect(container.querySelector('button[aria-label="更多操作：只读媒体"]')).not.toBeNull();
+  expect(container.textContent).toContain('安卓-100026/iOS-100027');
+  expect(container.textContent).not.toContain('文档 #');
 
   await act(async () => {
     editableMoreButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
