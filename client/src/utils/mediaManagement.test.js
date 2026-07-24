@@ -1,6 +1,7 @@
 import {
   buildMediaListParams,
   canShowMediaDelete,
+  getMediaNameColumnWidth,
   getMediaRowActionKeys,
   isValidMediaCid,
   mediaRecordToFormValues,
@@ -29,6 +30,18 @@ describe('media management utilities', () => {
       .toEqual(['detail', 'edit', 'delete']);
     expect(getMediaRowActionKeys({ can_edit: 0, can_delete: 0 }))
       .toEqual(['detail']);
+  });
+
+  test('sizes the media column from media names while ignoring endpoint descriptions', () => {
+    expect(getMediaNameColumnWidth([
+      { media_name: '梦游社', endpoint_description: '端描述'.repeat(100) },
+      { media_name: '米米库925', endpoint_description: '安卓-925/iOS-926/极速版-927' },
+    ])).toBe(168);
+
+    const longNameWidth = getMediaNameColumnWidth([{ media_name: '这是一个比较长的媒体主体名称' }]);
+    expect(longNameWidth).toBeGreaterThan(168);
+    expect(longNameWidth).toBeLessThanOrEqual(240);
+    expect(getMediaNameColumnWidth([{ media_name: '超长媒体名称'.repeat(20) }])).toBe(240);
   });
 
   test('normalizes form dates, nullable selectors, and budget arrays', () => {

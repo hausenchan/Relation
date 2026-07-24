@@ -67,6 +67,24 @@ export const mediaOptionMaps = {
 };
 
 export const MEDIA_CID_MAX_LENGTH = 20;
+export const MEDIA_NAME_COLUMN_MIN_WIDTH = 168;
+export const MEDIA_NAME_COLUMN_MAX_WIDTH = 240;
+
+function estimateMediaNameTextWidth(value) {
+  return Array.from(String(value || '').trim()).reduce((width, character) => (
+    width + (/[^\u0000-\u00ff]/.test(character) ? 14 : 8)
+  ), 0);
+}
+
+export function getMediaNameColumnWidth(records = []) {
+  const widestName = (Array.isArray(records) ? records : []).reduce((width, record) => (
+    Math.max(width, estimateMediaNameTextWidth(record?.media_name))
+  ), estimateMediaNameTextWidth('媒体'));
+  return Math.min(
+    MEDIA_NAME_COLUMN_MAX_WIDTH,
+    Math.max(MEDIA_NAME_COLUMN_MIN_WIDTH, Math.ceil(widestName + 40)),
+  );
+}
 
 export function isValidMediaCid(value) {
   return new RegExp(`^\\d{1,${MEDIA_CID_MAX_LENGTH}}$`).test(String(value || '').trim());

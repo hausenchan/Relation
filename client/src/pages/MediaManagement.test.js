@@ -109,6 +109,9 @@ test('moves row operations into a leading contextual menu column', async () => {
   expect(container.textContent).toContain(endpointDescription);
   expect(container.textContent).not.toContain('文档 #');
   expect(container.querySelector('.media-management-table table')?.style.tableLayout).toBe('fixed');
+  const columnWidths = Array.from(container.querySelectorAll('.media-management-table col'))
+    .map(column => column.style.width);
+  expect(columnWidths[2]).toBe('168px');
   const endpointNode = container.querySelector('.media-management-endpoint-description');
   expect(endpointNode).not.toBeNull();
   await act(async () => {

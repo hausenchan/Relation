@@ -48,6 +48,7 @@ import { ATTACHMENT_ACCEPT, validateAttachment } from '../utils/attachments';
 import {
   buildMediaListParams,
   canShowMediaDelete,
+  getMediaNameColumnWidth,
   getMediaRowActionKeys,
   isValidMediaCid,
   mediaBudgetOptions,
@@ -55,6 +56,7 @@ import {
   mediaDisplayStyleOptions,
   mediaImportanceOptions,
   MEDIA_CID_MAX_LENGTH,
+  MEDIA_NAME_COLUMN_MIN_WIDTH,
   mediaOptionMaps,
   mediaPornApiOptions,
   mediaProgressOptions,
@@ -275,6 +277,7 @@ export default function MediaManagement() {
     value: Number(user.id),
     label: user.display_name || user.username,
   })), [users]);
+  const mediaNameColumnWidth = useMemo(() => getMediaNameColumnWidth(rows), [rows]);
 
   const setFilter = (key, value) => setFilters(current => ({ ...current, [key]: value }));
 
@@ -518,7 +521,7 @@ export default function MediaManagement() {
       title: '媒体',
       dataIndex: 'media_name',
       key: 'media_name',
-      width: 260,
+      width: mediaNameColumnWidth,
       className: 'media-management-name-column',
       render: (value, record) => (
         <div className="media-management-name-cell">
@@ -718,7 +721,7 @@ export default function MediaManagement() {
               minWidths: {
                 __actions: 48,
                 cid: 96,
-                media_name: 260,
+                media_name: MEDIA_NAME_COLUMN_MIN_WIDTH,
                 importance: 100,
                 category: 96,
                 yyz_version: 120,
