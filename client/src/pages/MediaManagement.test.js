@@ -2,6 +2,7 @@ import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
 
 const mockListMedia = jest.fn();
+const mockGetMedia = jest.fn();
 const mockListUsers = jest.fn();
 const mockListAttachments = jest.fn();
 
@@ -22,6 +23,7 @@ jest.mock('../api', () => ({
   },
   mediaManagementApi: {
     list: (...args) => mockListMedia(...args),
+    get: (...args) => mockGetMedia(...args),
   },
   usersApi: {
     listSimple: (...args) => mockListUsers(...args),
@@ -60,6 +62,7 @@ afterAll(() => {
 
 beforeEach(() => {
   mockListMedia.mockResolvedValue([]);
+  mockGetMedia.mockResolvedValue(null);
   mockListUsers.mockResolvedValue([]);
   mockListAttachments.mockResolvedValue([]);
 });
@@ -109,6 +112,65 @@ test('moves row operations into a leading contextual menu column', async () => {
   const menuItems = Array.from(document.body.querySelectorAll('[role="menuitem"]'))
     .map(node => node.textContent.trim());
   expect(menuItems).toEqual(expect.arrayContaining(['查看详情', '编辑媒体', '删除媒体']));
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('deduplicates repeated row double clicks and ignores drawer mask clicks', async () => {
+  localStorage.clear();
+  const record = {
+    id: 9,
+    cid: '100029',
+    media_name: '稳定媒体',
+    document_id: 29,
+    can_edit: 1,
+    can_delete: 0,
+    budget_types: [],
+  };
+  let resolveDetail;
+  mockListMedia.mockResolvedValueOnce([record]);
+  mockGetMedia.mockImplementationOnce(() => new Promise(resolve => {
+    resolveDetail = resolve;
+  }));
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () => {
+    root.render(<MediaManagement />);
+  });
+  await act(async () => {
+    await new Promise(resolve => window.setTimeout(resolve, 260));
+  });
+
+  const mediaName = Array.from(container.querySelectorAll('button'))
+    .find(button => button.textContent.includes(record.media_name));
+  const row = mediaName?.closest('tr');
+  expect(row).not.toBeNull();
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(mockGetMedia).toHaveBeenCalledTimes(1);
+  expect(document.body.querySelector('.ant-drawer-open')).not.toBeNull();
+
+  const mask = document.body.querySelector('.ant-drawer-mask');
+  expect(mask).not.toBeNull();
+  await act(async () => {
+    mask.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(document.body.querySelector('.ant-drawer-open')).not.toBeNull();
+
+  await act(async () => {
+    resolveDetail(record);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  });
+  expect(mockListAttachments).toHaveBeenCalledWith(record.document_id);
+  expect(document.body.querySelector('.ant-drawer-open')).not.toBeNull();
+  expect(document.body.querySelector('[data-testid="embedded-document"]')).not.toBeNull();
 
   act(() => root.unmount());
   container.remove();

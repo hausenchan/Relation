@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Button,
   Card,
@@ -213,6 +213,9 @@ export default function MediaManagement() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailAttachments, setDetailAttachments] = useState([]);
   const [detailAttachmentsLoading, setDetailAttachmentsLoading] = useState(false);
+  const detailRequestSequenceRef = useRef(0);
+  const detailOpeningIdRef = useRef(null);
+  const detailAttachmentsRequestSequenceRef = useRef(0);
   const [visibleColumnKeys, setVisibleColumnKeys] = useState(readStoredVisibleColumns);
   const [tableDensity, setTableDensity] = useState(readStoredDensity);
   const [mediaAttachmentFileList, setMediaAttachmentFileList] = useState([]);
@@ -285,19 +288,26 @@ export default function MediaManagement() {
   };
 
   const loadDetailAttachments = useCallback(async (documentId) => {
+    const requestId = detailAttachmentsRequestSequenceRef.current + 1;
+    detailAttachmentsRequestSequenceRef.current = requestId;
     if (!documentId) {
       setDetailAttachments([]);
+      setDetailAttachmentsLoading(false);
       return;
     }
     setDetailAttachmentsLoading(true);
     try {
       const rows = await documentsApi.listAttachments(documentId);
+      if (detailAttachmentsRequestSequenceRef.current !== requestId) return;
       setDetailAttachments(Array.isArray(rows) ? rows : []);
     } catch (error) {
+      if (detailAttachmentsRequestSequenceRef.current !== requestId) return;
       setDetailAttachments([]);
       message.error(error.response?.data?.error || '加载媒体附件失败');
     } finally {
-      setDetailAttachmentsLoading(false);
+      if (detailAttachmentsRequestSequenceRef.current === requestId) {
+        setDetailAttachmentsLoading(false);
+      }
     }
   }, []);
 
@@ -337,19 +347,42 @@ export default function MediaManagement() {
   };
 
   const openDetail = async (record) => {
+    const recordId = Number(record?.id);
+    if (!Number.isInteger(recordId) || recordId <= 0) return;
+    if (detailOpeningIdRef.current === recordId) return;
+
+    const requestId = detailRequestSequenceRef.current + 1;
+    detailRequestSequenceRef.current = requestId;
+    detailOpeningIdRef.current = recordId;
     setDetailRecord(record);
     setDetailOpen(true);
     setDetailLoading(true);
+    detailAttachmentsRequestSequenceRef.current += 1;
     setDetailAttachments([]);
+    setDetailAttachmentsLoading(false);
     try {
-      const detail = await mediaManagementApi.get(record.id);
+      const detail = await mediaManagementApi.get(recordId);
+      if (detailRequestSequenceRef.current !== requestId) return;
       setDetailRecord(detail);
       await loadDetailAttachments(detail.document_id);
     } catch (error) {
+      if (detailRequestSequenceRef.current !== requestId) return;
       message.error(error.response?.data?.error || '加载媒体详情失败');
     } finally {
-      setDetailLoading(false);
+      if (detailRequestSequenceRef.current === requestId) {
+        detailOpeningIdRef.current = null;
+        setDetailLoading(false);
+      }
     }
+  };
+
+  const closeDetail = () => {
+    detailRequestSequenceRef.current += 1;
+    detailAttachmentsRequestSequenceRef.current += 1;
+    detailOpeningIdRef.current = null;
+    setDetailLoading(false);
+    setDetailAttachmentsLoading(false);
+    setDetailOpen(false);
   };
 
   const renderMediaAttachments = () => (
@@ -662,6 +695,8 @@ export default function MediaManagement() {
             onRow={record => ({
               onDoubleClick: event => {
                 if (event.target?.closest?.('button, a, input, [role="button"]')) return;
+                event.preventDefault();
+                event.stopPropagation();
                 openDetail(record);
               },
               style: { cursor: 'pointer' },
@@ -842,7 +877,8 @@ export default function MediaManagement() {
       <Drawer
         title={detailRecord?.media_name || '媒体详情'}
         open={detailOpen}
-        onClose={() => setDetailOpen(false)}
+        onClose={closeDetail}
+        maskClosable={false}
         width={isMobile ? '100%' : '66.67vw'}
         loading={detailLoading}
         styles={{ body: { padding: isMobile ? 14 : 24 } }}
@@ -868,7 +904,12 @@ export default function MediaManagement() {
       >
         {detailRecord && (
           <>
-            <Descriptions bordered size="small" column={isMobile ? 1 : 3} labelStyle={{ width: isMobile ? 110 : 128 }}>
+            <Descriptions
+              bordered
+              size="small"
+              column={isMobile ? 1 : 3}
+              styles={{ label: { width: isMobile ? 110 : 128 } }}
+            >
               <Descriptions.Item label="CID"><Text code>{detailRecord.cid}</Text></Descriptions.Item>
               <Descriptions.Item label="重要程度">{renderEnumTag('importance', detailRecord.importance)}</Descriptions.Item>
               <Descriptions.Item label="对接进度">{renderEnumTag('integration_progress', detailRecord.integration_progress)}</Descriptions.Item>
@@ -882,7 +923,7 @@ export default function MediaManagement() {
               <Descriptions.Item label="合同有效期">{displayText(detailRecord.contract_valid_until)}</Descriptions.Item>
               <Descriptions.Item label="上线时间">{displayText(detailRecord.launch_date)}</Descriptions.Item>
               <Descriptions.Item label="UV量级">{displayText(detailRecord.uv_scale)}</Descriptions.Item>
-              <Descriptions.Item label="预算" span={isMobile ? 1 : 3}>{renderBudgetTags(detailRecord.budget_types)}</Descriptions.Item>
+              <Descriptions.Item label="预算" span={isMobile ? 1 : 2}>{renderBudgetTags(detailRecord.budget_types)}</Descriptions.Item>
               <Descriptions.Item label="最新支持功能" span={isMobile ? 1 : 3}>{displayText(detailRecord.latest_features)}</Descriptions.Item>
               <Descriptions.Item label="是否有鉴黄API功能">{detailRecord.porn_api_status ? getOptionMeta('porn_api_status', detailRecord.porn_api_status).label : '-'}</Descriptions.Item>
               <Descriptions.Item label="APPID-SDK UI版" span={isMobile ? 1 : 2}><Text copyable={Boolean(detailRecord.sdk_ui_appid)}>{displayText(detailRecord.sdk_ui_appid)}</Text></Descriptions.Item>
