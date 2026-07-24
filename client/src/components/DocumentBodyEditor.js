@@ -41,6 +41,7 @@ import {
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
+  removeAdjacentMentionFromContentEditable,
   scheduleMentionNotification,
 } from './MentionPicker';
 
@@ -380,7 +381,7 @@ function InlineBlockEditor({
   const detectMention = () => {
     if (readOnly || composingRef.current) return;
     const trigger = getContentEditableMentionTrigger(editorRef.current);
-    if (trigger) onMentionTrigger?.(trigger);
+    onMentionTrigger?.(trigger || null);
   };
 
   const activate = () => {
@@ -452,6 +453,11 @@ function InlineBlockEditor({
           }
           const simpleDelete = !event.metaKey && !event.ctrlKey && !event.altKey && !composingRef.current;
           if (event.key === 'Backspace' && simpleDelete) {
+            if (removeAdjacentMentionFromContentEditable(editorRef.current, event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
             if (deleteInlineCharacter(editorRef.current, 'backward')) {
               event.preventDefault();
               event.stopPropagation();
@@ -467,6 +473,11 @@ function InlineBlockEditor({
             return;
           }
           if (event.key === 'Delete' && simpleDelete) {
+            if (removeAdjacentMentionFromContentEditable(editorRef.current, event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
             if (deleteInlineCharacter(editorRef.current, 'forward')) {
               event.preventDefault();
               event.stopPropagation();
@@ -609,6 +620,10 @@ export default function DocumentBodyEditor({
   const closeMentionPicker = () => setMentionState(null);
 
   const handleMentionTrigger = (blockId, trigger) => {
+    if (!trigger) {
+      closeMentionPicker();
+      return;
+    }
     if (!mentionContext?.entity_type || !mentionContext?.entity_id || readOnly) return;
     setMentionState({ ...trigger, blockId });
   };

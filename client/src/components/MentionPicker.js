@@ -5,6 +5,7 @@ import { mentionsApi } from '../api';
 
 const { Text } = Typography;
 const mentionStyle = 'display:inline-flex;align-items:center;border-radius:4px;background-color:#e6f4ff;color:#0958d9;padding:0 4px;font-weight:600;';
+const MENTION_SELECTOR = 'span[data-relation-mention="true"],span[style*="background-color:#e6f4ff"],span[style*="background-color: #e6f4ff"]';
 
 function escapeHtml(value = '') {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -17,7 +18,7 @@ function escapeHtml(value = '') {
 }
 
 export function buildMentionHtml(name) {
-  return `<span style="${mentionStyle}">@${escapeHtml(name)}</span>&nbsp;`;
+  return `<span data-relation-mention="true" contenteditable="false" style="${mentionStyle}">@${escapeHtml(name)}</span>&nbsp;`;
 }
 
 function getSelectionRangeInside(editor) {
@@ -117,8 +118,99 @@ export function insertMentionIntoContentEditable(trigger, userName) {
   return editor.textContent || '';
 }
 
+function isMentionElement(node) {
+  if (!node || node.nodeType !== 1 || node.tagName !== 'SPAN') return false;
+  if (node.getAttribute('data-relation-mention') === 'true') return true;
+  const style = String(node.getAttribute('style') || '').replace(/\s+/g, '').toLowerCase();
+  return style.includes('background-color:#e6f4ff') && String(node.textContent || '').trim().startsWith('@');
+}
+
+function textOffsetBeforeNode(editor, targetNode) {
+  const range = document.createRange();
+  range.selectNodeContents(editor);
+  range.setEndBefore(targetNode);
+  return range.toString().length;
+}
+
+function removeAdjacentWhitespaceText(node, direction = 'after') {
+  const sibling = direction === 'before' ? node.previousSibling : node.nextSibling;
+  if (sibling?.nodeType !== 3) return;
+  const value = sibling.nodeValue || '';
+  if (!value) return;
+  if (direction === 'after') {
+    sibling.nodeValue = value.replace(/^[\s\u00a0]+/, '');
+  } else {
+    sibling.nodeValue = value.replace(/[\s\u00a0]+$/, '');
+  }
+  if (!sibling.nodeValue) sibling.remove();
+}
+
+function collapseSelectionNear(editor, referenceNode) {
+  const selection = window.getSelection?.();
+  if (!selection || !editor) return;
+  const range = document.createRange();
+  if (referenceNode && editor.contains(referenceNode)) {
+    range.setStartBefore(referenceNode);
+  } else {
+    range.selectNodeContents(editor);
+    range.collapse(false);
+  }
+  range.collapse(true);
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+
+export function removeAdjacentMentionFromContentEditable(editor, event) {
+  if (!editor || !event || (event.key !== 'Delete' && event.key !== 'Backspace')) return false;
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false;
+  const caret = getSelectionRangeInside(editor);
+  if (!caret) return false;
+  const offset = getTextOffset(editor, caret.range);
+  const mentions = Array.from(editor.querySelectorAll(MENTION_SELECTOR)).filter(isMentionElement);
+  let target = null;
+  let removeWhitespace = 'after';
+  mentions.some(node => {
+    const start = textOffsetBeforeNode(editor, node);
+    const end = start + (node.textContent || '').length;
+    const textBetweenAfter = (editor.textContent || '').slice(end, offset);
+    const textBetweenBefore = (editor.textContent || '').slice(offset, start);
+    if ((event.key === 'Delete' || event.key === 'Backspace') && offset >= end && /^[\s\u00a0]*$/.test(textBetweenAfter)) {
+      target = node;
+      removeWhitespace = 'after';
+      return true;
+    }
+    if (event.key === 'Delete' && offset <= start && /^[\s\u00a0]*$/.test(textBetweenBefore)) {
+      target = node;
+      removeWhitespace = 'before';
+      return true;
+    }
+    return false;
+  });
+  if (!target) return false;
+  const nextReference = removeWhitespace === 'after' ? target.nextSibling : target;
+  removeAdjacentWhitespaceText(target, removeWhitespace);
+  target.remove();
+  collapseSelectionNear(editor, nextReference);
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
+  return true;
+}
+
+function getCurrentUserId() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const user = JSON.parse(window.localStorage.getItem('user') || 'null');
+    return user?.id ? Number(user.id) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function scheduleMentionNotification({ context, user, lineContent }) {
   if (!context?.entity_type || !context?.entity_id || !user?.id) return;
+  if (Number(user.id) === getCurrentUserId()) {
+    message.info('已添加 @自己，不发送通知');
+    return;
+  }
   const key = `mention-${context.entity_type}-${context.entity_id}-${user.id}-${Date.now()}`;
   let canceled = false;
   const close = () => {
@@ -161,6 +253,25 @@ export default function MentionPicker({ open, context, query = '', position, onS
   useEffect(() => {
     setKeyword(query || '');
   }, [query, open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointerDown = (event) => {
+      if (event.target?.closest?.('[data-mention-picker="true"]')) return;
+      onClose?.();
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose?.();
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('touchstart', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('touchstart', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open, onClose]);
 
   useEffect(() => {
     if (!open || !context?.entity_type || !context?.entity_id) return undefined;

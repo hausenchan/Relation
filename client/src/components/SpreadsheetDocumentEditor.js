@@ -216,14 +216,23 @@ export default function SpreadsheetDocumentEditor({
   onSelectionChangeRef.current = onSelectionChange;
 
   const detectInputMention = (event, rowIndex, columnIndex) => {
-    if (!canEdit || !mentionContext?.entity_type || !mentionContext?.entity_id) return;
+    if (!canEdit || !mentionContext?.entity_type || !mentionContext?.entity_id) {
+      setMentionState(null);
+      return;
+    }
     const input = event?.target;
-    if (typeof input?.selectionStart !== 'number') return;
+    if (typeof input?.selectionStart !== 'number') {
+      setMentionState(null);
+      return;
+    }
     const value = String(input.value || '');
     const offset = input.selectionStart;
     const before = value.slice(0, offset);
     const match = before.match(/(^|[\s([{，。；：、“‘])@([\p{L}\p{N}_-]{0,24})$/u);
-    if (!match) return;
+    if (!match) {
+      setMentionState(null);
+      return;
+    }
     const rect = input.getBoundingClientRect();
     setMentionState({
       rowIndex,
@@ -252,6 +261,7 @@ export default function SpreadsheetDocumentEditor({
 
   useEffect(() => {
     const next = normalizeSpreadsheetRange({ rowIndex: activeRowIndex, columnIndex: activeColumnIndex });
+    setMentionState(null);
     setSelection(current => (
       current && spreadsheetRangeContainsCell(current, activeRowIndex, activeColumnIndex)
         ? current

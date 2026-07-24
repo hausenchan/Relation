@@ -4,9 +4,33 @@
 
 ## 当前任务
 
-状态：文档中心/目标/周报/经营周会/在线表格 @ 提及通知已实现，待提交推送。
+状态：@ 提及删除、自提及和选择面板关闭优化已实现，待提交推送。
 
-目标：在有正文编辑能力的页面输入 @ 时展示有当前对象权限的成员，选择后插入 @ 内容，并在 5 秒撤销窗口结束后向被提及人发送通知中心消息。
+目标：优化 @ 提及交互，支持光标停在富文本 @ 标签后按 Delete 删除整条 @ 记录；选择面板在触发条件失效、点击外部或按 Esc 时稳定关闭；候选列表允许 @ 自己但不产生通知。
+
+## @ 提及体验优化（2026-07-25）
+
+状态：实现和自动化验证完成，待提交推送 `gitee/main`。
+
+### 已完成
+
+- 富文本 @ 标签新增稳定标记和不可编辑属性，兼容旧蓝底 @ 标签；光标停在 @ 标签后按 Delete
+  或 Backspace 时会一次性删除整条 @ 记录。
+- @ 成员选择面板新增点击外部、触发文本失效、Esc、切换在线表格单元格等关闭路径，避免面板残留。
+- 候选人接口不再过滤当前用户；前端选择自己后只插入 @ 标签并提示“不发送通知”，后端 notify
+  接口也对自提及做成功跳过兜底。
+
+### 已验证
+
+- `node --check server/index.js` 通过。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand src/components/DocumentBodyEditor.test.js`
+  通过，16/16，新增覆盖整条删除、面板关闭、自提及不通知。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand` 通过，26 个套件、132 条测试。
+- `cd client && BUILD_PATH=/tmp/relation-mention-ux-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-mention-ux-build npm run performance:frontend` 通过，首屏 JavaScript
+  328.1KB gzip，76 个异步 chunk，最大异步 chunk 420.8KB gzip。
+- `node --test server/lib/*.test.js` 沙盒内因 `listen EPERM 127.0.0.1` 失败；提权重跑通过，
+  107 条中 103 条通过，4 条需专用 MySQL 环境的测试按开关跳过。
 
 ## @ 提及通知（2026-07-25）
 

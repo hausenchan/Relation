@@ -22,7 +22,7 @@ export const DOCUMENT_BODY_BLOCK_TYPES = [
 
 const VALID_BLOCK_TYPES = new Set(DOCUMENT_BODY_BLOCK_TYPES.map(item => item.value));
 const INLINE_TAGS = ['strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del', 'code', 'span', 'mark', 'a', 'br'];
-const INLINE_ATTRS = ['style', 'href', 'target', 'rel'];
+const INLINE_ATTRS = ['style', 'href', 'target', 'rel', 'data-relation-mention', 'contenteditable'];
 const SAFE_INLINE_STYLE_PROPERTIES = new Set([
   'color',
   'background-color',

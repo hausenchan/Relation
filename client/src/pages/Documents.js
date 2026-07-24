@@ -79,6 +79,7 @@ import SpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
+  removeAdjacentMentionFromContentEditable,
   scheduleMentionNotification,
 } from '../components/MentionPicker';
 import {
@@ -1208,7 +1209,7 @@ function plainTextToBlocks(text) {
 }
 
 const inlineHtmlAllowedTags = ['strong', 'b', 'em', 'i', 'u', 's', 'strike', 'del', 'code', 'span', 'mark', 'a', 'br'];
-const inlineHtmlAllowedAttrs = ['style', 'href', 'target', 'rel'];
+const inlineHtmlAllowedAttrs = ['style', 'href', 'target', 'rel', 'data-relation-mention', 'contenteditable'];
 
 function normalizeLegacyInlineHtml(value) {
   const raw = String(value || '');
@@ -3027,7 +3028,7 @@ function InlineRichTextEditor({
   const detectMention = () => {
     if (composingRef.current) return;
     const trigger = getContentEditableMentionTrigger(editorRef.current);
-    if (trigger) onMentionTrigger?.(trigger);
+    onMentionTrigger?.(trigger || null);
   };
 
   return (
@@ -3089,7 +3090,17 @@ function InlineRichTextEditor({
             window.setTimeout(detectMention, 0);
           }
         }}
-        onKeyDown={onKeyDown}
+        onKeyDown={(event) => {
+          const simpleDelete = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !composingRef.current;
+          if ((event.key === 'Delete' || event.key === 'Backspace') && simpleDelete) {
+            if (removeAdjacentMentionFromContentEditable(editorRef.current, event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+          }
+          onKeyDown?.(event);
+        }}
         onPaste={onPaste}
         style={{
           minHeight: 24,
@@ -9962,6 +9973,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   } : null;
 
   const handleDocumentMentionTrigger = (block, trigger) => {
+    if (!trigger) {
+      setMentionState(null);
+      return;
+    }
     if (!documentMentionContext || !canEditDoc(selectedDoc)) return;
     setMentionState({ ...trigger, blockId: block?.id || null });
   };

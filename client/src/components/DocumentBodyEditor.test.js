@@ -72,6 +72,7 @@ jest.mock('@ant-design/icons', () => ({
 }));
 
 const { mentionsApi } = require('../api');
+const { message } = require('antd');
 
 function createClipboardData() {
   const values = new Map();
@@ -104,6 +105,7 @@ describe('DocumentBodyEditor block copy', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
+    window.localStorage.clear();
     mentionsApi.candidates.mockResolvedValue({ users: [{ id: 2, name: '陈豪赞', username: 'chenhaozan' }] });
     mentionsApi.notify.mockResolvedValue({ success: true });
   });
@@ -270,6 +272,137 @@ describe('DocumentBodyEditor block copy', () => {
       entity_id: 5,
       target_user_id: 2,
     }));
+    jest.useRealTimers();
+  });
+
+  test('deletes a styled mention as one record when caret is after it and Delete is pressed', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{
+            blocks: [{
+              id: 'mention-delete-line',
+              type: 'paragraph',
+              content: '跟进 <span data-relation-mention="true" contenteditable="false" style="background-color:#e6f4ff;color:#0958d9;">@陈豪赞</span>&nbsp;项目',
+              meta: {},
+            }],
+          }}
+          onChange={onChange}
+          mentionContext={{ entity_type: 'goal', entity_id: 5 }}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    const mentionNode = inlineEditor.querySelector('[data-relation-mention="true"]');
+    const range = document.createRange();
+    range.setStartAfter(mentionNode);
+    range.collapse(true);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
+    });
+
+    expect(inlineEditor.textContent).not.toContain('@陈豪赞');
+    expect(onChange.mock.calls.at(-1)[0].blocks[0].content).not.toContain('@陈豪赞');
+  });
+
+  test('closes mention picker when the trigger text no longer matches', async () => {
+    jest.useFakeTimers();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{ blocks: [{ id: 'mention-close-line', type: 'paragraph', content: '', meta: {} }] }}
+          onChange={() => {}}
+          mentionContext={{ entity_type: 'goal', entity_id: 5 }}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    inlineEditor.focus();
+    inlineEditor.textContent = '@';
+    const range = document.createRange();
+    range.selectNodeContents(inlineEditor);
+    range.collapse(false);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(0);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-mention-picker="true"]')).toBeTruthy();
+
+    inlineEditor.textContent = '普通文字';
+    const closeRange = document.createRange();
+    closeRange.selectNodeContents(inlineEditor);
+    closeRange.collapse(false);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(closeRange);
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(0);
+      await Promise.resolve();
+    });
+    expect(container.querySelector('[data-mention-picker="true"]')).toBeFalsy();
+    jest.useRealTimers();
+  });
+
+  test('allows mentioning self without sending a notification', async () => {
+    jest.useFakeTimers();
+    window.localStorage.setItem('user', JSON.stringify({ id: 9, name: 'Iris林璐韵' }));
+    mentionsApi.candidates.mockResolvedValue({ users: [{ id: 9, name: 'Iris林璐韵', username: 'iris' }] });
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{ blocks: [{ id: 'mention-self-line', type: 'paragraph', content: '', meta: {} }] }}
+          onChange={onChange}
+          mentionContext={{ entity_type: 'goal', entity_id: 5, module_name: '目标', title: '增长目标' }}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    inlineEditor.focus();
+    inlineEditor.textContent = '@';
+    const range = document.createRange();
+    range.selectNodeContents(inlineEditor);
+    range.collapse(false);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(0);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const memberButton = Array.from(container.querySelectorAll('[role="button"]'))
+      .find(node => node.textContent.includes('Iris林璐韵'));
+    expect(memberButton).toBeTruthy();
+
+    flushSync(() => {
+      memberButton.click();
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await Promise.resolve();
+    });
+
+    expect(inlineEditor.innerHTML).toContain('@Iris林璐韵');
+    expect(mentionsApi.notify).not.toHaveBeenCalled();
+    expect(message.info).toHaveBeenCalledWith('已添加 @自己，不发送通知');
     jest.useRealTimers();
   });
 

@@ -22370,7 +22370,6 @@ function getMentionCandidates(entityType, entityId, actor, scope = '') {
   const context = getMentionEntityContext(entityType, entityId, actor, scope);
   if (context.error) return context;
   const users = getActiveMentionUsers()
-    .filter(user => Number(user.id) !== Number(actor.id))
     .filter(user => context.canUserAccess(user))
     .map(serializeMentionUser)
     .filter(Boolean);
@@ -22396,6 +22395,7 @@ app.post('/api/mentions/notify', canWrite, (req, res) => {
   const context = getMentionCandidates(entityType, req.body?.entity_id, req.user, req.body?.scope);
   if (context.error) return res.status(context.status || 400).json({ error: context.error });
   if (!context.canNotify) return res.status(403).json({ error: '无权在该页面发送 @ 通知' });
+  if (targetUserId === Number(req.user.id)) return res.json({ success: true, skipped: 'self' });
   const target = context.users.find(user => Number(user.id) === targetUserId);
   if (!target) return res.status(403).json({ error: '该成员无当前页面权限，不能 @ 通知' });
   const actorName = req.user.display_name || req.user.username || '有人';
