@@ -64,7 +64,7 @@ beforeEach(() => {
   mockListAttachments.mockResolvedValue([]);
 });
 
-test('moves row operations into the media cell contextual menu', async () => {
+test('moves row operations into a leading contextual menu column', async () => {
   localStorage.clear();
   mockListMedia.mockResolvedValueOnce([
     {
@@ -99,6 +99,7 @@ test('moves row operations into the media cell contextual menu', async () => {
   expect(headers).not.toContain('操作');
   const editableMoreButton = container.querySelector('button[aria-label="更多操作：小蚕惠生活-安卓"]');
   expect(editableMoreButton).not.toBeNull();
+  expect(editableMoreButton.closest('td')?.className).toContain('media-management-row-action-cell');
   expect(container.querySelector('button[aria-label="更多操作：只读媒体"]')).not.toBeNull();
 
   await act(async () => {

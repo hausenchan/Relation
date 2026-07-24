@@ -96,8 +96,10 @@ export function useResizableColumns(storageKey, columns, options = {}) {
   const resizableColumns = useMemo(() => {
     return columns.map((column, index) => {
       const columnKey = getColumnKey(column, index);
-      const width = widths[columnKey] || column.width || defaultWidth;
       const columnMinWidth = minWidths[columnKey] || minWidth;
+      const savedWidth = Number(widths[columnKey]);
+      const baseWidth = Number.isFinite(savedWidth) && savedWidth > 0 ? savedWidth : (column.width || defaultWidth);
+      const width = Math.max(columnMinWidth, baseWidth);
       const originalOnHeaderCell = column.onHeaderCell;
 
       return {

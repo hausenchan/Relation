@@ -440,12 +440,41 @@ export default function MediaManagement() {
   };
 
   const allColumns = [
+    {
+      title: '',
+      dataIndex: '__actions',
+      key: '__actions',
+      width: 48,
+      alwaysVisible: true,
+      className: 'media-management-row-action-cell',
+      render: (_, record) => (
+        <Dropdown
+          trigger={['click']}
+          placement="bottomLeft"
+          menu={{
+            items: getMediaActionMenuItems(record),
+            onClick: info => handleMediaAction(record, info),
+          }}
+        >
+          <Button
+            type="text"
+            size="small"
+            className="media-management-row-more"
+            icon={<MoreOutlined />}
+            aria-label={`更多操作：${record.media_name}`}
+            title="更多操作"
+            onClick={event => event.stopPropagation()}
+            onDoubleClick={event => event.stopPropagation()}
+          />
+        </Dropdown>
+      ),
+    },
     { title: 'CID', dataIndex: 'cid', key: 'cid', width: 96, render: value => <Text code>{value}</Text> },
     {
       title: '媒体',
       dataIndex: 'media_name',
       key: 'media_name',
-      width: 230,
+      width: 260,
       render: (value, record) => (
         <div className="media-management-name-cell">
           <div className="media-management-name-main">
@@ -460,25 +489,6 @@ export default function MediaManagement() {
               文档 #{record.document_id || '-'}
             </Text>
           </div>
-          <Dropdown
-            trigger={['click']}
-            placement="bottomRight"
-            menu={{
-              items: getMediaActionMenuItems(record),
-              onClick: info => handleMediaAction(record, info),
-            }}
-          >
-            <Button
-              type="text"
-              size="small"
-              className="media-management-row-more"
-              icon={<MoreOutlined />}
-              aria-label={`更多操作：${value}`}
-              title="更多操作"
-              onClick={event => event.stopPropagation()}
-              onDoubleClick={event => event.stopPropagation()}
-            />
-          </Dropdown>
         </div>
       ),
     },
@@ -504,7 +514,7 @@ export default function MediaManagement() {
     { title: '其他特殊记录', dataIndex: 'other_notes', key: 'other_notes', width: 230, render: renderCompactText },
   ];
   const visibleColumnSet = new Set(visibleColumnKeys);
-  const columns = allColumns.filter(column => visibleColumnSet.has(column.key));
+  const columns = allColumns.filter(column => column.alwaysVisible || visibleColumnSet.has(column.key));
 
   const handleVisibleColumnsChange = (keys) => {
     setVisibleColumnKeys(Array.from(new Set([...requiredColumnKeys, ...keys])));
@@ -642,6 +652,7 @@ export default function MediaManagement() {
           />
         ) : (
           <ResizableTable
+            className="media-management-table"
             storageKey="media-management-table-columns"
             columns={columns}
             dataSource={rows}
@@ -655,6 +666,25 @@ export default function MediaManagement() {
               },
               style: { cursor: 'pointer' },
             })}
+            resizableOptions={{
+              minWidth: 88,
+              minWidths: {
+                __actions: 48,
+                cid: 96,
+                media_name: 260,
+                importance: 100,
+                category: 96,
+                yyz_version: 120,
+                display_style: 128,
+                budget_types: 128,
+                integration_progress: 112,
+                owner_name: 104,
+                updated_at: 132,
+                launch_date: 112,
+                latest_release_date: 150,
+                contract_valid_until: 128,
+              },
+            }}
             pagination={{ defaultPageSize: 20, showSizeChanger: true, showTotal: total => `共 ${total} 条` }}
           />
         )}
