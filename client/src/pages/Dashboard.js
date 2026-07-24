@@ -12,6 +12,10 @@ import { useAuth } from '../AuthContext';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/businessTime';
+import {
+  DASHBOARD_TASK_STATUS_SORT_RANK,
+  sortDashboardTasksByDefault,
+} from '../utils/dashboardTaskSort';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -102,7 +106,6 @@ function CompletedBoostIcon() {
 }
 
 const taskPrioritySortRank = { high: 0, medium: 1, low: 2 };
-const taskStatusSortRank = { pending: 0, in_progress: 1, suspended: 2, done: 3 };
 const taskDateColumnKeys = new Set(['plan_date', 'estimated_completion_date', 'start_date', 'complete_date']);
 const taskSortableColumnKeys = new Set([
   'title',
@@ -159,7 +162,11 @@ const getTaskColumnSorter = (columnKey) => {
       return compareTaskRankValue(a.priority, b.priority, taskPrioritySortRank);
     }
     if (columnKey === 'display_status_label') {
-      return compareTaskRankValue(a.display_status || a.status, b.display_status || b.status, taskStatusSortRank);
+      return compareTaskRankValue(
+        a.display_status || a.status,
+        b.display_status || b.status,
+        DASHBOARD_TASK_STATUS_SORT_RANK,
+      );
     }
     if (taskDateColumnKeys.has(columnKey)) {
       return getTaskDateSortValue(a[columnKey]) - getTaskDateSortValue(b[columnKey]);
@@ -466,28 +473,6 @@ export default function Dashboard() {
     return statusMap[status] ? status : 'done';
   };
 
-  const priorityRank = (priority) => ({ high: 0, medium: 1, low: 2 }[priority] ?? 3);
-  const taskSortTime = (task) => {
-    const date = task.plan_date || task.created_at;
-    const value = date ? dayjs(date).valueOf() : 0;
-    return Number.isFinite(value) ? value : 0;
-  };
-  const taskSortBucket = (task) => {
-    const status = task.display_status || task.status;
-    const active = ACTIVE_TASK_STATUSES.has(status);
-    const inThisWeek = task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'week');
-    if (active && inThisWeek) return 0;
-    if (active) return 1;
-    if (status === 'suspended') return 2;
-    return 3;
-  };
-  const sortDashboardTasks = (tasks) => [...tasks].sort((a, b) => {
-    const bucketDiff = taskSortBucket(a) - taskSortBucket(b);
-    if (bucketDiff !== 0) return bucketDiff;
-    const timeDiff = taskSortTime(b) - taskSortTime(a);
-    if (timeDiff !== 0) return timeDiff;
-    return priorityRank(a.priority) - priorityRank(b.priority);
-  });
   const mergeTaskRowsById = (...groups) => {
     const merged = new Map();
     groups.flat().forEach(task => {
@@ -571,7 +556,7 @@ export default function Dashboard() {
         display_result: t.done_note || '',
       }));
 
-    return sortDashboardTasks([...normalTasks, ...followUpItems]);
+    return sortDashboardTasksByDefault([...normalTasks, ...followUpItems]);
   };
 
   const buildExecutionTasks = (allTasks, allFollowUpData) => {
@@ -609,7 +594,7 @@ export default function Dashboard() {
         display_result: t.done_note || '',
       }));
 
-    return sortDashboardTasks([...normalTasks, ...followUpItems]);
+    return sortDashboardTasksByDefault([...normalTasks, ...followUpItems]);
   };
 
   const buildTeamTasks = (allTasks, allFollowUpData) => {
@@ -647,7 +632,7 @@ export default function Dashboard() {
         follower_name: t.assigned_to_name,
       })) : [];
 
-    return sortDashboardTasks([...normalTasks, ...followUpItems]);
+    return sortDashboardTasksByDefault([...normalTasks, ...followUpItems]);
   };
 
   const buildWatchedTasks = (allTasks, watchData) => {
@@ -681,7 +666,7 @@ export default function Dashboard() {
       display_result: t.done_note || '',
       created_by_name: t.assigned_by_name,
     }));
-    return sortDashboardTasks([...sharedNormalTasks, ...watchedItems]);
+    return sortDashboardTasksByDefault([...sharedNormalTasks, ...watchedItems]);
   };
 
   const countUnfinished = (items) => items.filter(item => ACTIVE_TASK_STATUSES.has(item.display_status || item.status)).length;
