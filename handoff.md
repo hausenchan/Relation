@@ -9,6 +9,29 @@
 目标：修复媒体管理、文档中心及其他模块中显式 ISO 时间比 MySQL `CURRENT_TIMESTAMP` 少 8 小时的
 混合写入问题，统一业务时区，并安全校正有审计证据的历史错误时间。
 
+## DAU查询助手菜单（2026-07-25）
+
+状态：实现和自动化验证完成，待提交推送 `gitee/main`。
+
+### 需求与实现
+
+- “常用工具”新增“DAU查询助手”，内部路由为 `/dau-query-assistant`。
+- 页面不增加说明或中间层，直接以全尺寸 iframe 加载固定地址
+  `https://ngwlcg9gyg3i.space.mcode.cn`。
+- 菜单权限页同步新增权限节点；管理员及老板身份默认可见，其他用户按现有菜单权限授权。
+- 目标地址固定在代码中，不接受 URL 参数覆盖；Relation 不代理或存储第三方页面数据。
+
+### 已验证
+
+- DAU查询助手页面测试 1/1 通过，确认页面只渲染一个 iframe，地址、标题、立即加载和 referrer
+  策略正确。
+- 目标站点响应 `200`，未返回 `X-Frame-Options` 或 CSP `frame-ancestors`，允许 iframe 嵌入。
+- 前端全量测试 26 个套件中 25 个通过；`DocumentBodyEditor.test.js` 因工作区已有未提交的
+  `MentionPicker.js` 与该测试 Ant Design mock 不兼容而加载失败，与本任务无关，本次未修改该并行改动。
+- 隔离生产构建输出到 `/tmp/relation-dau-query-assistant-build` 并编译成功。
+- 前端性能门禁通过：首屏 JavaScript 328.1KB gzip，75 个异步 chunk，最大异步 chunk 420.8KB gzip。
+- 本机 `3001` 后端未运行，因此未执行登录后的 Relation 菜单浏览器回归。
+
 ## 出差协同二维冻结（2026-07-25）
 
 状态：实现和自动化验证完成，待提交推送 `gitee/main`。

@@ -78,6 +78,7 @@ const MENU_TREE = [
     title: '常用工具',
     key: 'common-tools',
     children: [
+      { title: 'DAU查询助手', key: '/dau-query-assistant' },
       { title: '网络抓包', key: '/network-capture' },
       { title: '手机采集', key: '/mobile-task-center' },
     ],

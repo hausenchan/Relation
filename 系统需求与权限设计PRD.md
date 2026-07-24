@@ -201,7 +201,19 @@
 - 费用统计：`/trip-stats`
 - 预算管理：`/budgets`
 
-### 7.7 公司经营
+### 7.7 常用工具
+
+包含：
+
+- DAU查询助手：`/dau-query-assistant`，在系统内容区直接嵌入
+  `https://ngwlcg9gyg3i.space.mcode.cn`
+- 网络抓包：`/network-capture`
+- 手机采集：`/mobile-task-center`
+
+DAU查询助手遵循通用菜单权限：管理员及老板身份默认可见，其他用户需配置
+`/dau-query-assistant` 菜单权限；页面不代理或存储第三方页面数据。
+
+### 7.8 公司经营
 
 包含：
 
@@ -214,7 +226,7 @@
 - 招聘雷达：`/executive/recruit-radar`
 - 雷达配置：`/executive/recruit-radar/config`
 
-### 7.8 系统管理
+### 7.9 系统管理
 
 前端系统管理菜单对前端 `isAdmin(user)` 可见，即 `role` 或 `executive_role` 命中 `admin/ceo/coo/cto/cmo` 均可显示。
 

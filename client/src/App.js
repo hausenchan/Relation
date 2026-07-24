@@ -48,6 +48,7 @@ const PAGE_TITLE_MAP = {
   '/media-management': '媒体管理',
   '/documents': '文档中心',
   '/network-capture': '网络抓包',
+  '/dau-query-assistant': 'DAU查询助手',
   '/persons': '人脉管理',
   '/interactions': '互动记录',
   '/reminders': '提醒事项',
@@ -384,6 +385,7 @@ const MediaManagement = lazy(() => import('./pages/MediaManagement'));
 const CompanySubjects = lazy(() => import('./pages/CompanySubjects'));
 const Documents = lazy(() => import('./pages/Documents'));
 const NetworkCapture = lazy(() => import('./pages/NetworkCapture'));
+const DauQueryAssistant = lazy(() => import('./pages/DauQueryAssistant'));
 const ExecutiveDashboard = lazy(() => import('./pages/ExecutiveDashboard'));
 const ExecutiveTalents = lazy(() => import('./pages/ExecutiveTalents'));
 const ExecutiveDynamics = lazy(() => import('./pages/ExecutiveDynamics'));
@@ -918,6 +920,9 @@ function AppLayout() {
 
   // ── 常用工具 ────────────────────────────────────────────────
   const commonToolChildren = [
+    canAccessMenu('/dau-query-assistant') && {
+      key: '/dau-query-assistant', icon: <RiseOutlined />, label: <Link to="/dau-query-assistant">DAU查询助手</Link>,
+    },
     canAccessMenu('/network-capture') && {
       key: '/network-capture', icon: <GlobalOutlined />, label: <Link to="/network-capture">网络抓包</Link>,
     },
@@ -1296,6 +1301,7 @@ function AppLayout() {
             <Route path="/media-management" element={<PrivateRoute module="product_assets"><MediaManagement /></PrivateRoute>} />
             <Route path="/documents" element={<PrivateRoute><Documents /></PrivateRoute>} />
             <Route path="/network-capture" element={<PrivateRoute><NetworkCapture /></PrivateRoute>} />
+            <Route path="/dau-query-assistant" element={<PrivateRoute menuKey="/dau-query-assistant"><DauQueryAssistant /></PrivateRoute>} />
             {/* 公司经营模块（仅高管） */}
             <Route path="/executive" element={<PrivateRoute><ExecutiveDashboard /></PrivateRoute>} />
             <Route path="/executive/talents" element={<PrivateRoute><ExecutiveTalents /></PrivateRoute>} />

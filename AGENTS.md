@@ -138,6 +138,9 @@ RELATION_RUN_MYSQL_TESTS=1 \
 - 文档中心 `/documents`：文件夹树、多标签、普通文档块编辑、在线表格文档、表格块、
   图片/附件、共享、Wolai/TAPD 导入、历史、多人更新、收藏和搜索。
 - 网络抓包 `/network-capture`：采集与入库辅助能力。
+- 常用工具“DAU查询助手” `/dau-query-assistant` 只嵌入固定 HTTPS 地址
+  `https://ngwlcg9gyg3i.space.mcode.cn`；不得接受查询参数覆盖目标地址。页面受同名菜单权限控制，
+  不代理、不持久化第三方页面数据。
 
 ### 3.5 商务协作
 
