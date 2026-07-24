@@ -22293,6 +22293,38 @@ function serializeMentionUser(user) {
   };
 }
 
+function getDocumentMentionAccessUserIds(document) {
+  if (!document?.id) return [];
+  const ids = new Set();
+  getActiveMentionUsers().forEach(user => {
+    if (canAdministrateDocuments(user)) ids.add(Number(user.id));
+  });
+  if (document.created_by) ids.add(Number(document.created_by));
+  const shares = db.prepare('SELECT target_type, target_id, target_key FROM document_shares WHERE document_id = ?').all(document.id);
+  shares.forEach(share => {
+    if (share.target_type === 'user' && share.target_id) {
+      ids.add(Number(share.target_id));
+    } else if (share.target_type === 'department' && share.target_key) {
+      getUserIdsByDepartmentKey(share.target_key, { activeOnly: true }).forEach(id => ids.add(Number(id)));
+    } else if (share.target_type === 'team' && share.target_id) {
+      getUsersByTeamIds([share.target_id]).forEach(id => ids.add(Number(id)));
+    } else if (share.target_type === 'project_group' && share.target_id) {
+      db.prepare('SELECT user_id FROM user_project_groups WHERE project_group_id = ?')
+        .all(share.target_id)
+        .forEach(row => ids.add(Number(row.user_id)));
+    }
+  });
+  getActiveMentionUsers()
+    .filter(user => user.role === 'leader')
+    .forEach(user => {
+      const visibleIds = getVisibleUserIds(user.id, user.role);
+      if (Array.isArray(visibleIds) && visibleIds.includes(Number(document.created_by))) {
+        ids.add(Number(user.id));
+      }
+    });
+  return [...ids].filter(Boolean);
+}
+
 function getMentionEntityContext(entityType, entityId, actor, scope = '') {
   const id = Number(entityId);
   if (!id) return { error: '页面不存在', status: 404 };
@@ -22305,6 +22337,7 @@ function getMentionEntityContext(entityType, entityId, actor, scope = '') {
       title: document.title || '未命名文档',
       link: `/documents?doc=${document.id}`,
       canNotify: canEditDocument(actor, document),
+      accessUserIds: getDocumentMentionAccessUserIds(document),
       canUserAccess: user => Boolean(getVisibleDocument(document.id, user)),
     };
   }
@@ -22369,10 +22402,16 @@ function getMentionEntityContext(entityType, entityId, actor, scope = '') {
 function getMentionCandidates(entityType, entityId, actor, scope = '') {
   const context = getMentionEntityContext(entityType, entityId, actor, scope);
   if (context.error) return context;
-  const users = getActiveMentionUsers()
-    .filter(user => context.canUserAccess(user))
-    .map(serializeMentionUser)
-    .filter(Boolean);
+  const cacheKey = `mentions:candidates:${entityType}:${Number(entityId)}:${String(scope || '')}:${Number(actor?.id || 0)}`;
+  const users = getRuntimeCached(cacheKey, RUNTIME_CACHE_TTL_MS, () => {
+    const accessSet = Array.isArray(context.accessUserIds)
+      ? new Set(context.accessUserIds.map(Number))
+      : null;
+    return getActiveMentionUsers()
+      .filter(user => (accessSet ? accessSet.has(Number(user.id)) : context.canUserAccess(user)))
+      .map(serializeMentionUser)
+      .filter(Boolean);
+  });
   return { ...context, users };
 }
 

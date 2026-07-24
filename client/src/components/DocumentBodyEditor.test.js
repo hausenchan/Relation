@@ -73,6 +73,7 @@ jest.mock('@ant-design/icons', () => ({
 
 const { mentionsApi } = require('../api');
 const { message } = require('antd');
+const { clearMentionCandidateCache } = require('./MentionPicker');
 
 function createClipboardData() {
   const values = new Map();
@@ -106,6 +107,7 @@ describe('DocumentBodyEditor block copy', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     window.localStorage.clear();
+    clearMentionCandidateCache();
     mentionsApi.candidates.mockResolvedValue({ users: [{ id: 2, name: '陈豪赞', username: 'chenhaozan' }] });
     mentionsApi.notify.mockResolvedValue({ success: true });
   });
@@ -272,6 +274,45 @@ describe('DocumentBodyEditor block copy', () => {
       entity_id: 5,
       target_user_id: 2,
     }));
+    jest.useRealTimers();
+  });
+
+  test('preloads mention candidates so picker opens with members immediately', async () => {
+    jest.useFakeTimers();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{ blocks: [{ id: 'mention-fast-line', type: 'paragraph', content: '', meta: {} }] }}
+          onChange={() => {}}
+          mentionContext={{ entity_type: 'goal', entity_id: 5, module_name: '目标', title: '增长目标' }}
+        />
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    inlineEditor.focus();
+    inlineEditor.textContent = '@';
+    const range = document.createRange();
+    range.selectNodeContents(inlineEditor);
+    range.collapse(false);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(0);
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('[data-mention-picker="true"]')).toBeTruthy();
+    expect(container.textContent).toContain('陈豪赞');
+    expect(container.textContent).not.toContain('loading');
+    expect(mentionsApi.candidates).toHaveBeenCalledTimes(1);
     jest.useRealTimers();
   });
 

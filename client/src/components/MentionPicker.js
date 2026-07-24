@@ -6,6 +6,8 @@ import { mentionsApi } from '../api';
 const { Text } = Typography;
 const mentionStyle = 'display:inline-flex;align-items:center;border-radius:4px;background-color:#e6f4ff;color:#0958d9;padding:0 4px;font-weight:600;';
 const MENTION_SELECTOR = 'span[data-relation-mention="true"],span[style*="background-color:#e6f4ff"],span[style*="background-color: #e6f4ff"]';
+const MENTION_CANDIDATE_CACHE_TTL_MS = 60 * 1000;
+const mentionCandidateCache = new Map();
 
 function escapeHtml(value = '') {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
@@ -205,6 +207,46 @@ function getCurrentUserId() {
   }
 }
 
+function getMentionContextCacheKey(context) {
+  if (!context?.entity_type || !context?.entity_id) return '';
+  return [
+    context.entity_type,
+    context.entity_id,
+    context.scope || '',
+  ].join(':');
+}
+
+function normalizeMentionCandidateUsers(data) {
+  return Array.isArray(data?.users) ? data.users : [];
+}
+
+export function clearMentionCandidateCache() {
+  mentionCandidateCache.clear();
+}
+
+export function preloadMentionCandidates(context) {
+  const key = getMentionContextCacheKey(context);
+  if (!key) return null;
+  const now = Date.now();
+  const cached = mentionCandidateCache.get(key);
+  if (cached?.users && now - cached.timestamp < MENTION_CANDIDATE_CACHE_TTL_MS) {
+    return Promise.resolve(cached.users);
+  }
+  if (cached?.promise) return cached.promise;
+  const promise = mentionsApi.candidates(context)
+    .then(data => {
+      const users = normalizeMentionCandidateUsers(data);
+      mentionCandidateCache.set(key, { users, timestamp: Date.now() });
+      return users;
+    })
+    .catch(error => {
+      mentionCandidateCache.delete(key);
+      throw error;
+    });
+  mentionCandidateCache.set(key, { promise, timestamp: now });
+  return promise;
+}
+
 export function scheduleMentionNotification({ context, user, lineContent }) {
   if (!context?.entity_type || !context?.entity_id || !user?.id) return;
   if (Number(user.id) === getCurrentUserId()) {
@@ -277,11 +319,18 @@ export default function MentionPicker({ open, context, query = '', position, onS
     if (!open || !context?.entity_type || !context?.entity_id) return undefined;
     const seq = requestSeqRef.current + 1;
     requestSeqRef.current = seq;
-    setLoading(true);
-    mentionsApi.candidates(context)
-      .then(data => {
+    const cacheKey = getMentionContextCacheKey(context);
+    const cached = cacheKey ? mentionCandidateCache.get(cacheKey) : null;
+    if (cached?.users && Date.now() - cached.timestamp < MENTION_CANDIDATE_CACHE_TTL_MS) {
+      setMembers(cached.users);
+      setLoading(false);
+      return undefined;
+    }
+    setLoading(!members.length);
+    preloadMentionCandidates(context)
+      .then(users => {
         if (requestSeqRef.current !== seq) return;
-        setMembers(Array.isArray(data?.users) ? data.users : []);
+        setMembers(users);
       })
       .catch(error => {
         if (requestSeqRef.current !== seq) return;

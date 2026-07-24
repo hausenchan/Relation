@@ -20,7 +20,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Dropdown, Input, Modal, Select, Space, Tooltip, Typography, message } from 'antd';
-import MentionPicker, { scheduleMentionNotification } from './MentionPicker';
+import MentionPicker, { preloadMentionCandidates, scheduleMentionNotification } from './MentionPicker';
 import {
   buildSpreadsheetCellKey,
   createDefaultSpreadsheetSheet,
@@ -283,6 +283,11 @@ export default function SpreadsheetDocumentEditor({
     selectedCell?.sheetId,
     onSelectedCellChange,
   ]);
+
+  useEffect(() => {
+    if (!canEdit || !mentionContext?.entity_type || !mentionContext?.entity_id) return;
+    preloadMentionCandidates(mentionContext).catch(() => {});
+  }, [canEdit, mentionContext?.entity_type, mentionContext?.entity_id, mentionContext?.scope]);
 
   useEffect(() => {
     const viewport = viewportRef.current;

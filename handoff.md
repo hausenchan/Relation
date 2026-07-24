@@ -8,6 +8,30 @@
 
 目标：优化 @ 提及交互，支持光标停在富文本 @ 标签后按 Delete 删除整条 @ 记录；选择面板在触发条件失效、点击外部或按 Esc 时稳定关闭；候选列表允许 @ 自己但不产生通知。
 
+## @ 成员选择面板加载提速（2026-07-25）
+
+状态：实现和自动化验证完成，待提交推送 `gitee/main`。
+
+### 已完成
+
+- `MentionPicker` 新增候选成员缓存和预加载 API；同一页面 60 秒内复用候选结果，面板再次打开直接展示成员。
+- 文档中心、共享块编辑器和在线表格在页面/对象就绪后提前预取 @ 候选人，避免用户输入 `@` 后才开始请求。
+- 服务端文档候选人从“遍历所有用户逐个调用文档可见性检查”改为批量展开管理员、创建人、
+  用户/部门/小组/项目组共享和组长可见范围，并保留统一候选接口权限兜底。
+- 候选接口增加短 TTL 运行时缓存，降低连续输入和多编辑器场景的重复计算。
+
+### 已验证
+
+- `node --check server/index.js` 通过。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand src/components/DocumentBodyEditor.test.js`
+  通过，17/17，新增覆盖预加载后面板直接展示成员且不显示 loading。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand` 通过，26 个套件、133 条测试。
+- `cd client && BUILD_PATH=/tmp/relation-mention-fast-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-mention-fast-build npm run performance:frontend` 通过，首屏 JavaScript
+  328.1KB gzip，76 个异步 chunk，最大异步 chunk 420.8KB gzip。
+- `node --test server/lib/*.test.js` 沙盒内因 `listen EPERM 127.0.0.1` 失败；提权重跑通过，
+  107 条中 103 条通过，4 条需专用 MySQL 环境的测试按开关跳过。
+
 ## @ 提及体验优化（2026-07-25）
 
 状态：实现和自动化验证完成，待提交推送 `gitee/main`。

@@ -41,6 +41,7 @@ import {
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
+  preloadMentionCandidates,
   removeAdjacentMentionFromContentEditable,
   scheduleMentionNotification,
 } from './MentionPicker';
@@ -595,6 +596,11 @@ export default function DocumentBodyEditor({
     }
     undoHistoryRef.current = [];
   }, [serializedValue]);
+
+  useEffect(() => {
+    if (!mentionContext?.entity_type || !mentionContext?.entity_id || readOnly) return;
+    preloadMentionCandidates(mentionContext).catch(() => {});
+  }, [mentionContext?.entity_type, mentionContext?.entity_id, mentionContext?.scope, readOnly]);
 
   const emitBlocks = (nextBlocks, nextFocusId = null, { recordUndo = true } = {}) => {
     const currentSnapshot = cloneDocumentBodyValue(normalized);

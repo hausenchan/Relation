@@ -79,6 +79,7 @@ import SpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
+  preloadMentionCandidates,
   removeAdjacentMentionFromContentEditable,
   scheduleMentionNotification,
 } from '../components/MentionPicker';
@@ -9971,6 +9972,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     module_name: '文档中心',
     title: editorTitle || selectedDoc.title,
   } : null;
+
+  useEffect(() => {
+    if (!documentMentionContext || !canEditDoc(selectedDoc)) return;
+    preloadMentionCandidates(documentMentionContext).catch(() => {});
+  }, [documentMentionContext?.entity_type, documentMentionContext?.entity_id, documentMentionContext?.scope, selectedDoc?.can_edit]);
 
   const handleDocumentMentionTrigger = (block, trigger) => {
     if (!trigger) {
