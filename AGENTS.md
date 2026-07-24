@@ -140,6 +140,14 @@ RELATION_RUN_MYSQL_TESTS=1 \
   鼠标悬停通过 Tooltip 展示完整内容。媒体名称同样不得突破媒体列边界。
 - 文档中心 `/documents`：文件夹树、多标签、普通文档块编辑、在线表格文档、表格块、
   图片/附件、共享、Wolai/TAPD 导入、历史、多人更新、收藏和搜索。
+- 在线表格长期目标内核为 Univer；当前自研 `SpreadsheetDocumentEditor`、
+  `spreadsheetWorkbook.js` 和 `spreadsheetWorkbookFile.js` 仅作为已上线过渡实现和兼容 fallback。
+  后续新增完整公式、条件筛选、条件格式、附件/图片对象、复杂排序筛选、冻结窗格、格式刷、填充柄、
+  查找替换、图表等类石墨完整能力时，优先接入 Univer，不再继续扩展自研表格引擎。
+- 在线表格 UI 目标为像素级复刻石墨表格体验：菜单、工具栏、公式栏、列头、行号、单元格尺寸、
+  字体、颜色、网格线、选区、填充柄、右键菜单、Sheet 标签、缩放控件和空白区域密度均以石墨截图
+  为验收标尺；不得套用 Ant Design 按钮/卡片风格破坏表格软件质感。Relation 仍保留自身标题、
+  权限、分享、历史、收藏和通知外壳，不使用石墨品牌 Logo、商标或水印资源。
 - 网络抓包 `/network-capture`：采集与入库辅助能力。
 - 常用工具“DAU查询助手” `/dau-query-assistant` 只嵌入固定 HTTPS 地址
   `https://ngwlcg9gyg3i.space.mcode.cn`；不得接受查询参数覆盖目标地址。页面受同名菜单权限控制，
@@ -232,12 +240,18 @@ RELATION_RUN_MYSQL_TESTS=1 \
   历史恢复和多人同步时都必须保留 workbook 格式。
 - 在线表格的本地工作簿回调必须在同一同步调用中标记文档 dirty，并先更新活动编辑器快照，
   不能等待 React effect 后才记录，否则快速轮询或手动保存会把本地工作簿误判为干净数据。
-- 在线表格工作簿模型和公式、排序、筛选、行列迁移等纯逻辑统一放在
-  `client/src/utils/spreadsheetWorkbook.js`；网格交互和虚拟滚动统一放在
-  `client/src/components/SpreadsheetDocumentEditor.js`，不得重新塞回 `Documents.js`。
-- 在线表格公式原文以 `=` 开头存入单元格 `v`，展示值由公式求值器动态计算；禁止使用
-  `eval` 或把计算结果覆盖公式原文。Excel 文件解析与生成统一走
-  `server/lib/spreadsheetWorkbookFile.js`。
+- 新版在线表格必须以 Univer 作为前端表格内核和公式/渲染/交互引擎，封装在独立组件中懒加载；
+  Relation 只负责文档外壳、权限、保存、历史、协作、附件和数据格式适配。当前自研工作簿模型、
+  公式、排序、筛选、行列迁移、Excel 解析与网格交互仅用于旧数据兼容、迁移 fallback 和必要的
+  服务端校验，不得继续承载石墨级完整功能扩展。
+- Univer 快照与 Relation 文档内容之间必须有明确版本化适配层，不能把 Univer API 细节散落到
+  `Documents.js`；旧 `relation_spreadsheet_workbook_v1` 数据需要可读、可迁移、可导出。
+- 在没有独立测试/灰度分支的情况下，Univer 预备代码可以进入主线，但正式在线表格入口必须默认
+  继续走旧编辑器，直到隔离 MySQL 登录回归、性能门禁、包体预算和回滚路径全部通过。不得仅用
+  CRA 环境变量隐藏动态 import 后直接发布，因为 webpack 仍可能把 Univer 大 chunk 纳入生产构建。
+- 在线表格公式原文必须保留，不得用计算值覆盖公式原文；无论由 Univer 还是兼容层计算，禁止使用
+  `eval`。Excel 导入导出优先走 Univer 能力或专用适配层，服务端仍需执行权限、大小、Sheet 名和
+  敏感内容校验。
 - 插入或删除行列时，必须更新整个工作簿中指向目标 Sheet 的单元格和区域引用，包括绝对引用；
   不得误改公式字符串字面量、Sheet 名中的数字或名称前缀相似的其他 Sheet。
 - 工作表名称必须非空、最多 31 个字符、避开 Excel 非法字符且在工作簿内不区分大小写唯一；
@@ -261,6 +275,11 @@ RELATION_RUN_MYSQL_TESTS=1 \
   workbook 重建、Tab 切换或后续自动保存而丢失或串到其他文档。
 - Excel 导入只允许可编辑用户，导出允许所有可见用户；未登录统一返回 `401`，`readonly/guest`
   即使被共享也不得通过导入接口修改工作簿。
+- 在线表格附件、图片或文件对象必须通过 Relation 文档附件权限和存储层上传、预览、下载和删除；
+  Univer 内只保存受控引用 ID/URL 和展示元数据，不得绕过附件权限或直接持久化本地临时路径。
+- 像素级石墨 UI 验收必须同时覆盖桌面和移动宽度；使用 Playwright 截图/像素检查核对工具栏高度、
+  公式栏高度、默认行高列宽、字体大小、网格线、选区边框和 Sheet 标签，不允许出现 AntD 卡片感、
+  文案溢出或控件重叠。
 - 非文档中心模块统一使用 `relation_document_blocks_v1`，工具位于
   `client/src/utils/documentBodyBlocks.js`。
 - 可复用编辑器是 `client/src/components/DocumentBodyEditor.js`。
@@ -339,9 +358,11 @@ RELATION_RUN_MYSQL_TESTS=1 \
 | `DocumentBodyEditor.js` | 目标、周报、经营周会；粘贴、删除、多选、撤销和保存测试 |
 | `documentBodyBlocks.js` | 历史数据兼容、Wolai 导入、签名、纯文本转换、AI 输入 |
 | `Documents.js` 编辑行为 | 共享编辑器是否也需同步；文档表格/附件是否使用独立事件链 |
-| `SpreadsheetDocumentEditor.js` | 选区、公式栏、复制粘贴、冻结区、合并区、虚拟滚动、只读权限和自动保存 |
-| `spreadsheetWorkbook.js` | 工作簿旧数据兼容、Sheet 命名与重命名公式迁移、错误传播、排序筛选、行列迁移、合并区域和 `content_text` |
-| `spreadsheetWorkbookFile.js` | `.xlsx` 多 Sheet、公式、样式、冻结、合并、Sheet 名服务端校验、`content_text` 派生、导入限制、导出权限和临时文件清理 |
+| Univer 在线表格封装组件 | 石墨像素级 UI、懒加载体积、权限只读态、公式栏、选区、快捷键、右键菜单、附件对象、保存与历史桥接 |
+| Univer 适配层 | Relation workbook 与 Univer snapshot 双向迁移、旧数据兼容、`content_text` 派生、operation 差异、Excel 往返 |
+| `SpreadsheetDocumentEditor.js` | 旧自研表格 fallback；只修阻断性 bug，不继续扩展完整石墨能力 |
+| `spreadsheetWorkbook.js` | 旧工作簿兼容、迁移、fallback 校验和 `content_text` 派生；新增复杂公式/筛选/格式不得继续手写在此 |
+| `spreadsheetWorkbookFile.js` | 旧 `.xlsx` 往返兼容、服务端限制和临时文件清理；Univer 接入后需联查导入导出适配 |
 | 前后端 `spreadsheetOperations.js` | 单元格、属性与 Sheet 增删重排差异规划、相邻锚点、顺序投影、前置值、批次原子性、公式迁移、幂等重试、坐标/大小限制、远端合并和冲突 |
 | `documentCollaboration.js` / `spreadsheetPresence.js` | SSE 鉴权与重连、权限复查、presence 失效、会话隔离、选区范围、只读协作者、虚拟网格高亮、日志排除和轮询兜底 |
 | `collaborativeDocument.js` | 稳定块 ID、删除冲突、顺序合并、三模块 409 重试 |
@@ -409,9 +430,10 @@ RELATION_RUN_MYSQL_TESTS=1 \
 - 协作：两端改不同块、同块冲突、远端删除、本地新增、隐藏/恢复页面。
 - 历史：初始版本、重复内容去重、保存版本、权限隔离、恢复后再生成版本。
 - 权限：管理员/CXO、普通指定人、非准备人、readonly/guest、无菜单、无敏感权限。
-- 在线表格：普通文档兼容、公式与错误传播、Sheet 命名和公式迁移、撤销重做、排序筛选、冻结合并、
-  虚拟滚动、Excel 往返、operation 幂等与原子冲突、派生检索文本、历史恢复、SSE/presence、只读
-  导出与写入拒绝；权限接口必须在真实隔离 MySQL/HTTP 环境执行。
+- 在线表格：普通文档兼容、Univer 快照读写、旧工作簿迁移、石墨像素级 UI 截图验收、直接输入、
+  公式全集与错误传播、Sheet 命名和公式迁移、撤销重做、排序筛选、条件筛选、条件格式、冻结合并、
+  图片/附件对象、Excel 往返、operation 幂等与原子冲突、派生检索文本、历史恢复、SSE/presence、
+  只读导出与写入拒绝；权限接口必须在真实隔离 MySQL/HTTP 环境执行。
 - 数据库：MySQL 空库初始化、旧库增量迁移、索引与字段类型、生产模式启动及启动耗时。
 - 时间：MySQL 会话时区、`CURRENT_TIMESTAMP` 与显式 ISO 同秒一致、夏令时无关的 `+08:00`
   转换、历史迁移幂等、文档协作基线和前端业务时间展示。

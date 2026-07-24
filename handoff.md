@@ -1,12 +1,13 @@
 # 开发交接
 
-最后更新：2026-07-24
+最后更新：2026-07-25
 
 ## 当前任务
 
-状态：@ 提及删除、自提及和选择面板关闭优化已实现，待提交推送。
+状态：在线表格一期 Univer 预备代码已实现，但正式入口默认仍走旧编辑器；默认构建性能门禁通过。
 
-目标：优化 @ 提及交互，支持光标停在富文本 @ 标签后按 Delete 删除整条 @ 记录；选择面板在触发条件失效、点击外部或按 Esc 时稳定关闭；候选列表允许 @ 自己但不产生通知。
+目标：将在线表格长期方案从继续扩展自研网格调整为接入 Univer，并以石墨表格工作区像素级复刻
+作为 UI 验收目标；Relation 继续承载文档治理、权限、保存、历史、协作、附件和通知外壳。
 
 ## 工作台任务默认排序（2026-07-25）
 
@@ -31,6 +32,73 @@
 - 提交干净快照目标测试 4/4、隔离生产构建通过；性能门禁通过，首屏 JavaScript `328.2KB / 400KB`，
   76 个异步 chunk，最大 `420.8KB / 500KB`。
 
+## 在线表格 Univer 一期接入（2026-07-25）
+
+状态：实现完成，正式默认关闭，待产品走真实文档交互回归；暂不提交。
+
+### 正式服发布策略
+
+- 当前没有测试分支或灰度分支时，只建议提交 Univer 预备代码，不建议把正式在线表格入口切到
+  Univer。`Documents.js` 应继续默认渲染旧 `SpreadsheetDocumentEditor`，避免未验证编辑器和
+  1MB+ Univer 异步 chunk 进入正式用户路径。
+- 不能只靠 `REACT_APP_ENABLE_UNIVER_SPREADSHEET` 等 CRA 环境变量做上线开关；实测只要
+  `Documents.js` 存在 Univer 动态 import，生产构建仍会包含 Univer 大 chunk，并触发异步 chunk
+  性能预算失败。
+- 正式替换入口前，需要先补隔离 MySQL + 登录账号的真实文档端到端回归，至少覆盖输入、自动保存、
+  刷新回读、排序、筛选、冻结、Excel 导入导出和只读写入拒绝。
+- 回滚策略应保持简单：入口接线独立成小提交，回滚 `Documents.js` 入口即可恢复旧编辑器；任何
+  新格式保存或迁移都必须保留旧工作簿可读 fallback。
+
+### 已完成
+
+- 安装 Univer 依赖 `@univerjs/presets`、`@univerjs/preset-sheets-core`、
+  `@univerjs/preset-sheets-sort`、`@univerjs/preset-sheets-filter`，版本统一为 `0.25.1`。
+- 新增 `UniverSpreadsheetDocumentEditor` 预备组件，但当前 `Documents.js` 正式入口不引用该组件，
+  在线表格仍默认渲染旧 `SpreadsheetDocumentEditor`。这样代码可随主线提交，但正式构建不会打入
+  Univer 运行时大包，也不会让线上用户进入未完整验证的新编辑器。
+- 新增石墨风格皮肤层 `UniverSpreadsheetDocumentEditor.css`，先约束字体、工具栏/输入控件密度、
+  主题色、网格线、弹层阴影和工作区高度；后续仍需基于石墨截图做像素级微调。
+- 新增 `spreadsheetUniverAdapter`，把现有 `relation_spreadsheet_workbook_v1` 转成 Univer snapshot，
+  并在 Univer 命令变更后 debounce 保存回旧工作簿格式，复用现有保存、历史、协作和服务端校验链路。
+- 一期启用 Univer 核心、排序和筛选 preset；基础录入、公式、格式、排序、筛选、冻结行/列等能力
+  由 Univer 工作区承载。
+
+### 已验证
+
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand src/utils/spreadsheetUniverAdapter.test.js src/components/SpreadsheetDocumentEditor.test.js`
+  通过，16/16。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand` 通过，27 个套件、135 条测试；
+  仍有既有 `act(...)` 测试警告。
+- `cd client && BUILD_PATH=/tmp/relation-univer-build npm run build` 通过。
+- `/tmp/relation-univer-build` 目录约 17MB，其中 `static/js` 约 16MB、`static/css` 约 144KB。
+- `cd client && BUILD_PATH=/tmp/relation-univer-build npm run performance:budget` 未通过：首屏 JS gzip
+  `330.0KB / 400.0KB` 达标；最大异步 chunk gzip `1279.2KB / 500.0KB` 超预算，主要来自 Univer
+  Sheets 核心运行时。
+- 正式安全构建 `cd client && BUILD_PATH=/tmp/relation-univer-safe-build npm run build` 通过；由于
+  `Documents.js` 不引用 Univer 组件，构建产物不包含 Univer 大 chunk。
+- 正式安全构建性能门禁 `cd client && BUILD_PATH=/tmp/relation-univer-safe-build npm run performance:budget`
+  通过：首屏 JS gzip `328.1KB / 400.0KB`，异步 chunk 76 个，最大 `420.8KB / 500.0KB`。
+- 浏览器回归：完整 `DB_CLIENT=mysql npm run dev` 提权启动被安全审核拒绝，原因是可能连接并迁移未知
+  MySQL 库；只验证了当前 3000 前端可打开并跳转登录页。
+- 浏览器回归：在 `/tmp` 生成一次性 Univer 静态预览页并通过本地静态 HTTP 服务打开，确认 Univer
+  工作区真实浏览器渲染成功，页面含 3 个 canvas，样例工作表、公式结果、冻结行/列分隔线和 Sheet
+  标签可见；在 D2 单元格输入“新增数据”后截图确认内容写入网格。
+
+### 遗留风险
+
+- 尚未用登录态真实在线表格文档做浏览器回归，尤其需要核对保存回读、排序、筛选、自动保存状态、
+  Excel 导入导出和旧编辑器 fallback。若继续验证，需要用户明确提供/授权隔离 MySQL 测试库。
+- 如果后续要真正开启 Univer，不能只靠 `REACT_APP_ENABLE_UNIVER_SPREADSHEET` 这种 CRA 环境变量
+  开关；实测只要 `Documents.js` 里存在动态 import，webpack 仍会把 Univer 大 chunk 纳入构建并导致
+  性能门禁失败。需要单独做入口接线 PR、构建拆包策略或正式预算例外。
+- 静态预览页确认 Univer sort/filter preset 已打包加载，但受预览页工具栏折叠和无真实文档环境限制，
+  未完成排序/筛选菜单的端到端点击验证。
+- 当前一期为了复用既有服务端链路，仍保存为旧工作簿格式；Univer 专属高级状态可能无法完整保留，
+  后续需要升级到 `relation_univer_spreadsheet_workbook_v1`。
+- 石墨像素级 UI 仅完成基础 skin/token，尚未按石墨截图做 Playwright 像素差异验收。
+- Univer 核心异步 chunk 超过当前性能门禁，后续需评估调整构建拆包策略、路由预算例外或进一步按
+  功能拆插件。
+
 ## @ 成员选择面板加载提速（2026-07-25）
 
 状态：实现和自动化验证完成，待提交推送 `gitee/main`。
@@ -54,6 +122,30 @@
   328.1KB gzip，76 个异步 chunk，最大异步 chunk 420.8KB gzip。
 - `node --test server/lib/*.test.js` 沙盒内因 `listen EPERM 127.0.0.1` 失败；提权重跑通过，
   107 条中 103 条通过，4 条需专用 MySQL 环境的测试按开关跳过。
+
+## 在线表格 Univer 方案文档化（2026-07-25）
+
+状态：PRD、AGENTS 和交接文档已更新；未改业务代码，未安装依赖，未运行测试。
+
+### 已完成
+
+- `文档中心-在线表格文档PRD.md` 明确新版在线表格以 Univer 为目标内核，自研
+  `SpreadsheetDocumentEditor` / `spreadsheetWorkbook.js` / `spreadsheetWorkbookFile.js` 仅作为旧数据
+  兼容和 fallback，不再继续扩展完整石墨级能力。
+- PRD 新增石墨像素级 UI 验收口径：菜单栏、工具栏、公式栏、网格、选区、Sheet 标签、右键菜单、
+  筛选/条件筛选面板、附件/图片对象等均以石墨表格截图为内部验收标尺；不使用石墨 Logo、商标、
+  水印或受保护素材。
+- PRD 新增 Univer 数据格式 `relation_univer_spreadsheet_workbook_v1`、适配层、旧工作簿迁移、
+  fallback、只读态、附件对象和操作日志脱敏约束。
+- `文档中心模块PRD.md` 同步说明：当前自研在线表格是过渡能力，后续完整能力由 Univer 承载。
+- `AGENTS.md` 固化长期开发约束：新增复杂公式、条件筛选、条件格式、附件/图片对象、复杂排序、
+  冻结、格式刷、填充柄、查找替换、图表等能力时优先接入 Univer，不再继续堆叠自研引擎。
+
+### 下一步建议
+
+- 第零期先做不影响线上入口的 Univer PoC，验证输入、公式、排序、筛选、条件筛选、冻结、格式、
+  Sheet、复制粘贴、撤销重做、只读模式、图片/附件对象、Excel 往返和懒加载包体。
+- 建立石墨 UI token 和 Playwright 截图回归，再决定正式替换自研编辑器的迁移批次。
 
 ## @ 提及体验优化（2026-07-25）
 
@@ -799,8 +891,8 @@
 - 第四期单元格、属性与 Sheet 增删重排 operation、前置值原子校验、远端不同位置合并、前端自动
   保存、在线成员/选区和 SSE 实时通知均已完成；5 秒轮询保留为断线兜底，超限批次继续复用文档级
   保存。READY-TEST-29 已完成独立回归并随本次提交交付；后续再评估批量协同性能和独立表格存储。
-- 当前公式是安全的轻量计算器，不是完整 Excel 函数引擎；数组公式、数据透视表、图表、条件格式、
-  复杂排序筛选和全函数集继续评估 Univer 等成熟引擎。
+- 当前自研公式是安全的轻量计算器，不是完整 Excel 函数引擎；数组公式、数据透视表、图表、
+  条件格式、复杂排序筛选和全函数集已确定纳入后续 Univer 正式替换路线。
 - 后续根据工作簿体积和 operation 数量评估是否从 `documents.content` 迁移到独立
   `document_spreadsheets` 表。
 - 当前联调使用隔离 MySQL `127.0.0.1:3307/relation_test`、前端 `3000`、后端 `3001`；测试数据
