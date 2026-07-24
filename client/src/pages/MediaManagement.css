@@ -1,0 +1,58 @@
+.media-management-name-cell {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
+.media-management-name-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.media-management-name-link {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  font-weight: 600;
+  text-align: left;
+}
+
+.media-management-name-link .ant-typography {
+  min-width: 0;
+}
+
+.media-management-document-id {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+}
+
+.media-management-row-more {
+  flex: 0 0 28px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, background-color 120ms ease;
+}
+
+.ant-table-row:hover .media-management-row-more,
+.media-management-name-cell:focus-within .media-management-row-more,
+.media-management-row-more:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .media-management-row-more {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}

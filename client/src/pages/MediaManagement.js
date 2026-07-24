@@ -7,13 +7,13 @@ import {
   DatePicker,
   Descriptions,
   Divider,
+  Dropdown,
   Drawer,
   Form,
   Grid,
   Input,
   List,
   Modal,
-  Popconfirm,
   Popover,
   Row,
   Segmented,
@@ -31,6 +31,8 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  EyeOutlined,
+  MoreOutlined,
   PaperClipOutlined,
   PlusOutlined,
   ReloadOutlined,
@@ -46,6 +48,7 @@ import { ATTACHMENT_ACCEPT, validateAttachment } from '../utils/attachments';
 import {
   buildMediaListParams,
   canShowMediaDelete,
+  getMediaRowActionKeys,
   isValidMediaCid,
   mediaBudgetOptions,
   mediaCategoryOptions,
@@ -60,6 +63,7 @@ import {
   normalizeMediaFormPayload,
 } from '../utils/mediaManagement';
 import { formatBusinessDateTime } from '../utils/businessTime';
+import './MediaManagement.css';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -402,6 +406,39 @@ export default function MediaManagement() {
     }
   };
 
+  const confirmDeleteRecord = (record) => {
+    Modal.confirm({
+      title: '确认删除该媒体？',
+      content: '关联文档将停止展示，历史和附件会保留。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => deleteRecord(record),
+    });
+  };
+
+  const getMediaActionMenuItems = (record, options = {}) => {
+    const keys = getMediaRowActionKeys(record)
+      .filter(key => !options.deleteOnly || key === 'delete');
+    return keys.flatMap(key => {
+      if (key === 'delete') {
+        return [
+          ...(keys.length > 1 ? [{ type: 'divider' }] : []),
+          { key, icon: <DeleteOutlined />, label: '删除媒体', danger: true },
+        ];
+      }
+      if (key === 'edit') return [{ key, icon: <EditOutlined />, label: '编辑媒体' }];
+      return [{ key, icon: <EyeOutlined />, label: '查看详情' }];
+    });
+  };
+
+  const handleMediaAction = (record, { key, domEvent }) => {
+    domEvent?.stopPropagation?.();
+    if (key === 'detail') openDetail(record);
+    if (key === 'edit') openEdit(record);
+    if (key === 'delete') confirmDeleteRecord(record);
+  };
+
   const allColumns = [
     { title: 'CID', dataIndex: 'cid', key: 'cid', width: 96, render: value => <Text code>{value}</Text> },
     {
@@ -410,18 +447,39 @@ export default function MediaManagement() {
       key: 'media_name',
       width: 230,
       render: (value, record) => (
-        <Space direction="vertical" size={0} style={{ maxWidth: '100%' }}>
-          <Button
-            type="link"
-            onClick={() => openDetail(record)}
-            style={{ padding: 0, height: 'auto', maxWidth: '100%', fontWeight: 600 }}
+        <div className="media-management-name-cell">
+          <div className="media-management-name-main">
+            <Button
+              type="link"
+              className="media-management-name-link"
+              onClick={() => openDetail(record)}
+            >
+              <Text ellipsis={{ tooltip: value }}>{value}</Text>
+            </Button>
+            <Text type="secondary" className="media-management-document-id">
+              文档 #{record.document_id || '-'}
+            </Text>
+          </div>
+          <Dropdown
+            trigger={['click']}
+            placement="bottomRight"
+            menu={{
+              items: getMediaActionMenuItems(record),
+              onClick: info => handleMediaAction(record, info),
+            }}
           >
-            <Text ellipsis={{ tooltip: value }} style={{ maxWidth: 198 }}>{value}</Text>
-          </Button>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            文档 #{record.document_id || '-'}
-          </Text>
-        </Space>
+            <Button
+              type="text"
+              size="small"
+              className="media-management-row-more"
+              icon={<MoreOutlined />}
+              aria-label={`更多操作：${value}`}
+              title="更多操作"
+              onClick={event => event.stopPropagation()}
+              onDoubleClick={event => event.stopPropagation()}
+            />
+          </Dropdown>
+        </div>
       ),
     },
     { title: '重要程度', dataIndex: 'importance', key: 'importance', width: 100, render: value => renderEnumTag('importance', value) },
@@ -444,42 +502,9 @@ export default function MediaManagement() {
     { title: '任务配置要求', dataIndex: 'task_config_requirements', key: 'task_config_requirements', width: 230, render: renderCompactText },
     { title: '特殊入口信息', dataIndex: 'special_entry_info', key: 'special_entry_info', width: 230, render: renderCompactText },
     { title: '其他特殊记录', dataIndex: 'other_notes', key: 'other_notes', width: 230, render: renderCompactText },
-    {
-      title: '操作',
-      key: 'actions',
-      width: 104,
-      fixed: 'right',
-      render: (_, record) => (
-        <Space size={2}>
-          <Button
-            type="text"
-            icon={<EditOutlined />}
-            aria-label="编辑媒体"
-            disabled={!Number(record.can_edit)}
-            onClick={event => { event.stopPropagation(); openEdit(record); }}
-          />
-          {canShowMediaDelete(record) && (
-            <Popconfirm
-              title="确认删除该媒体？"
-              description="关联文档将停止展示，历史和附件会保留。"
-              onConfirm={() => deleteRecord(record)}
-            >
-              <Button
-                type="text"
-                danger
-                icon={<DeleteOutlined />}
-                aria-label="删除媒体"
-                onClick={event => event.stopPropagation()}
-              />
-            </Popconfirm>
-          )}
-        </Space>
-      ),
-    },
   ];
   const visibleColumnSet = new Set(visibleColumnKeys);
-  const columns = allColumns.filter(column => column.key === 'actions' || visibleColumnSet.has(column.key));
-  const tableScrollX = Math.max(1180, columns.reduce((sum, column) => sum + (Number(column.width) || 160), 0));
+  const columns = allColumns.filter(column => visibleColumnSet.has(column.key));
 
   const handleVisibleColumnsChange = (keys) => {
     setVisibleColumnKeys(Array.from(new Set([...requiredColumnKeys, ...keys])));
@@ -623,7 +648,6 @@ export default function MediaManagement() {
             rowKey="id"
             loading={loading}
             size={tableDensity}
-            scroll={{ x: tableScrollX }}
             onRow={record => ({
               onDoubleClick: event => {
                 if (event.target?.closest?.('button, a, input, [role="button"]')) return;
@@ -650,7 +674,7 @@ export default function MediaManagement() {
         width={isMobile ? '100%' : 960}
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         styles={{ body: { maxHeight: isMobile ? 'calc(100vh - 150px)' : '70vh', overflowY: 'auto' } }}
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={form} layout="vertical" preserve={false}>
           <Row gutter={16}>
@@ -792,8 +816,24 @@ export default function MediaManagement() {
         width={isMobile ? '100%' : '66.67vw'}
         loading={detailLoading}
         styles={{ body: { padding: isMobile ? 14 : 24 } }}
-        extra={detailRecord && Number(detailRecord.can_edit) ? (
-          <Button icon={<EditOutlined />} onClick={() => openEdit(detailRecord)}>编辑信息</Button>
+        extra={detailRecord ? (
+          <Space size={6}>
+            {Number(detailRecord.can_edit) === 1 && (
+              <Button icon={<EditOutlined />} onClick={() => openEdit(detailRecord)}>编辑信息</Button>
+            )}
+            {canShowMediaDelete(detailRecord) && (
+              <Dropdown
+                trigger={['click']}
+                placement="bottomRight"
+                menu={{
+                  items: getMediaActionMenuItems(detailRecord, { deleteOnly: true }),
+                  onClick: info => handleMediaAction(detailRecord, info),
+                }}
+              >
+                <Button type="text" icon={<MoreOutlined />} aria-label="更多媒体操作" />
+              </Dropdown>
+            )}
+          </Space>
         ) : null}
       >
         {detailRecord && (

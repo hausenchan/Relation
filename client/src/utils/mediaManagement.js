@@ -76,6 +76,14 @@ export function canShowMediaDelete(record) {
   return Number(record?.can_delete) === 1;
 }
 
+export function getMediaRowActionKeys(record = {}) {
+  return [
+    'detail',
+    ...(Number(record.can_edit) === 1 ? ['edit'] : []),
+    ...(canShowMediaDelete(record) ? ['delete'] : []),
+  ];
+}
+
 export function normalizeMediaFormPayload(values = {}) {
   const normalizeDate = value => (value?.format ? value.format('YYYY-MM-DD') : (value || null));
   return {

@@ -1,6 +1,7 @@
 import {
   buildMediaListParams,
   canShowMediaDelete,
+  getMediaRowActionKeys,
   isValidMediaCid,
   mediaRecordToFormValues,
   normalizeMediaFormPayload,
@@ -21,6 +22,13 @@ describe('media management utilities', () => {
     expect(canShowMediaDelete({ can_delete: 0 })).toBe(false);
     expect(canShowMediaDelete({ can_delete: true })).toBe(true);
     expect(canShowMediaDelete({})).toBe(false);
+  });
+
+  test('builds contextual row actions from server permissions', () => {
+    expect(getMediaRowActionKeys({ can_edit: 1, can_delete: 1 }))
+      .toEqual(['detail', 'edit', 'delete']);
+    expect(getMediaRowActionKeys({ can_edit: 0, can_delete: 0 }))
+      .toEqual(['detail']);
   });
 
   test('normalizes form dates, nullable selectors, and budget arrays', () => {
