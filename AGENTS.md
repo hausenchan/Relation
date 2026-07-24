@@ -152,6 +152,8 @@ RELATION_RUN_MYSQL_TESTS=1 \
 - 我的任务 `/my-tasks`、任务看板 `/task-board`。
 - 客户答谢 `/gift-plans`、审核记录 `/gift-review`、礼品库 `/gifts`。
 - 出差申请 `/trips`、出差协同 `/trip-collaboration`、费用统计 `/trip-stats`。
+- 出差协同日程网格必须在自身双向滚动容器内冻结顶部日期行和左侧时段列；左上角交叉格同时
+  冻结并高于两者，冻结区域使用不透明背景，不能被日程卡片覆盖。
 - 预算 `/budgets`。
 
 ### 3.7 公司经营

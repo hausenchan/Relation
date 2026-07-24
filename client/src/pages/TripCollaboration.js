@@ -33,6 +33,7 @@ import {
 import dayjs from 'dayjs';
 import { tripCollaborationApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
+import './TripCollaboration.css';
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -547,24 +548,32 @@ export default function TripCollaboration() {
     const timeColWidth = isMobile ? 72 : 92;
     return (
       <Spin spinning={scheduleLoading}>
-        <div style={{ overflow: 'auto', maxHeight: isMobile ? 'none' : 'calc(100vh - 236px)' }}>
+        <div
+          className="trip-collaboration-grid-scroll"
+          data-testid="trip-collaboration-grid-scroll"
+          style={{ maxHeight: isMobile ? 'none' : 'calc(100vh - 236px)' }}
+        >
           <div
+            className="trip-collaboration-grid"
             style={{
               display: 'grid',
               gridTemplateColumns: `${timeColWidth}px repeat(${tripDays.length}, minmax(${minDayWidth}px, 1fr))`,
               minWidth: timeColWidth + tripDays.length * minDayWidth,
             }}
           >
-            <div style={{ minHeight: 76, borderRight: '1px solid #edf0f5', borderBottom: '1px solid #edf0f5', background: '#fff' }} />
+            <div
+              className="trip-collaboration-grid-corner"
+              style={{ minHeight: 76, borderRight: '1px solid #edf0f5', borderBottom: '1px solid #edf0f5' }}
+            />
             {tripDays.map(day => (
               <div
                 key={day}
+                className="trip-collaboration-grid-date"
                 style={{
                   minHeight: 76,
                   padding: '14px 16px',
                   borderRight: '1px solid #edf0f5',
                   borderBottom: '1px solid #edf0f5',
-                  background: '#fff',
                 }}
               >
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{dayjs(day).format('M月D日')}</div>
@@ -575,12 +584,12 @@ export default function TripCollaboration() {
             {periods.map(period => (
               <React.Fragment key={period}>
                 <div
+                  className="trip-collaboration-grid-period"
                   style={{
                     minHeight: 152,
                     padding: '16px 12px',
                     borderRight: '1px solid #edf0f5',
                     borderBottom: '1px solid #edf0f5',
-                    background: '#fff',
                     fontWeight: 700,
                   }}
                 >
