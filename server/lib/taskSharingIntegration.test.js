@@ -164,6 +164,32 @@ test('task users shared into attention can edit normal task status', { timeout: 
   const updated = sharedTasks.payload.find(task => Number(task.id) === taskId);
   assert.equal(updated?.status, 'in_progress');
   assert.equal(Number(updated?.shared_to_me), 1);
+
+  const completeUpdate = await request(baseUrl, `/api/tasks/${taskId}`, {
+    method: 'PUT',
+    token: sharedUser.token,
+    body: { status: 'done' },
+  });
+  assert.equal(completeUpdate.status, 200, JSON.stringify(completeUpdate.payload));
+  const completedTasks = await request(baseUrl, '/api/tasks?parent_id=null', {
+    token: sharedUser.token,
+  });
+  const completed = completedTasks.payload.find(task => Number(task.id) === taskId);
+  assert.equal(completed?.status, 'done');
+  assert.ok(completed?.done_at);
+
+  const titleOnlyUpdate = await request(baseUrl, `/api/tasks/${taskId}`, {
+    method: 'PUT',
+    token: sharedUser.token,
+    body: { title: '共享关注任务（改名）', status: 'done' },
+  });
+  assert.equal(titleOnlyUpdate.status, 200, JSON.stringify(titleOnlyUpdate.payload));
+  const renamedTasks = await request(baseUrl, '/api/tasks?parent_id=null', {
+    token: sharedUser.token,
+  });
+  const renamed = renamedTasks.payload.find(task => Number(task.id) === taskId);
+  assert.equal(renamed?.title, '共享关注任务（改名）');
+  assert.equal(renamed?.done_at, completed.done_at);
 });
 
 test('mine task query is not truncated by the dashboard visible task limit', { timeout: 60000 }, async t => {

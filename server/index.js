@@ -33,6 +33,10 @@ const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
 const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
 const { createRequestPerformanceMiddleware } = require('./lib/performanceBudget');
 const { applyBusinessTimeMigration } = require('./lib/businessTimeMigration');
+const {
+  applyTaskCompletionRepairMigration,
+  resolveTaskLifecycleTimestamps,
+} = require('./lib/taskCompletion');
 const { DEFAULT_MYSQL_TIMEZONE, parseMysqlDateTime } = require('./lib/businessTime');
 const {
   decodeOssKey,
@@ -7856,6 +7860,10 @@ applyBusinessTimeMigration({
   db,
   isMysql: Database.isMysql(),
 });
+applyTaskCompletionRepairMigration({
+  db,
+  isMysql: Database.isMysql(),
+});
 
 app.get('/api/document-folders', (req, res) => {
   const rows = db.prepare(`
@@ -11408,14 +11416,17 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
     }
   }
   const now = new Date().toISOString();
-  const startedAt = status === 'in_progress'
-    ? (task.started_at || now)
-    : task.started_at;
-  const doneAt = status === 'done' ? now : (status && status !== 'done' ? null : task.done_at);
+  const lifecycle = resolveTaskLifecycleTimestamps({
+    currentStatus: task.status,
+    requestedStatus: status,
+    startedAt: task.started_at,
+    doneAt: task.done_at,
+    now,
+  });
   const enc = encryptRow('follow_up_tasks', { done_note: done_note ?? task.done_note });
   db.prepare(`
     UPDATE follow_up_tasks SET status=?, done_note=?, due_date=?, started_at=?, done_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
-  `).run(status ?? task.status, enc.done_note, due_date ?? task.due_date, startedAt, doneAt, req.params.id);
+  `).run(lifecycle.status, enc.done_note, due_date ?? task.due_date, lifecycle.startedAt, lifecycle.doneAt, req.params.id);
   clearRuntimeCache('follow-up-tasks:');
   res.json({ success: true });
 });
@@ -11643,10 +11654,13 @@ app.put('/api/tasks/:id', (req, res) => {
   }
 
   const now = new Date().toISOString();
-  const startedAt = status === 'in_progress'
-    ? (task.started_at || now)
-    : task.started_at;
-  const doneAt = status === 'done' ? now : (status && status !== 'done' ? null : task.done_at);
+  const lifecycle = resolveTaskLifecycleTimestamps({
+    currentStatus: task.status,
+    requestedStatus: status,
+    startedAt: task.started_at,
+    doneAt: task.done_at,
+    now,
+  });
   const nextEstimatedHours = estimated_hours === undefined ? task.estimated_hours : normalizedEstimatedHours.value;
   const merged = encryptRow('tasks', {
     title: title ?? task.title,
@@ -11658,13 +11672,13 @@ app.put('/api/tasks/:id', (req, res) => {
   `).run(
     merged.title,
     merged.description,
-    status ?? task.status,
+    lifecycle.status,
     priority ?? task.priority,
     date ?? task.date,
     estimated_completion_date ?? task.estimated_completion_date ?? task.date,
     nextEstimatedHours,
-    startedAt,
-    doneAt,
+    lifecycle.startedAt,
+    lifecycle.doneAt,
     merged.result,
     req.params.id
   );
