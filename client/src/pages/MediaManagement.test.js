@@ -74,7 +74,7 @@ test('moves row operations into a leading contextual menu column', async () => {
       id: 7,
       cid: '100026',
       media_name: '小蚕惠生活-安卓',
-      endpoint_description: '安卓-100026/iOS-100027',
+      endpoint_description: '安卓-100026/iOS-100027/极速版-100028/鸿蒙-100029/平板版-100030',
       can_edit: 1,
       can_delete: 1,
       budget_types: [],
@@ -105,8 +105,17 @@ test('moves row operations into a leading contextual menu column', async () => {
   expect(editableMoreButton).not.toBeNull();
   expect(editableMoreButton.closest('td')?.className).toContain('media-management-row-action-cell');
   expect(container.querySelector('button[aria-label="更多操作：只读媒体"]')).not.toBeNull();
-  expect(container.textContent).toContain('安卓-100026/iOS-100027');
+  const endpointDescription = '安卓-100026/iOS-100027/极速版-100028/鸿蒙-100029/平板版-100030';
+  expect(container.textContent).toContain(endpointDescription);
   expect(container.textContent).not.toContain('文档 #');
+  expect(container.querySelector('.media-management-table table')?.style.tableLayout).toBe('fixed');
+  const endpointNode = container.querySelector('.media-management-endpoint-description');
+  expect(endpointNode).not.toBeNull();
+  await act(async () => {
+    endpointNode.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    await new Promise(resolve => window.setTimeout(resolve, 150));
+  });
+  expect(document.body.querySelector('.ant-tooltip-inner')?.textContent).toBe(endpointDescription);
 
   await act(async () => {
     editableMoreButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));

@@ -172,6 +172,17 @@ function renderCompactText(value) {
   );
 }
 
+function renderEndpointDescription(value) {
+  const text = String(value || '').trim();
+  const content = (
+    <Text type="secondary" className="media-management-endpoint-description">
+      {text || '-'}
+    </Text>
+  );
+  if (!text) return content;
+  return <Tooltip title={text}>{content}</Tooltip>;
+}
+
 function formatShortDateTime(value) {
   return formatBusinessDateTime(value);
 }
@@ -508,6 +519,7 @@ export default function MediaManagement() {
       dataIndex: 'media_name',
       key: 'media_name',
       width: 260,
+      className: 'media-management-name-column',
       render: (value, record) => (
         <div className="media-management-name-cell">
           <div className="media-management-name-main">
@@ -518,13 +530,7 @@ export default function MediaManagement() {
             >
               <Text ellipsis={{ tooltip: value }}>{value}</Text>
             </Button>
-            <Text
-              type="secondary"
-              className="media-management-endpoint-description"
-              ellipsis={{ tooltip: record.endpoint_description || '-' }}
-            >
-              {record.endpoint_description || '-'}
-            </Text>
+            {renderEndpointDescription(record.endpoint_description)}
           </div>
         </div>
       ),
@@ -589,9 +595,7 @@ export default function MediaManagement() {
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
             <div style={{ minWidth: 0 }}>
               <Text strong ellipsis style={{ display: 'block' }}>{record.media_name}</Text>
-              <Text type="secondary" ellipsis style={{ display: 'block', fontSize: 12 }}>
-                {record.endpoint_description || '-'}
-              </Text>
+              {renderEndpointDescription(record.endpoint_description)}
               <Text type="secondary" style={{ fontSize: 12 }}>
                 CID {record.cid} · {getOptionMeta('category', record.category).label} · {record.owner_name || '-'}
               </Text>
@@ -693,6 +697,7 @@ export default function MediaManagement() {
         ) : (
           <ResizableTable
             className="media-management-table"
+            tableLayout="fixed"
             storageKey="media-management-table-columns"
             columns={columns}
             dataSource={rows}
