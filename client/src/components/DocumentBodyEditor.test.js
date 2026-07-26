@@ -224,7 +224,7 @@ describe('DocumentBodyEditor block copy', () => {
     expect(nextValue.blocks[3].meta).toEqual(value.blocks[1].meta);
   });
 
-  test('Delete from the inline editor removes a Cmd+A block selection together', () => {
+  test('Mac Delete removes every Cmd+A selected block and leaves an empty editor', () => {
     const onChange = jest.fn();
     flushSync(() => {
       root.render(<DocumentBodyEditor value={value} onChange={onChange} />);
@@ -239,7 +239,12 @@ describe('DocumentBodyEditor block copy', () => {
         bubbles: true,
         cancelable: true,
       }));
-      inlineEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
+      inlineEditor.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Backspace',
+        code: 'Backspace',
+        bubbles: true,
+        cancelable: true,
+      }));
     });
 
     const nextValue = onChange.mock.calls.at(-1)[0];

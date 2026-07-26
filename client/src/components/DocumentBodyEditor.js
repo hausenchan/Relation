@@ -465,7 +465,10 @@ function InlineBlockEditor({
             return;
           }
           const simpleDelete = !event.metaKey && !event.ctrlKey && !event.altKey && !composingRef.current;
-          if (event.key === 'Delete' && simpleDelete && onDeleteBlockSelection?.()) {
+          if ((event.key === 'Delete' || event.key === 'Backspace')
+            && simpleDelete
+            && onDeleteBlockSelection?.()
+          ) {
             event.preventDefault();
             event.stopPropagation();
             return;
@@ -939,7 +942,7 @@ export default function DocumentBodyEditor({
       if (!editorRootRef.current?.contains(document.activeElement)) return;
       const key = String(event.key || '').toLowerCase();
       if (!readOnly
-        && key === 'delete'
+        && (key === 'delete' || key === 'backspace')
         && !event.shiftKey
         && !event.metaKey
         && !event.ctrlKey
@@ -1734,7 +1737,7 @@ export default function DocumentBodyEditor({
       onMouseDown={handleEditorMouseDown}
       onKeyDownCapture={(event) => {
         const key = String(event.key || '').toLowerCase();
-        const plainDelete = key === 'delete'
+        const plainDelete = (key === 'delete' || key === 'backspace')
           && !event.shiftKey
           && !event.metaKey
           && !event.ctrlKey
