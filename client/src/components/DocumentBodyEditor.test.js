@@ -224,7 +224,7 @@ describe('DocumentBodyEditor block copy', () => {
     expect(nextValue.blocks[3].meta).toEqual(value.blocks[1].meta);
   });
 
-  test('Delete removes the current multi-block selection together', () => {
+  test('Delete from the inline editor removes a Cmd+A block selection together', () => {
     const onChange = jest.fn();
     flushSync(() => {
       root.render(<DocumentBodyEditor value={value} onChange={onChange} />);
@@ -233,18 +233,87 @@ describe('DocumentBodyEditor block copy', () => {
 
     inlineEditor.focus();
     flushSync(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', {
+      inlineEditor.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'a',
         metaKey: true,
         bubbles: true,
         cancelable: true,
       }));
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
+      inlineEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
     });
 
     const nextValue = onChange.mock.calls.at(-1)[0];
     expect(nextValue.blocks).toHaveLength(1);
     expect(nextValue.blocks[0]).toMatchObject({ type: 'paragraph', content: '' });
+  });
+
+  test('Delete removes a mouse-dragged pink block selection before capture clears it', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={onChange} />);
+    });
+    const editableNodes = container.querySelectorAll('[contenteditable="true"]');
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = jest.fn(() => editableNodes[1]);
+
+    flushSync(() => {
+      editableNodes[0].dispatchEvent(new MouseEvent('mousedown', {
+        bubbles: true,
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+      }));
+      window.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true,
+        clientX: 10,
+        clientY: 60,
+      }));
+      window.dispatchEvent(new MouseEvent('mouseup', {
+        bubbles: true,
+        clientX: 10,
+        clientY: 60,
+      }));
+    });
+
+    expect(container.querySelectorAll('[data-document-body-block-id][data-block-selected="true"]')).toHaveLength(2);
+    editableNodes[0].focus();
+    flushSync(() => {
+      editableNodes[0].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Delete',
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks.map(block => block.id)).toEqual(['three']);
+    document.elementFromPoint = originalElementFromPoint;
+  });
+
+  test('Delete resolves a native cross-block selection synchronously', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={onChange} />);
+    });
+    const editableNodes = container.querySelectorAll('[contenteditable="true"]');
+    editableNodes[0].focus();
+    const range = document.createRange();
+    range.setStart(editableNodes[0].firstChild, 1);
+    range.setEnd(editableNodes[1].querySelector('strong').firstChild, 2);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    flushSync(() => {
+      editableNodes[0].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Delete',
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks.map(block => block.id)).toEqual(['three']);
   });
 
   test('inserts a styled mention and sends notification after undo window', async () => {

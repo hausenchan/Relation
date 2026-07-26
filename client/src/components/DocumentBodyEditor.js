@@ -1132,7 +1132,10 @@ export default function DocumentBodyEditor({
   }
 
   function deleteKeyboardSelectedBlocks() {
-    const selectedIds = clipboardBlockIdsRef.current;
+    const nativeSelectedIds = getDocumentBodySelectionBlockIds(blocksRootRef.current);
+    const selectedIds = clipboardBlockIdsRef.current.length > 1
+      ? clipboardBlockIdsRef.current
+      : nativeSelectedIds;
     if (readOnly || selectedIds.length < 2) return false;
     return deleteBlocksByIds(selectedIds);
   }
@@ -1730,6 +1733,17 @@ export default function DocumentBodyEditor({
       onCopy={handleEditorCopy}
       onMouseDown={handleEditorMouseDown}
       onKeyDownCapture={(event) => {
+        const key = String(event.key || '').toLowerCase();
+        const plainDelete = key === 'delete'
+          && !event.shiftKey
+          && !event.metaKey
+          && !event.ctrlKey
+          && !event.altKey;
+        if (!readOnly && plainDelete && deleteKeyboardSelectedBlocks()) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         if ((!selectAllBlocksActiveRef.current && !manualBlockSelectionActiveRef.current)
           || event.metaKey || event.ctrlKey || event.altKey) return;
         clearClipboardBlockSelection();
