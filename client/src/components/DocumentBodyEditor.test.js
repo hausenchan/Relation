@@ -224,6 +224,29 @@ describe('DocumentBodyEditor block copy', () => {
     expect(nextValue.blocks[3].meta).toEqual(value.blocks[1].meta);
   });
 
+  test('Delete removes the current multi-block selection together', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={onChange} />);
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+
+    inlineEditor.focus();
+    flushSync(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'a',
+        metaKey: true,
+        bubbles: true,
+        cancelable: true,
+      }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }));
+    });
+
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks).toHaveLength(1);
+    expect(nextValue.blocks[0]).toMatchObject({ type: 'paragraph', content: '' });
+  });
+
   test('inserts a styled mention and sends notification after undo window', async () => {
     jest.useFakeTimers();
     const onChange = jest.fn();

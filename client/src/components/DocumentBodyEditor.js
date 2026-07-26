@@ -341,6 +341,7 @@ function InlineBlockEditor({
   onEnter,
   onBackspace,
   onDelete,
+  onDeleteBlockSelection,
   onIndent,
   onPaste,
   onMentionTrigger,
@@ -464,6 +465,11 @@ function InlineBlockEditor({
             return;
           }
           const simpleDelete = !event.metaKey && !event.ctrlKey && !event.altKey && !composingRef.current;
+          if (event.key === 'Delete' && simpleDelete && onDeleteBlockSelection?.()) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (event.key === 'Backspace' && simpleDelete) {
             if (removeAdjacentMentionFromContentEditable(editorRef.current, event)) {
               event.preventDefault();
@@ -931,8 +937,20 @@ export default function DocumentBodyEditor({
   useEffect(() => {
     const handleEditorShortcut = (event) => {
       if (!editorRootRef.current?.contains(document.activeElement)) return;
-      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       const key = String(event.key || '').toLowerCase();
+      if (!readOnly
+        && key === 'delete'
+        && !event.shiftKey
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.altKey
+        && deleteKeyboardSelectedBlocks()
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (!(event.metaKey || event.ctrlKey) || event.altKey) return;
       if (key === 'a' && !event.shiftKey) {
         const activeElement = document.activeElement;
         if (activeElement?.closest?.('input, textarea, [data-document-body-table-cell="true"]')) return;
@@ -1101,7 +1119,7 @@ export default function DocumentBodyEditor({
     return true;
   };
 
-  const deleteBlocksByIds = (ids = []) => {
+  function deleteBlocksByIds(ids = []) {
     const deleteSet = new Set(ids);
     const firstDeletedIndex = blocks.findIndex(block => deleteSet.has(block.id));
     if (firstDeletedIndex < 0) return false;
@@ -1111,7 +1129,13 @@ export default function DocumentBodyEditor({
     clearClipboardBlockSelection();
     emitBlocks(nextBlocks, nextFocus?.id);
     return true;
-  };
+  }
+
+  function deleteKeyboardSelectedBlocks() {
+    const selectedIds = clipboardBlockIdsRef.current;
+    if (readOnly || selectedIds.length < 2) return false;
+    return deleteBlocksByIds(selectedIds);
+  }
 
   const createBlockAfter = (type, afterId = blocks[blocks.length - 1]?.id, options = {}) => {
     const afterIndex = blocks.findIndex(block => block.id === afterId);
@@ -1383,6 +1407,7 @@ export default function DocumentBodyEditor({
       onDelete: (_event, context) => (
         blocks.length > 1 && mergeBlockWithNextAtEnd(block.id, context?.content)
       ),
+      onDeleteBlockSelection: deleteKeyboardSelectedBlocks,
       onIndent: delta => changeIndent(block.id, delta),
       onPaste: event => handleBlockPaste(event, block.id),
       onMentionTrigger: trigger => handleMentionTrigger(block.id, trigger),
