@@ -98,7 +98,7 @@ function agendaObjectToDocumentBody(agenda) {
 }
 
 function normalizeOperationalAgendaContent(value) {
-  if (!value) return null;
+  if (!value) return normalizeDocumentBodyValue('');
   if (value?.blocks) return normalizeDocumentBodyValue(value);
   if (typeof value === 'string') return normalizeDocumentBodyValue(value);
   return agendaObjectToDocumentBody(value);
@@ -195,6 +195,8 @@ export default function OperationalMeeting() {
   const requestedDetailTab = searchParams.get('tab') === 'meeting' ? 'meeting' : 'preparation';
   const canViewPreparationTab = Boolean(detail?.can_view_preparation);
   const detailTab = getOperationalMeetingDetailTab(requestedDetailTab, canViewPreparationTab);
+  const canEditMeetingContent = Boolean(detail?.meeting)
+    && !['readonly', 'guest'].includes(String(user?.role || '').toLowerCase());
 
   useEffect(() => {
     const previousController = agendaGenerationAbortControllerRef.current;
@@ -788,7 +790,7 @@ export default function OperationalMeeting() {
   };
 
   const saveAgenda = async ({ silent = false } = {}) => {
-    if (!detail?.meeting?.id || !detail?.can_edit_agenda) return false;
+    if (!detail?.meeting?.id || !canEditMeetingContent) return false;
     if (agendaPendingSaveRef.current) {
       await agendaPendingSaveRef.current.catch(() => null);
       return saveAgenda({ silent });
@@ -852,7 +854,7 @@ export default function OperationalMeeting() {
   };
 
   const saveDecision = async ({ silent = false } = {}) => {
-    if (!detail?.meeting?.id || !detail?.can_edit_decision) return false;
+    if (!detail?.meeting?.id || !canEditMeetingContent) return false;
     if (decisionPendingSaveRef.current) {
       await decisionPendingSaveRef.current.catch(() => null);
       return saveDecision({ silent });
@@ -1292,15 +1294,14 @@ export default function OperationalMeeting() {
             >
               历史
             </Button>
-            {agendaDraft && Boolean(detail.can_edit_agenda) && renderMeetingSaveStatus(agendaSaveState)}
-            {agendaSaveState.phase === 'error' && Boolean(detail.can_edit_agenda) && (
+            {canEditMeetingContent && renderMeetingSaveStatus(agendaSaveState)}
+            {agendaSaveState.phase === 'error' && canEditMeetingContent && (
               <Button size="small" onClick={() => saveAgenda({ silent: false })}>重试</Button>
             )}
-            {Boolean(detail.can_edit_agenda) && (
+            {canEditMeetingContent && (
               <Button
                 icon={<SaveOutlined />}
                 loading={agendaSaveState.phase === 'saving'}
-                disabled={!agendaDraft}
                 onClick={() => saveAgenda({ silent: false })}
               >
                 保存提纲
@@ -1348,18 +1349,18 @@ export default function OperationalMeeting() {
               description={`正在汇总 ${preparationSubmissionStats.submitted} 份准备内容，完成后会自动保存并显示。`}
             />
           )}
-          {agendaLoading && !agendaDraft ? (
+          {agendaLoading && !documentBodyHasContent(agendaDraft) ? (
             <div style={{ minHeight: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <Spin size="large" />
             </div>
-          ) : agendaDraft ? (
+          ) : (
             <DocumentBodyEditor
               value={agendaDraft}
               onChange={patchAgendaContent}
               onSave={() => saveAgenda({ silent: false })}
               minHeight={360}
               placeholder="编辑会议提纲"
-              readOnly={!detail.can_edit_agenda}
+              readOnly={!canEditMeetingContent}
               mentionContext={detail?.meeting?.id ? {
                 entity_type: 'operational_meeting',
                 entity_id: detail.meeting.id,
@@ -1368,8 +1369,6 @@ export default function OperationalMeeting() {
                 scope: 'agenda',
               } : null}
             />
-          ) : (
-            <Empty description="暂无会议提纲" />
           )}
         </Space>
       </Card>
@@ -1387,11 +1386,11 @@ export default function OperationalMeeting() {
             >
               历史
             </Button>
-            {Boolean(detail.can_edit_decision) && renderMeetingSaveStatus(decisionSaveState)}
-            {Boolean(detail.can_edit_decision) && decisionSaveState.phase === 'error' && (
+            {canEditMeetingContent && renderMeetingSaveStatus(decisionSaveState)}
+            {canEditMeetingContent && decisionSaveState.phase === 'error' && (
               <Button size="small" onClick={() => saveDecision({ silent: false })}>重试</Button>
             )}
-            {Boolean(detail.can_edit_decision) && <Button
+            {canEditMeetingContent && <Button
               icon={<SaveOutlined />}
               loading={decisionSaveState.phase === 'saving'}
               onClick={() => saveDecision({ silent: false })}
@@ -1407,7 +1406,7 @@ export default function OperationalMeeting() {
           onSave={() => saveDecision({ silent: false })}
           placeholder="记录会议最终决策、负责人、截止时间和后续动作"
           minHeight={280}
-          readOnly={!detail.can_edit_decision}
+          readOnly={!canEditMeetingContent}
           mentionContext={detail?.meeting?.id ? {
             entity_type: 'operational_meeting',
             entity_id: detail.meeting.id,
