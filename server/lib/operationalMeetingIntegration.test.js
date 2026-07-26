@@ -366,6 +366,51 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     false,
   );
   assert.equal(generatedAgenda.payload.prompt_version, 'operational-meeting-agenda-v3');
+  assert.equal(generatedAgenda.payload.saved, true);
+  assert.ok(generatedAgenda.payload.updated_at);
+
+  const detailImmediatelyAfterGenerate = await request(
+    baseUrl,
+    `/api/operational-meetings/${meetingId}`,
+    { token: ceoToken },
+  );
+  assert.equal(detailImmediatelyAfterGenerate.status, 200);
+  assert.deepEqual(
+    detailImmediatelyAfterGenerate.payload.agenda?.agenda_content,
+    generatedAgenda.payload.agenda,
+  );
+  assert.equal(detailImmediatelyAfterGenerate.payload.meeting.agenda_status, 'generated');
+  assert.equal(detailImmediatelyAfterGenerate.payload.meeting.status, 'agenda_generated');
+
+  const historyImmediatelyAfterGenerate = await request(
+    baseUrl,
+    `/api/operational-meetings/${meetingId}/history?scope=agenda`,
+    { token: ceoToken },
+  );
+  assert.equal(historyImmediatelyAfterGenerate.status, 200);
+  assert.equal(historyImmediatelyAfterGenerate.payload.revisions.length, 1);
+
+  const unavailableRegenerate = await request(
+    baseUrl,
+    `/api/operational-meetings/${meetingId}/agenda/generate`,
+    {
+      method: 'POST',
+      token: ceoToken,
+      body: { base_updated_at: generatedAgenda.payload.updated_at },
+    },
+  );
+  assert.equal(unavailableRegenerate.status, 503, JSON.stringify(unavailableRegenerate.payload));
+  assert.equal(unavailableRegenerate.payload.code, 'AI_MODEL_UNAVAILABLE');
+
+  const detailAfterUnavailableRegenerate = await request(
+    baseUrl,
+    `/api/operational-meetings/${meetingId}`,
+    { token: ceoToken },
+  );
+  assert.deepEqual(
+    detailAfterUnavailableRegenerate.payload.agenda?.agenda_content,
+    generatedAgenda.payload.agenda,
+  );
 
   const agendaContent = generatedAgenda.payload.agenda;
   const sensitiveAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
@@ -405,6 +450,16 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     },
   });
   assert.equal(saveAgenda.status, 200, JSON.stringify(saveAgenda.payload));
+  assert.equal(saveAgenda.payload.changed, false);
+  assert.equal(saveAgenda.payload.updated_at, generatedAgenda.payload.updated_at);
+
+  const historyAfterIdempotentSave = await request(
+    baseUrl,
+    `/api/operational-meetings/${meetingId}/history?scope=agenda`,
+    { token: ceoToken },
+  );
+  assert.equal(historyAfterIdempotentSave.status, 200);
+  assert.equal(historyAfterIdempotentSave.payload.revisions.length, 1);
 
   const outsiderSavesAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
     method: 'PUT',

@@ -142,6 +142,7 @@ export default function OperationalMeeting() {
   const [dirtySectionIds, setDirtySectionIds] = useState([]);
   const [submittingSectionId, setSubmittingSectionId] = useState(null);
   const [agendaLoading, setAgendaLoading] = useState(false);
+  const [agendaGenerationError, setAgendaGenerationError] = useState('');
   const [agendaSaveState, setAgendaSaveState] = useState({ phase: 'idle', savedAt: null });
   const [decisionSaveState, setDecisionSaveState] = useState({ phase: 'idle', savedAt: null });
   const [participantOpen, setParticipantOpen] = useState(false);
@@ -192,6 +193,10 @@ export default function OperationalMeeting() {
   const requestedDetailTab = searchParams.get('tab') === 'meeting' ? 'meeting' : 'preparation';
   const canViewPreparationTab = Boolean(detail?.can_view_preparation);
   const detailTab = getOperationalMeetingDetailTab(requestedDetailTab, canViewPreparationTab);
+
+  useEffect(() => {
+    setAgendaGenerationError('');
+  }, [meetingId]);
 
   const updateSectionSaveState = useCallback((sectionId, patch) => {
     setSectionSaveStates((prev) => {
@@ -667,18 +672,23 @@ export default function OperationalMeeting() {
       if (!confirmed) return;
     }
     setAgendaLoading(true);
+    setAgendaGenerationError('');
     try {
       for (const sectionId of [...dirtySectionIdsRef.current]) {
         const saved = await persistSection(sectionId, { showError: true });
         if (!saved) {
-          message.error('准备内容保存失败，未生成会议提纲');
+          const errorText = '准备内容保存失败，未生成会议提纲';
+          setAgendaGenerationError(errorText);
+          message.error({ content: errorText, duration: 8 });
           return;
         }
       }
       if (agendaDirtyRef.current) {
         const saved = await saveAgenda({ silent: true });
         if (!saved) {
-          message.error('当前会议提纲保存失败，未执行重新生成');
+          const errorText = '当前会议提纲保存失败，未执行重新生成';
+          setAgendaGenerationError(errorText);
+          message.error({ content: errorText, duration: 8 });
           return;
         }
       }
@@ -686,34 +696,28 @@ export default function OperationalMeeting() {
         base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
       });
       if (result.runtime?.mode !== 'llm' && detail.agenda) {
-        message.error(result.runtime?.error || 'AI服务当前不可用，已保留原会议提纲');
+        const errorText = result.runtime?.error || 'AI服务当前不可用，已保留原会议提纲';
+        setAgendaGenerationError(errorText);
+        message.error({ content: errorText, duration: 8 });
         return;
       }
       const agenda = normalizeOperationalAgendaContent(result.agenda);
-      const savedAgenda = await operationalMeetingsApi.saveAgenda(detail.meeting.id, {
-        agenda,
-        source_hash: result.source_hash,
-        model_provider: result.runtime?.provider || 'rule',
-        model_name: result.runtime?.model_name || '',
-        prompt_version: result.prompt_version,
-        safety_scan_status: 'passed',
-        revision_action: 'generate',
-        base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
-      });
       agendaDraftRef.current = agenda;
       agendaLastSavedSignatureRef.current = getDocumentBodySignature(agenda);
       agendaDirtyRef.current = false;
       agendaRemoteSnapshotRef.current = {
         content: agenda,
-        updated_at: savedAgenda.updated_at || new Date().toISOString(),
+        updated_at: result.updated_at || new Date().toISOString(),
       };
       setAgendaDraft(agenda);
-      setAgendaSaveState({ phase: 'saved', savedAt: new Date().toISOString() });
+      setAgendaSaveState({ phase: 'saved', savedAt: result.updated_at || new Date().toISOString() });
       await loadMeetings();
       await loadDetail(detail.meeting.id);
       message.success(result.runtime?.mode === 'llm' ? 'AI 提纲已生成' : '已生成规则兜底提纲');
     } catch (error) {
-      message.error(error.response?.data?.error || error.message || '生成提纲失败');
+      const errorText = error.response?.data?.error || error.message || '生成提纲失败';
+      setAgendaGenerationError(errorText);
+      message.error({ content: errorText, duration: 8 });
     } finally {
       setAgendaLoading(false);
     }
@@ -1272,8 +1276,35 @@ export default function OperationalMeeting() {
           </Space>
         )}
       >
-        {agendaDraft ? (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          {agendaGenerationError && (
+            <Alert
+              type="error"
+              showIcon
+              closable
+              message="会议提纲生成失败"
+              description={agendaGenerationError}
+              onClose={() => setAgendaGenerationError('')}
+              action={Boolean(detail.can_generate_agenda) ? (
+                <Button size="small" danger onClick={generateAgenda} disabled={agendaLoading}>
+                  重试
+                </Button>
+              ) : null}
+            />
+          )}
+          {agendaLoading && (
+            <Alert
+              type="info"
+              showIcon
+              message="正在生成会议提纲"
+              description={`正在汇总 ${preparationSubmissionStats.submitted} 份准备内容，生成完成后会自动保存。`}
+            />
+          )}
+          {agendaLoading && !agendaDraft ? (
+            <div style={{ minHeight: 280, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <Spin size="large" />
+            </div>
+          ) : agendaDraft ? (
             <DocumentBodyEditor
               value={agendaDraft}
               onChange={patchAgendaContent}
@@ -1289,10 +1320,10 @@ export default function OperationalMeeting() {
                 scope: 'agenda',
               } : null}
             />
-          </Space>
-        ) : (
-          <Empty description="暂无会议提纲" />
-        )}
+          ) : (
+            <Empty description="暂无会议提纲" />
+          )}
+        </Space>
       </Card>
 
       <Card

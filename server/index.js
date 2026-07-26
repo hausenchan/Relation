@@ -23476,6 +23476,124 @@ function getOperationalMeetingAgendaSource(meeting) {
   };
 }
 
+function persistOperationalMeetingAgenda({
+  meeting,
+  userId,
+  agenda,
+  sourceHash = null,
+  modelProvider = null,
+  modelName = null,
+  promptVersion = OPERATIONAL_MEETING_PROMPT_VERSION,
+  safetyScanStatus = 'passed',
+  revisionAction = 'save',
+  baseUpdatedAt = '',
+  hasBaseUpdatedAt = false,
+}) {
+  const agendaJson = stringifyOperationalMeetingContent(agenda, '会议提纲');
+  const persist = db.transaction(() => {
+    const existingAgenda = db.prepare(
+      'SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?',
+    ).get(meeting.id) || null;
+    const isIdempotentGeneratedSave = Boolean(
+      existingAgenda
+      && revisionAction === 'generate'
+      && sourceHash
+      && String(existingAgenda.source_hash || '') === String(sourceHash)
+      && JSON.stringify(parseJsonSafe(existingAgenda.agenda_json, null)) === agendaJson,
+    );
+    if (isIdempotentGeneratedSave) {
+      return {
+        changed: false,
+        id: existingAgenda.id,
+        updatedAt: existingAgenda.updated_at,
+        savedAgenda: existingAgenda,
+      };
+    }
+    if (
+      existingAgenda
+      && hasBaseUpdatedAt
+      && String(baseUpdatedAt || '') !== String(existingAgenda.updated_at || '')
+    ) {
+      return {
+        conflict: true,
+        latest: serializeOperationalAgenda(existingAgenda),
+      };
+    }
+
+    const updatedAt = new Date().toISOString();
+    let agendaId = existingAgenda?.id;
+    if (agendaId) {
+      db.prepare(`
+        UPDATE operational_meeting_agendas
+        SET agenda_json = ?,
+            crypto_version = 'none',
+            source_hash = ?,
+            model_provider = ?,
+            model_name = ?,
+            prompt_version = ?,
+            safety_scan_status = ?,
+            generated_by = ?,
+            generated_at = ?,
+            updated_at = ?
+        WHERE id = ?
+      `).run(
+        agendaJson,
+        sourceHash,
+        modelProvider,
+        modelName,
+        promptVersion,
+        safetyScanStatus,
+        userId,
+        updatedAt,
+        updatedAt,
+        agendaId,
+      );
+    } else {
+      const result = db.prepare(`
+        INSERT INTO operational_meeting_agendas (
+          meeting_id, agenda_json, crypto_version, source_hash,
+          model_provider, model_name, prompt_version, safety_scan_status,
+          generated_by, generated_at, updated_at
+        ) VALUES (?, ?, 'none', ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        meeting.id,
+        agendaJson,
+        sourceHash,
+        modelProvider,
+        modelName,
+        promptVersion,
+        safetyScanStatus,
+        userId,
+        updatedAt,
+        updatedAt,
+      );
+      agendaId = result.lastInsertRowid;
+    }
+
+    const savedAgenda = db.prepare(
+      'SELECT * FROM operational_meeting_agendas WHERE id = ?',
+    ).get(agendaId);
+    recordContentRevisionChange({
+      entityType: 'operational_meeting',
+      entityId: meeting.id,
+      scopeKey: 'agenda',
+      before: buildOperationalAgendaRevisionSnapshot(existingAgenda),
+      after: buildOperationalAgendaRevisionSnapshot(savedAgenda),
+      action: revisionAction === 'generate' ? 'generate' : 'save',
+      userId,
+    });
+    touchOperationalMeeting(meeting.id, userId, updatedAt);
+    refreshOperationalMeetingStatuses(meeting.id);
+    return {
+      changed: true,
+      id: agendaId,
+      updatedAt: savedAgenda.updated_at || updatedAt,
+      savedAgenda,
+    };
+  });
+  return persist();
+}
+
 app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeetingAccess, canWrite, async (req, res) => {
   const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
@@ -23496,6 +23614,16 @@ app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeet
         code: 'PREPARATION_CHANGED',
       });
     }
+    const existingAgenda = db.prepare(
+      'SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?',
+    ).get(meeting.id);
+    if (result.runtime?.mode !== 'llm' && existingAgenda) {
+      throw new OperationalMeetingAgendaError(
+        result.runtime?.error || 'AI服务当前不可用，已保留原会议提纲',
+        'AI_MODEL_UNAVAILABLE',
+        503,
+      );
+    }
     const agenda = operationalMeetingAgendaToDocumentBody(result.agenda, source.sourceHash);
     if (operationalMeetingAgendaLooksSensitive(agenda)) {
       return res.status(422).json({
@@ -23503,11 +23631,34 @@ app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeet
         code: 'AI_OUTPUT_SENSITIVE',
       });
     }
+    const persisted = persistOperationalMeetingAgenda({
+      meeting,
+      userId: req.user.id,
+      agenda,
+      sourceHash: source.sourceHash,
+      modelProvider: result.runtime?.provider || 'rule',
+      modelName: result.runtime?.model_name || null,
+      promptVersion: OPERATIONAL_MEETING_PROMPT_VERSION,
+      safetyScanStatus: 'passed',
+      revisionAction: 'generate',
+      baseUpdatedAt: req.body?.base_updated_at,
+      hasBaseUpdatedAt: Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at'),
+    });
+    if (persisted.conflict) {
+      return res.status(409).json({
+        error: '会议提纲已被其他协作者更新，请先同步最新内容',
+        code: 'CONTENT_CONFLICT',
+        latest: persisted.latest,
+      });
+    }
     return res.json({
       agenda,
       runtime: result.runtime,
       source_hash: source.sourceHash,
       prompt_version: OPERATIONAL_MEETING_PROMPT_VERSION,
+      id: persisted.id,
+      updated_at: persisted.updatedAt,
+      saved: true,
     });
   } catch (error) {
     const status = error instanceof OperationalMeetingAgendaError ? error.status : 500;
@@ -23542,89 +23693,44 @@ app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess,
       return res.status(500).json({ error: '校验会议准备内容失败', code: 'PREPARATION_CHECK_FAILED' });
     }
   }
-  const existingAgenda = db.prepare('SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?').get(meeting.id) || null;
-  const baseUpdatedAt = String(req.body?.base_updated_at || '');
-  const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
-  if (existingAgenda && hasBaseUpdatedAt && baseUpdatedAt !== String(existingAgenda.updated_at || '')) {
-    return res.status(409).json({
-      error: '会议提纲已被其他协作者更新，请先同步最新内容',
-      code: 'CONTENT_CONFLICT',
-      latest: serializeOperationalAgenda(existingAgenda),
+  if (operationalMeetingAgendaLooksSensitive(req.body?.agenda)) {
+    return res.status(422).json({
+      error: '会议提纲疑似包含毛利或利润类敏感信息，已阻断保存',
+      code: 'AGENDA_CONTENT_SENSITIVE',
     });
   }
-  let agendaJson;
   try {
-    if (operationalMeetingAgendaLooksSensitive(req.body?.agenda)) {
-      return res.status(422).json({
-        error: '会议提纲疑似包含毛利或利润类敏感信息，已阻断保存',
-        code: 'AGENDA_CONTENT_SENSITIVE',
-      });
-    }
-    agendaJson = stringifyOperationalMeetingContent(req.body?.agenda, '会议提纲');
+    stringifyOperationalMeetingContent(req.body?.agenda, '会议提纲');
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
-  const updatedAt = new Date().toISOString();
-  let agendaId = existingAgenda?.id;
-  if (agendaId) {
-    db.prepare(`
-      UPDATE operational_meeting_agendas
-      SET agenda_json = ?,
-          crypto_version = 'none',
-          source_hash = ?,
-          model_provider = ?,
-          model_name = ?,
-          prompt_version = ?,
-          safety_scan_status = ?,
-          generated_by = ?,
-          generated_at = ?,
-          updated_at = ?
-      WHERE id = ?
-    `).run(
-      agendaJson,
-      req.body?.source_hash || null,
-      req.body?.model_provider || null,
-      req.body?.model_name || null,
-      req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
-      req.body?.safety_scan_status || 'passed',
-      req.user.id,
-      updatedAt,
-      updatedAt,
-      agendaId,
-    );
-  } else {
-    const result = db.prepare(`
-      INSERT INTO operational_meeting_agendas (
-        meeting_id, agenda_json, crypto_version, source_hash,
-        model_provider, model_name, prompt_version, safety_scan_status, generated_by, generated_at, updated_at
-      ) VALUES (?, ?, 'none', ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      meeting.id,
-      agendaJson,
-      req.body?.source_hash || null,
-      req.body?.model_provider || null,
-      req.body?.model_name || null,
-      req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
-      req.body?.safety_scan_status || 'passed',
-      req.user.id,
-      updatedAt,
-      updatedAt,
-    );
-    agendaId = result.lastInsertRowid;
-  }
-  const savedAgenda = db.prepare('SELECT * FROM operational_meeting_agendas WHERE id = ?').get(agendaId);
-  recordContentRevisionChange({
-    entityType: 'operational_meeting',
-    entityId: meeting.id,
-    scopeKey: 'agenda',
-    before: buildOperationalAgendaRevisionSnapshot(existingAgenda),
-    after: buildOperationalAgendaRevisionSnapshot(savedAgenda),
-    action: req.body?.revision_action === 'generate' ? 'generate' : 'save',
+  const persisted = persistOperationalMeetingAgenda({
+    meeting,
     userId: req.user.id,
+    agenda: req.body?.agenda,
+    sourceHash: req.body?.source_hash || null,
+    modelProvider: req.body?.model_provider || null,
+    modelName: req.body?.model_name || null,
+    promptVersion: req.body?.prompt_version || OPERATIONAL_MEETING_PROMPT_VERSION,
+    safetyScanStatus: req.body?.safety_scan_status || 'passed',
+    revisionAction: req.body?.revision_action === 'generate' ? 'generate' : 'save',
+    baseUpdatedAt: req.body?.base_updated_at,
+    hasBaseUpdatedAt: Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at'),
   });
-  touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
-  refreshOperationalMeetingStatuses(meeting.id);
-  res.json({ success: true, id: agendaId, updated_at: updatedAt, updated_by: req.user.id });
+  if (persisted.conflict) {
+    return res.status(409).json({
+      error: '会议提纲已被其他协作者更新，请先同步最新内容',
+      code: 'CONTENT_CONFLICT',
+      latest: persisted.latest,
+    });
+  }
+  return res.json({
+    success: true,
+    id: persisted.id,
+    updated_at: persisted.updatedAt,
+    updated_by: req.user.id,
+    changed: persisted.changed,
+  });
 });
 
 app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAccess, canWrite, (req, res) => {
