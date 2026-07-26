@@ -513,6 +513,30 @@ describe('DocumentBodyEditor block copy', () => {
     document.elementFromPoint = originalElementFromPoint;
   });
 
+  test('copies manual multi-block selection from document-level copy event with list html', () => {
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={value} onChange={() => {}} />);
+    });
+    const handles = container.querySelectorAll('button[aria-label="块菜单"]');
+
+    flushSync(() => {
+      handles[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    });
+
+    const clipboardData = createClipboardData();
+    let copyEvent;
+    flushSync(() => {
+      copyEvent = dispatchCopy(document, clipboardData);
+    });
+
+    expect(copyEvent.defaultPrevented).toBe(true);
+    expect(clipboardData.getData('text/plain')).toBe('- 第一块\n  1. 第二块');
+    expect(clipboardData.getData('text/html')).toContain('<ul>');
+    expect(clipboardData.getData('text/html')).toContain('<ol>');
+    expect(clipboardData.getData('text/html')).toContain('<strong>第二块</strong>');
+    expect(JSON.parse(clipboardData.getData(DOCUMENT_BODY_CLIPBOARD_MIME)).blocks).toHaveLength(2);
+  });
+
   test('keeps block selection active in only one meeting editor at a time', () => {
     flushSync(() => {
       root.render(

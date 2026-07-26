@@ -476,10 +476,83 @@ function documentBodyBlockToClipboardHtml(block) {
   return `<${tag} ${attributes.join(' ')}>${content}</${tag}>`;
 }
 
+function isClipboardListBlock(block) {
+  return ['bullet', 'numbered', 'fold-list'].includes(block?.type);
+}
+
+function getClipboardListTag(block) {
+  return block?.type === 'numbered' ? 'ol' : 'ul';
+}
+
+function documentBodyListBlocksToClipboardHtml(listBlocks = []) {
+  const source = listBlocks.filter(isClipboardListBlock);
+  if (!source.length) return '';
+  const minimumIndent = Math.min(...source.map(block => Math.max(0, Number(block.meta?.indent || 0))));
+  const root = { children: [] };
+  const stack = [root];
+  source.forEach((block) => {
+    let level = Math.max(0, Number(block.meta?.indent || 0) - minimumIndent);
+    if (level > stack.length - 1) level = stack.length - 1;
+    while (stack.length > level + 1) stack.pop();
+    const node = { block, children: [] };
+    stack[level].children.push(node);
+    stack[level + 1] = node;
+  });
+
+  const renderChildren = (children = []) => {
+    let html = '';
+    let cursor = 0;
+    while (cursor < children.length) {
+      const tag = getClipboardListTag(children[cursor].block);
+      let group = '';
+      while (cursor < children.length && getClipboardListTag(children[cursor].block) === tag) {
+        const node = children[cursor];
+        const block = node.block;
+        const indent = Math.max(0, Number(block.meta?.indent || 0) - minimumIndent);
+        const attributes = [
+          `data-block-type="${escapeClipboardHtml(block.type || 'paragraph')}"`,
+          `data-indent="${indent}"`,
+          `aria-level="${indent + 1}"`,
+        ];
+        const content = sanitizeDocumentBodyInlineHtml(block.content || '');
+        const body = block.type === 'fold-list'
+          ? sanitizeDocumentBodyInlineHtml(block.meta?.body || '')
+          : '';
+        group += `<li ${attributes.join(' ')}>${content}${body ? `<div>${body}</div>` : ''}${renderChildren(node.children)}</li>`;
+        cursor += 1;
+      }
+      html += `<${tag}>${group}</${tag}>`;
+    }
+    return html;
+  };
+
+  return renderChildren(root.children);
+}
+
+function documentBodyBlocksToClipboardHtml(blocks = []) {
+  let html = '';
+  let listBuffer = [];
+  const flushList = () => {
+    if (!listBuffer.length) return;
+    html += documentBodyListBlocksToClipboardHtml(listBuffer);
+    listBuffer = [];
+  };
+  blocks.forEach((block) => {
+    if (isClipboardListBlock(block)) {
+      listBuffer.push(block);
+      return;
+    }
+    flushList();
+    html += documentBodyBlockToClipboardHtml(block);
+  });
+  flushList();
+  return html;
+}
+
 export function buildDocumentBodyClipboardPayload(blocks = []) {
   const source = (Array.isArray(blocks) ? blocks : []).filter(Boolean);
   const structuredBlocks = normalizeClipboardPayloadBlocks(source);
-  const html = source.map(documentBodyBlockToClipboardHtml).filter(Boolean).join('');
+  const html = documentBodyBlocksToClipboardHtml(source);
   const encoded = escapeClipboardHtml(encodeURIComponent(JSON.stringify({ blocks: structuredBlocks })));
   return {
     text: source.map(documentBodyBlockToClipboardText).filter(Boolean).join('\n'),

@@ -1038,6 +1038,22 @@ export default function DocumentBodyEditor({
     message.success('已复制');
   };
 
+  useEffect(() => {
+    const handleDocumentCopy = (event) => {
+      if (event.defaultPrevented) return;
+      if (!clipboardBlockIdsRef.current.length) return;
+      const selection = window.getSelection?.();
+      if (selection && !selection.isCollapsed) {
+        const selectionInEditor = [selection.anchorNode, selection.focusNode]
+          .some(node => node && editorRootRef.current?.contains(node));
+        if (!selectionInEditor) return;
+      }
+      handleEditorCopy(event);
+    };
+    document.addEventListener('copy', handleDocumentCopy, true);
+    return () => document.removeEventListener('copy', handleDocumentCopy, true);
+  });
+
   const getBlockActionIds = (blockId) => {
     const selectedIds = clipboardBlockIdsRef.current;
     return selectedIds.includes(blockId) && selectedIds.length
