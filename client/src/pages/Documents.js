@@ -117,6 +117,7 @@ import {
   flattenDocumentClipboardHtml,
   shouldSkipNestedClipboardListElement,
 } from '../utils/documentClipboard';
+import { splitContentEditableAtSelection } from '../utils/contentEditableSplit';
 import {
   buildBulkShareTreeCheckState,
   buildFolderDocumentSelectionMap,
@@ -7940,7 +7941,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   };
 
   const splitBlockAtCursor = (event, block, index) => {
-    const input = event.target;
+    const input = event.currentTarget?.isContentEditable ? event.currentTarget : event.target;
     const getCurrentContent = () => {
       if (!input?.isContentEditable) return String(block.content || '');
       const selection = window.getSelection?.();
@@ -7952,7 +7953,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       return sanitizeInlineHtml(input.innerHTML);
     };
     const content = getCurrentContent();
-    const editableSelection = input?.isContentEditable ? getContentEditableSelectionRange(input) : null;
+    const editableSplit = input?.isContentEditable ? splitContentEditableAtSelection(input) : null;
+    const editableSelection = editableSplit
+      ? { start: editableSplit.start, end: editableSplit.end }
+      : null;
     const selectionStart = editableSelection
       ? editableSelection.start
       : (typeof input?.selectionStart === 'number' ? input.selectionStart : content.length);
@@ -7964,23 +7968,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const end = Math.max(start, Math.min(Math.max(selectionStart, selectionEnd), plainContent.length));
     let leftContent = plainContent.slice(0, start);
     let rightContent = plainContent.slice(end);
-    if (input?.isContentEditable) {
-      const selection = window.getSelection?.();
-      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-      if (range && input.contains(range.startContainer) && input.contains(range.endContainer)) {
-        const leftRange = document.createRange();
-        leftRange.selectNodeContents(input);
-        leftRange.setEnd(range.startContainer, range.startOffset);
-        const rightRange = document.createRange();
-        rightRange.selectNodeContents(input);
-        rightRange.setStart(range.endContainer, range.endOffset);
-        const container = document.createElement('div');
-        container.appendChild(leftRange.cloneContents());
-        leftContent = sanitizeInlineHtml(container.innerHTML);
-        container.innerHTML = '';
-        container.appendChild(rightRange.cloneContents());
-        rightContent = sanitizeInlineHtml(container.innerHTML);
-      }
+    if (editableSplit) {
+      leftContent = sanitizeInlineHtml(editableSplit.leftHtml);
+      rightContent = sanitizeInlineHtml(editableSplit.rightHtml);
       input.innerHTML = leftContent;
     }
     const nextType = getNextBlockTypeAfterEnter(block);

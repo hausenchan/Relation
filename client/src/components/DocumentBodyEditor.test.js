@@ -576,6 +576,79 @@ describe('DocumentBodyEditor block copy', () => {
     expect(nextValue.blocks[0].content).toContain('已有内容第一行<br><strong>第二行</strong>');
   });
 
+  test('Enter in the middle of a numbered item moves the trailing content to the next item', () => {
+    const onChange = jest.fn();
+    const listValue = {
+      format: DOCUMENT_BODY_FORMAT,
+      blocks: [
+        { id: 'wish', type: 'numbered', content: '许愿星测试：', meta: { indent: 1, hierarchy: 'list' } },
+        { id: 'next', type: 'numbered', content: '数字列表项', meta: { indent: 1, hierarchy: 'list' } },
+      ],
+    };
+    flushSync(() => {
+      root.render(<DocumentBodyEditor value={listValue} onChange={onChange} />);
+    });
+    const inlineEditor = container.querySelector('[data-document-body-block-id="wish"] [contenteditable="true"]');
+    inlineEditor.focus();
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(inlineEditor.firstChild, 3);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    let enterEvent;
+    flushSync(() => {
+      enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      inlineEditor.dispatchEvent(enterEvent);
+    });
+
+    expect(enterEvent.defaultPrevented).toBe(true);
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks.map(block => ({ type: block.type, content: block.content, indent: block.meta.indent })))
+      .toEqual([
+        { type: 'numbered', content: '许愿星', indent: 1 },
+        { type: 'numbered', content: '测试：', indent: 1 },
+        { type: 'numbered', content: '数字列表项', indent: 1 },
+      ]);
+  });
+
+  test('Enter preserves inline formatting on both sides of the split point', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{
+            blocks: [{
+              id: 'styled',
+              type: 'numbered',
+              content: '<strong>许愿星</strong><span style="color: #d4380d">测试：</span>',
+              meta: { indent: 0, hierarchy: 'list' },
+            }],
+          }}
+          onChange={onChange}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[data-document-body-block-id="styled"] [contenteditable="true"]');
+    const trailingText = inlineEditor.querySelector('span').firstChild;
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(trailingText, 0);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks[0].content).toBe('<strong>许愿星</strong>');
+    expect(nextValue.blocks[1].content).toContain('color: #d4380d');
+    expect(nextValue.blocks[1].content).toContain('测试：');
+  });
+
   test('Backspace at the start of a block merges it into the previous block', () => {
     const onChange = jest.fn();
     const mergeValue = {

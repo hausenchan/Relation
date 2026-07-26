@@ -38,6 +38,7 @@ import {
   documentClipboardHasEmbeddedBlocks,
   flattenDocumentClipboardHtml,
 } from '../utils/documentClipboard';
+import { splitContentEditableAtSelection } from '../utils/contentEditableSplit';
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
@@ -449,7 +450,17 @@ function InlineBlockEditor({
           }
           if (event.key === 'Enter' && !event.shiftKey && !composingRef.current) {
             event.preventDefault();
-            onEnter?.();
+            const split = splitContentEditableAtSelection(editorRef.current);
+            const leftContent = sanitizeDocumentBodyInlineHtml(split.leftHtml);
+            const rightContent = sanitizeDocumentBodyInlineHtml(split.rightHtml);
+            if (editorRef.current) editorRef.current.innerHTML = leftContent;
+            localHtmlRef.current = leftContent;
+            onEnter?.({
+              leftContent,
+              rightContent,
+              start: split.start,
+              end: split.end,
+            });
             return;
           }
           const simpleDelete = !event.metaKey && !event.ctrlKey && !event.altKey && !composingRef.current;
@@ -1234,23 +1245,30 @@ export default function DocumentBodyEditor({
     setDraggingBlockId(null);
   };
 
-  const handleEnter = (block) => {
+  const handleEnter = (block, split = {}) => {
+    const blockIndex = blocks.findIndex(item => item.id === block.id);
+    if (blockIndex < 0) return;
     const indent = getBlockIndent(block);
+    let nextType = 'paragraph';
+    let nextMeta = indent ? { indent, hierarchy: 'list' } : {};
     if (block.type === 'fold-list') {
-      createBlockAfter('numbered', block.id, {
+      nextType = 'numbered';
+      nextMeta = {
         indent: Math.min(MAX_LIST_INDENT, indent + 1),
-        meta: {
-          hierarchy: 'list',
-          template_question_parent: block.meta?.template_question_key,
-        },
-      });
-      return;
+        hierarchy: 'list',
+        template_question_parent: block.meta?.template_question_key,
+      };
+    } else if (['bullet', 'numbered'].includes(block.type)) {
+      nextType = block.type;
+      nextMeta = { indent, hierarchy: 'list' };
     }
-    if (['bullet', 'numbered'].includes(block.type)) {
-      createBlockAfter(block.type, block.id, { indent, meta: { hierarchy: 'list' } });
-      return;
-    }
-    createBlockAfter('paragraph', block.id, { meta: indent ? { indent, hierarchy: 'list' } : {} });
+    const leftContent = split.leftContent ?? block.content ?? '';
+    const rightContent = split.rightContent ?? '';
+    const nextBlock = createDocumentBodyBlock(nextType, rightContent, { meta: nextMeta });
+    const nextBlocks = [...blocks];
+    nextBlocks[blockIndex] = { ...block, content: leftContent };
+    nextBlocks.splice(blockIndex + 1, 0, nextBlock);
+    emitBlocks(nextBlocks, nextBlock.id);
   };
 
   const handleBlockMenuAction = async (block, key) => {
@@ -1342,7 +1360,7 @@ export default function DocumentBodyEditor({
       onAutoFocusDone: () => setFocusBlockId(null),
       onChange: content => patchBlock(block.id, { content }),
       onActivate: (editor, range) => rememberInlineSelection(block.id, editor, range),
-      onEnter: () => handleEnter(block),
+      onEnter: split => handleEnter(block, split),
       onBackspace: (_event, context) => (
         blocks.length > 1 && mergeBlockWithPreviousAtStart(block.id, context?.content)
       ),
