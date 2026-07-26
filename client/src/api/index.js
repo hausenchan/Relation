@@ -432,6 +432,7 @@ export const systemSettingsApi = {
 
 const OPERATIONAL_MEETING_AGENDA_START_TIMEOUT_MS = 30000;
 const OPERATIONAL_MEETING_AGENDA_POLL_TIMEOUT_MS = 15000;
+const OPERATIONAL_MEETING_SAVE_TIMEOUT_MS = 15000;
 
 export const operationalMeetingsApi = {
   templates: () => api.get('/operational-meeting-templates').then(r => r.data),
@@ -439,10 +440,14 @@ export const operationalMeetingsApi = {
   list: (params) => api.get('/operational-meetings', { params }).then(r => r.data),
   annualSummary: (params) => api.get('/operational-meetings/annual-summary', { params }).then(r => r.data),
   create: (data) => api.post('/operational-meetings', data).then(r => r.data),
-  get: (id) => api.get(`/operational-meetings/${id}`).then(r => r.data),
+  get: (id) => api.get(`/operational-meetings/${id}`, { timeout: OPERATIONAL_MEETING_SAVE_TIMEOUT_MS }).then(r => r.data),
   participants: (id) => api.get(`/operational-meetings/${id}/participants`).then(r => r.data),
   updateParticipants: (id, data) => api.put(`/operational-meetings/${id}/participants`, data).then(r => r.data),
-  updateSection: (sectionId, data) => api.put(`/operational-meeting-sections/${sectionId}`, data).then(r => r.data),
+  updateSection: (sectionId, data) => api.put(
+    `/operational-meeting-sections/${sectionId}`,
+    data,
+    { timeout: OPERATIONAL_MEETING_SAVE_TIMEOUT_MS },
+  ).then(r => r.data),
   submitSection: (sectionId) => api.post(`/operational-meeting-sections/${sectionId}/submit`).then(r => r.data),
   generateAgenda: (id, data, { signal } = {}) => api.post(
     `/operational-meetings/${id}/agenda/generate`,
@@ -453,8 +458,16 @@ export const operationalMeetingsApi = {
     `/operational-meetings/${id}/agenda/generate/${encodeURIComponent(jobId)}`,
     { timeout: OPERATIONAL_MEETING_AGENDA_POLL_TIMEOUT_MS, signal },
   ).then(r => r.data),
-  saveAgenda: (id, data) => api.put(`/operational-meetings/${id}/agenda`, data).then(r => r.data),
-  saveDecision: (id, data) => api.put(`/operational-meetings/${id}/decision`, data).then(r => r.data),
+  saveAgenda: (id, data) => api.put(
+    `/operational-meetings/${id}/agenda`,
+    data,
+    { timeout: OPERATIONAL_MEETING_SAVE_TIMEOUT_MS },
+  ).then(r => r.data),
+  saveDecision: (id, data) => api.put(
+    `/operational-meetings/${id}/decision`,
+    data,
+    { timeout: OPERATIONAL_MEETING_SAVE_TIMEOUT_MS },
+  ).then(r => r.data),
   history: (id, params) => api.get(`/operational-meetings/${id}/history`, { params }).then(r => r.data),
   restoreHistory: (id, revisionId, data) => api.post(`/operational-meetings/${id}/history/${revisionId}/restore`, data).then(r => r.data),
 };

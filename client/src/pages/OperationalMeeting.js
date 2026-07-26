@@ -37,6 +37,11 @@ import {
   operationalPreparationCanSubmit,
 } from '../utils/operationalMeetingPreparation';
 import { pollOperationalAgendaGeneration } from '../utils/operationalAgendaGeneration';
+import {
+  getOperationalMeetingSaveError,
+  startOperationalMeetingSave,
+  waitForOperationalMeetingSave,
+} from '../utils/operationalMeetingSave';
 
 const { RangePicker } = DatePicker;
 const { Text, Title } = Typography;
@@ -184,7 +189,10 @@ export default function OperationalMeeting() {
   const decisionRemoteSnapshotRef = useRef(null);
   const agendaPendingSaveRef = useRef(null);
   const decisionPendingSaveRef = useRef(null);
+  const saveAgendaRef = useRef(null);
+  const saveDecisionRef = useRef(null);
   const detailSyncPendingRef = useRef(false);
+  const detailRequestSequenceRef = useRef(0);
   const agendaGenerationAbortControllerRef = useRef(null);
 
   const hasSensitiveAccess = canAccessSensitiveModule?.(MODULE_KEY);
@@ -249,16 +257,21 @@ export default function OperationalMeeting() {
 
   const loadDetail = useCallback(async (id, { background = false } = {}) => {
     if (!id) return;
+    const requestSequence = detailRequestSequenceRef.current + 1;
+    detailRequestSequenceRef.current = requestSequence;
     if (!background) setDetailLoading(true);
     try {
       const data = await operationalMeetingsApi.get(id);
+      if (requestSequence !== detailRequestSequenceRef.current) return null;
       setDetail(data);
       return data;
     } catch (error) {
-      if (!background) message.error(error.response?.data?.error || '加载经营周会详情失败');
+      if (!background && requestSequence === detailRequestSequenceRef.current) {
+        message.error(error.response?.data?.error || '加载经营周会详情失败');
+      }
       return null;
     } finally {
-      if (!background) setDetailLoading(false);
+      if (!background && requestSequence === detailRequestSequenceRef.current) setDetailLoading(false);
     }
   }, []);
 
@@ -276,7 +289,7 @@ export default function OperationalMeeting() {
 
   useEffect(() => {
     loadMeetings();
-  }, [loadMeetings]);
+  }, [isDetailView, loadMeetings]);
 
   useEffect(() => {
     if (meetingId) loadDetail(meetingId);
@@ -513,7 +526,9 @@ export default function OperationalMeeting() {
     const pending = sectionPendingSaveRef.current[normalizedSectionId];
     if (pending) {
       await pending.catch(() => null);
-      return persistSectionRef.current?.(normalizedSectionId, { showError }) || false;
+      if (sectionPendingSaveRef.current[normalizedSectionId] === pending) {
+        delete sectionPendingSaveRef.current[normalizedSectionId];
+      }
     }
 
     const payload = normalizeOperationalPreparationContent(
@@ -575,11 +590,12 @@ export default function OperationalMeeting() {
             ? '准备内容存在同块冲突，已保留本地内容并合并其他修改'
             : '已合并协作者的最新准备内容');
         }
+        const errorText = getOperationalMeetingSaveError(error, '自动保存失败');
         updateSectionSaveState(normalizedSectionId, {
           phase: error?.response?.status === 409 ? 'dirty' : 'error',
-          error: error.response?.data?.error || error.message || '自动保存失败',
+          error: errorText,
         });
-        if (showError) message.error(error.response?.data?.error || error.message || '自动保存失败');
+        if (showError) message.error(errorText);
         return false;
       }
     })();
@@ -614,6 +630,12 @@ export default function OperationalMeeting() {
       dirtySectionIdsRef.current.forEach(sectionId => {
         persistSectionRef.current?.(sectionId).catch(() => {});
       });
+      if (agendaDirtyRef.current && !agendaPendingSaveRef.current) {
+        saveAgendaRef.current?.({ silent: true }).catch(() => {});
+      }
+      if (decisionDirtyRef.current && !decisionPendingSaveRef.current) {
+        saveDecisionRef.current?.({ silent: true }).catch(() => {});
+      }
     }, SECTION_AUTO_SAVE_INTERVAL);
     const flushOnHide = () => {
       if (document.visibilityState !== 'hidden') return;
@@ -791,10 +813,7 @@ export default function OperationalMeeting() {
 
   const saveAgenda = async ({ silent = false } = {}) => {
     if (!detail?.meeting?.id || !canEditMeetingContent) return false;
-    if (agendaPendingSaveRef.current) {
-      await agendaPendingSaveRef.current.catch(() => null);
-      return saveAgenda({ silent });
-    }
+    await waitForOperationalMeetingSave(agendaPendingSaveRef);
     const payload = normalizeOperationalAgendaContent(agendaDraftRef.current);
     if (!payload) return false;
     const signature = getDocumentBodySignature(payload);
@@ -804,61 +823,80 @@ export default function OperationalMeeting() {
       return true;
     }
     setAgendaSaveState(prev => ({ ...prev, phase: 'saving' }));
-    const savePromise = operationalMeetingsApi.saveAgenda(detail.meeting.id, {
-      agenda: payload,
-      source_hash: detail.agenda?.source_hash || null,
-      model_provider: detail.agenda?.model_provider || 'edited',
-      model_name: detail.agenda?.model_name || '',
-      prompt_version: detail.agenda?.prompt_version || '',
-      safety_scan_status: detail.agenda?.safety_scan_status || 'passed',
-      base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
-    });
-    agendaPendingSaveRef.current = savePromise;
-    try {
-      const saved = await savePromise;
-      agendaLastSavedSignatureRef.current = signature;
-      agendaDirtyRef.current = false;
-      agendaRemoteSnapshotRef.current = {
-        content: payload,
-        updated_at: saved.updated_at || new Date().toISOString(),
-      };
-      setAgendaSaveState({ phase: 'saved', savedAt: saved.updated_at || new Date().toISOString() });
-      await loadMeetings();
-      if (!silent) message.success('会议提纲已保存');
-      return true;
-    } catch (error) {
-      if (error?.response?.status === 409 && error.response?.data?.latest) {
-        const latest = error.response.data.latest;
-        const remote = normalizeOperationalAgendaContent(latest.agenda_content);
-        const base = agendaRemoteSnapshotRef.current?.content || remote;
-        const merged = mergeCollaborativeDocumentBodies(base, agendaDraftRef.current, remote);
-        agendaRemoteSnapshotRef.current = { content: remote, updated_at: latest.updated_at || '' };
-        agendaLastSavedSignatureRef.current = remote ? getDocumentBodySignature(remote) : '';
-        agendaDraftRef.current = merged.value;
+    const meetingId = detail.meeting.id;
+    return startOperationalMeetingSave(agendaPendingSaveRef, async () => {
+      try {
+        const saved = await operationalMeetingsApi.saveAgenda(meetingId, {
+          agenda: payload,
+          source_hash: detail.agenda?.source_hash || null,
+          model_provider: detail.agenda?.model_provider || 'edited',
+          model_name: detail.agenda?.model_name || '',
+          prompt_version: detail.agenda?.prompt_version || '',
+          safety_scan_status: detail.agenda?.safety_scan_status || 'passed',
+          base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
+        });
+        const updatedAt = saved.updated_at || new Date().toISOString();
+        agendaLastSavedSignatureRef.current = signature;
+        agendaRemoteSnapshotRef.current = { content: payload, updated_at: updatedAt };
+        const isCurrent = getDocumentBodySignature(agendaDraftRef.current) === signature;
+        agendaDirtyRef.current = !isCurrent;
+        setAgendaSaveState({
+          phase: isCurrent ? 'saved' : 'dirty',
+          savedAt: updatedAt,
+          error: '',
+        });
+        detailRequestSequenceRef.current += 1;
+        setDetail(prev => (Number(prev?.meeting?.id) === Number(meetingId) ? {
+          ...prev,
+          agenda: {
+            ...(prev.agenda || {}),
+            id: saved.id || prev.agenda?.id,
+            agenda_content: payload,
+            updated_at: updatedAt,
+          },
+        } : prev));
+        if (!silent) message.success(isCurrent ? '会议提纲已保存' : '当前版本已保存，最新修改将继续自动保存');
+        return true;
+      } catch (error) {
+        if (error?.response?.status === 409 && error.response?.data?.latest) {
+          const latest = error.response.data.latest;
+          const remote = normalizeOperationalAgendaContent(latest.agenda_content);
+          const base = agendaRemoteSnapshotRef.current?.content || remote;
+          const merged = mergeCollaborativeDocumentBodies(base, agendaDraftRef.current, remote);
+          const remoteSignature = getDocumentBodySignature(remote);
+          const mergedSignature = getDocumentBodySignature(merged.value);
+          const dirty = mergedSignature !== remoteSignature;
+          agendaRemoteSnapshotRef.current = { content: remote, updated_at: latest.updated_at || '' };
+          agendaLastSavedSignatureRef.current = remoteSignature;
+          agendaDraftRef.current = merged.value;
+          agendaDirtyRef.current = dirty;
+          setAgendaDraft(merged.value);
+          setAgendaSaveState({
+            phase: dirty ? 'dirty' : 'saved',
+            savedAt: latest.updated_at || null,
+            error: '',
+          });
+          setRemoteUpdateHint(merged.hadConflicts
+            ? '会议提纲存在同块冲突，已保留本地内容并合并其他修改'
+            : '已合并协作者的最新会议提纲');
+          if (!dirty) return true;
+        }
+        const errorText = getOperationalMeetingSaveError(error, '保存会议提纲失败');
         agendaDirtyRef.current = true;
-        setAgendaDraft(merged.value);
-        setRemoteUpdateHint(merged.hadConflicts
-          ? '会议提纲存在同块冲突，已保留本地内容并合并其他修改'
-          : '已合并协作者的最新会议提纲');
+        setAgendaSaveState(prev => ({
+          ...prev,
+          phase: error?.response?.status === 409 ? 'dirty' : 'error',
+          error: errorText,
+        }));
+        if (!silent) message.error(errorText);
+        return false;
       }
-      setAgendaSaveState(prev => ({
-        ...prev,
-        phase: error?.response?.status === 409 ? 'dirty' : 'error',
-        error: error.response?.data?.error || error.message || '保存会议提纲失败',
-      }));
-      if (!silent) message.error(error.response?.data?.error || error.message || '保存会议提纲失败');
-      return false;
-    } finally {
-      if (agendaPendingSaveRef.current === savePromise) agendaPendingSaveRef.current = null;
-    }
+    });
   };
 
   const saveDecision = async ({ silent = false } = {}) => {
     if (!detail?.meeting?.id || !canEditMeetingContent) return false;
-    if (decisionPendingSaveRef.current) {
-      await decisionPendingSaveRef.current.catch(() => null);
-      return saveDecision({ silent });
-    }
+    await waitForOperationalMeetingSave(decisionPendingSaveRef);
     const payload = normalizeOperationalDecisionContent(decisionDraftRef.current);
     const signature = getDocumentBodySignature(payload);
     if (signature === decisionLastSavedSignatureRef.current) {
@@ -867,50 +905,77 @@ export default function OperationalMeeting() {
       return true;
     }
     setDecisionSaveState(prev => ({ ...prev, phase: 'saving' }));
-    const savePromise = operationalMeetingsApi.saveDecision(detail.meeting.id, {
-      decision: payload,
-      status: documentBodyHasContent(payload) ? 'saved' : 'draft',
-      base_updated_at: decisionRemoteSnapshotRef.current?.updated_at || null,
-    });
-    decisionPendingSaveRef.current = savePromise;
-    try {
-      const saved = await savePromise;
-      decisionLastSavedSignatureRef.current = signature;
-      decisionDirtyRef.current = false;
-      decisionRemoteSnapshotRef.current = {
-        content: payload,
-        updated_at: saved.updated_at || new Date().toISOString(),
-      };
-      setDecisionSaveState({ phase: 'saved', savedAt: saved.updated_at || new Date().toISOString() });
-      await loadMeetings();
-      if (!silent) message.success('会议结论已保存');
-      return true;
-    } catch (error) {
-      if (error?.response?.status === 409 && error.response?.data?.latest) {
-        const latest = error.response.data.latest;
-        const remote = normalizeOperationalDecisionContent(latest.decision_content || '');
-        const base = decisionRemoteSnapshotRef.current?.content || remote;
-        const merged = mergeCollaborativeDocumentBodies(base, decisionDraftRef.current, remote);
-        decisionRemoteSnapshotRef.current = { content: remote, updated_at: latest.updated_at || '' };
-        decisionLastSavedSignatureRef.current = getDocumentBodySignature(remote);
-        decisionDraftRef.current = merged.value;
+    const meetingId = detail.meeting.id;
+    const status = documentBodyHasContent(payload) ? 'saved' : 'draft';
+    return startOperationalMeetingSave(decisionPendingSaveRef, async () => {
+      try {
+        const saved = await operationalMeetingsApi.saveDecision(meetingId, {
+          decision: payload,
+          status,
+          base_updated_at: decisionRemoteSnapshotRef.current?.updated_at || null,
+        });
+        const updatedAt = saved.updated_at || new Date().toISOString();
+        decisionLastSavedSignatureRef.current = signature;
+        decisionRemoteSnapshotRef.current = { content: payload, updated_at: updatedAt };
+        const isCurrent = getDocumentBodySignature(decisionDraftRef.current) === signature;
+        decisionDirtyRef.current = !isCurrent;
+        setDecisionSaveState({
+          phase: isCurrent ? 'saved' : 'dirty',
+          savedAt: updatedAt,
+          error: '',
+        });
+        detailRequestSequenceRef.current += 1;
+        setDetail(prev => (Number(prev?.meeting?.id) === Number(meetingId) ? {
+          ...prev,
+          decision: {
+            ...(prev.decision || {}),
+            id: saved.id || prev.decision?.id,
+            decision_content: payload,
+            status,
+            updated_at: updatedAt,
+          },
+        } : prev));
+        if (!silent) message.success(isCurrent ? '会议结论已保存' : '当前版本已保存，最新修改将继续自动保存');
+        return true;
+      } catch (error) {
+        if (error?.response?.status === 409 && error.response?.data?.latest) {
+          const latest = error.response.data.latest;
+          const remote = normalizeOperationalDecisionContent(latest.decision_content || '');
+          const base = decisionRemoteSnapshotRef.current?.content || remote;
+          const merged = mergeCollaborativeDocumentBodies(base, decisionDraftRef.current, remote);
+          const remoteSignature = getDocumentBodySignature(remote);
+          const mergedSignature = getDocumentBodySignature(merged.value);
+          const dirty = mergedSignature !== remoteSignature;
+          decisionRemoteSnapshotRef.current = { content: remote, updated_at: latest.updated_at || '' };
+          decisionLastSavedSignatureRef.current = remoteSignature;
+          decisionDraftRef.current = merged.value;
+          decisionDirtyRef.current = dirty;
+          setDecisionDraft(merged.value);
+          setDecisionSaveState({
+            phase: dirty ? 'dirty' : 'saved',
+            savedAt: latest.updated_at || null,
+            error: '',
+          });
+          setRemoteUpdateHint(merged.hadConflicts
+            ? '会议结论存在同块冲突，已保留本地内容并合并其他修改'
+            : '已合并协作者的最新会议结论');
+          if (!dirty) return true;
+        }
+        const errorText = getOperationalMeetingSaveError(error, '保存会议结论失败');
         decisionDirtyRef.current = true;
-        setDecisionDraft(merged.value);
-        setRemoteUpdateHint(merged.hadConflicts
-          ? '会议结论存在同块冲突，已保留本地内容并合并其他修改'
-          : '已合并协作者的最新会议结论');
+        setDecisionSaveState(prev => ({
+          ...prev,
+          phase: error?.response?.status === 409 ? 'dirty' : 'error',
+          error: errorText,
+        }));
+        if (!silent) message.error(errorText);
+        return false;
       }
-      setDecisionSaveState(prev => ({
-        ...prev,
-        phase: error?.response?.status === 409 ? 'dirty' : 'error',
-        error: error.response?.data?.error || error.message || '保存会议结论失败',
-      }));
-      if (!silent) message.error(error.response?.data?.error || error.message || '保存会议结论失败');
-      return false;
-    } finally {
-      if (decisionPendingSaveRef.current === savePromise) decisionPendingSaveRef.current = null;
-    }
+    });
   };
+
+  saveAgendaRef.current = saveAgenda;
+  saveDecisionRef.current = saveDecision;
 
   useEffect(() => {
     if (agendaAutoSaveTimerRef.current) window.clearTimeout(agendaAutoSaveTimerRef.current);

@@ -23340,6 +23340,24 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
   const section = getOperationalSectionForAccess(req.params.sectionId, req.user);
   if (!section) return res.status(404).json({ error: '准备块不存在' });
   if (!canEditOperationalSection(req.user, section)) return res.status(403).json({ error: '无权编辑此准备块' });
+  let contentJson;
+  try {
+    contentJson = stringifyOperationalMeetingContent(req.body?.content, '准备内容');
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const existingContentJson = JSON.stringify(parseJsonSafe(section.content_json, null));
+  if (existingContentJson === contentJson) {
+    return res.json({
+      success: true,
+      changed: false,
+      status: section.status || 'draft',
+      submitted_at: section.submitted_at || null,
+      submission_changed: 0,
+      updated_at: section.updated_at,
+      updated_by: section.updated_by || null,
+    });
+  }
   const baseUpdatedAt = String(req.body?.base_updated_at || '');
   if (baseUpdatedAt && baseUpdatedAt !== String(section.updated_at || '')) {
     return res.status(409).json({
@@ -23354,12 +23372,6 @@ app.put('/api/operational-meeting-sections/:sectionId', requireOperationalMeetin
         updated_by: section.updated_by || null,
       },
     });
-  }
-  let contentJson;
-  try {
-    contentJson = stringifyOperationalMeetingContent(req.body?.content, '准备内容');
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
   }
   const defaultQuestions = parseJsonSafe(section.default_questions_json, []);
   const previousContent = parseJsonSafe(section.content_json, null);
@@ -23499,14 +23511,15 @@ function persistOperationalMeetingAgenda({
     const existingAgenda = db.prepare(
       'SELECT * FROM operational_meeting_agendas WHERE meeting_id = ?',
     ).get(meeting.id) || null;
-    const isIdempotentGeneratedSave = Boolean(
+    const isIdempotentContentSave = Boolean(
       existingAgenda
-      && revisionAction === 'generate'
-      && sourceHash
-      && String(existingAgenda.source_hash || '') === String(sourceHash)
-      && JSON.stringify(parseJsonSafe(existingAgenda.agenda_json, null)) === agendaJson,
+      && JSON.stringify(parseJsonSafe(existingAgenda.agenda_json, null)) === agendaJson
+      && (
+        revisionAction !== 'generate'
+        || (sourceHash && String(existingAgenda.source_hash || '') === String(sourceHash))
+      )
     );
-    if (isIdempotentGeneratedSave) {
+    if (isIdempotentContentSave) {
       return {
         changed: false,
         id: existingAgenda.id,
@@ -23882,6 +23895,26 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
     return res.status(403).json({ error: '无权编辑本周会议结论' });
   }
   const existingDecision = db.prepare('SELECT * FROM operational_meeting_decisions WHERE meeting_id = ?').get(meeting.id) || null;
+  let decisionJson;
+  try {
+    decisionJson = stringifyOperationalMeetingContent(req.body?.decision, '会议结论');
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  const nextStatus = req.body?.status || 'saved';
+  if (
+    existingDecision
+    && JSON.stringify(parseJsonSafe(existingDecision.decision_json, null)) === decisionJson
+    && String(existingDecision.status || 'saved') === String(nextStatus)
+  ) {
+    return res.json({
+      success: true,
+      changed: false,
+      id: existingDecision.id,
+      updated_at: existingDecision.updated_at,
+      updated_by: existingDecision.updated_by || null,
+    });
+  }
   const baseUpdatedAt = String(req.body?.base_updated_at || '');
   const hasBaseUpdatedAt = Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at');
   if (existingDecision && hasBaseUpdatedAt && baseUpdatedAt !== String(existingDecision.updated_at || '')) {
@@ -23890,12 +23923,6 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
       code: 'CONTENT_CONFLICT',
       latest: serializeOperationalDecision(existingDecision),
     });
-  }
-  let decisionJson;
-  try {
-    decisionJson = stringifyOperationalMeetingContent(req.body?.decision, '会议结论');
-  } catch (error) {
-    return res.status(400).json({ error: error.message });
   }
   const updatedAt = new Date().toISOString();
   let decisionId = existingDecision?.id;
@@ -23908,7 +23935,7 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
           updated_by = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(decisionJson, req.body?.status || 'saved', req.user.id, updatedAt, decisionId);
+    `).run(decisionJson, nextStatus, req.user.id, updatedAt, decisionId);
   } else {
     const result = db.prepare(`
       INSERT INTO operational_meeting_decisions (
@@ -23917,7 +23944,7 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
     `).run(
       meeting.id,
       decisionJson,
-      req.body?.status || 'saved',
+      nextStatus,
       req.user.id,
       req.user.id,
       updatedAt,
@@ -23936,7 +23963,7 @@ app.put('/api/operational-meetings/:id/decision', requireOperationalMeetingAcces
   });
   touchOperationalMeeting(meeting.id, req.user.id, updatedAt);
   refreshOperationalMeetingStatuses(meeting.id);
-  res.json({ success: true, id: decisionId, updated_at: updatedAt, updated_by: req.user.id });
+  res.json({ success: true, changed: true, id: decisionId, updated_at: updatedAt, updated_by: req.user.id });
 });
 
 function getOperationalHistoryScopeContext(meeting, user, scopeKey) {

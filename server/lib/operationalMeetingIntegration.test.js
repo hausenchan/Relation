@@ -319,12 +319,13 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     {
       method: 'PUT',
       token: designatedToken,
-      body: { content: preparationContent },
+      body: { content: preparationContent, base_updated_at: 'stale-retry-baseline' },
     },
   );
   assert.equal(repeatSubmittedPreparation.status, 200, JSON.stringify(repeatSubmittedPreparation.payload));
   assert.equal(repeatSubmittedPreparation.payload.status, 'submitted');
   assert.equal(repeatSubmittedPreparation.payload.submission_changed, 0);
+  assert.equal(repeatSubmittedPreparation.payload.changed, false);
 
   const collapseOnlyPreparation = await request(
     baseUrl,
@@ -620,9 +621,14 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
   const outsiderSavesAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {
     method: 'PUT',
     token: outsiderToken,
-    body: { agenda: agendaContent, model_provider: 'edited' },
+    body: {
+      agenda: agendaContent,
+      model_provider: 'edited',
+      base_updated_at: 'stale-retry-baseline',
+    },
   });
   assert.equal(outsiderSavesAgenda.status, 200, JSON.stringify(outsiderSavesAgenda.payload));
+  assert.equal(outsiderSavesAgenda.payload.changed, false);
 
   const decisionContent = {
     format: 'relation_document_body_v1',
@@ -634,6 +640,19 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     body: { decision: decisionContent, status: 'saved' },
   });
   assert.equal(saveDecision.status, 200, JSON.stringify(saveDecision.payload));
+
+  const retrySavedDecision = await request(baseUrl, `/api/operational-meetings/${meetingId}/decision`, {
+    method: 'PUT',
+    token: ceoToken,
+    body: {
+      decision: decisionContent,
+      status: 'saved',
+      base_updated_at: 'stale-retry-baseline',
+    },
+  });
+  assert.equal(retrySavedDecision.status, 200, JSON.stringify(retrySavedDecision.payload));
+  assert.equal(retrySavedDecision.payload.changed, false);
+  assert.equal(retrySavedDecision.payload.updated_at, saveDecision.payload.updated_at);
 
   const outsiderSavesDecision = await request(baseUrl, `/api/operational-meetings/${meetingId}/decision`, {
     method: 'PUT',
