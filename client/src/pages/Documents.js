@@ -823,8 +823,8 @@ function getDefaultBlockContent(type) {
 }
 
 function getTransientBlockPlaceholder(type) {
-  if (type === 'bullet') return '列表项';
-  if (type === 'numbered') return '数字列表项';
+  if (type === 'bullet') return '';
+  if (type === 'numbered') return '';
   if (type === 'fold-list') return '折叠列表标题';
   if (type === 'todo') return '待办事项';
   if (type === 'fold-todo') return '折叠待办事项';
@@ -10923,7 +10923,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           <InlineRichTextEditor
             {...commonProps}
             placeholder={selectedBlockId === block.id
-              ? (block.type === 'fold-list' ? '折叠列表标题' : block.type === 'numbered' ? '数字列表项' : '列表项')
+              ? (block.type === 'fold-list' ? '折叠列表标题' : '')
               : ''}
             onChange={value => commonProps.onChange(value)}
             style={{

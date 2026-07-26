@@ -1453,7 +1453,7 @@ export default function DocumentBodyEditor({
             <InlineBlockEditor
               {...commonProps}
               placeholder={active
-                ? (block.type === 'fold-list' ? '折叠列表标题' : block.type === 'numbered' ? '数字列表项' : '列表项')
+                ? (block.type === 'fold-list' ? '折叠列表标题' : '')
                 : ''}
               style={{ ...commonProps.style, minHeight: lineHeightPx }}
             />

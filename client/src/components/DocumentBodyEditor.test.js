@@ -673,4 +673,23 @@ describe('DocumentBodyEditor block copy', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(onChange.mock.calls.at(-1)[0].blocks[0].content).toBe('三字');
   });
+
+  test('does not show list item placeholder text while editing an empty numbered list item', () => {
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{ blocks: [{ id: 'empty-numbered', type: 'numbered', content: '', meta: {} }] }}
+          onChange={() => {}}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    flushSync(() => {
+      inlineEditor.focus();
+      inlineEditor.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+    });
+
+    expect(container.textContent).not.toContain('数字列表项');
+    expect(container.textContent).not.toContain('列表项');
+  });
 });
