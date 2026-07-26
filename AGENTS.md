@@ -189,8 +189,10 @@ RELATION_RUN_MYSQL_TESTS=1 \
 
 - DAU查询助手 `/dau-query-assistant` 通过跨域 iframe 加载固定的 mcode 页面，不接受 URL 参数
   覆盖，也不在 Relation 中代理或存储第三方页面数据。
-- 目标页面内置的 iframe 元素检查脚本会默认显示 `<div>/<span>` 高亮框；iframe 加载完成后必须向
-  固定来源发送 `disable-iframe-highlight` 和 `clear-selected-element` 消息，避免调试框拦截正常查询。
+- 目标页面内置的 iframe 元素检查脚本会默认显示 `<div>/<span>/<input>` 高亮框；其“关闭高亮”
+  只关闭 hover，仍会在点击时重新生成 selected 框。iframe 加载完成后必须发送
+  `disable-iframe-highlight` 和 `clear-selected-element`，并持续监听该 iframe 的 ready/hover/click
+  消息后再次清除。消息处理必须同时校验固定 origin、`event.source` 和 injector source tag。
 
 ## 4. 权限与安全不变量
 

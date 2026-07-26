@@ -206,19 +206,22 @@
 - 目标地址固定在代码中，不接受 URL 参数覆盖；Relation 不代理或存储第三方页面数据。
 - 外部页面在 iframe 中会自动启用 MiniMax 元素检查脚本，造成蓝色 `<div>/<span>` 标签、虚线框和
   点击拦截；Relation 在 iframe 加载完成后向固定来源发送关闭高亮和清除选中节点消息。
+- 外部脚本的 `disableHighlight()` 只关闭 hover，不移除 click 监听；点击 input/div/span 时仍会调用
+  `updateSelectedHighlight()` 重新生成常驻标签。Relation 现监听该 iframe 的 ready/hover/click 消息，
+  严格校验 origin、source window 和 injector 标记后，再次关闭并清除选中节点。
 - 右下角 `Created by MiniMax Agent` 是第三方页面自身品牌标识，不属于元素检查器；目标站点未提供
   跨域关闭接口，Relation 不使用遮罩覆盖，以免挡住查询内容和交互。
 
 ### 已验证
 
 - DAU查询助手页面测试 1/1 通过，确认页面只渲染一个 iframe，地址、标题、立即加载和 referrer
-  策略正确，并覆盖加载后向固定来源发送两个调试浮层关闭消息。
-- 真实跨域 iframe 回归通过：鼠标悬停应用卡片后，高亮框、标签和选中框均保持 `display:none`，
-  查询输入框正常存在。
-- 前端全量测试 26 个套件、129 条测试全部通过；测试输出仅有既有 React `act` 警告。
-- 隔离生产构建输出到 `/tmp/relation-dau-inspector-fix-build` 并编译成功。
+  策略正确，并覆盖加载关闭、点击后再次清除、伪造来源忽略和组件卸载清理监听器。
+- 真实跨域 iframe 回归通过：点击搜索输入框后焦点正常停留在 `INPUT`，再点击普通卡片标题，hover、
+  tag、selected 和 selectedLabel 均保持 `display:none`，不再出现 `✓ <input>/<div>/<span>`。
+- 前端全量测试 28 个套件、139 条测试全部通过；测试输出仅有既有 React `act` 警告。
+- 隔离生产构建输出到 `/tmp/relation-dau-inspector-click-fix-build` 并编译成功。
 - 目标站点响应 `200`，未返回 `X-Frame-Options` 或 CSP `frame-ancestors`，允许 iframe 嵌入。
-- 前端性能门禁通过：首屏 JavaScript 328.1KB gzip，75 个异步 chunk，最大异步 chunk 420.8KB gzip。
+- 前端性能门禁通过：首屏 JavaScript 328.1KB gzip，76 个异步 chunk，最大异步 chunk 420.8KB gzip。
 - 本机 `3001` 后端未运行，因此未执行登录后的 Relation 菜单浏览器回归。
 
 ## 出差协同二维冻结（2026-07-25）

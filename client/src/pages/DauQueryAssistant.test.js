@@ -40,8 +40,65 @@ test('loads the DAU query assistant and disables its embedded element inspector'
     { type: 'clear-selected-element' },
     DAU_QUERY_ASSISTANT_ORIGIN,
   );
-  postMessageSpy.mockRestore();
+
+  act(() => window.dispatchEvent(new MessageEvent('message', {
+    origin: DAU_QUERY_ASSISTANT_ORIGIN,
+    source: frame.contentWindow,
+    data: {
+      type: 'iframe-element-click',
+      source: 'iframe-highlight-injector',
+    },
+  })));
+  expect(postMessageSpy).toHaveBeenNthCalledWith(
+    3,
+    { type: 'disable-iframe-highlight' },
+    DAU_QUERY_ASSISTANT_ORIGIN,
+  );
+  expect(postMessageSpy).toHaveBeenNthCalledWith(
+    4,
+    { type: 'clear-selected-element' },
+    DAU_QUERY_ASSISTANT_ORIGIN,
+  );
+
+  act(() => window.dispatchEvent(new MessageEvent('message', {
+    origin: 'https://untrusted.example.com',
+    source: frame.contentWindow,
+    data: {
+      type: 'iframe-element-click',
+      source: 'iframe-highlight-injector',
+    },
+  })));
+  expect(postMessageSpy).toHaveBeenCalledTimes(4);
+
+  act(() => window.dispatchEvent(new MessageEvent('message', {
+    origin: DAU_QUERY_ASSISTANT_ORIGIN,
+    source: window,
+    data: {
+      type: 'iframe-element-click',
+      source: 'iframe-highlight-injector',
+    },
+  })));
+  act(() => window.dispatchEvent(new MessageEvent('message', {
+    origin: DAU_QUERY_ASSISTANT_ORIGIN,
+    source: frame.contentWindow,
+    data: {
+      type: 'iframe-element-click',
+      source: 'untrusted-injector',
+    },
+  })));
+  expect(postMessageSpy).toHaveBeenCalledTimes(4);
 
   act(() => root.unmount());
+  act(() => window.dispatchEvent(new MessageEvent('message', {
+    origin: DAU_QUERY_ASSISTANT_ORIGIN,
+    source: frame.contentWindow,
+    data: {
+      type: 'iframe-element-click',
+      source: 'iframe-highlight-injector',
+    },
+  })));
+  expect(postMessageSpy).toHaveBeenCalledTimes(4);
+  postMessageSpy.mockRestore();
+
   container.remove();
 });
