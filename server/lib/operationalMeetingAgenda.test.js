@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const {
   CLOSING_TEXT,
   OPENING_TEXT,
+  OPERATIONAL_MEETING_AI_MAX_COMPLETION_TOKENS,
+  OPERATIONAL_MEETING_AI_TIMEOUT_MS,
   OPERATIONAL_MEETING_PROMPT_VERSION,
   OperationalMeetingAgendaError,
   buildFallbackOperationalMeetingAgenda,
@@ -14,6 +16,7 @@ const {
   operationalMeetingAgendaLooksSensitive,
   operationalMeetingAgendaToDocumentBody,
   parseOperationalMeetingModelOutput,
+  resolveOperationalMeetingAiTimeoutMs,
   sanitizeOperationalMeetingInput,
 } = require('./operationalMeetingAgenda');
 
@@ -171,6 +174,17 @@ test('validates semantic agenda and converts every point to native document bloc
   assert.equal(body.blocks[0].content, '经营周会会前提纲');
   assert.equal(body.blocks[1].content, OPENING_TEXT);
   assert.equal(body.blocks.at(-1).content, CLOSING_TEXT);
+  assert.deepEqual(
+    body.blocks.filter(block => block.type === 'heading2').map(block => block.content),
+    [
+      '一、本次会议目标',
+      '二、本周经营总览',
+      '三、本次重点讨论和决策议题',
+      '四、建议会议议程',
+      '五、下周动作建议',
+      '六、请大家会前准备',
+    ],
+  );
   assert.ok(body.blocks.some(block => block.type === 'heading2' && block.content === '二、本周经营总览'));
   assert.ok(body.blocks.some(block => block.type === 'heading3' && block.content === '1. 海外AFS'));
   assert.ok(body.blocks.some(block => block.type === 'heading4' && block.content === '需要形成的结论'));
@@ -235,7 +249,7 @@ test('returns structured fallback when no model is configured', async () => {
   assert.equal(result.agenda.decision_topics.length, 5);
 });
 
-test('calls the configured model with the v2 prompt and validates its JSON response', async () => {
+test('calls the configured model with the v3 prompt and validates its JSON response', async () => {
   const agenda = sampleAgenda();
   let requestBody;
   const result = await callOperationalMeetingLlm({
@@ -265,7 +279,43 @@ test('calls the configured model with the v2 prompt and validates its JSON respo
   assert.equal(result.runtime.mode, 'llm');
   assert.equal(result.agenda.meeting_goals.length, 4);
   assert.equal(requestBody.response_format.type, 'json_object');
+  assert.equal(requestBody.max_completion_tokens, OPERATIONAL_MEETING_AI_MAX_COMPLETION_TOKENS);
   assert.match(requestBody.messages[0].content, /只输出一个 JSON 对象/);
   assert.match(requestBody.messages[0].content, /材料来源/);
-  assert.equal(OPERATIONAL_MEETING_PROMPT_VERSION, 'operational-meeting-agenda-v2');
+  assert.match(requestBody.messages[0].content, /必须覆盖每一份非空的已提交准备内容/);
+  assert.match(requestBody.messages[0].content, /3500-5000/);
+  assert.equal(OPERATIONAL_MEETING_PROMPT_VERSION, 'operational-meeting-agenda-v3');
+  assert.equal(result.runtime.timeout_ms, OPERATIONAL_MEETING_AI_TIMEOUT_MS);
+});
+
+test('uses a meeting-specific long timeout instead of the generic 25-second model timeout', () => {
+  assert.equal(resolveOperationalMeetingAiTimeoutMs(), OPERATIONAL_MEETING_AI_TIMEOUT_MS);
+  assert.equal(resolveOperationalMeetingAiTimeoutMs(25000), OPERATIONAL_MEETING_AI_TIMEOUT_MS);
+  assert.equal(resolveOperationalMeetingAiTimeoutMs(150000), 150000);
+  assert.equal(resolveOperationalMeetingAiTimeoutMs(999999), 180000);
+});
+
+test('maps an aborted model request to a distinct timeout response', async () => {
+  await assert.rejects(
+    callOperationalMeetingLlm({
+      sections: [{ title: '国内业务', questions: [{ question: '结果', content: '收入增长' }] }],
+      config: {
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'test-key',
+        model: 'test-model',
+        timeoutMs: 25000,
+      },
+      fetchImpl: async () => {
+        const error = new Error('request aborted');
+        error.name = 'AbortError';
+        throw error;
+      },
+    }),
+    error => (
+      error instanceof OperationalMeetingAgendaError
+      && error.status === 504
+      && error.code === 'AI_GENERATION_TIMEOUT'
+      && error.message === 'AI生成超过120秒，请稍后重试'
+    ),
+  );
 });

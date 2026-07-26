@@ -365,7 +365,7 @@ test('operational meeting APIs enforce preparation and meeting visibility', { ti
     generatedAgenda.payload.agenda.blocks.some(block => String(block.content).includes('伪造准备内容')),
     false,
   );
-  assert.equal(generatedAgenda.payload.prompt_version, 'operational-meeting-agenda-v2');
+  assert.equal(generatedAgenda.payload.prompt_version, 'operational-meeting-agenda-v3');
 
   const agendaContent = generatedAgenda.payload.agenda;
   const sensitiveAgenda = await request(baseUrl, `/api/operational-meetings/${meetingId}/agenda`, {

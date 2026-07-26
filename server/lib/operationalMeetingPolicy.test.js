@@ -56,6 +56,17 @@ test('designated participants can edit meeting content but cannot generate the a
   assert.equal(canGenerateAgenda(cxo, null), true);
 });
 
+test('every CXO role can generate the agenda regardless of the meeting participant flag', () => {
+  for (const executiveRole of ['ceo', 'coo', 'cto', 'cmo']) {
+    const user = { id: 10, role: 'member', executive_role: executiveRole };
+    assert.equal(canGenerateAgenda(user, {
+      ...designatedParticipant,
+      user_id: 10,
+      can_generate_agenda: 0,
+    }), true);
+  }
+});
+
 test('system readonly and guest roles cannot edit meeting content', () => {
   assert.equal(canEditAgenda({ id: 5, role: 'readonly' }, null), false);
   assert.equal(canEditDecision({ id: 6, role: 'guest' }, null), false);
