@@ -430,7 +430,8 @@ export const systemSettingsApi = {
   saveSensitiveModuleMembers: (moduleKey, data) => api.put(`/admin/sensitive-modules/${moduleKey}/members`, data).then(r => r.data),
 };
 
-const OPERATIONAL_MEETING_AGENDA_REQUEST_TIMEOUT_MS = 135000;
+const OPERATIONAL_MEETING_AGENDA_START_TIMEOUT_MS = 30000;
+const OPERATIONAL_MEETING_AGENDA_POLL_TIMEOUT_MS = 15000;
 
 export const operationalMeetingsApi = {
   templates: () => api.get('/operational-meeting-templates').then(r => r.data),
@@ -443,10 +444,14 @@ export const operationalMeetingsApi = {
   updateParticipants: (id, data) => api.put(`/operational-meetings/${id}/participants`, data).then(r => r.data),
   updateSection: (sectionId, data) => api.put(`/operational-meeting-sections/${sectionId}`, data).then(r => r.data),
   submitSection: (sectionId) => api.post(`/operational-meeting-sections/${sectionId}/submit`).then(r => r.data),
-  generateAgenda: (id, data) => api.post(
+  generateAgenda: (id, data, { signal } = {}) => api.post(
     `/operational-meetings/${id}/agenda/generate`,
-    data,
-    { timeout: OPERATIONAL_MEETING_AGENDA_REQUEST_TIMEOUT_MS },
+    { ...(data || {}), async: true },
+    { timeout: OPERATIONAL_MEETING_AGENDA_START_TIMEOUT_MS, signal },
+  ).then(r => r.data),
+  agendaGenerationJob: (id, jobId, { signal } = {}) => api.get(
+    `/operational-meetings/${id}/agenda/generate/${encodeURIComponent(jobId)}`,
+    { timeout: OPERATIONAL_MEETING_AGENDA_POLL_TIMEOUT_MS, signal },
   ).then(r => r.data),
   saveAgenda: (id, data) => api.put(`/operational-meetings/${id}/agenda`, data).then(r => r.data),
   saveDecision: (id, data) => api.put(`/operational-meetings/${id}/decision`, data).then(r => r.data),

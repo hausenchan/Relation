@@ -36,6 +36,7 @@ import {
   normalizeOperationalPreparationContent,
   operationalPreparationCanSubmit,
 } from '../utils/operationalMeetingPreparation';
+import { pollOperationalAgendaGeneration } from '../utils/operationalAgendaGeneration';
 
 const { RangePicker } = DatePicker;
 const { Text, Title } = Typography;
@@ -184,6 +185,7 @@ export default function OperationalMeeting() {
   const agendaPendingSaveRef = useRef(null);
   const decisionPendingSaveRef = useRef(null);
   const detailSyncPendingRef = useRef(false);
+  const agendaGenerationAbortControllerRef = useRef(null);
 
   const hasSensitiveAccess = canAccessSensitiveModule?.(MODULE_KEY);
   const hasMenuAccess = canAccessMenu?.('/executive/operational');
@@ -195,7 +197,16 @@ export default function OperationalMeeting() {
   const detailTab = getOperationalMeetingDetailTab(requestedDetailTab, canViewPreparationTab);
 
   useEffect(() => {
+    const previousController = agendaGenerationAbortControllerRef.current;
+    agendaGenerationAbortControllerRef.current = null;
+    previousController?.abort();
+    setAgendaLoading(false);
     setAgendaGenerationError('');
+    return () => {
+      const activeController = agendaGenerationAbortControllerRef.current;
+      agendaGenerationAbortControllerRef.current = null;
+      activeController?.abort();
+    };
   }, [meetingId]);
 
   const updateSectionSaveState = useCallback((sectionId, patch) => {
@@ -671,6 +682,9 @@ export default function OperationalMeeting() {
       });
       if (!confirmed) return;
     }
+    agendaGenerationAbortControllerRef.current?.abort();
+    const generationController = new AbortController();
+    agendaGenerationAbortControllerRef.current = generationController;
     setAgendaLoading(true);
     setAgendaGenerationError('');
     try {
@@ -692,9 +706,39 @@ export default function OperationalMeeting() {
           return;
         }
       }
-      const result = await operationalMeetingsApi.generateAgenda(detail.meeting.id, {
-        base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null,
-      });
+      const startedJob = await operationalMeetingsApi.generateAgenda(
+        detail.meeting.id,
+        { base_updated_at: agendaRemoteSnapshotRef.current?.updated_at || null },
+        { signal: generationController.signal },
+      );
+      const terminalJob = ['completed', 'failed'].includes(startedJob?.status)
+        ? startedJob
+        : await pollOperationalAgendaGeneration({
+            jobId: startedJob?.job_id,
+            pollAfterMs: startedJob?.poll_after_ms,
+            signal: generationController.signal,
+            getJob: (jobId, options) => operationalMeetingsApi.agendaGenerationJob(
+              detail.meeting.id,
+              jobId,
+              options,
+            ),
+          });
+      if (terminalJob.status === 'failed') {
+        const generationError = new Error(terminalJob.error || '生成会议提纲失败');
+        generationError.code = terminalJob.code || 'AI_GENERATION_FAILED';
+        generationError.response = {
+          status: terminalJob.http_status || 500,
+          data: {
+            error: terminalJob.error || '生成会议提纲失败',
+            code: terminalJob.code || 'AI_GENERATION_FAILED',
+          },
+        };
+        throw generationError;
+      }
+      const result = terminalJob.result;
+      if (!result?.saved || !result?.agenda) {
+        throw new Error('AI 提纲生成完成，但服务端未返回已保存的提纲');
+      }
       if (result.runtime?.mode !== 'llm' && detail.agenda) {
         const errorText = result.runtime?.error || 'AI服务当前不可用，已保留原会议提纲';
         setAgendaGenerationError(errorText);
@@ -715,11 +759,15 @@ export default function OperationalMeeting() {
       await loadDetail(detail.meeting.id);
       message.success(result.runtime?.mode === 'llm' ? 'AI 提纲已生成' : '已生成规则兜底提纲');
     } catch (error) {
+      if (generationController.signal.aborted || error?.code === 'ERR_CANCELED') return;
       const errorText = error.response?.data?.error || error.message || '生成提纲失败';
       setAgendaGenerationError(errorText);
       message.error({ content: errorText, duration: 8 });
     } finally {
-      setAgendaLoading(false);
+      if (agendaGenerationAbortControllerRef.current === generationController) {
+        agendaGenerationAbortControllerRef.current = null;
+        setAgendaLoading(false);
+      }
     }
   };
 
@@ -1296,8 +1344,8 @@ export default function OperationalMeeting() {
             <Alert
               type="info"
               showIcon
-              message="正在生成会议提纲"
-              description={`正在汇总 ${preparationSubmissionStats.submitted} 份准备内容，生成完成后会自动保存。`}
+              message="正在后台生成会议提纲"
+              description={`正在汇总 ${preparationSubmissionStats.submitted} 份准备内容，完成后会自动保存并显示。`}
             />
           )}
           {agendaLoading && !agendaDraft ? (

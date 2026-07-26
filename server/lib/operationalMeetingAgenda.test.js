@@ -291,7 +291,7 @@ test('calls the configured model with the v3 prompt and validates its JSON respo
 test('uses a meeting-specific long timeout instead of the generic 25-second model timeout', () => {
   assert.equal(resolveOperationalMeetingAiTimeoutMs(), OPERATIONAL_MEETING_AI_TIMEOUT_MS);
   assert.equal(resolveOperationalMeetingAiTimeoutMs(25000), OPERATIONAL_MEETING_AI_TIMEOUT_MS);
-  assert.equal(resolveOperationalMeetingAiTimeoutMs(150000), 150000);
+  assert.equal(resolveOperationalMeetingAiTimeoutMs(150000), OPERATIONAL_MEETING_AI_TIMEOUT_MS);
   assert.equal(resolveOperationalMeetingAiTimeoutMs(999999), 180000);
 });
 
@@ -315,7 +315,7 @@ test('maps an aborted model request to a distinct timeout response', async () =>
       error instanceof OperationalMeetingAgendaError
       && error.status === 504
       && error.code === 'AI_GENERATION_TIMEOUT'
-      && error.message === 'AI生成超过120秒，请稍后重试'
+      && error.message === 'AI生成超过180秒，请稍后重试'
     ),
   );
 });

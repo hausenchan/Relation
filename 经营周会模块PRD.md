@@ -1301,6 +1301,7 @@ AI 返回语义 JSON：
 ### 13.3 AI 提纲
 
 - `POST /api/operational-meetings/:id/agenda/generate`
+- `GET /api/operational-meetings/:id/agenda/generate/:jobId`
 - `GET /api/operational-meetings/:id/agenda`
 - `PUT /api/operational-meetings/:id/agenda`
 
@@ -1315,10 +1316,20 @@ AI 返回语义 JSON：
   `operational-meeting-agenda-v3`。
 - `generate` 接口允许任一 CEO、COO、CTO、CMO 调用，不受哪位 CXO 创建会议或准备内容的影响；
   指定参与人只能读取生成后的提纲。
-- 生成提纲使用独立长任务超时：服务端至少等待 120 秒，前端请求窗口为 135 秒；不得继续复用
-  通用模型默认 25 秒。真正超时返回 `504 AI_GENERATION_TIMEOUT`，与模型错误、格式错误区分。
-- `generate` 接口成功前必须在服务端原子完成提纲保存、历史版本和周会状态更新；响应中的
-  `saved=true`、`id`、`updated_at` 表示结果已经落库，前端不得再追加一次保存请求。
+- 新版前端提交 `async=true` 后，`generate` 必须快速返回 `202`、`job_id`、`status` 和
+  `poll_after_ms`，模型生成在后台继续执行；前端每 1.5 秒左右轮询任务，最长等待 5 分钟，不得
+  让浏览器用单个 HTTP 请求跨越模型执行过程。模型执行窗口为 180 秒，不得继续复用通用模型默认
+  25 秒；真正超时在任务结果中保留 `504 AI_GENERATION_TIMEOUT`，与模型错误、格式错误区分。
+- 任务状态为 `pending / running / completed / failed`。`completed.result` 必须包含已经保存的
+  `agenda`、`saved=true`、`id` 和 `updated_at`；`failed` 必须包含可展示的 `error`、`code` 和
+  `http_status`。任务按会议 ID 和发起用户绑定，轮询时重新校验两道入口门、写权限和 CXO 身份；
+  其他用户不得读取任务结果。
+- 同一用户、同一会议只复用一个活动生成任务。任务在服务端内存中限制数量并在 15 分钟后清理，
+  元数据不得包含提示词、准备正文、API Key 或 Token；服务重启或任务失效后返回明确错误并允许
+  用户重新生成。
+- 后台任务标记成功前必须在服务端原子完成提纲保存、历史版本和周会状态更新，前端不得再追加
+  一次保存请求。未传 `async=true` 的旧客户端继续走同步兼容路径，避免已打开的旧页面因收到
+  `202` 而误判为空白。
 - 为兼容已经打开的旧页面，使用相同 `source_hash` 重复保存完全相同的生成结果时按幂等成功处理，
   不更新时间、不重复生成历史版本。生成期间持续显示汇总状态；失败原因在提纲区域保留并支持重试，
   不得在 toast 消失后恢复为无反馈的空白页。

@@ -100,10 +100,15 @@ const {
   operationalMeetingAgendaLooksSensitive,
   operationalMeetingAgendaToDocumentBody,
 } = require('./lib/operationalMeetingAgenda');
+const {
+  createOperationalMeetingAgendaJobStore,
+} = require('./lib/operationalMeetingAgendaJobs');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 const JSON_BODY_LIMIT = process.env.RELATION_JSON_BODY_LIMIT || process.env.RELATION_BODY_LIMIT || '50mb';
+const OPERATIONAL_AGENDA_JOB_POLL_AFTER_MS = 1500;
+const operationalMeetingAgendaJobs = createOperationalMeetingAgendaJobStore();
 const DEFAULT_UPLOAD_FILE_SIZE_BYTES = 500 * 1024 * 1024;
 const DOCUMENT_ATTACHMENT_CHUNK_DIR = path.join(UPLOADS_DIR, 'document-attachment-chunks');
 if (!fs.existsSync(DOCUMENT_ATTACHMENT_CHUNK_DIR)) fs.mkdirSync(DOCUMENT_ATTACHMENT_CHUNK_DIR, { recursive: true });
@@ -23594,6 +23599,155 @@ function persistOperationalMeetingAgenda({
   return persist();
 }
 
+function getOperationalMeetingAgendaGenerationFailure(error) {
+  if (error instanceof OperationalMeetingAgendaError) {
+    return {
+      status: error.status,
+      code: error.code,
+      error: error.message,
+      ...(error.latest ? { latest: error.latest } : {}),
+    };
+  }
+  if (error?.code === 'AGENDA_GENERATION_BUSY') {
+    return {
+      status: 503,
+      code: 'AGENDA_GENERATION_BUSY',
+      error: 'AI生成任务较多，请稍后重试',
+    };
+  }
+  return {
+    status: 500,
+    code: 'AI_GENERATION_FAILED',
+    error: sanitizeAiModelErrorMessage(error?.message || '生成会议提纲失败'),
+  };
+}
+
+function logOperationalMeetingAgendaGenerationFailure(failure) {
+  console.error('[operational-agenda] generate failed', {
+    code: failure.code,
+    status: failure.status,
+    message: failure.error,
+  });
+}
+
+function serializeOperationalMeetingAgendaJob(job) {
+  const payload = {
+    job_id: job.id,
+    status: job.status,
+    poll_after_ms: OPERATIONAL_AGENDA_JOB_POLL_AFTER_MS,
+    created_at: new Date(job.createdAt).toISOString(),
+    started_at: job.startedAt ? new Date(job.startedAt).toISOString() : null,
+    completed_at: job.completedAt ? new Date(job.completedAt).toISOString() : null,
+  };
+  if (job.status === 'completed') payload.result = job.result;
+  if (job.status === 'failed') {
+    payload.error = job.error;
+    payload.code = job.code;
+    payload.http_status = job.httpStatus;
+  }
+  return payload;
+}
+
+async function generateAndPersistOperationalMeetingAgenda({
+  meeting,
+  userId,
+  source,
+  baseUpdatedAt,
+  hasBaseUpdatedAt,
+}) {
+  const result = await callOperationalMeetingLlm({
+    meeting,
+    sections: source.sections,
+    config: getSystemAiModelConfig(),
+  });
+  const latestMeeting = db.prepare(`
+    SELECT *
+    FROM operational_meetings
+    WHERE id = ? AND deleted_at IS NULL
+  `).get(meeting.id);
+  if (!latestMeeting) {
+    throw new OperationalMeetingAgendaError(
+      '经营周会不存在或已删除',
+      'OPERATIONAL_MEETING_NOT_FOUND',
+      404,
+    );
+  }
+  const latestSource = getOperationalMeetingAgendaSource(latestMeeting);
+  if (latestSource.sourceHash !== source.sourceHash) {
+    throw new OperationalMeetingAgendaError(
+      'AI生成期间准备内容发生变化，请重新生成',
+      'PREPARATION_CHANGED',
+      409,
+    );
+  }
+  const existingAgenda = db.prepare(
+    'SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?',
+  ).get(meeting.id);
+  if (result.runtime?.mode !== 'llm' && existingAgenda) {
+    throw new OperationalMeetingAgendaError(
+      result.runtime?.error || 'AI服务当前不可用，已保留原会议提纲',
+      'AI_MODEL_UNAVAILABLE',
+      503,
+    );
+  }
+  const agenda = operationalMeetingAgendaToDocumentBody(result.agenda, source.sourceHash);
+  if (operationalMeetingAgendaLooksSensitive(agenda)) {
+    throw new OperationalMeetingAgendaError(
+      'AI 提纲疑似包含毛利或利润类敏感信息，已阻断保存',
+      'AI_OUTPUT_SENSITIVE',
+      422,
+    );
+  }
+  const persisted = persistOperationalMeetingAgenda({
+    meeting: latestMeeting,
+    userId,
+    agenda,
+    sourceHash: source.sourceHash,
+    modelProvider: result.runtime?.provider || 'rule',
+    modelName: result.runtime?.model_name || null,
+    promptVersion: OPERATIONAL_MEETING_PROMPT_VERSION,
+    safetyScanStatus: 'passed',
+    revisionAction: 'generate',
+    baseUpdatedAt,
+    hasBaseUpdatedAt,
+  });
+  if (persisted.conflict) {
+    const conflict = new OperationalMeetingAgendaError(
+      '会议提纲已被其他协作者更新，请先同步最新内容',
+      'CONTENT_CONFLICT',
+      409,
+    );
+    conflict.latest = persisted.latest;
+    throw conflict;
+  }
+  return {
+    agenda,
+    runtime: result.runtime,
+    source_hash: source.sourceHash,
+    prompt_version: OPERATIONAL_MEETING_PROMPT_VERSION,
+    id: persisted.id,
+    updated_at: persisted.updatedAt,
+    saved: true,
+  };
+}
+
+async function runOperationalMeetingAgendaJob(jobId, context) {
+  const job = operationalMeetingAgendaJobs.markRunning(jobId);
+  if (!job) return;
+  try {
+    const result = await generateAndPersistOperationalMeetingAgenda(context);
+    operationalMeetingAgendaJobs.complete(jobId, result);
+  } catch (error) {
+    const failure = getOperationalMeetingAgendaGenerationFailure(error);
+    logOperationalMeetingAgendaGenerationFailure(failure);
+    operationalMeetingAgendaJobs.fail(jobId, {
+      error: failure.error,
+      code: failure.code,
+      httpStatus: failure.status,
+    });
+  }
+}
+
 app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeetingAccess, canWrite, async (req, res) => {
   const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
   if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
@@ -23602,73 +23756,61 @@ app.post('/api/operational-meetings/:id/agenda/generate', requireOperationalMeet
   }
   try {
     const source = getOperationalMeetingAgendaSource(meeting);
-    const result = await callOperationalMeetingLlm({
-      meeting,
-      sections: source.sections,
-      config: getSystemAiModelConfig(),
-    });
-    const latestSource = getOperationalMeetingAgendaSource(meeting);
-    if (latestSource.sourceHash !== source.sourceHash) {
-      return res.status(409).json({
-        error: 'AI生成期间准备内容发生变化，请重新生成',
-        code: 'PREPARATION_CHANGED',
-      });
-    }
-    const existingAgenda = db.prepare(
-      'SELECT id FROM operational_meeting_agendas WHERE meeting_id = ?',
-    ).get(meeting.id);
-    if (result.runtime?.mode !== 'llm' && existingAgenda) {
-      throw new OperationalMeetingAgendaError(
-        result.runtime?.error || 'AI服务当前不可用，已保留原会议提纲',
-        'AI_MODEL_UNAVAILABLE',
-        503,
-      );
-    }
-    const agenda = operationalMeetingAgendaToDocumentBody(result.agenda, source.sourceHash);
-    if (operationalMeetingAgendaLooksSensitive(agenda)) {
-      return res.status(422).json({
-        error: 'AI 提纲疑似包含毛利或利润类敏感信息，已阻断保存',
-        code: 'AI_OUTPUT_SENSITIVE',
-      });
-    }
-    const persisted = persistOperationalMeetingAgenda({
+    const context = {
       meeting,
       userId: req.user.id,
-      agenda,
-      sourceHash: source.sourceHash,
-      modelProvider: result.runtime?.provider || 'rule',
-      modelName: result.runtime?.model_name || null,
-      promptVersion: OPERATIONAL_MEETING_PROMPT_VERSION,
-      safetyScanStatus: 'passed',
-      revisionAction: 'generate',
+      source,
       baseUpdatedAt: req.body?.base_updated_at,
       hasBaseUpdatedAt: Object.prototype.hasOwnProperty.call(req.body || {}, 'base_updated_at'),
-    });
-    if (persisted.conflict) {
-      return res.status(409).json({
-        error: '会议提纲已被其他协作者更新，请先同步最新内容',
-        code: 'CONTENT_CONFLICT',
-        latest: persisted.latest,
+    };
+    if (req.body?.async === true) {
+      const { job, reused } = operationalMeetingAgendaJobs.create({
+        meetingId: meeting.id,
+        userId: req.user.id,
+        sourceHash: source.sourceHash,
+      });
+      if (!reused) {
+        setImmediate(() => {
+          runOperationalMeetingAgendaJob(job.id, context);
+        });
+      }
+      res.setHeader('Location', `/api/operational-meetings/${meeting.id}/agenda/generate/${job.id}`);
+      return res.status(202).json({
+        ...serializeOperationalMeetingAgendaJob(job),
+        reused,
       });
     }
-    return res.json({
-      agenda,
-      runtime: result.runtime,
-      source_hash: source.sourceHash,
-      prompt_version: OPERATIONAL_MEETING_PROMPT_VERSION,
-      id: persisted.id,
-      updated_at: persisted.updatedAt,
-      saved: true,
-    });
+    const result = await generateAndPersistOperationalMeetingAgenda(context);
+    return res.json(result);
   } catch (error) {
-    const status = error instanceof OperationalMeetingAgendaError ? error.status : 500;
-    const code = error instanceof OperationalMeetingAgendaError ? error.code : 'AI_GENERATION_FAILED';
-    const messageText = error instanceof OperationalMeetingAgendaError
-      ? error.message
-      : sanitizeAiModelErrorMessage(error?.message || '生成会议提纲失败');
-    console.error('[operational-agenda] generate failed', { code, status, message: messageText });
-    return res.status(status).json({ error: messageText, code });
+    const failure = getOperationalMeetingAgendaGenerationFailure(error);
+    logOperationalMeetingAgendaGenerationFailure(failure);
+    return res.status(failure.status).json({
+      error: failure.error,
+      code: failure.code,
+      ...(failure.latest ? { latest: failure.latest } : {}),
+    });
   }
+});
+
+app.get('/api/operational-meetings/:id/agenda/generate/:jobId', requireOperationalMeetingAccess, canWrite, (req, res) => {
+  const meeting = getOperationalMeetingForAccess(req.params.id, req.user);
+  if (!meeting) return res.status(404).json({ error: '经营周会不存在' });
+  if (!canGenerateOperationalAgenda(req.user, meeting._accessParticipant)) {
+    return res.status(403).json({ error: '只有 CXO 可以查看会议提纲生成任务' });
+  }
+  const job = operationalMeetingAgendaJobs.get(req.params.jobId);
+  if (
+    !job
+    || Number(job.meetingId) !== Number(meeting.id)
+    || Number(job.userId) !== Number(req.user.id)
+  ) {
+    return res.status(404).json({
+      error: '生成任务已失效，请重新生成',
+      code: 'AGENDA_GENERATION_JOB_EXPIRED',
+    });
+  }
+  return res.json(serializeOperationalMeetingAgendaJob(job));
 });
 
 app.put('/api/operational-meetings/:id/agenda', requireOperationalMeetingAccess, canWrite, (req, res) => {
