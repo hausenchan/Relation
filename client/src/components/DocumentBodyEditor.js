@@ -39,6 +39,7 @@ import {
   flattenDocumentClipboardHtml,
 } from '../utils/documentClipboard';
 import { splitContentEditableAtSelection } from '../utils/contentEditableSplit';
+import { wrapInlineRangeContents } from '../utils/inlineTextFormatting';
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
@@ -722,7 +723,7 @@ export default function DocumentBodyEditor({
     setInlineToolbarOpen(true);
   };
 
-  const wrapInlineSelection = (tagName, configure) => {
+  const wrapInlineSelection = (tagName, configure, format) => {
     const range = restoreInlineSelection();
     if (!range) {
       message.info('请先选择要设置样式的文字');
@@ -731,20 +732,20 @@ export default function DocumentBodyEditor({
     const wrapper = document.createElement(tagName);
     configure?.(wrapper);
     try {
-      range.surroundContents(wrapper);
+      wrapInlineRangeContents(range, wrapper, { format });
     } catch {
-      wrapper.appendChild(range.extractContents());
-      range.insertNode(wrapper);
+      message.error('文字样式设置失败，请重新选择文字后再试');
+      return;
     }
     commitInlineMutation(wrapper);
   };
 
   const applyInlineStyle = (style) => {
-    if (style === 'bold') wrapInlineSelection('strong');
-    if (style === 'italic') wrapInlineSelection('em');
-    if (style === 'underline') wrapInlineSelection('u');
-    if (style === 'strike') wrapInlineSelection('s');
-    if (style === 'code') wrapInlineSelection('code');
+    if (style === 'bold') wrapInlineSelection('strong', null, 'bold');
+    if (style === 'italic') wrapInlineSelection('em', null, 'italic');
+    if (style === 'underline') wrapInlineSelection('u', null, 'underline');
+    if (style === 'strike') wrapInlineSelection('s', null, 'strike');
+    if (style === 'code') wrapInlineSelection('code', null, 'code');
     if (style === 'link') {
       const href = window.prompt('请输入链接地址', 'https://');
       if (!href) return;
@@ -757,7 +758,7 @@ export default function DocumentBodyEditor({
   };
 
   const applyInlineColor = (color) => {
-    wrapInlineSelection('span', node => node.setAttribute('style', `color: ${color}`));
+    wrapInlineSelection('span', node => node.setAttribute('style', `color: ${color}`), 'color');
   };
 
   const setClipboardBlockSelection = (ids = [], {

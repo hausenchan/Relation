@@ -32,9 +32,10 @@ jest.mock('antd', () => {
     Avatar: ({ children }) => <span>{children}</span>,
     Checkbox: ({ checked, onChange }) => <input type="checkbox" checked={checked} onChange={onChange} />,
     Divider: () => <hr />,
-    Dropdown: ({ children, menu }) => (
+    Dropdown: ({ children, menu, dropdownRender }) => (
       <>
         {children}
+        {dropdownRender?.()}
         {(menu?.items || []).filter(item => item?.key).map(item => (
           <button
             key={item.key}
@@ -885,5 +886,48 @@ describe('DocumentBodyEditor block copy', () => {
 
     expect(container.textContent).not.toContain('数字列表项');
     expect(container.textContent).not.toContain('列表项');
+  });
+
+  test('applies color across nested imported spans in a numbered list item', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{
+            blocks: [{
+              id: 'styled-numbered',
+              type: 'numbered',
+              content: '<span style="color: #111827;">已</span><span style="color: #111827; font-weight: 400;">上线</span>',
+              meta: {},
+            }],
+          }}
+          onChange={onChange}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[contenteditable="true"]');
+    const spans = inlineEditor.querySelectorAll('span');
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(spans[0].firstChild, 0);
+    range.setEnd(spans[1].firstChild, spans[1].textContent.length);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    });
+    const greenButton = container.querySelector('button[aria-label="文字颜色 #22c55e"]');
+    expect(greenButton).not.toBeNull();
+    flushSync(() => greenButton.click());
+
+    const nextContent = onChange.mock.calls.at(-1)[0].blocks[0].content;
+    const parsed = document.createElement('div');
+    parsed.innerHTML = nextContent;
+    const greenWrapper = Array.from(parsed.querySelectorAll('span')).find(node => (
+      node.style.color === 'rgb(34, 197, 94)'
+    ));
+    expect(greenWrapper?.textContent).toBe('已上线');
+    expect(Array.from(greenWrapper.querySelectorAll('[style]')).every(node => !node.style.color)).toBe(true);
   });
 });

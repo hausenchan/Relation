@@ -116,6 +116,7 @@ import {
   shouldSkipNestedClipboardListElement,
 } from '../utils/documentClipboard';
 import { splitContentEditableAtSelection } from '../utils/contentEditableSplit';
+import { wrapInlineRangeContents } from '../utils/inlineTextFormatting';
 import {
   buildBulkShareTreeCheckState,
   buildFolderDocumentSelectionMap,
@@ -9940,7 +9941,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     setCommentDraft('');
   };
 
-  const placeInlineToolbar = (block, input, start, end) => {
+  const placeInlineToolbar = (block, input, start, end, selectionTarget = {}) => {
     if (!input || start === end) return;
     const inputText = input.isContentEditable ? (input.textContent || '') : (input.value || '');
     const selectedText = String(inputText).slice(start, end);
@@ -9959,6 +9960,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     clearAreaBlockSelection();
     setInlineToolbar({
       blockId: block.id,
+      ...selectionTarget,
+      editorId: input.id || `doc-block-input-${block.id}`,
       start,
       end,
       text: selectedText,
@@ -9970,6 +9973,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
 
   const getInlineSelectionElementId = (selection) => {
     if (!selection?.blockId) return '';
+    if (selection.editorId) return selection.editorId;
     if (selection.tableCell) {
       const { type, rowIndex, columnIndex } = selection.tableCell;
       return `doc-table-cell-input-${selection.blockId}-${type}-${rowIndex}-${columnIndex}`;
@@ -10003,6 +10007,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     setInlineToolbar({
       blockId: block.id,
       tableCell,
+      editorId: input.id || '',
       start,
       end,
       text: selectedText,
@@ -10073,7 +10078,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     });
   };
 
-  const handleInlineTextSelection = (block, event) => {
+  const handleInlineTextSelection = (block, event, selectionTarget = {}) => {
     const input = getInlineSelectionInput(event);
     if (!input) return;
     window.setTimeout(() => {
@@ -10090,7 +10095,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         if (!commentComposer) setInlineToolbar(prev => (prev?.blockId === block.id ? null : prev));
         return;
       }
-      placeInlineToolbar(block, input, start, end);
+      placeInlineToolbar(block, input, start, end, selectionTarget);
     }, 0);
   };
 
@@ -10124,13 +10129,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     })
   );
 
-  const focusInlineSelection = (blockId, start, end) => {
+  const focusInlineSelection = (blockId, start, end, selectionTarget = {}) => {
     window.setTimeout(() => {
-      const input = document.getElementById(`doc-block-input-${blockId}`);
+      const input = document.getElementById(getInlineSelectionElementId({ blockId, ...selectionTarget }));
       if (input?.setSelectionRange) {
         input.focus();
         input.setSelectionRange(start, end);
-        placeInlineToolbar({ id: blockId }, input, start, end);
+        placeInlineToolbar({ id: blockId }, input, start, end, selectionTarget);
       }
     }, 0);
   };
@@ -10247,6 +10252,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       if (block) handleTableCellTextSelection(block, selection.tableCell, { target: editor });
       return changed;
     }
+    if (selection.blockMetaField) {
+      updateBlockMeta(selection.blockId, { [selection.blockMetaField]: nextHtml });
+      if (block) {
+        handleInlineTextSelection(block, { target: editor }, {
+          blockMetaField: selection.blockMetaField,
+        });
+      }
+      return true;
+    }
     updateBlock(selection.blockId, { content: nextHtml });
     if (block) handleInlineTextSelection(block, { target: editor });
     return true;
@@ -10263,15 +10277,18 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     return { range, currentSelection };
   };
 
-  const applyContentEditableInlineNode = (selection, editor, createNode) => {
+  const applyContentEditableInlineNode = (selection, editor, createNode, format) => {
     const restored = getRestoredContentEditableRange(selection, editor);
     if (!restored) return false;
     const { range, currentSelection } = restored;
     const wrapper = createNode();
     if (!wrapper) return false;
-    const fragment = range.extractContents();
-    wrapper.appendChild(fragment);
-    range.insertNode(wrapper);
+    try {
+      wrapInlineRangeContents(range, wrapper, { format });
+    } catch {
+      message.error('文字样式设置失败，请重新选择文字后再试');
+      return false;
+    }
     const nextRange = document.createRange();
     nextRange.selectNodeContents(wrapper);
     currentSelection.removeAllRanges();
@@ -10324,7 +10341,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     const tag = tagMap[kind];
     if (!tag) return false;
-    return applyContentEditableInlineNode(selection, editor, () => document.createElement(tag));
+    return applyContentEditableInlineNode(selection, editor, () => document.createElement(tag), kind);
   };
 
   const applyInlineTextColorFallback = (selection, color) => {
@@ -10408,7 +10425,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           const node = document.createElement('span');
           node.setAttribute('style', `color: ${safeColor};`);
           return node;
-        });
+        }, 'color');
       }
       return;
     }
@@ -10575,7 +10592,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         }}
       >
         <Space size={2} wrap style={{ width: '100%' }}>
-          {!inlineToolbar.tableCell && (
+          {!inlineToolbar.tableCell && !inlineToolbar.blockMetaField && (
             <>
               {renderInlineStyleMenu()}
               <Divider type="vertical" style={{ marginInline: 4 }} />
@@ -10653,7 +10670,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
               A
             </Button>
           </Dropdown>
-          {!inlineToolbar.tableCell && (
+          {!inlineToolbar.tableCell && !inlineToolbar.blockMetaField && (
             <>
               <Divider type="vertical" style={{ marginInline: 4 }} />
               <Tooltip title="添加评论">
@@ -11071,8 +11088,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
               id={`doc-fold-body-input-${block.id}`}
               value={meta.body || ''}
               placeholder="折叠内容"
-              onFocus={() => setSelectedBlockId(block.id)}
+              onFocus={commonProps.onFocus}
+              onBlur={commonProps.onBlur}
+              onCompositionStart={commonProps.onCompositionStart}
+              onCompositionEnd={commonProps.onCompositionEnd}
               onChange={value => updateBlockMeta(block.id, { body: value })}
+              onMouseUp={event => handleInlineTextSelection(block, event, { blockMetaField: 'body' })}
+              onKeyUp={event => handleInlineTextSelection(block, event, { blockMetaField: 'body' })}
               style={{
                 minHeight: 42,
                 padding: 0,
