@@ -20,6 +20,7 @@ import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../uti
 import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/businessTime';
+import { TASK_TYPE_META, TASK_TYPE_OPTIONS } from '../utils/taskTypes';
 
 const { Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -1100,7 +1101,11 @@ function CompetitorResearchTab({ companyId }) {
 
   const handleSave = async () => {
     const values = await form.validateFields();
-    const payload = { ...values, company_id: companyId };
+    const payload = {
+      ...values,
+      opportunity_type: values.opportunity_type || null,
+      company_id: companyId,
+    };
     let recordId;
     if (editing) {
       await competitorResearchApi.update(editing.id, payload);
@@ -1146,6 +1151,14 @@ function CompetitorResearchTab({ companyId }) {
       width: 100,
       align: 'center',
       render: (v) => v && v.trim() !== '' ? <Tag color="green">✓</Tag> : <Tag color="default">-</Tag>,
+    },
+    {
+      title: '商机类型',
+      dataIndex: 'opportunity_type',
+      width: 120,
+      render: value => value
+        ? <Tag color={TASK_TYPE_META[value]?.color || 'default'}>{TASK_TYPE_META[value]?.label || value}</Tag>
+        : '-',
     },
     { title: '金额', dataIndex: 'amount', width: 100, render: (v) => v ? `¥${v}` : '-' },
     { title: '结果', dataIndex: 'outcome', ellipsis: true },
@@ -1245,6 +1258,9 @@ function CompetitorResearchTab({ companyId }) {
               <Space wrap size={[6, 6]}>
                 <Tag color="blue" icon={<RiseOutlined />}>{record.opportunity_title}</Tag>
                 {record.opportunity_status && <Tag color={opportunityStatusMap[record.opportunity_status]?.color}>{opportunityStatusMap[record.opportunity_status]?.label || record.opportunity_status}</Tag>}
+                {record.opportunity_type && (
+                  <Tag color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[record.opportunity_type]?.label || record.opportunity_type}</Tag>
+                )}
               </Space>
             )}
             {sharedUsers.length > 0 && (
@@ -1310,7 +1326,7 @@ function CompetitorResearchTab({ companyId }) {
           rowKey="id"
           size="small"
           pagination={{ defaultPageSize: 10, showSizeChanger: false }}
-          scroll={{ x: 860 }}
+          scroll={{ x: 980 }}
           onRow={(record) => ({
             onDoubleClick: () => setDetailRecord(record),
             style: { cursor: 'pointer' },
@@ -1419,7 +1435,12 @@ function CompetitorResearchTab({ companyId }) {
                       </Select>
                     </Form.Item>
                   </Col>
-                  <Col span={24}>
+                  <Col span={isMobile ? 24 : 12}>
+                    <Form.Item label="商机类型" name="opportunity_type">
+                      <Select allowClear placeholder="选择商机类型" options={TASK_TYPE_OPTIONS} />
+                    </Form.Item>
+                  </Col>
+                  <Col span={isMobile ? 24 : 12}>
                     <Form.Item label="指派跟进人" name="opportunity_assignee">
                       <Select
                         allowClear
@@ -1518,6 +1539,11 @@ function CompetitorResearchTab({ companyId }) {
                 </Descriptions.Item>
                 <Descriptions.Item label="商机跟进人">
                   {assignee ? (assignee.display_name || assignee.username) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商机类型">
+                  {r.opportunity_type
+                    ? <Tag color={TASK_TYPE_META[r.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[r.opportunity_type]?.label || r.opportunity_type}</Tag>
+                    : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="商机说明">
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>

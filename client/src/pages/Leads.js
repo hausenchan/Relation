@@ -7,6 +7,7 @@ import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined,
 import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
+import { TASK_TYPE_META, TASK_TYPE_OPTIONS } from '../utils/taskTypes';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -161,6 +162,7 @@ export default function Leads() {
           impact: values.impact || '',
           opportunity_title: values.opportunity_title,
           opportunity_status: values.opportunity_status,
+          opportunity_type: values.opportunity_type || null,
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
           watcher_ids: values.watcher_ids || [],
@@ -197,6 +199,7 @@ export default function Leads() {
           next_action_date: nextDateStr,
           opportunity_title: values.opportunity_title,
           opportunity_status: values.opportunity_status,
+          opportunity_type: values.opportunity_type || null,
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
           watcher_ids: values.watcher_ids || [],
@@ -217,6 +220,7 @@ export default function Leads() {
           next_action_date: nextDateStr,
           opportunity_title: values.opportunity_title,
           opportunity_status: values.opportunity_status,
+          opportunity_type: values.opportunity_type || null,
           opportunity_assignee: values.opportunity_assignee,
           opportunity_note: values.opportunity_note || '',
           watcher_ids: values.watcher_ids || [],
@@ -263,6 +267,7 @@ export default function Leads() {
       info_source: record.source,
       opportunity_title: record.opportunity_title,
       opportunity_status: record.opportunity_status,
+      opportunity_type: record.opportunity_type || undefined,
       opportunity_assignee: record.opportunity_assignee,
       opportunity_note: record.opportunity_note,
       watcher_ids: record.watcher_ids ? record.watcher_ids.split(',').map(id => Number(id)).filter(Boolean) : [],
@@ -274,7 +279,11 @@ export default function Leads() {
 
   const handleSave = async () => {
     const values = await editForm.validateFields();
-    await opportunitiesApi.update(editTarget.id, { ...values, source_type: editTarget.source_type });
+    await opportunitiesApi.update(editTarget.id, {
+      ...values,
+      opportunity_type: values.opportunity_type || null,
+      source_type: editTarget.source_type,
+    });
     message.success('更新成功');
     setEditModalOpen(false);
     load();
@@ -386,6 +395,14 @@ export default function Leads() {
       },
     },
     {
+      title: '商机类型',
+      dataIndex: 'opportunity_type',
+      width: 120,
+      render: value => value
+        ? <Tag color={TASK_TYPE_META[value]?.color || 'default'}>{TASK_TYPE_META[value]?.label || value}</Tag>
+        : <Text type="secondary">-</Text>,
+    },
+    {
       title: '指派给',
       dataIndex: 'assignee_name',
       width: 150,
@@ -482,6 +499,11 @@ export default function Leads() {
                   }} />
                   {status.label}
                 </span>
+                {record.opportunity_type && (
+                  <Tag color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'} style={{ margin: 0 }}>
+                    {TASK_TYPE_META[record.opportunity_type]?.label || record.opportunity_type}
+                  </Tag>
+                )}
               </Space>
             </div>
 
@@ -646,7 +668,7 @@ export default function Leads() {
             rowKey={(record) => `${record.source_type}-${record.source_id}`}
             loading={loading}
             size="small"
-            scroll={{ x: 1150 }}
+            scroll={{ x: 1370 }}
             tableLayout="fixed"
             pagination={{ defaultPageSize: 20, showTotal: (total) => `共 ${total} 条` }}
             locale={{ emptyText: '暂无商机记录' }}
@@ -678,6 +700,9 @@ export default function Leads() {
                 <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>
               ))}
             </Select>
+          </Form.Item>
+          <Form.Item label="商机类型" name="opportunity_type">
+            <Select allowClear placeholder="选择商机类型" options={TASK_TYPE_OPTIONS} />
           </Form.Item>
           <Form.Item label="指派跟进人" name="opportunity_assignee">
             <Select
@@ -718,6 +743,11 @@ export default function Leads() {
                   return <span style={{ padding: '2px 10px', borderRadius: 6, fontSize: 12, fontWeight: 500, color: s.color, background: s.bg, border: `1px solid ${s.border}` }}>{s.label}</span>;
                 })()}
                 {detailRecord.assignee_name && <Tag style={{ borderRadius: 6 }} icon={<UserOutlined />}>{detailRecord.assignee_name}</Tag>}
+                {detailRecord.opportunity_type && (
+                  <Tag color={TASK_TYPE_META[detailRecord.opportunity_type]?.color || 'default'} style={{ borderRadius: 6 }}>
+                    {TASK_TYPE_META[detailRecord.opportunity_type]?.label || detailRecord.opportunity_type}
+                  </Tag>
+                )}
               </Space>
             </div>
             <Descriptions column={1} bordered size="small" labelStyle={{ fontWeight: 500, color: '#6b7280', fontSize: 13, width: 90 }} contentStyle={{ fontSize: 13, color: '#374151' }}>
@@ -727,6 +757,11 @@ export default function Leads() {
                   ` (${detailRecord.company || detailRecord.current_company})`}
               </Descriptions.Item>
               <Descriptions.Item label="指派给">{detailRecord.assignee_name || <Text style={{ color: '#d1d5db' }}>未指派</Text>}</Descriptions.Item>
+              <Descriptions.Item label="商机类型">
+                {detailRecord.opportunity_type
+                  ? <Tag color={TASK_TYPE_META[detailRecord.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[detailRecord.opportunity_type]?.label || detailRecord.opportunity_type}</Tag>
+                  : '-'}
+              </Descriptions.Item>
               <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
               <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
               <Descriptions.Item label="互动描述"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div></Descriptions.Item>
@@ -860,6 +895,11 @@ export default function Leads() {
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>
+              <Form.Item label="商机类型" name="opportunity_type">
+                <Select allowClear placeholder="选择商机类型" options={TASK_TYPE_OPTIONS} />
+              </Form.Item>
+            </Col>
+            <Col span={24}>
               <Form.Item label="指派跟进人" name="opportunity_assignee">
                 <Select allowClear showSearch placeholder="选择跟进人" optionFilterProp="label"
                   options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}

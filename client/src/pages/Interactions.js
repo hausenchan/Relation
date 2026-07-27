@@ -9,6 +9,7 @@ import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../uti
 import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 import { formatBusinessDateTime } from '../utils/businessTime';
+import { TASK_TYPE_META, TASK_TYPE_OPTIONS } from '../utils/taskTypes';
 
 
 const { Text } = Typography;
@@ -143,6 +144,7 @@ export default function Interactions() {
     const values = await form.validateFields();
     const payload = {
       ...values,
+      opportunity_type: values.opportunity_type || null,
       date: values.date?.format('YYYY-MM-DD'),
       next_action_date: values.next_action_date?.format('YYYY-MM-DD'),
     };
@@ -213,6 +215,9 @@ export default function Interactions() {
           <Space size={4} wrap>
             <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
             <Tag color={s.color}>{s.label}</Tag>
+            {r.opportunity_type && (
+              <Tag color={TASK_TYPE_META[r.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[r.opportunity_type]?.label || r.opportunity_type}</Tag>
+            )}
           </Space>
         );
       },
@@ -288,6 +293,9 @@ export default function Interactions() {
               <Space wrap size={[6, 6]}>
                 <Tag color="blue" icon={<RiseOutlined />}>{record.opportunity_title}</Tag>
                 {opportunity && <Tag color={opportunity.color}>{opportunity.label}</Tag>}
+                {record.opportunity_type && (
+                  <Tag color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[record.opportunity_type]?.label || record.opportunity_type}</Tag>
+                )}
               </Space>
             )}
 
@@ -528,7 +536,12 @@ export default function Interactions() {
                     </Select>
                   </Form.Item>
                 </Col>
-                <Col span={24}>
+                <Col span={isMobile ? 24 : 12}>
+                  <Form.Item label="商机类型" name="opportunity_type">
+                    <Select allowClear placeholder="选择商机类型" options={TASK_TYPE_OPTIONS} />
+                  </Form.Item>
+                </Col>
+                <Col span={isMobile ? 24 : 12}>
                   <Form.Item label="指派跟进人" name="opportunity_assignee">
                     <Select
                       allowClear
@@ -628,6 +641,11 @@ export default function Interactions() {
                 </Descriptions.Item>
                 <Descriptions.Item label="商机跟进人">
                   {assignee ? (assignee.display_name || assignee.username) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商机类型">
+                  {r.opportunity_type
+                    ? <Tag color={TASK_TYPE_META[r.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[r.opportunity_type]?.label || r.opportunity_type}</Tag>
+                    : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="商机说明" span={isMobile ? 1 : 1}>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>

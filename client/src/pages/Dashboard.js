@@ -16,6 +16,7 @@ import {
   DASHBOARD_TASK_STATUS_SORT_RANK,
   sortDashboardTasksByDefault,
 } from '../utils/dashboardTaskSort';
+import { TASK_TYPE_META as taskTypeMap, TASK_TYPE_VALUES } from '../utils/taskTypes';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -84,13 +85,6 @@ const priorityMap = {
   medium: { label: '中', color: 'orange' },
   low:    { label: '低', color: 'default' },
 };
-const taskTypeMap = {
-  '认知': { label: '认知', color: 'geekblue' },
-  '增长-客户': { label: '增长-客户', color: 'green' },
-  '增长-产品': { label: '增长-产品', color: 'cyan' },
-  '组织': { label: '组织', color: 'gold' },
-};
-const TASK_TYPE_VALUES = Object.keys(taskTypeMap);
 const AI_SUGGESTION_PRIORITY_VALUES = ['high', 'medium', 'low'];
 const AI_SUGGESTION_STATUS_VALUES = Object.keys(aiSuggestionStatusMap);
 

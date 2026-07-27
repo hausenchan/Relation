@@ -11,6 +11,7 @@ import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
 import dayjs from 'dayjs';
 import { formatBusinessDateTime } from '../utils/businessTime';
+import { TASK_TYPE_META } from '../utils/taskTypes';
 
 const { Text } = Typography;
 const { useBreakpoint } = Grid;
@@ -104,6 +105,14 @@ export default function FollowUpTasks() {
           {!r.person_name && r.company_name && <Text type="secondary" style={{ fontSize: 12 }}>(公司)</Text>}
         </Space>
       ),
+    },
+    {
+      title: '任务类型',
+      dataIndex: 'task_type',
+      width: 120,
+      render: value => value
+        ? <Tag color={TASK_TYPE_META[value]?.color || 'default'}>{TASK_TYPE_META[value]?.label || value}</Tag>
+        : <Text type="secondary">-</Text>,
     },
     {
       title: '指派人',
@@ -208,6 +217,11 @@ export default function FollowUpTasks() {
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <Typography.Text type="secondary">指派人：{record.assigned_by_name || '-'}</Typography.Text>
               <Typography.Text type="secondary">商机：{record.opportunity_title || '-'}</Typography.Text>
+              {record.task_type && (
+                <Tag color={TASK_TYPE_META[record.task_type]?.color || 'default'} style={{ margin: 0 }}>
+                  {TASK_TYPE_META[record.task_type]?.label || record.task_type}
+                </Tag>
+              )}
             </div>
 
             {record.opportunity_note && (
@@ -314,6 +328,11 @@ export default function FollowUpTasks() {
               </Descriptions.Item>
               <Descriptions.Item label="商机标题">
                 {detailRecord.opportunity_title || '-'}
+              </Descriptions.Item>
+              <Descriptions.Item label="任务类型">
+                {detailRecord.task_type
+                  ? <Tag color={TASK_TYPE_META[detailRecord.task_type]?.color || 'default'}>{TASK_TYPE_META[detailRecord.task_type]?.label || detailRecord.task_type}</Tag>
+                  : '-'}
               </Descriptions.Item>
               <Descriptions.Item label="商机说明">
                 <div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div>

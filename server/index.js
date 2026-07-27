@@ -1418,6 +1418,7 @@ if (intCols.length > 0) {
   if (!intCols.includes('opportunity_status')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_status TEXT DEFAULT NULL");
   if (!intCols.includes('opportunity_assignee')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_assignee INTEGER DEFAULT NULL");
   if (!intCols.includes('opportunity_note')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_note TEXT DEFAULT NULL");
+  if (!intCols.includes('opportunity_type')) db.exec("ALTER TABLE interactions ADD COLUMN opportunity_type TEXT DEFAULT NULL");
   if (!intCols.includes('follow_result')) db.exec("ALTER TABLE interactions ADD COLUMN follow_result TEXT DEFAULT NULL");
   if (!intCols.includes('created_by')) db.exec("ALTER TABLE interactions ADD COLUMN created_by INTEGER DEFAULT NULL");
   if (!intCols.includes('visibility_scope')) db.exec("ALTER TABLE interactions ADD COLUMN visibility_scope TEXT DEFAULT 'company'");
@@ -1430,6 +1431,7 @@ if (crCols.length > 0) {
   if (!crCols.includes('opportunity_status')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_status TEXT DEFAULT NULL");
   if (!crCols.includes('opportunity_assignee')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_assignee INTEGER DEFAULT NULL");
   if (!crCols.includes('opportunity_note')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_note TEXT DEFAULT NULL");
+  if (!crCols.includes('opportunity_type')) db.exec("ALTER TABLE competitor_research ADD COLUMN opportunity_type TEXT DEFAULT NULL");
   if (!crCols.includes('follow_result')) db.exec("ALTER TABLE competitor_research ADD COLUMN follow_result TEXT DEFAULT NULL");
   if (!crCols.includes('created_by')) db.exec("ALTER TABLE competitor_research ADD COLUMN created_by INTEGER DEFAULT NULL");
   if (!crCols.includes('shared_with')) db.exec("ALTER TABLE competitor_research ADD COLUMN shared_with TEXT DEFAULT NULL");
@@ -2197,6 +2199,7 @@ db.exec(`
     company_id      INTEGER,
     opportunity_title TEXT,
     opportunity_note  TEXT,
+    task_type       TEXT DEFAULT NULL,
     assigned_to     INTEGER NOT NULL,
     assigned_by     INTEGER NOT NULL,
     status          TEXT DEFAULT 'pending',
@@ -2221,6 +2224,7 @@ if (futCols.length > 0) {
   if (!futCols.includes('competitor_research_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN competitor_research_id INTEGER DEFAULT NULL");
   if (!futCols.includes('company_id')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN company_id INTEGER DEFAULT NULL");
   if (!futCols.includes('started_at')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN started_at DATETIME DEFAULT NULL");
+  if (!futCols.includes('task_type')) db.exec("ALTER TABLE follow_up_tasks ADD COLUMN task_type TEXT DEFAULT NULL");
 }
 createIndexesIfColumnsExist('follow_up_tasks', [
   { name: 'idx_follow_up_tasks_assigned_to_status', columnsSql: 'assigned_to, status', columns: ['assigned_to', 'status'] },
@@ -2236,21 +2240,21 @@ createIndexesIfColumnsExist('follow_up_tasks', [
 try {
   // 改 JS 实现：companies.name 加密后无法在 SQL 里拼接 title
   const missing = db.prepare(`
-    SELECT cr.id as cr_id, cr.company_id, cr.opportunity_title, cr.opportunity_assignee, c.name as company_name
+    SELECT cr.id as cr_id, cr.company_id, cr.opportunity_title, cr.opportunity_type, cr.opportunity_assignee, c.name as company_name
     FROM competitor_research cr
     LEFT JOIN companies c ON cr.company_id = c.id
     LEFT JOIN follow_up_tasks ft ON ft.competitor_research_id = cr.id
     WHERE cr.opportunity_title IS NOT NULL AND cr.opportunity_assignee IS NOT NULL AND ft.id IS NULL
   `).all();
   const insertFt = db.prepare(`
-    INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, assigned_to, assigned_by, status)
-    VALUES (?, 0, 0, ?, ?, ?, ?, 1, 'pending')
+    INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, task_type, assigned_to, assigned_by, status)
+    VALUES (?, 0, 0, ?, ?, ?, ?, ?, 1, 'pending')
   `);
   for (const m of missing) {
     const companyName = safeDecrypt(m.company_name) || '未知公司';
     const title = `${companyName} - ${m.opportunity_title}`;
     const enc = encryptRow('follow_up_tasks', { title, opportunity_title: m.opportunity_title });
-    insertFt.run(enc.title, m.cr_id, m.company_id, enc.opportunity_title, m.opportunity_assignee);
+    insertFt.run(enc.title, m.cr_id, m.company_id, enc.opportunity_title, m.opportunity_type || null, m.opportunity_assignee);
   }
 } catch(e) { /* 表不存在时忽略 */ }
 
@@ -11095,9 +11099,115 @@ app.get('/api/interactions', (req, res) => {
   res.json(out);
 });
 
+const TASK_TYPE_VALUES = ['认知', '增长-客户', '增长-产品', '组织'];
+const TASK_TYPES = new Set(TASK_TYPE_VALUES);
+
+function normalizeTaskType(value, fieldLabel = '任务类型') {
+  if (value === undefined) return { value: undefined };
+  if (value === null || String(value).trim() === '') return { value: null };
+  const normalized = String(value).trim();
+  if (!TASK_TYPES.has(normalized)) {
+    return { error: `${fieldLabel}必须是：${TASK_TYPE_VALUES.join('、')}` };
+  }
+  return { value: normalized };
+}
+
+function syncOpportunityFollowUpTask({
+  sourceType,
+  sourceId,
+  relatedId,
+  relatedName,
+  opportunityTitle,
+  opportunityNote,
+  opportunityType,
+  opportunityAssignee,
+  assignedBy,
+}) {
+  const sourceConfig = sourceType === 'competitor_research'
+    ? { column: 'competitor_research_id', fallbackName: '未知公司' }
+    : sourceType === 'interaction'
+      ? { column: 'interaction_id', fallbackName: '未知人脉' }
+      : null;
+  const numericSourceId = Number(sourceId);
+  if (!sourceConfig || !Number.isInteger(numericSourceId) || numericSourceId <= 0) return;
+
+  const normalizedType = opportunityType || null;
+  const linkedTasks = db.prepare(`
+    SELECT id, status, task_type
+    FROM follow_up_tasks
+    WHERE ${sourceConfig.column} = ?
+    ORDER BY id ASC
+  `).all(numericSourceId);
+  let changed = false;
+
+  const staleTypeTasks = linkedTasks.filter(task => (task.task_type || null) !== normalizedType);
+  if (staleTypeTasks.length > 0) {
+    db.prepare(`
+      UPDATE follow_up_tasks
+      SET task_type = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE ${sourceConfig.column} = ?
+    `).run(normalizedType, numericSourceId);
+    changed = true;
+  }
+
+  const normalizedTitle = String(opportunityTitle || '').trim();
+  const assigneeId = Number(opportunityAssignee) || null;
+  if (normalizedTitle && assigneeId) {
+    const taskTitle = `${String(relatedName || '').trim() || sourceConfig.fallbackName} - ${normalizedTitle}`;
+    const encrypted = encryptRow('follow_up_tasks', {
+      title: taskTitle,
+      opportunity_title: normalizedTitle,
+      opportunity_note: opportunityNote,
+    });
+    const activeTasks = linkedTasks.filter(task => task.status !== 'done');
+    if (activeTasks.length > 0) {
+      db.prepare(`
+        UPDATE follow_up_tasks
+        SET title = ?, opportunity_title = ?, opportunity_note = ?, task_type = ?, assigned_to = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE ${sourceConfig.column} = ? AND status != 'done'
+      `).run(
+        encrypted.title,
+        encrypted.opportunity_title,
+        encrypted.opportunity_note || null,
+        normalizedType,
+        assigneeId,
+        numericSourceId,
+      );
+      changed = true;
+    } else if (linkedTasks.length === 0) {
+      const relationColumns = sourceType === 'competitor_research'
+        ? { interactionId: 0, personId: 0, competitorResearchId: numericSourceId, companyId: Number(relatedId) || 0 }
+        : { interactionId: numericSourceId, personId: Number(relatedId) || 0, competitorResearchId: null, companyId: null };
+      db.prepare(`
+        INSERT INTO follow_up_tasks (
+          title, interaction_id, person_id, competitor_research_id, company_id,
+          opportunity_title, opportunity_note, task_type, assigned_to, assigned_by
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+      `).run(
+        encrypted.title,
+        relationColumns.interactionId,
+        relationColumns.personId,
+        relationColumns.competitorResearchId,
+        relationColumns.companyId,
+        encrypted.opportunity_title,
+        encrypted.opportunity_note || null,
+        normalizedType,
+        assigneeId,
+        Number(assignedBy) || 0,
+      );
+      changed = true;
+    }
+  }
+
+  if (changed) clearRuntimeCache('follow-up-tasks:');
+}
+
 app.post('/api/interactions', (req, res) => {
   const { person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
-    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
+    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, opportunity_type, watcher_ids } = req.body;
+  const normalizedOpportunityType = normalizeTaskType(opportunity_type, '商机类型');
+  if (normalizedOpportunityType.error) return res.status(400).json({ error: normalizedOpportunityType.error });
+  const nextOpportunityType = normalizedOpportunityType.value ?? null;
   const createdBy = req.user?.id || null;
   const person = getPersonAccessRecord(person_id);
   if (!person) return res.status(404).json({ error: '未找到人脉' });
@@ -11111,10 +11221,10 @@ app.post('/api/interactions', (req, res) => {
   });
   const result = db.prepare(`
     INSERT INTO interactions (person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
-      opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by, visibility_scope, private_owner_id)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, opportunity_type, created_by, visibility_scope, private_owner_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(person_id, type, date, amount, enc.description, enc.outcome, enc.follow_result || null, enc.next_action, next_action_date, importance || 'normal', enc.gift_name || null,
-    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null, createdBy,
+    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null, nextOpportunityType, createdBy,
     visibility.visibility_scope, visibility.private_owner_id);
 
   const interactionId = result.lastInsertRowid;
@@ -11139,21 +11249,18 @@ app.post('/api/interactions', (req, res) => {
     }
   }
 
-  // 自动创建待跟进任务
-  if (opportunity_title && opportunity_assignee) {
-    const person = db.prepare('SELECT name FROM persons WHERE id = ?').get(person_id);
-    const personName = safeDecrypt(person?.name) || '未知人脉';
-    const taskTitle = `${personName} - ${opportunity_title}`;
-    const ftEnc = encryptRow('follow_up_tasks', {
-      title: taskTitle, opportunity_title, opportunity_note,
-    });
-    db.prepare(`
-      INSERT INTO follow_up_tasks (title, interaction_id, person_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
-      VALUES (?,?,?,?,?,?,?)
-    `).run(ftEnc.title, interactionId, person_id, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
-      opportunity_assignee, createdBy || 0);
-    clearRuntimeCache('follow-up-tasks:');
-  }
+  const taskPerson = db.prepare('SELECT name FROM persons WHERE id = ?').get(person_id);
+  syncOpportunityFollowUpTask({
+    sourceType: 'interaction',
+    sourceId: interactionId,
+    relatedId: person_id,
+    relatedName: safeDecrypt(taskPerson?.name),
+    opportunityTitle: opportunity_title,
+    opportunityNote: opportunity_note,
+    opportunityType: nextOpportunityType,
+    opportunityAssignee: opportunity_assignee,
+    assignedBy: createdBy,
+  });
 
   if (watcher_ids?.length) {
     syncLeadWatchers('interaction', interactionId, watcher_ids);
@@ -11164,9 +11271,12 @@ app.post('/api/interactions', (req, res) => {
 
 app.put('/api/interactions/:id', (req, res) => {
   const { type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
-    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids } = req.body;
+    opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, opportunity_type, watcher_ids } = req.body;
+  const normalizedOpportunityType = normalizeTaskType(opportunity_type, '商机类型');
+  if (normalizedOpportunityType.error) return res.status(400).json({ error: normalizedOpportunityType.error });
   const original = db.prepare(`
-    SELECT i.person_id, p.id as person_record_id, p.created_by, p.assigned_to, p.visibility_scope, p.private_owner_id
+    SELECT i.person_id, i.opportunity_type, p.id as person_record_id, p.name as person_name,
+      p.created_by, p.assigned_to, p.visibility_scope, p.private_owner_id
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
     WHERE i.id=?
@@ -11186,13 +11296,28 @@ app.put('/api/interactions/:id', (req, res) => {
     description, outcome, follow_result, next_action,
     opportunity_title, opportunity_note, gift_name,
   });
+  const nextOpportunityType = normalizedOpportunityType.value === undefined
+    ? original.opportunity_type || null
+    : normalizedOpportunityType.value;
   db.prepare(`
     UPDATE interactions SET type=?, date=?, amount=?, description=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, importance=?, gift_name=?,
-      opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?
+      opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?, opportunity_type=?
     WHERE id=?
   `).run(type, date, amount, enc.description, enc.outcome, enc.follow_result || null, enc.next_action, next_action_date, importance || 'normal', enc.gift_name || null,
-    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null,
+    enc.opportunity_title || null, opportunity_status || null, opportunity_assignee || null, enc.opportunity_note || null, nextOpportunityType,
     req.params.id);
+
+  syncOpportunityFollowUpTask({
+    sourceType: 'interaction',
+    sourceId: req.params.id,
+    relatedId: original.person_id,
+    relatedName: safeDecrypt(original.person_name),
+    opportunityTitle: opportunity_title,
+    opportunityNote: opportunity_note,
+    opportunityType: nextOpportunityType,
+    opportunityAssignee: opportunity_assignee,
+    assignedBy: req.user?.id,
+  });
 
   if (next_action_date && next_action && original) {
     const remindDate = new Date(next_action_date);
@@ -11340,6 +11465,7 @@ app.put('/api/opportunities/:id', (req, res) => {
     opportunity_assignee,
     opportunity_note,
     opportunity_title,
+    opportunity_type,
     follow_result,
     date,
     importance,
@@ -11353,11 +11479,19 @@ app.put('/api/opportunities/:id', (req, res) => {
     source_type,
     watcher_ids,
   } = req.body;
+  const normalizedOpportunityType = normalizeTaskType(opportunity_type, '商机类型');
+  if (normalizedOpportunityType.error) return res.status(400).json({ error: normalizedOpportunityType.error });
 
   // 根据来源类型更新不同的表
   if (source_type === 'competitor_research') {
     const original = db.prepare('SELECT * FROM competitor_research WHERE id = ?').get(req.params.id);
     if (!original) return res.status(404).json({ error: '未找到' });
+    const nextOpportunityType = normalizedOpportunityType.value === undefined
+      ? original.opportunity_type || null
+      : normalizedOpportunityType.value;
+    const nextOpportunityTitle = opportunity_title ?? original.opportunity_title;
+    const nextOpportunityNote = opportunity_note ?? original.opportunity_note;
+    const nextOpportunityAssignee = opportunity_assignee ?? original.opportunity_assignee;
 
     db.prepare(`
       UPDATE competitor_research SET
@@ -11373,7 +11507,8 @@ app.put('/api/opportunities/:id', (req, res) => {
         opportunity_title=?,
         opportunity_status=?,
         opportunity_assignee=?,
-        opportunity_note=?
+        opportunity_note=?,
+        opportunity_type=?
       WHERE id=?
     `).run(
       date ?? original.date,
@@ -11385,12 +11520,26 @@ app.put('/api/opportunities/:id', (req, res) => {
       follow_result ?? original.follow_result,
       next_action ?? original.next_action,
       next_action_date ?? original.next_action_date,
-      opportunity_title ?? original.opportunity_title,
+      nextOpportunityTitle,
       opportunity_status ?? original.opportunity_status,
-      opportunity_assignee ?? original.opportunity_assignee,
-      opportunity_note ?? original.opportunity_note,
+      nextOpportunityAssignee,
+      nextOpportunityNote,
+      nextOpportunityType,
       req.params.id
     );
+
+    const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(original.company_id);
+    syncOpportunityFollowUpTask({
+      sourceType: 'competitor_research',
+      sourceId: req.params.id,
+      relatedId: original.company_id,
+      relatedName: safeDecrypt(company?.name),
+      opportunityTitle: nextOpportunityTitle,
+      opportunityNote: nextOpportunityNote,
+      opportunityType: nextOpportunityType,
+      opportunityAssignee: nextOpportunityAssignee,
+      assignedBy: original.created_by || req.user?.id,
+    });
   } else {
     // 默认处理 interactions
     const original = db.prepare('SELECT * FROM interactions WHERE id = ?').get(req.params.id);
@@ -11402,6 +11551,10 @@ app.put('/api/opportunities/:id', (req, res) => {
       watcher_ids,
     });
     if (collaborationError) return res.status(403).json({ error: collaborationError });
+    const nextOpportunityType = normalizedOpportunityType.value === undefined
+      ? original.opportunity_type || null
+      : normalizedOpportunityType.value;
+    const nextOpportunityAssignee = opportunity_assignee ?? original.opportunity_assignee;
 
     // original.* 的加密字段保持密文，new value 是明文；encryptRow 幂等（密文穿透）
     const merged = encryptRow('interactions', {
@@ -11426,7 +11579,8 @@ app.put('/api/opportunities/:id', (req, res) => {
         opportunity_title=?,
         opportunity_status=?,
         opportunity_assignee=?,
-        opportunity_note=?
+        opportunity_note=?,
+        opportunity_type=?
       WHERE id=?
     `).run(
       interaction_type ?? original.type,
@@ -11439,19 +11593,24 @@ app.put('/api/opportunities/:id', (req, res) => {
       next_action_date ?? original.next_action_date,
       merged.opportunity_title,
       opportunity_status ?? original.opportunity_status,
-      opportunity_assignee ?? original.opportunity_assignee,
+      nextOpportunityAssignee,
       merged.opportunity_note,
+      nextOpportunityType,
       req.params.id
     );
 
-    // 若更改了指派人，同步更新对应的 follow_up_tasks（未完成的）
-    if (opportunity_assignee && opportunity_assignee !== original.opportunity_assignee) {
-      db.prepare(`
-        UPDATE follow_up_tasks SET assigned_to=?, updated_at=CURRENT_TIMESTAMP
-        WHERE interaction_id=? AND status != 'done'
-      `).run(opportunity_assignee, req.params.id);
-      clearRuntimeCache('follow-up-tasks:');
-    }
+    const taskPerson = db.prepare('SELECT name FROM persons WHERE id = ?').get(original.person_id);
+    syncOpportunityFollowUpTask({
+      sourceType: 'interaction',
+      sourceId: req.params.id,
+      relatedId: original.person_id,
+      relatedName: safeDecrypt(taskPerson?.name),
+      opportunityTitle: opportunity_title === undefined ? safeDecrypt(original.opportunity_title) : opportunity_title,
+      opportunityNote: opportunity_note === undefined ? safeDecrypt(original.opportunity_note) : opportunity_note,
+      opportunityType: nextOpportunityType,
+      opportunityAssignee: nextOpportunityAssignee,
+      assignedBy: original.created_by || req.user?.id,
+    });
   }
 
   if (watcher_ids !== undefined) {
@@ -11628,17 +11787,6 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
 
 // =========== 商务任务 API ===========
 const TASK_STATUSES = new Set(['pending', 'in_progress', 'done', 'suspended']);
-const TASK_TYPES = new Set(['认知', '增长-客户', '增长-产品', '组织']);
-
-function normalizeTaskType(value) {
-  if (value === undefined) return { value: undefined };
-  if (value === null || String(value).trim() === '') return { value: null };
-  const normalized = String(value).trim();
-  if (!TASK_TYPES.has(normalized)) {
-    return { error: '任务类型必须是：认知、增长-客户、增长-产品、组织' };
-  }
-  return { value: normalized };
-}
 
 function normalizeTaskEstimatedHours(value) {
   if (value === undefined || value === null || value === '') return { value: null };
@@ -18605,6 +18753,9 @@ db.exec(`
     opportunity_status TEXT,
     opportunity_assignee INTEGER,
     opportunity_note TEXT,
+    opportunity_type TEXT,
+    created_by INTEGER DEFAULT NULL,
+    shared_with TEXT DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
@@ -18630,30 +18781,30 @@ app.get('/api/competitor_research', (req, res) => {
 });
 
 app.post('/api/competitor_research', (req, res) => {
-  const { company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids, shared_with } = req.body;
+  const { company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, opportunity_type, watcher_ids, shared_with } = req.body;
+  const normalizedOpportunityType = normalizeTaskType(opportunity_type, '商机类型');
+  if (normalizedOpportunityType.error) return res.status(400).json({ error: normalizedOpportunityType.error });
+  const nextOpportunityType = normalizedOpportunityType.value ?? null;
   const createdBy = req.user?.id || null;
   const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   const r = db.prepare(`
-    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, created_by, shared_with)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, createdBy, sharedCsv);
+    INSERT INTO competitor_research (company_id, date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, opportunity_type, created_by, shared_with)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(company_id, date, title, importance || 'normal', content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, nextOpportunityType, createdBy, sharedCsv);
   db.prepare('UPDATE companies SET updated_at=CURRENT_TIMESTAMP WHERE id=?').run(company_id);
 
-  // 自动创建待跟进任务（商机指派）
-  if (opportunity_title && opportunity_assignee) {
-    const company = db.prepare('SELECT name FROM companies WHERE id = ?').get(company_id);
-    const companyName = safeDecrypt(company?.name) || '未知公司';
-    const taskTitle = `${companyName} - ${opportunity_title}`;
-    const ftEnc = encryptRow('follow_up_tasks', {
-      title: taskTitle, opportunity_title, opportunity_note,
-    });
-    db.prepare(`
-      INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
-      VALUES (?,0,0,?,?,?,?,?,?)
-    `).run(ftEnc.title, r.lastInsertRowid, company_id, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
-      opportunity_assignee, req.user.id);
-    clearRuntimeCache('follow-up-tasks:');
-  }
+  const taskCompany = db.prepare('SELECT name FROM companies WHERE id = ?').get(company_id);
+  syncOpportunityFollowUpTask({
+    sourceType: 'competitor_research',
+    sourceId: r.lastInsertRowid,
+    relatedId: company_id,
+    relatedName: safeDecrypt(taskCompany?.name),
+    opportunityTitle: opportunity_title,
+    opportunityNote: opportunity_note,
+    opportunityType: nextOpportunityType,
+    opportunityAssignee: opportunity_assignee,
+    assignedBy: createdBy,
+  });
 
   if (watcher_ids?.length) {
     syncLeadWatchers('competitor_research', r.lastInsertRowid, watcher_ids);
@@ -18663,36 +18814,32 @@ app.post('/api/competitor_research', (req, res) => {
 });
 
 app.put('/api/competitor_research/:id', (req, res) => {
-  const { date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, watcher_ids, shared_with } = req.body;
+  const { date, title, importance, content, source, impact, amount, outcome, follow_result, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, opportunity_type, watcher_ids, shared_with } = req.body;
+  const normalizedOpportunityType = normalizeTaskType(opportunity_type, '商机类型');
+  if (normalizedOpportunityType.error) return res.status(400).json({ error: normalizedOpportunityType.error });
+  const original = db.prepare('SELECT * FROM competitor_research WHERE id = ?').get(req.params.id);
+  if (!original) return res.status(404).json({ error: '未找到' });
+  const nextOpportunityType = normalizedOpportunityType.value === undefined
+    ? original.opportunity_type || null
+    : normalizedOpportunityType.value;
   const sharedCsv = Array.isArray(shared_with) && shared_with.length ? shared_with.join(',') : null;
   db.prepare(`
-    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?, shared_with=?
+    UPDATE competitor_research SET date=?, title=?, importance=?, content=?, source=?, impact=?, amount=?, outcome=?, follow_result=?, next_action=?, next_action_date=?, opportunity_title=?, opportunity_status=?, opportunity_assignee=?, opportunity_note=?, opportunity_type=?, shared_with=?
     WHERE id=?
-  `).run(date, title, importance, content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, sharedCsv, req.params.id);
+  `).run(date, title, importance, content, source, impact, amount || null, outcome, follow_result || null, next_action, next_action_date, opportunity_title, opportunity_status, opportunity_assignee || null, opportunity_note, nextOpportunityType, sharedCsv, req.params.id);
 
-  // 同步更新待跟进任务
-  if (opportunity_title && opportunity_assignee) {
-    const existing = db.prepare('SELECT id FROM follow_up_tasks WHERE competitor_research_id = ? AND status != ?').get(req.params.id, 'done');
-    if (existing) {
-      const ftUpd = encryptRow('follow_up_tasks', { opportunity_title, opportunity_note });
-      db.prepare('UPDATE follow_up_tasks SET assigned_to=?, opportunity_title=?, opportunity_note=?, updated_at=CURRENT_TIMESTAMP WHERE id=?')
-        .run(opportunity_assignee, ftUpd.opportunity_title, ftUpd.opportunity_note || null, existing.id);
-    } else {
-      const cr = db.prepare('SELECT company_id FROM competitor_research WHERE id = ?').get(req.params.id);
-      const company = cr ? db.prepare('SELECT name FROM companies WHERE id = ?').get(cr.company_id) : null;
-      const companyName = safeDecrypt(company?.name) || '未知公司';
-      const taskTitle = `${companyName} - ${opportunity_title}`;
-      const ftEnc = encryptRow('follow_up_tasks', {
-        title: taskTitle, opportunity_title, opportunity_note,
-      });
-      db.prepare(`
-        INSERT INTO follow_up_tasks (title, interaction_id, person_id, competitor_research_id, company_id, opportunity_title, opportunity_note, assigned_to, assigned_by)
-        VALUES (?,0,0,?,?,?,?,?,?)
-      `).run(ftEnc.title, req.params.id, cr?.company_id || 0, ftEnc.opportunity_title, ftEnc.opportunity_note || null,
-        opportunity_assignee, req.user.id);
-    }
-    clearRuntimeCache('follow-up-tasks:');
-  }
+  const taskCompany = db.prepare('SELECT name FROM companies WHERE id = ?').get(original.company_id);
+  syncOpportunityFollowUpTask({
+    sourceType: 'competitor_research',
+    sourceId: req.params.id,
+    relatedId: original.company_id,
+    relatedName: safeDecrypt(taskCompany?.name),
+    opportunityTitle: opportunity_title,
+    opportunityNote: opportunity_note,
+    opportunityType: nextOpportunityType,
+    opportunityAssignee: opportunity_assignee,
+    assignedBy: original.created_by || req.user?.id,
+  });
 
   if (watcher_ids !== undefined) {
     syncLeadWatchers('competitor_research', req.params.id, watcher_ids);

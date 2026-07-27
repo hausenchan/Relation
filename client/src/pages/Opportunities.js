@@ -7,6 +7,7 @@ import { RiseOutlined, EditOutlined, UserOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi } from '../api';
 import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
+import { TASK_TYPE_META, TASK_TYPE_OPTIONS } from '../utils/taskTypes';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -59,6 +60,7 @@ export default function Opportunities() {
     editForm.setFieldsValue({
       opportunity_title: record.opportunity_title,
       opportunity_status: record.opportunity_status,
+      opportunity_type: record.opportunity_type || undefined,
       opportunity_assignee: record.opportunity_assignee || undefined,
       opportunity_note: record.opportunity_note,
     });
@@ -67,7 +69,11 @@ export default function Opportunities() {
 
   const handleSave = async () => {
     const values = await editForm.validateFields();
-    await opportunitiesApi.update(editTarget.id, { ...values, source_type: editTarget.source_type });
+    await opportunitiesApi.update(editTarget.id, {
+      ...values,
+      opportunity_type: values.opportunity_type || null,
+      source_type: editTarget.source_type,
+    });
     message.success('更新成功');
     setEditModalOpen(false);
     load();
@@ -117,6 +123,13 @@ export default function Opportunities() {
         const s = opportunityStatusMap[v] || { label: v || '-', color: 'default' };
         return <Tag color={s.color}>{s.label}</Tag>;
       },
+    },
+    {
+      title: '商机类型',
+      dataIndex: 'opportunity_type',
+      render: value => value
+        ? <Tag color={TASK_TYPE_META[value]?.color || 'default'}>{TASK_TYPE_META[value]?.label || value}</Tag>
+        : <Text type="secondary">-</Text>,
     },
     {
       title: '指派给',
@@ -182,6 +195,12 @@ export default function Opportunities() {
               </div>
               <Tag color={status.color}>{status.label}</Tag>
             </div>
+
+            {record.opportunity_type && (
+              <Tag color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'} style={{ alignSelf: 'flex-start' }}>
+                {TASK_TYPE_META[record.opportunity_type]?.label || record.opportunity_type}
+              </Tag>
+            )}
 
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               <Text type="secondary">来源：{record.source_type === 'competitor_research' ? '竞品研究记录' : '互动记录'}</Text>
@@ -289,6 +308,9 @@ export default function Opportunities() {
               ))}
             </Select>
           </Form.Item>
+          <Form.Item label="商机类型" name="opportunity_type">
+            <Select allowClear placeholder="选择商机类型" options={TASK_TYPE_OPTIONS} />
+          </Form.Item>
           <Form.Item label="指派跟进人" name="opportunity_assignee">
             <Select
               allowClear
@@ -330,6 +352,11 @@ export default function Opportunities() {
               <Tag color={opportunityStatusMap[detailRecord.opportunity_status]?.color}>
                 {opportunityStatusMap[detailRecord.opportunity_status]?.label || detailRecord.opportunity_status}
               </Tag>
+            </Descriptions.Item>
+            <Descriptions.Item label="商机类型">
+              {detailRecord.opportunity_type
+                ? <Tag color={TASK_TYPE_META[detailRecord.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[detailRecord.opportunity_type]?.label || detailRecord.opportunity_type}</Tag>
+                : '-'}
             </Descriptions.Item>
             <Descriptions.Item label="指派给">{detailRecord.assignee_name || '-'}</Descriptions.Item>
             <Descriptions.Item label="商机说明"><RichTextView value={detailRecord.opportunity_note} /></Descriptions.Item>

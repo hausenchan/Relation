@@ -3,6 +3,7 @@ import { Form, Input, Select, DatePicker, Button, Space, message, Card, Collapse
 import { PlusOutlined, RiseOutlined, UploadOutlined } from '@ant-design/icons';
 import { interactionsApi } from '../api';
 import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
+import { TASK_TYPE_OPTIONS } from '../utils/taskTypes';
 import dayjs from 'dayjs';
 
 const { Option } = Select;
@@ -54,6 +55,7 @@ export default function InteractionForm({ personId, onSuccess }) {
       const res = await interactionsApi.create({
         person_id: personId,
         ...values,
+        opportunity_type: values.opportunity_type || null,
         date: values.date?.format('YYYY-MM-DD'),
         next_action_date: values.next_action_date?.format('YYYY-MM-DD'),
       });
@@ -129,7 +131,12 @@ export default function InteractionForm({ personId, onSuccess }) {
                   </Select>
                 </Form.Item>
               </Col>
-              <Col span={24}>
+              <Col span={12}>
+                <Form.Item label="商机类型" name="opportunity_type">
+                  <Select allowClear placeholder="选择商机类型" options={TASK_TYPE_OPTIONS} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
                 <Form.Item label="指派跟进人" name="opportunity_assignee">
                   <Select
                     allowClear

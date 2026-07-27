@@ -3,6 +3,7 @@ import { List, Tag, Button, Popconfirm, Space, Typography, Empty, Drawer, Descri
 import { DeleteOutlined, EyeOutlined, RiseOutlined } from '@ant-design/icons';
 import AttachmentList from './AttachmentList';
 import { formatBusinessDateTime } from '../utils/businessTime';
+import { TASK_TYPE_META } from '../utils/taskTypes';
 
 const { Text } = Typography;
 
@@ -109,6 +110,11 @@ export default function InteractionList({ data, onDelete }) {
                       {oppStatus && <Tag color={oppStatus.color}>{oppStatus.label}</Tag>}
                     </Space>
                   ) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="商机类型">
+                  {r.opportunity_type
+                    ? <Tag color={TASK_TYPE_META[r.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[r.opportunity_type]?.label || r.opportunity_type}</Tag>
+                    : '-'}
                 </Descriptions.Item>
                 {r.opportunity_note && (
                   <Descriptions.Item label="商机说明">
