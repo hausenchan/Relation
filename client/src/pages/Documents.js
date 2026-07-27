@@ -2871,6 +2871,23 @@ function getFolderInnerPathLabel(folder, folderPathMap = null) {
   return pathParts.filter(Boolean).join(' / ');
 }
 
+function isDocumentFolderCompatibleWithLocation(folder, values = {}) {
+  if (!folder) return false;
+  if (values.domain && folder.domain !== values.domain) return false;
+  if (values.department_key && folder.department_key !== values.department_key) return false;
+  if (values.doc_type && folder.default_doc_type !== values.doc_type) return false;
+  return true;
+}
+
+function getDocumentFolderOptionsForLocation(folders = [], folderPathMap = null, values = {}) {
+  return folders
+    .filter(folder => isDocumentFolderCompatibleWithLocation(folder, values))
+    .map(folder => ({
+      value: Number(folder.id),
+      label: getFolderPathLabel(folder, folderPathMap),
+    }));
+}
+
 function getDocumentPathLabel(doc) {
   if (!doc) return '未归档';
   const parts = [
@@ -3613,13 +3630,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   }, [folderSidebarWidth]);
 
   const folderPathMap = useMemo(() => buildFolderPathMap(folders), [folders]);
-  const documentFolderOptions = useMemo(
-    () => folders.map(folder => ({
-      value: Number(folder.id),
-      label: getFolderPathLabel(folder, folderPathMap),
-    })),
-    [folders, folderPathMap]
-  );
   const defaultDocumentCxoUsers = useMemo(() => getDefaultDocumentCxoUsers(users), [users]);
   const defaultDocumentCxoUserIds = useMemo(
     () => defaultDocumentCxoUsers.map(user => Number(user.id)).filter(Boolean),
@@ -4886,6 +4896,59 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       doc_type: folder?.default_doc_type || 'IMP',
     };
   };
+
+  const handleDocumentLocationValuesChange = (form, changedValues, allValues) => {
+    if (Object.prototype.hasOwnProperty.call(changedValues, 'folder_id')) {
+      const folderId = normalizeDocumentFolderSelectValue(changedValues.folder_id);
+      const folder = folderId
+        ? folders.find(item => Number(item.id) === Number(folderId))
+        : null;
+      if (!folder) return;
+      form.setFieldsValue({
+        domain: folder.domain,
+        department_key: folder.department_key,
+        doc_type: folder.default_doc_type,
+        ...(folder.project_group_id ? { project_group_id: Number(folder.project_group_id) } : {}),
+      });
+      return;
+    }
+    if (!['domain', 'department_key', 'doc_type'].some(key => Object.prototype.hasOwnProperty.call(changedValues, key))) {
+      return;
+    }
+    const folderId = normalizeDocumentFolderSelectValue(allValues.folder_id);
+    if (!folderId) return;
+    const folder = folders.find(item => Number(item.id) === Number(folderId));
+    if (!isDocumentFolderCompatibleWithLocation(folder, allValues)) {
+      form.setFieldValue('folder_id', undefined);
+    }
+  };
+
+  const renderDocumentLocationFolderField = () => (
+    <Form.Item
+      noStyle
+      shouldUpdate={(previousValues, currentValues) => (
+        previousValues.domain !== currentValues.domain
+        || previousValues.department_key !== currentValues.department_key
+        || previousValues.doc_type !== currentValues.doc_type
+      )}
+    >
+      {({ getFieldValue }) => (
+        <Form.Item name="folder_id" label="文件夹">
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择当前归属域下的文件夹"
+            options={getDocumentFolderOptionsForLocation(folders, folderPathMap, {
+              domain: getFieldValue('domain'),
+              department_key: getFieldValue('department_key'),
+              doc_type: getFieldValue('doc_type'),
+            })}
+          />
+        </Form.Item>
+      )}
+    </Form.Item>
+  );
 
   const openCreate = async (documentKind = 'rich_text') => {
     const nextDocumentKind = getDocumentKind(documentKind);
@@ -16056,7 +16119,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
-        <Form form={wolaiImportForm} layout="vertical">
+        <Form
+          form={wolaiImportForm}
+          layout="vertical"
+          onValuesChange={(changedValues, allValues) => (
+            handleDocumentLocationValuesChange(wolaiImportForm, changedValues, allValues)
+          )}
+        >
           <Form.Item
             name="import_mode"
             label="导入方式"
@@ -16162,14 +16231,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
               <Form.Item name="department_key" label="部门">
                 <Select options={departmentOptions} />
               </Form.Item>
-              <Form.Item name="folder_id" label="文件夹">
-                <Select
-                  allowClear
-                  showSearch
-                  optionFilterProp="label"
-                  options={documentFolderOptions}
-                />
-              </Form.Item>
+              {renderDocumentLocationFolderField()}
               <Form.Item name="doc_type" label="文档类型">
                 <Select options={docTypeOptions} />
               </Form.Item>
@@ -16199,7 +16261,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
       >
-        <Form form={createForm} layout="vertical">
+        <Form
+          form={createForm}
+          layout="vertical"
+          onValuesChange={(changedValues, allValues) => (
+            handleDocumentLocationValuesChange(createForm, changedValues, allValues)
+          )}
+        >
           <Form.Item name="title" label="标题" rules={[{ required: true, message: '请输入标题' }]}>
             <Input placeholder="请输入文档标题" />
           </Form.Item>
@@ -16264,14 +16332,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           <Form.Item name="department_key" label="部门">
             <Select options={departmentOptions} />
           </Form.Item>
-          <Form.Item name="folder_id" label="文件夹">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              options={documentFolderOptions}
-            />
-          </Form.Item>
+          {renderDocumentLocationFolderField()}
           <Form.Item name="doc_type" label="文档类型">
             <Select options={docTypeOptions} />
           </Form.Item>

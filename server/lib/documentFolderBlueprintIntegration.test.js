@@ -50,7 +50,7 @@ async function request(baseUrl, route, { method = 'GET', token = '', body } = {}
   return { status: response.status, payload };
 }
 
-test('human resources administration folders are fixed while descendants remain manageable', { timeout: 30000 }, async t => {
+test('managed document folders preserve fixed blueprints and isolate identical domestic and overseas paths', { timeout: 30000 }, async t => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-document-folder-blueprint-'));
   const databasePath = path.join(tempDir, 'data.db');
   const port = await getFreePort();
@@ -186,4 +186,82 @@ test('human resources administration folders are fixed while descendants remain 
   const foldersAfterTemplate = await request(baseUrl, '/api/document-folders', { token });
   assert.equal(foldersAfterTemplate.payload.length, beforeTemplateCount);
   assert.equal(foldersAfterTemplate.payload.filter(folder => folder.domain === 'hr_administration').length, 12);
+
+  const findStageFolder = (domain, departmentName, stageName) => {
+    const domainFolders = foldersAfterTemplate.payload.filter(folder => folder.domain === domain);
+    const department = domainFolders.find(folder => !folder.parent_id && folder.name === departmentName);
+    assert.ok(department, `${domain} ${departmentName} directory should exist`);
+    const stage = domainFolders.find(folder => (
+      Number(folder.parent_id) === Number(department.id) && folder.name === stageName
+    ));
+    assert.ok(stage, `${domain} ${departmentName}/${stageName} directory should exist`);
+    return stage;
+  };
+  const domesticLegacy = findStageFolder('domestic_project', '商务', '沉淀');
+  const overseasLegacy = findStageFolder('overseas_project', '商务', '沉淀');
+  const domesticSop = await request(baseUrl, '/api/document-folders', {
+    method: 'POST',
+    token,
+    body: { name: 'SOP', parent_id: domesticLegacy.id },
+  });
+  const overseasSop = await request(baseUrl, '/api/document-folders', {
+    method: 'POST',
+    token,
+    body: { name: 'SOP', parent_id: overseasLegacy.id },
+  });
+  assert.equal(domesticSop.status, 200, JSON.stringify(domesticSop.payload));
+  assert.equal(overseasSop.status, 200, JSON.stringify(overseasSop.payload));
+
+  const mismatchedDocument = await request(baseUrl, '/api/documents', {
+    method: 'POST',
+    token,
+    body: {
+      title: '不应跨域的国内商务 SOP',
+      domain: 'domestic_project',
+      department_key: 'BD',
+      doc_type: 'LEGA',
+      folder_id: overseasSop.payload.id,
+    },
+  });
+  assert.equal(mismatchedDocument.status, 400, JSON.stringify(mismatchedDocument.payload));
+  assert.match(mismatchedDocument.payload.error, /目标目录与归属域不一致/);
+
+  const domesticDocument = await request(baseUrl, '/api/documents', {
+    method: 'POST',
+    token,
+    body: {
+      title: '国内商务沉淀 SOP',
+      domain: 'domestic_project',
+      department_key: 'BD',
+      doc_type: 'LEGA',
+      folder_id: domesticSop.payload.id,
+    },
+  });
+  assert.equal(domesticDocument.status, 200, JSON.stringify(domesticDocument.payload));
+  assert.equal(domesticDocument.payload.domain, 'domestic_project');
+  assert.equal(Number(domesticDocument.payload.folder_id), Number(domesticSop.payload.id));
+  assert.equal(domesticDocument.payload.department_key, 'BD');
+  assert.equal(domesticDocument.payload.doc_type, 'LEGA');
+
+  const mismatchedUpdate = await request(baseUrl, `/api/documents/${domesticDocument.payload.id}`, {
+    method: 'PUT',
+    token,
+    body: {
+      domain: 'domestic_project',
+      department_key: 'BD',
+      doc_type: 'LEGA',
+      folder_id: overseasSop.payload.id,
+    },
+  });
+  assert.equal(mismatchedUpdate.status, 400, JSON.stringify(mismatchedUpdate.payload));
+  assert.match(mismatchedUpdate.payload.error, /目标目录与归属域不一致/);
+
+  const documentAfterRejectedMove = await request(
+    baseUrl,
+    `/api/documents/${domesticDocument.payload.id}`,
+    { token },
+  );
+  assert.equal(documentAfterRejectedMove.status, 200, JSON.stringify(documentAfterRejectedMove.payload));
+  assert.equal(documentAfterRejectedMove.payload.domain, 'domestic_project');
+  assert.equal(Number(documentAfterRejectedMove.payload.folder_id), Number(domesticSop.payload.id));
 });

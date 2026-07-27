@@ -6202,6 +6202,28 @@ function getDocumentBusinessFieldsFromFolder(folderId, fallback = {}) {
   };
 }
 
+function assertDocumentFolderMatchesRequest(folderId, body = {}) {
+  const context = resolveDocumentFolderContext(folderId);
+  if (!context) throw createDocumentRequestError(400, '目标目录不存在');
+  const hasField = key => Object.prototype.hasOwnProperty.call(body || {}, key)
+    && body[key] !== undefined
+    && body[key] !== null
+    && body[key] !== '';
+  if (hasField('domain') && normalizeDocumentDomain(body.domain) !== context.domain) {
+    throw createDocumentRequestError(400, '目标目录与归属域不一致，请重新选择文件夹');
+  }
+  if (
+    hasField('department_key')
+    && normalizeDocumentDirectoryDepartment(context.domain, body.department_key) !== context.department_key
+  ) {
+    throw createDocumentRequestError(400, '目标目录与部门不一致，请重新选择文件夹');
+  }
+  if (hasField('doc_type') && normalizeDocumentDirectoryType(body.doc_type) !== context.doc_type) {
+    throw createDocumentRequestError(400, '目标目录与文档类型不一致，请重新选择文件夹');
+  }
+  return context;
+}
+
 function isDocumentFolderManager(user) {
   return Boolean(user && (isAdmin(user.role) || isAdmin(user.executive_role) || user.role === 'leader'));
 }
@@ -7952,6 +7974,7 @@ function serializeDocumentEditRecord(row, options = {}) {
 function createDocumentRecord(body, user) {
   const createDoc = db.transaction(() => {
     const { folderId } = resolveRequestedDocumentFolder(body);
+    if (folderId) assertDocumentFolderMatchesRequest(folderId, body);
     const folderFields = folderId ? getDocumentBusinessFieldsFromFolder(folderId, body) : null;
     const domain = normalizeDocumentDomain(folderFields?.domain || body.domain);
     const projectGroupId = folderFields ? folderFields.project_group_id : (body.project_group_id ?? null);
@@ -9294,6 +9317,13 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
     ? getDocumentFolderById(nextFolderId)
     : null;
   if (canApplyFolderFields && nextFolderId && !folder) return res.status(400).json({ error: '目标目录不存在' });
+  if (canApplyFolderFields && nextFolderId) {
+    try {
+      assertDocumentFolderMatchesRequest(nextFolderId, req.body || {});
+    } catch (error) {
+      return res.status(error.statusCode || 400).json({ error: error.message || '目标目录与文档属性不一致' });
+    }
+  }
   const folderFields = canApplyFolderFields && nextFolderId
     ? getDocumentBusinessFieldsFromFolder(nextFolderId, req.body)
     : null;
@@ -9539,6 +9569,13 @@ app.post('/api/documents/:id/renumber', canWrite, (req, res) => {
   }
   if (!String(req.body.reason || '').trim()) return res.status(400).json({ error: '请填写重新编号原因' });
   const folderId = req.body.folder_id || doc.folder_id;
+  if (folderId) {
+    try {
+      assertDocumentFolderMatchesRequest(folderId, req.body || {});
+    } catch (error) {
+      return res.status(error.statusCode || 400).json({ error: error.message || '目标目录与文档属性不一致' });
+    }
+  }
   const folderFields = folderId ? getDocumentBusinessFieldsFromFolder(folderId, req.body) : null;
   const domain = normalizeDocumentDomain(folderFields?.domain || req.body.domain || doc.domain);
   const projectGroupId = folderFields ? folderFields.project_group_id : (req.body.project_group_id ?? doc.project_group_id);
