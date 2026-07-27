@@ -59,6 +59,7 @@ const {
 const { createAiTrainingExternalConnectorRuntime } = require('./lib/aiTrainingConnectors');
 const { createAiTrainingEventStream } = require('./lib/aiTrainingEventStream');
 const {
+  canAccessMediaManagement: resolveMediaManagementAccess,
   createMediaManagementRouter,
   deleteMediaAssetByDocumentId,
   ensureMediaDocumentPlacement,
@@ -6782,6 +6783,14 @@ function canUseDocumentWriteActions(user) {
   return Boolean(user && !['readonly', 'guest'].includes(user.role));
 }
 
+function canAccessMediaManagement(user) {
+  return resolveMediaManagementAccess(user, {
+    isAdmin,
+    getUserMenuPerms,
+    getUserModulePerms,
+  });
+}
+
 function isDocumentSharedWithUser(user, document) {
   if (!user || !document?.id) return false;
   const clauses = [`target_type = 'user' AND target_id = ?`];
@@ -7307,6 +7316,10 @@ function buildDocumentVisibilityFilter(user, alias = 'd') {
 
   clauses.push(`EXISTS (SELECT 1 FROM document_shares ds_user WHERE ds_user.document_id = ${alias}.id AND ds_user.target_type = 'user' AND ds_user.target_id = ?)`);
   params.push(user.id);
+
+  if (canAccessMediaManagement(user)) {
+    clauses.push(`EXISTS (SELECT 1 FROM media_assets media_access WHERE media_access.document_id = ${alias}.id)`);
+  }
 
   const departmentKeys = getDepartmentKeysForUser(user);
   if (departmentKeys.length) {
@@ -7835,7 +7848,7 @@ app.use('/api/media-management', createMediaManagementRouter({
   isAdmin,
   getUserMenuPerms,
   getUserModulePerms,
-  buildDocumentVisibilityFilter,
+  canAccessMediaManagement,
   getVisibleDocument,
   canEditDocument,
   canManageDocument,

@@ -122,6 +122,9 @@ RELATION_RUN_MYSQL_TESTS=1 \
 - 媒体管理 `/media-management`：媒体接入台账及关联文档；关联文档固定归档到
   `国内项目 / 产运 / 落地 / YYZ / 媒体对接`，使用普通文档图标和 `IMP` 类型，媒体身份以
   `media_assets.document_id` 关系判断，不得再依赖 `doc_type=MEDIA`。
+- 媒体管理采用模块级统一读取边界：通过 `/media-management` 入口校验的用户必须看到相同的全部
+  未删除媒体记录，并可读取其关联文档、正文、附件和历史；不得再按文档创建人或共享范围缩减
+  媒体列表。关联文档的编辑仍复用文档 `canEditDocument`，`readonly/guest` 不可写。
 - 媒体删除仅允许 CEO、COO、CTO、CMO，或 `role=leader` 且在 `teams.leader_id` 中实际负责
   “流量商务”商务小组的用户；普通管理员、创建人、共享协作者和其他组长均无删除入口，服务端
   DELETE 接口也必须独立拒绝。

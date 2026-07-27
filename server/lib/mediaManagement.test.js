@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
 const RelationDatabase = require('./database');
 const {
+  canAccessMediaManagement,
   ensureMediaManagementSchema,
   ensureMediaDocumentPlacement,
   deleteMediaAssetByDocumentId,
@@ -11,6 +12,30 @@ const {
   parseBudgetTypes,
   resolveMediaDocumentTitle,
 } = require('./mediaManagement');
+
+test('uses the media menu as the shared read boundary for every non-guest role', () => {
+  const menuByUser = new Map([
+    [2, ['/media-management']],
+    [3, ['/media-management']],
+    [4, ['/media-management']],
+  ]);
+  const modulePermsByUser = new Map([
+    [4, [{ module: 'product_assets', can_read: 1 }]],
+  ]);
+  const deps = {
+    isAdmin: role => ['admin', 'ceo', 'coo', 'cto', 'cmo'].includes(role),
+    getUserMenuPerms: userId => menuByUser.get(Number(userId)) || [],
+    getUserModulePerms: userId => modulePermsByUser.get(Number(userId)) || [],
+  };
+
+  assert.equal(canAccessMediaManagement({ id: 1, role: 'admin' }, deps), true);
+  assert.equal(canAccessMediaManagement({ id: 8, role: 'member', executive_role: 'cmo' }, deps), true);
+  assert.equal(canAccessMediaManagement({ id: 2, role: 'member' }, deps), true);
+  assert.equal(canAccessMediaManagement({ id: 3, role: 'custom_operator' }, deps), true);
+  assert.equal(canAccessMediaManagement({ id: 4, role: 'guest' }, deps), true);
+  assert.equal(canAccessMediaManagement({ id: 5, role: 'member' }, deps), false);
+  assert.equal(canAccessMediaManagement({ id: 3, role: 'guest' }, deps), false);
+});
 
 function validInput(overrides = {}) {
   return {

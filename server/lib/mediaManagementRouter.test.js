@@ -1,7 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Database = require('better-sqlite3');
-const { createMediaManagementRouter } = require('./mediaManagement');
+const {
+  canAccessMediaManagement,
+  createMediaManagementRouter,
+} = require('./mediaManagement');
 
 function createHarness() {
   const db = new Database(':memory:');
@@ -79,6 +82,11 @@ function createHarness() {
     [5, [{ module: 'product_assets', can_read: 1, can_write: 0 }]],
   ]);
   const isAdmin = role => ['admin', 'ceo', 'coo', 'cto', 'cmo'].includes(role);
+  const hasMediaAccess = user => canAccessMediaManagement(user, {
+    isAdmin,
+    getUserMenuPerms: userId => menuByUser.get(Number(userId)) || [],
+    getUserModulePerms: userId => modulePermsByUser.get(Number(userId)) || [],
+  });
   const isShared = (documentId, userId) => Boolean(db.prepare(`
     SELECT 1 FROM document_shares
     WHERE document_id = ? AND target_type = 'user' AND target_id = ?
@@ -93,7 +101,13 @@ function createHarness() {
   const getVisibleDocument = (id, user) => {
     const document = db.prepare('SELECT * FROM documents WHERE id = ? AND COALESCE(is_deleted, 0) = 0').get(id);
     if (!document) return null;
-    return isAdmin(user.role) || Number(document.created_by) === Number(user.id) || isShared(document.id, user.id)
+    const isMediaDocument = Boolean(db.prepare(
+      'SELECT 1 FROM media_assets WHERE document_id = ?',
+    ).get(document.id));
+    return isAdmin(user.role)
+      || Number(document.created_by) === Number(user.id)
+      || isShared(document.id, user.id)
+      || (hasMediaAccess(user) && isMediaDocument)
       ? document
       : null;
   };
@@ -113,16 +127,7 @@ function createHarness() {
     isAdmin,
     getUserMenuPerms: userId => menuByUser.get(Number(userId)) || [],
     getUserModulePerms: userId => modulePermsByUser.get(Number(userId)) || [],
-    buildDocumentVisibilityFilter: (user, alias) => {
-      if (isAdmin(user.role)) return { sql: '', params: [] };
-      return {
-        sql: ` AND (${alias}.created_by = ? OR EXISTS (
-          SELECT 1 FROM document_shares ds
-          WHERE ds.document_id = ${alias}.id AND ds.target_type = 'user' AND ds.target_id = ?
-        ))`,
-        params: [user.id, user.id],
-      };
-    },
+    canAccessMediaManagement: hasMediaAccess,
     getVisibleDocument,
     canEditDocument,
     canManageDocument,
@@ -192,6 +197,8 @@ function createHarness() {
     db,
     dispatch,
     users,
+    getVisibleDocument,
+    isShared,
     getCreatedDocumentInput: () => createdDocumentInput,
   };
 }
@@ -213,7 +220,14 @@ function input(overrides = {}) {
 }
 
 test('router enforces menu access and supports linked-document CRUD, search, and filters without a network listener', () => {
-  const { db, dispatch, users, getCreatedDocumentInput } = createHarness();
+  const {
+    db,
+    dispatch,
+    users,
+    getCreatedDocumentInput,
+    getVisibleDocument,
+    isShared,
+  } = createHarness();
   try {
     const blocked = dispatch({ user: users.blocked });
     assert.equal(blocked.statusCode, 403);
@@ -258,6 +272,49 @@ test('router enforces menu access and supports linked-document CRUD, search, and
     `);
     [users.cxo.id, users.trafficLeader.id, users.otherLeader.id]
       .forEach(userId => shareDocument.run(documentId, userId));
+
+    const unshared = dispatch({
+      method: 'POST',
+      body: input({ cid: '000125', media_name: '未单独共享媒体', owner_id: null }),
+      user: users.admin,
+    });
+    assert.equal(unshared.statusCode, 200, JSON.stringify(unshared.payload));
+    assert.equal(unshared.payload.can_edit, 1);
+    assert.equal(isShared(unshared.payload.document_id, users.editor.id), false);
+
+    const editorList = dispatch({ user: users.editor });
+    assert.equal(editorList.statusCode, 200);
+    assert.deepEqual(
+      new Set(editorList.payload.map(record => Number(record.id))),
+      new Set([mediaId, Number(unshared.payload.id)]),
+    );
+    const editorDetail = dispatch({
+      path: '/:id',
+      params: { id: String(unshared.payload.id) },
+      user: users.editor,
+    });
+    assert.equal(editorDetail.statusCode, 200);
+    assert.equal(editorDetail.payload.can_edit, 0);
+    assert.ok(getVisibleDocument(unshared.payload.document_id, users.editor));
+    const editorCannotUpdateUnshared = dispatch({
+      method: 'PUT',
+      path: '/:id',
+      params: { id: String(unshared.payload.id) },
+      body: input({ cid: '000125', media_name: '不应更新', owner_id: null }),
+      user: users.editor,
+    });
+    assert.equal(editorCannotUpdateUnshared.statusCode, 403);
+    const guestList = dispatch({ user: users.guestReader });
+    assert.equal(guestList.statusCode, 200);
+    assert.equal(guestList.payload.length, 2);
+
+    const removeUnshared = dispatch({
+      method: 'DELETE',
+      path: '/:id',
+      params: { id: String(unshared.payload.id) },
+      user: users.trafficLeader,
+    });
+    assert.equal(removeUnshared.statusCode, 200);
 
     const cxoList = dispatch({ user: users.cxo });
     assert.equal(cxoList.statusCode, 200);

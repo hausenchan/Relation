@@ -86,6 +86,22 @@ const MEDIA_TEXT_LIMITS = Object.freeze({
 
 const MEDIA_CID_MAX_LENGTH = 20;
 
+function canAccessMediaManagement(user, {
+  isAdmin,
+  getUserMenuPerms,
+  getUserModulePerms,
+} = {}) {
+  if (!user || typeof isAdmin !== 'function') return false;
+  if (isAdmin(user.role) || isAdmin(user.executive_role)) return true;
+  const menuPerms = typeof getUserMenuPerms === 'function' ? getUserMenuPerms(user.id) : [];
+  if (!Array.isArray(menuPerms) || !menuPerms.includes(MEDIA_MENU_KEY)) return false;
+  if (user.role !== 'guest') return true;
+  const modulePerms = typeof getUserModulePerms === 'function' ? getUserModulePerms(user.id) : [];
+  return Array.isArray(modulePerms) && modulePerms.some(permission => (
+    permission.module === 'product_assets' && Number(permission.can_read) === 1
+  ));
+}
+
 function mediaError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -394,7 +410,7 @@ function createMediaManagementRouter(deps) {
     isAdmin,
     getUserMenuPerms,
     getUserModulePerms,
-    buildDocumentVisibilityFilter,
+    canAccessMediaManagement: canAccessMediaManagementForUser,
     getVisibleDocument,
     canEditDocument,
     createDocumentRecord,
@@ -420,24 +436,11 @@ function createMediaManagementRouter(deps) {
   };
   const router = express.Router();
 
-  const hasProductAssetModuleAccess = (user) => {
-    if (!user) return false;
-    if (isAdmin(user.role) || isAdmin(user.executive_role)) return true;
-    if (['member', 'readonly', 'leader', 'sales_director'].includes(user.role)) return true;
-    if (user.role !== 'guest') return false;
-    return getUserModulePerms(user.id).some(permission => (
-      permission.module === 'product_assets' && Number(permission.can_read) === 1
-    ));
-  };
-
-  const hasMenuAccess = (user) => Boolean(user && (
-    isAdmin(user.role)
-    || isAdmin(user.executive_role)
-    || (
-      getUserMenuPerms(user.id).includes(MEDIA_MENU_KEY)
-      && hasProductAssetModuleAccess(user)
-    )
-  ));
+  const hasMenuAccess = (user) => (
+    typeof canAccessMediaManagementForUser === 'function'
+      ? canAccessMediaManagementForUser(user)
+      : canAccessMediaManagement(user, { isAdmin, getUserMenuPerms, getUserModulePerms })
+  );
 
   const canDeleteMediaForUser = (user) => {
     if (canDeleteMedia(user)) return true;
@@ -464,8 +467,7 @@ function createMediaManagementRouter(deps) {
     if (!owner) throw mediaError(400, '负责人不存在或已停用');
   };
 
-  const getVisibleMediaRow = (id, user) => {
-    const visibility = buildDocumentVisibilityFilter(user, 'd');
+  const getMediaRow = (id) => {
     return db.prepare(`
       SELECT m.*, u.display_name AS owner_name, u.username AS owner_username,
         d.created_by AS document_created_by, d.content_text AS document_content_text,
@@ -474,8 +476,7 @@ function createMediaManagementRouter(deps) {
       INNER JOIN documents d ON d.id = m.document_id AND COALESCE(d.is_deleted, 0) = 0
       LEFT JOIN users u ON u.id = m.owner_id
       WHERE m.id = ?
-      ${visibility.sql}
-    `).get(Number(id), ...visibility.params);
+    `).get(Number(id));
   };
 
   const serializeMedia = (row, user, deleteAllowed = canDeleteMediaForUser(user)) => {
@@ -536,7 +537,6 @@ function createMediaManagementRouter(deps) {
 
   router.get('/', (req, res) => {
     try {
-      const visibility = buildDocumentVisibilityFilter(req.user, 'd');
       let sql = `
         SELECT m.*, u.display_name AS owner_name, u.username AS owner_username,
           d.created_by AS document_created_by, d.content_text AS document_content_text,
@@ -545,9 +545,8 @@ function createMediaManagementRouter(deps) {
         INNER JOIN documents d ON d.id = m.document_id AND COALESCE(d.is_deleted, 0) = 0
         LEFT JOIN users u ON u.id = m.owner_id
         WHERE 1=1
-        ${visibility.sql}
       `;
-      const params = [...visibility.params];
+      const params = [];
       const exactFilters = [
         'importance', 'category', 'yyz_version', 'display_style',
         'integration_progress', 'porn_api_status',
@@ -592,8 +591,8 @@ function createMediaManagementRouter(deps) {
   });
 
   router.get('/:id', (req, res) => {
-    const row = getVisibleMediaRow(req.params.id, req.user);
-    if (!row) return res.status(404).json({ error: '媒体不存在或无权限访问' });
+    const row = getMediaRow(req.params.id);
+    if (!row) return res.status(404).json({ error: '媒体不存在' });
     return res.json(serializeMedia(row, req.user));
   });
 
@@ -651,7 +650,7 @@ function createMediaManagementRouter(deps) {
         req.user.id,
         req.user.id,
       );
-      return res.json(serializeMedia(getVisibleMediaRow(result.lastInsertRowid, req.user), req.user));
+      return res.json(serializeMedia(getMediaRow(result.lastInsertRowid), req.user));
     } catch (error) {
       if (documentId) {
         db.prepare('UPDATE documents SET is_deleted = 1 WHERE id = ?').run(documentId);
@@ -662,8 +661,8 @@ function createMediaManagementRouter(deps) {
 
   router.put('/:id', canWrite, (req, res) => {
     try {
-      const row = getVisibleMediaRow(req.params.id, req.user);
-      if (!row) return res.status(404).json({ error: '媒体不存在或无权限访问' });
+      const row = getMediaRow(req.params.id);
+      if (!row) return res.status(404).json({ error: '媒体不存在' });
       const document = getVisibleDocument(row.document_id, req.user);
       if (!document || !canEditDocument(req.user, document)) {
         return res.status(403).json({ error: '无权编辑该媒体' });
@@ -734,7 +733,7 @@ function createMediaManagementRouter(deps) {
         }
       });
       update();
-      return res.json(serializeMedia(getVisibleMediaRow(row.id, req.user), req.user));
+      return res.json(serializeMedia(getMediaRow(row.id), req.user));
     } catch (error) {
       return respondError(res, error, '更新媒体失败');
     }
@@ -742,8 +741,8 @@ function createMediaManagementRouter(deps) {
 
   router.delete('/:id', canWrite, (req, res) => {
     try {
-      const row = getVisibleMediaRow(req.params.id, req.user);
-      if (!row) return res.status(404).json({ error: '媒体不存在或无权限访问' });
+      const row = getMediaRow(req.params.id);
+      if (!row) return res.status(404).json({ error: '媒体不存在' });
       if (!canDeleteMediaForUser(req.user)) {
         return res.status(403).json({ error: '仅 CXO 和流量商务组长可以删除媒体' });
       }
@@ -769,6 +768,7 @@ module.exports = {
   MEDIA_ENUM_LABELS,
   MEDIA_ENUMS,
   MEDIA_MENU_KEY,
+  canAccessMediaManagement,
   createMediaManagementRouter,
   deleteMediaAssetByDocumentId,
   ensureMediaDocumentPlacement,
