@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const Database = require('better-sqlite3');
 
 function getFreePort() {
   return new Promise((resolve, reject) => {
@@ -94,7 +95,7 @@ function mediaInput() {
   };
 }
 
-test('media menu access grants editable linked documents and dynamic system members', { timeout: 45000 }, async t => {
+test('media menu access immediately grants existing media and linked documents across server caches', { timeout: 45000 }, async t => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-media-access-'));
   const databasePath = path.join(tempDir, 'data.db');
   const port = await getFreePort();
@@ -142,10 +143,6 @@ test('media menu access grants editable linked documents and dynamic system memb
     display_name: '无媒体菜单用户',
     role: 'member',
   });
-  await saveMenuPermissions(baseUrl, adminToken, editor.id, ['/media-management']);
-  await saveMenuPermissions(baseUrl, adminToken, readonly.id, ['/media-management']);
-  await saveMenuPermissions(baseUrl, adminToken, guest.id, ['/media-management']);
-
   const createdMedia = await request(baseUrl, '/api/media-management', {
     method: 'POST',
     token: adminToken,
@@ -160,6 +157,34 @@ test('media menu access grants editable linked documents and dynamic system memb
   const readonlyLogin = await login(baseUrl, readonly.username, readonly.password);
   const guestLogin = await login(baseUrl, guest.username, guest.password);
   const blockedLogin = await login(baseUrl, blocked.username, blocked.password);
+
+  const editorBeforeGrant = await request(baseUrl, '/api/media-management', { token: editorLogin.token });
+  assert.equal(editorBeforeGrant.status, 403);
+  const editorDocumentBeforeGrant = await request(baseUrl, `/api/documents/${documentId}`, {
+    token: editorLogin.token,
+  });
+  assert.equal(editorDocumentBeforeGrant.status, 404);
+  const adminDocumentBeforeGrant = await request(baseUrl, `/api/documents/${documentId}`, {
+    token: adminToken,
+  });
+  assert.equal(adminDocumentBeforeGrant.status, 200, JSON.stringify(adminDocumentBeforeGrant.payload));
+  assert.equal(
+    adminDocumentBeforeGrant.payload.shares.some(share => Number(share.target_id) === editor.id),
+    false,
+  );
+
+  // Simulate another application process saving menu permissions after this process cached the old result.
+  const externalDb = new Database(databasePath);
+  try {
+    const insertMenuPermission = externalDb.prepare(
+      'INSERT INTO user_menu_perms (user_id, menu_key) VALUES (?, ?)',
+    );
+    [editor.id, readonly.id, guest.id].forEach(userId => {
+      insertMenuPermission.run(userId, '/media-management');
+    });
+  } finally {
+    externalDb.close();
+  }
 
   const editorList = await request(baseUrl, '/api/media-management', { token: editorLogin.token });
   assert.equal(editorList.status, 200, JSON.stringify(editorList.payload));

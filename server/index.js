@@ -6841,15 +6841,22 @@ function canUseDocumentWriteActions(user) {
 function canAccessMediaManagement(user) {
   return resolveMediaManagementAccess(user, {
     isAdmin,
-    getUserMenuPerms,
-    getUserModulePerms,
+    // Media access changes must be visible across server processes immediately.
+    getUserMenuPerms: userId => db.prepare(`
+      SELECT menu_key
+      FROM user_menu_perms
+      WHERE user_id = ?
+    `).all(Number(userId)).map(row => row.menu_key),
+    getUserModulePerms: userId => db.prepare(`
+      SELECT module, can_read, can_write
+      FROM user_module_perms
+      WHERE user_id = ?
+    `).all(Number(userId)),
   });
 }
 
 function getMediaManagementAccessUsers() {
-  return getRuntimeCached('media-management:access-users', RUNTIME_CACHE_TTL_MS, () => (
-    listMediaManagementAccessUsers(db, { isAdmin })
-  ));
+  return listMediaManagementAccessUsers(db, { isAdmin });
 }
 
 function isMediaLinkedDocument(document) {
