@@ -102,6 +102,40 @@ function canAccessMediaManagement(user, {
   ));
 }
 
+function listMediaManagementAccessUsers(db, { isAdmin } = {}) {
+  if (!db || typeof isAdmin !== 'function') return [];
+  const users = db.prepare(`
+    SELECT id, username, display_name, role, executive_role, account_status, department, team_id
+    FROM users
+    WHERE COALESCE(account_status, 'active') = 'active'
+    ORDER BY display_name ASC, username ASC, id ASC
+  `).all();
+  if (!users.length) return [];
+
+  const menuUserIds = new Set(db.prepare(`
+    SELECT DISTINCT user_id
+    FROM user_menu_perms
+    WHERE menu_key = ?
+  `).all(MEDIA_MENU_KEY).map(row => Number(row.user_id)));
+  const productAssetReaders = new Set(db.prepare(`
+    SELECT DISTINCT user_id
+    FROM user_module_perms
+    WHERE module = 'product_assets' AND can_read = 1
+  `).all().map(row => Number(row.user_id)));
+
+  return users.filter(user => canAccessMediaManagement(user, {
+    isAdmin,
+    getUserMenuPerms: userId => (
+      menuUserIds.has(Number(userId)) ? [MEDIA_MENU_KEY] : []
+    ),
+    getUserModulePerms: userId => (
+      productAssetReaders.has(Number(userId))
+        ? [{ module: 'product_assets', can_read: 1 }]
+        : []
+    ),
+  }));
+}
+
 function mediaError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -490,6 +524,7 @@ function createMediaManagementRouter(deps) {
     const document = {
       id: Number(decrypted.document_id),
       created_by: Number(decrypted.document_created_by),
+      media_asset_id: Number(decrypted.id),
     };
     const {
       document_created_by,
@@ -789,6 +824,7 @@ module.exports = {
   ensureMediaDocumentPlacement,
   ensureMediaManagementSchema,
   formatMediaDocumentNo,
+  listMediaManagementAccessUsers,
   MEDIA_DOCUMENT_DIRECTORY,
   normalizeMediaInput,
   parseBudgetTypes,

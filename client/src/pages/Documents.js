@@ -2809,6 +2809,7 @@ function draftToShares(draft) {
 const accessSourceLabel = {
   creator: '创建人',
   default: '超级管理员默认可访问',
+  media_management: '媒体管理菜单授权',
   project_group: '项目组共享',
   department: '部门共享',
   team: '小组共享',
@@ -9251,6 +9252,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   } = {}) => {
     const isBulk = mode === 'bulk';
     const accessUsers = isBulk ? [] : (selectedDoc?.access_summary?.users || []);
+    const systemUserIdSet = new Set(accessUsers
+      .filter(item => Array.isArray(item?.source_types) && item.source_types.includes('media_management'))
+      .map(item => Number(item.id))
+      .filter(Boolean));
     const selectedDefaultUserIds = (draft.user_ids || [])
       .map(Number)
       .filter(id => defaultDocumentCxoUserIdSet.has(id));
@@ -9312,11 +9317,12 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             onChange={value => setDraft(prev => updateDefaultDocumentShareUsers(
               prev,
               defaultDocumentCxoUserIds,
-              value
+              [...value, ...defaultDocumentCxoUserIds.filter(id => systemUserIdSet.has(Number(id)))]
             ))}
             options={defaultDocumentCxoUsers.map(item => ({
               value: Number(item.id),
               label: item.display_name || item.username,
+              disabled: systemUserIdSet.has(Number(item.id)),
             }))}
             style={{ width: '100%', marginTop: 8 }}
           />
@@ -9379,11 +9385,12 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             onChange={value => setDraft(prev => updateExplicitDocumentShareUsers(
               prev,
               defaultDocumentCxoUserIds,
-              value
+              [...value, ...selectedExplicitUserIds.filter(id => systemUserIdSet.has(Number(id)))]
             ))}
             options={users.filter(item => !defaultDocumentCxoUserIdSet.has(Number(item.id))).map(item => ({
               value: Number(item.id),
               label: item.display_name || item.username,
+              disabled: systemUserIdSet.has(Number(item.id)),
             }))}
             style={{ width: '100%', marginTop: 8 }}
           />

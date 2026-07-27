@@ -135,7 +135,11 @@ RELATION_RUN_MYSQL_TESTS=1 \
   `media_assets.document_id` 关系判断，不得再依赖 `doc_type=MEDIA`。
 - 媒体管理采用模块级统一读取边界：通过 `/media-management` 入口校验的用户必须看到相同的全部
   未删除媒体记录，并可读取其关联文档、正文、附件和历史；不得再按文档创建人或共享范围缩减
-  媒体列表。关联文档的编辑仍复用文档 `canEditDocument`，`readonly/guest` 不可写。
+  媒体列表。除 `readonly/guest` 外，入口用户默认可编辑媒体及关联文档，无需逐篇手工共享；
+  `readonly/guest` 即使有入口也只读。
+- 媒体入口用户必须作为动态系统个人成员出现在关联文档“共享文档 / 个人”和“有权限成员”中；
+  该授权不写入 `document_shares`，菜单取消或账号停用后立即失效。共享界面不得移除系统成员，
+  既有或另行添加的手工共享必须独立保留。媒体入口授权不得扩大媒体删除权限。
 - 媒体删除仅允许 CEO、COO、CTO、CMO，或 `role=leader` 且在 `teams.leader_id` 中实际负责
   “流量商务”商务小组的用户；普通管理员、创建人、共享协作者和其他组长均无删除入口，服务端
   DELETE 接口也必须独立拒绝。
@@ -403,7 +407,7 @@ RELATION_RUN_MYSQL_TESTS=1 \
 | `content_revisions` | `encryptedFields.js`、MySQL schema、恢复权限、删除级联 |
 | 目标/周报字段 | 权限 SQL、列表筛选、工作台汇总、加密字段、MySQL `LONGTEXT` |
 | 目标/周报共享 | `content_shares`、列表/详情/历史/实时协作权限、默认 CXO、删除清理 |
-| 媒体关联文档 | 固定目录、`DOMESTIC-OPS-IMP` 编号、默认图标、标题保护、收藏列表和旧数据迁移 |
+| 媒体关联文档 | 固定目录、`DOMESTIC-OPS-IMP` 编号、默认图标、标题保护、菜单动态编辑授权、系统成员展示、手工共享保留、收藏列表和旧数据迁移 |
 | 经营周会参与人 | 两道门、准备可见性、提交统计、AI 输入、年度汇总 |
 | `App.js` 菜单/路由 | `MenuPerms.js` 菜单树、后端菜单 key、工作区标签标题 |
 | `DauQueryAssistant.js` | 固定第三方来源、iframe sandbox、元素检查器关闭消息、跨域加载回归 |

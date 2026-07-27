@@ -63,6 +63,7 @@ const {
   createMediaManagementRouter,
   deleteMediaAssetByDocumentId,
   ensureMediaDocumentPlacement,
+  listMediaManagementAccessUsers,
   resolveMediaDocumentTitle,
 } = require('./lib/mediaManagement');
 const {
@@ -6845,6 +6846,25 @@ function canAccessMediaManagement(user) {
   });
 }
 
+function getMediaManagementAccessUsers() {
+  return getRuntimeCached('media-management:access-users', RUNTIME_CACHE_TTL_MS, () => (
+    listMediaManagementAccessUsers(db, { isAdmin })
+  ));
+}
+
+function isMediaLinkedDocument(document) {
+  if (!document?.id) return false;
+  if (Object.prototype.hasOwnProperty.call(document, 'media_asset_id')) {
+    return Number(document.media_asset_id || 0) > 0;
+  }
+  return Boolean(db.prepare(`
+    SELECT 1
+    FROM media_assets
+    WHERE document_id = ?
+    LIMIT 1
+  `).get(Number(document.id)));
+}
+
 function isDocumentSharedWithUser(user, document) {
   if (!user || !document?.id) return false;
   const clauses = [`target_type = 'user' AND target_id = ?`];
@@ -6880,6 +6900,7 @@ function canEditDocument(user, document) {
   return canUseDocumentWriteActions(user) && (
     canAdministrateDocuments(user)
     || Number(document.created_by) === Number(user.id)
+    || (isMediaLinkedDocument(document) && canAccessMediaManagement(user))
     || isDocumentSharedWithUser(user, document)
   );
 }
@@ -6889,6 +6910,9 @@ function getEditableDocumentIds(user, documentIds = []) {
   if (!ids.length || !canUseDocumentWriteActions(user)) return [];
   if (canAdministrateDocuments(user)) return ids;
   const target = buildShareTargetMatch(user, 'editable_document_share');
+  const mediaAccessClause = canAccessMediaManagement(user)
+    ? 'OR EXISTS (SELECT 1 FROM media_assets editable_media WHERE editable_media.document_id = editable_document.id)'
+    : '';
   return db.prepare(`
     SELECT DISTINCT editable_document.id
     FROM documents editable_document
@@ -6898,6 +6922,7 @@ function getEditableDocumentIds(user, documentIds = []) {
       AND (
         editable_document.created_by = ?
         OR (${target.sql})
+        ${mediaAccessClause}
       )
   `).all(...ids, user.id, ...target.params).map(row => Number(row.id));
 }
@@ -7587,7 +7612,18 @@ function getDocumentShareKey(share) {
 }
 
 function replaceDocumentShares(documentId, shares, userId) {
-  const normalized = normalizeDocumentShares(shares);
+  const existingKeys = new Set(db.prepare(`
+    SELECT target_type, target_id, target_key
+    FROM document_shares
+    WHERE document_id = ?
+  `).all(documentId).map(getDocumentShareKey));
+  const mediaAccessUserIds = isMediaLinkedDocument({ id: documentId })
+    ? new Set(getMediaManagementAccessUsers().map(user => Number(user.id)))
+    : new Set();
+  const normalized = normalizeDocumentShares(shares).filter(share => {
+    if (share.target_type !== 'user' || !mediaAccessUserIds.has(Number(share.target_id))) return true;
+    return existingKeys.has(getDocumentShareKey(share));
+  });
   db.prepare('DELETE FROM document_shares WHERE document_id = ?').run(documentId);
   const insert = db.prepare(`
     INSERT INTO document_shares (document_id, target_type, target_id, target_key, created_by)
@@ -7713,7 +7749,7 @@ initializeLegacyDefaultShares();
 
 function getDocumentShares(documentId) {
   ensureDocumentDefaultShares(documentId);
-  return db.prepare(`
+  const shares = db.prepare(`
     SELECT ds.*,
       u.display_name as user_name,
       t.name as team_name,
@@ -7725,6 +7761,34 @@ function getDocumentShares(documentId) {
     WHERE ds.document_id = ?
     ORDER BY ds.target_type, ds.id
   `).all(documentId);
+  if (!isMediaLinkedDocument({ id: documentId })) return shares;
+
+  const sharesByKey = new Map(shares.map(share => [getDocumentShareKey(share), share]));
+  getMediaManagementAccessUsers().forEach(user => {
+    const share = {
+      id: null,
+      document_id: Number(documentId),
+      target_type: 'user',
+      target_id: Number(user.id),
+      target_key: null,
+      created_by: null,
+      user_name: user.display_name || user.username || `用户${user.id}`,
+      team_name: null,
+      project_group_name: null,
+      is_system: 1,
+      share_source: 'media_management_menu',
+      can_edit: canUseDocumentWriteActions(user) ? 1 : 0,
+    };
+    const key = getDocumentShareKey(share);
+    const existing = sharesByKey.get(key);
+    if (existing) {
+      existing.has_media_menu_access = 1;
+      return;
+    }
+    shares.push(share);
+    sharesByKey.set(key, share);
+  });
+  return shares;
 }
 
 function addDocumentAccessUser(accessMap, userId, source) {
@@ -7755,6 +7819,11 @@ function getDocumentAccessMap(document) {
         .forEach(row => addDocumentAccessUser(accessMap, row.user_id, 'project_group'));
     }
   });
+  if (isMediaLinkedDocument(document)) {
+    getMediaManagementAccessUsers().forEach(user => {
+      addDocumentAccessUser(accessMap, user.id, 'media_management');
+    });
+  }
   return accessMap;
 }
 
@@ -7776,6 +7845,17 @@ function getDocumentAccessUsers(document) {
     WHERE id IN (${ids.map(() => '?').join(',')})
   `).all(...ids);
   const usersById = new Map(rows.map(row => [Number(row.id), row]));
+  const departmentRows = db.prepare(`
+    SELECT user_id, department_key
+    FROM user_departments
+    WHERE user_id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids);
+  const departmentsByUser = new Map();
+  departmentRows.forEach(row => {
+    const userId = Number(row.user_id);
+    if (!departmentsByUser.has(userId)) departmentsByUser.set(userId, []);
+    departmentsByUser.get(userId).push(row.department_key);
+  });
   return ids
     .map(id => {
       const row = usersById.get(id);
@@ -7788,7 +7868,10 @@ function getDocumentAccessUsers(document) {
         role: row.role,
         executive_role: row.executive_role,
         department: row.department,
-        departments: getUserDepartmentKeys(id),
+        departments: normalizeDepartmentKeys([
+          row.department,
+          ...(departmentsByUser.get(id) || []),
+        ]),
         team_id: row.team_id,
         source_types: sourceTypes,
         is_creator: sourceTypes.includes('creator') ? 1 : 0,
@@ -9536,7 +9619,8 @@ app.put('/api/documents/:id/shares', canWrite, (req, res) => {
   const doc = getVisibleDocument(req.params.id, req.user);
   if (!doc) return res.status(404).json({ error: '文档不存在或无权限访问' });
   if (!canEditDocument(req.user, doc)) return res.status(403).json({ error: '只有可编辑该文档的用户才可以调整共享范围' });
-  const shares = replaceDocumentShares(doc.id, req.body.shares || [], req.user.id);
+  replaceDocumentShares(doc.id, req.body.shares || [], req.user.id);
+  const shares = getDocumentShares(doc.id);
   res.json({ success: true, shares, access_summary: getDocumentAccessSummary(doc) });
 });
 

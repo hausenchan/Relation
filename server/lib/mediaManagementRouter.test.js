@@ -66,6 +66,8 @@ function createHarness() {
     .run('traffic_leader', '流量商务组长', 'leader');
   db.prepare('INSERT INTO users (id, username, display_name, role) VALUES (8, ?, ?, ?)')
     .run('other_leader', '其他组长', 'leader');
+  db.prepare('INSERT INTO users (id, username, display_name, role) VALUES (9, ?, ?, ?)')
+    .run('readonly', '只读用户', 'readonly');
   db.prepare('INSERT INTO teams (id, name, department, leader_id) VALUES (1, ?, ?, ?)')
     .run('流量商务小组', 'commercial', 7);
   db.prepare('INSERT INTO teams (id, name, department, leader_id) VALUES (2, ?, ?, ?)')
@@ -77,6 +79,7 @@ function createHarness() {
     [5, ['/media-management']],
     [7, ['/media-management']],
     [8, ['/media-management']],
+    [9, ['/media-management']],
   ]);
   const modulePermsByUser = new Map([
     [5, [{ module: 'product_assets', can_read: 1, can_write: 0 }]],
@@ -93,7 +96,14 @@ function createHarness() {
   `).get(documentId, userId));
   const canEditDocument = (user, document) => Boolean(
     user && document && !['readonly', 'guest'].includes(user.role)
-      && (isAdmin(user.role) || Number(document.created_by) === Number(user.id) || isShared(document.id, user.id))
+      && (
+        isAdmin(user.role)
+        || Number(document.created_by) === Number(user.id)
+        || isShared(document.id, user.id)
+        || (hasMediaAccess(user) && Boolean(db.prepare(
+          'SELECT 1 FROM media_assets WHERE document_id = ?',
+        ).get(document.id)))
+      )
   );
   const canManageDocument = (user, document) => Boolean(
     user && document && (isAdmin(user.role) || Number(document.created_by) === Number(user.id))
@@ -166,6 +176,7 @@ function createHarness() {
     cxo: { id: 6, username: 'cxo', display_name: 'CXO', role: 'member', executive_role: 'cmo' },
     trafficLeader: { id: 7, username: 'traffic_leader', display_name: '流量商务组长', role: 'leader' },
     otherLeader: { id: 8, username: 'other_leader', display_name: '其他组长', role: 'leader' },
+    readonly: { id: 9, username: 'readonly', display_name: '只读用户', role: 'readonly' },
   };
 
   const dispatch = ({ method = 'GET', path = '/', params = {}, query = {}, body = {}, user = users.admin }) => {
@@ -199,6 +210,7 @@ function createHarness() {
     users,
     getVisibleDocument,
     isShared,
+    setMenuPerms: (userId, menuKeys) => menuByUser.set(Number(userId), [...menuKeys]),
     getCreatedDocumentInput: () => createdDocumentInput,
   };
 }
@@ -227,6 +239,7 @@ test('router enforces menu access and supports linked-document CRUD, search, and
     getCreatedDocumentInput,
     getVisibleDocument,
     isShared,
+    setMenuPerms,
   } = createHarness();
   try {
     const blocked = dispatch({ user: users.blocked });
@@ -294,19 +307,40 @@ test('router enforces menu access and supports linked-document CRUD, search, and
       user: users.editor,
     });
     assert.equal(editorDetail.statusCode, 200);
-    assert.equal(editorDetail.payload.can_edit, 0);
+    assert.equal(editorDetail.payload.can_edit, 1);
     assert.ok(getVisibleDocument(unshared.payload.document_id, users.editor));
-    const editorCannotUpdateUnshared = dispatch({
+    const editorUpdatesUnshared = dispatch({
       method: 'PUT',
       path: '/:id',
       params: { id: String(unshared.payload.id) },
-      body: input({ cid: '000125', media_name: '不应更新', owner_id: null }),
+      body: input({
+        cid: '000125',
+        media_name: '未单独共享媒体',
+        owner_id: null,
+        other_notes: '菜单授权可编辑',
+      }),
       user: users.editor,
     });
-    assert.equal(editorCannotUpdateUnshared.statusCode, 403);
+    assert.equal(editorUpdatesUnshared.statusCode, 200, JSON.stringify(editorUpdatesUnshared.payload));
+    assert.equal(editorUpdatesUnshared.payload.other_notes, '菜单授权可编辑');
+    setMenuPerms(users.editor.id, []);
+    assert.equal(dispatch({ user: users.editor }).statusCode, 403);
+    setMenuPerms(users.editor.id, ['/media-management']);
     const guestList = dispatch({ user: users.guestReader });
     assert.equal(guestList.statusCode, 200);
     assert.equal(guestList.payload.length, 2);
+    assert.ok(guestList.payload.every(record => Number(record.can_edit) === 0));
+    const readonlyList = dispatch({ user: users.readonly });
+    assert.equal(readonlyList.statusCode, 200);
+    assert.ok(readonlyList.payload.every(record => Number(record.can_edit) === 0));
+    const readonlyUpdate = dispatch({
+      method: 'PUT',
+      path: '/:id',
+      params: { id: String(unshared.payload.id) },
+      body: input({ cid: '000125', media_name: '只读不得更新', owner_id: null }),
+      user: users.readonly,
+    });
+    assert.equal(readonlyUpdate.statusCode, 403);
 
     const removeUnshared = dispatch({
       method: 'DELETE',
