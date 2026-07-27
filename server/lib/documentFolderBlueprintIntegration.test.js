@@ -212,6 +212,14 @@ test('managed document folders preserve fixed blueprints and isolate identical d
   assert.equal(domesticSop.status, 200, JSON.stringify(domesticSop.payload));
   assert.equal(overseasSop.status, 200, JSON.stringify(overseasSop.payload));
 
+  const domesticProjectGroup = await request(baseUrl, '/api/project-groups', {
+    method: 'POST',
+    token,
+    body: { name: '国内项目', code: 'DOMESTIC' },
+  });
+  assert.equal(domesticProjectGroup.status, 200, JSON.stringify(domesticProjectGroup.payload));
+  const domesticProjectGroupId = Number(domesticProjectGroup.payload.id);
+
   const mismatchedDocument = await request(baseUrl, '/api/documents', {
     method: 'POST',
     token,
@@ -226,12 +234,32 @@ test('managed document folders preserve fixed blueprints and isolate identical d
   assert.equal(mismatchedDocument.status, 400, JSON.stringify(mismatchedDocument.payload));
   assert.match(mismatchedDocument.payload.error, /目标目录与归属域不一致/);
 
+  const mismatchedProjectGroupDocument = await request(baseUrl, '/api/documents', {
+    method: 'POST',
+    token,
+    body: {
+      title: '不应进入海外目录的国内项目组文档',
+      domain: 'overseas_project',
+      project_group_id: domesticProjectGroupId,
+      department_key: 'BD',
+      doc_type: 'LEGA',
+      folder_id: overseasSop.payload.id,
+    },
+  });
+  assert.equal(
+    mismatchedProjectGroupDocument.status,
+    400,
+    JSON.stringify(mismatchedProjectGroupDocument.payload),
+  );
+  assert.match(mismatchedProjectGroupDocument.payload.error, /目标目录与项目组归属域不一致/);
+
   const domesticDocument = await request(baseUrl, '/api/documents', {
     method: 'POST',
     token,
     body: {
       title: '国内商务沉淀 SOP',
       domain: 'domestic_project',
+      project_group_id: domesticProjectGroupId,
       department_key: 'BD',
       doc_type: 'LEGA',
       folder_id: domesticSop.payload.id,
@@ -239,9 +267,55 @@ test('managed document folders preserve fixed blueprints and isolate identical d
   });
   assert.equal(domesticDocument.status, 200, JSON.stringify(domesticDocument.payload));
   assert.equal(domesticDocument.payload.domain, 'domestic_project');
+  assert.equal(Number(domesticDocument.payload.project_group_id), domesticProjectGroupId);
+  assert.equal(domesticDocument.payload.project_code, 'DOMESTIC');
   assert.equal(Number(domesticDocument.payload.folder_id), Number(domesticSop.payload.id));
   assert.equal(domesticDocument.payload.department_key, 'BD');
   assert.equal(domesticDocument.payload.doc_type, 'LEGA');
+
+  const legacyProjectGroup = await request(baseUrl, '/api/project-groups', {
+    method: 'POST',
+    token,
+    body: { name: '待迁移国内项目', code: 'LEGACY_DOMESTIC' },
+  });
+  assert.equal(legacyProjectGroup.status, 200, JSON.stringify(legacyProjectGroup.payload));
+  const legacyProjectGroupId = Number(legacyProjectGroup.payload.id);
+  const legacyMismatchedDocument = await request(baseUrl, '/api/documents', {
+    method: 'POST',
+    token,
+    body: {
+      title: '历史国内项目组错归海外 SOP',
+      domain: 'overseas_project',
+      project_group_id: legacyProjectGroupId,
+      department_key: 'BD',
+      doc_type: 'LEGA',
+      folder_id: overseasSop.payload.id,
+    },
+  });
+  assert.equal(legacyMismatchedDocument.status, 200, JSON.stringify(legacyMismatchedDocument.payload));
+  const legacyUpdatedAt = legacyMismatchedDocument.payload.updated_at;
+  const promoteLegacyProjectGroup = await request(baseUrl, `/api/project-groups/${legacyProjectGroupId}`, {
+    method: 'PUT',
+    token,
+    body: { name: '待迁移国内项目', code: 'DOMESTIC', status: 'active' },
+  });
+  assert.equal(promoteLegacyProjectGroup.status, 200, JSON.stringify(promoteLegacyProjectGroup.payload));
+  const repairLegacyDirectories = await request(baseUrl, '/api/document-folders/apply-template', {
+    method: 'POST',
+    token,
+  });
+  assert.equal(repairLegacyDirectories.status, 200, JSON.stringify(repairLegacyDirectories.payload));
+  const repairedLegacyDocument = await request(
+    baseUrl,
+    `/api/documents/${legacyMismatchedDocument.payload.id}`,
+    { token },
+  );
+  assert.equal(repairedLegacyDocument.status, 200, JSON.stringify(repairedLegacyDocument.payload));
+  assert.equal(repairedLegacyDocument.payload.domain, 'domestic_project');
+  assert.equal(Number(repairedLegacyDocument.payload.folder_id), Number(domesticSop.payload.id));
+  assert.equal(Number(repairedLegacyDocument.payload.project_group_id), legacyProjectGroupId);
+  assert.equal(repairedLegacyDocument.payload.project_code, 'DOMESTIC');
+  assert.equal(repairedLegacyDocument.payload.updated_at, legacyUpdatedAt);
 
   const mismatchedUpdate = await request(baseUrl, `/api/documents/${domesticDocument.payload.id}`, {
     method: 'PUT',

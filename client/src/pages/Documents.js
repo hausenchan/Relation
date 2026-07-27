@@ -345,6 +345,11 @@ const domainLabel = Object.fromEntries(domainOptions.map(item => [item.value, it
 const departmentLabel = Object.fromEntries(departmentOptions.map(item => [item.value, item.label]));
 const orgDepartmentLabel = Object.fromEntries(orgDepartmentOptions.map(item => [item.value, item.label]));
 const docTypeLabel = Object.fromEntries(docTypeOptions.map(item => [item.value, item.label]));
+const managedDocumentDomainByProjectCode = Object.freeze({
+  DOMESTIC: 'domestic_project',
+  OVERSEAS: 'overseas_project',
+  HRADM: 'hr_administration',
+});
 const documentKindOptions = [
   { value: 'rich_text', label: '普通文档', description: '编写方案、纪要、PRD、SOP 和知识内容' },
   { value: 'spreadsheet', label: '在线表格', description: '管理预算、名单、数据清单、排期和台账' },
@@ -2888,6 +2893,13 @@ function getDocumentFolderOptionsForLocation(folders = [], folderPathMap = null,
     }));
 }
 
+function getManagedDocumentDomainForProjectGroup(projectGroups = [], projectGroupId) {
+  const id = Number(projectGroupId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const projectGroup = projectGroups.find(item => Number(item.id) === id);
+  return managedDocumentDomainByProjectCode[String(projectGroup?.code || '').trim().toUpperCase()] || null;
+}
+
 function getDocumentPathLabel(doc) {
   if (!doc) return '未归档';
   const parts = [
@@ -4904,21 +4916,34 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         ? folders.find(item => Number(item.id) === Number(folderId))
         : null;
       if (!folder) return;
+      const projectDomain = getManagedDocumentDomainForProjectGroup(projectGroups, allValues.project_group_id);
       form.setFieldsValue({
         domain: folder.domain,
         department_key: folder.department_key,
         doc_type: folder.default_doc_type,
+        ...(projectDomain && projectDomain !== folder.domain ? { project_group_id: undefined } : {}),
         ...(folder.project_group_id ? { project_group_id: Number(folder.project_group_id) } : {}),
       });
       return;
     }
-    if (!['domain', 'department_key', 'doc_type'].some(key => Object.prototype.hasOwnProperty.call(changedValues, key))) {
+    if (!['domain', 'project_group_id', 'department_key', 'doc_type'].some(key => Object.prototype.hasOwnProperty.call(changedValues, key))) {
       return;
+    }
+    const changedProjectGroup = Object.prototype.hasOwnProperty.call(changedValues, 'project_group_id');
+    const changedDomain = Object.prototype.hasOwnProperty.call(changedValues, 'domain');
+    const projectDomain = getManagedDocumentDomainForProjectGroup(projectGroups, allValues.project_group_id);
+    let nextValues = allValues;
+    if (changedProjectGroup && projectDomain && projectDomain !== allValues.domain) {
+      form.setFieldValue('domain', projectDomain);
+      nextValues = { ...allValues, domain: projectDomain };
+    } else if (changedDomain && projectDomain && projectDomain !== allValues.domain) {
+      form.setFieldValue('project_group_id', undefined);
+      nextValues = { ...allValues, project_group_id: undefined };
     }
     const folderId = normalizeDocumentFolderSelectValue(allValues.folder_id);
     if (!folderId) return;
     const folder = folders.find(item => Number(item.id) === Number(folderId));
-    if (!isDocumentFolderCompatibleWithLocation(folder, allValues)) {
+    if (!isDocumentFolderCompatibleWithLocation(folder, nextValues)) {
       form.setFieldValue('folder_id', undefined);
     }
   };
@@ -5171,13 +5196,24 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         return;
       }
       createForm.resetFields();
+      const projectDomain = getManagedDocumentDomainForProjectGroup(projectGroups, doc.project_group_id);
+      const locationValues = {
+        domain: projectDomain || doc.domain || 'general',
+        department_key: doc.department_key || 'ALL',
+        doc_type: doc.doc_type || 'TMP',
+      };
+      const currentFolder = normalizeDocumentFolderSelectValue(doc.folder_id)
+        ? folders.find(folder => Number(folder.id) === Number(doc.folder_id))
+        : null;
       createForm.setFieldsValue({
         title: doc.title || '未命名文档',
-        domain: doc.domain || 'general',
+        domain: locationValues.domain,
         project_group_id: doc.project_group_id || undefined,
-        department_key: doc.department_key || 'ALL',
-        folder_id: normalizeDocumentFolderSelectValue(doc.folder_id),
-        doc_type: doc.doc_type || 'TMP',
+        department_key: locationValues.department_key,
+        folder_id: isDocumentFolderCompatibleWithLocation(currentFolder, locationValues)
+          ? normalizeDocumentFolderSelectValue(doc.folder_id)
+          : undefined,
+        doc_type: locationValues.doc_type,
         document_kind: getDocumentKind(doc.document_kind),
         icon_key: doc.icon_key || defaultDocumentIconFormValue,
       });

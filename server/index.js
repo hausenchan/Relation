@@ -6074,6 +6074,27 @@ function getProjectCodeForDocument(projectGroupId, domain, explicitCode) {
   return DOCUMENT_DOMAIN_CODES[normalizeDocumentDomain(domain)] || 'GEN';
 }
 
+function getManagedDocumentDomainForProjectGroup(projectGroupId) {
+  const id = Number(projectGroupId);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  const group = db.prepare('SELECT code FROM project_groups WHERE id = ?').get(id);
+  return getManagedDocumentDomainForProjectCode(group?.code);
+}
+
+function getManagedDocumentDomainForProjectCode(value) {
+  const code = String(value || '').trim().toUpperCase();
+  if (!code) return null;
+  return Object.entries(DOCUMENT_DOMAIN_CODES)
+    .find(([, domainCode]) => domainCode === code)?.[0] || null;
+}
+
+function assertDocumentProjectGroupMatchesDomain(projectGroupId, domain) {
+  const projectDomain = getManagedDocumentDomainForProjectGroup(projectGroupId);
+  if (projectDomain && projectDomain !== normalizeDocumentDomain(domain)) {
+    throw createDocumentRequestError(400, '项目组与归属域不一致，请重新选择归属域或项目组');
+  }
+}
+
 function isManagedDocumentSpace(domain) {
   return DOCUMENT_MANAGED_SPACE_DOMAINS.includes(normalizeDocumentDomain(domain));
 }
@@ -6221,6 +6242,12 @@ function assertDocumentFolderMatchesRequest(folderId, body = {}) {
   if (hasField('doc_type') && normalizeDocumentDirectoryType(body.doc_type) !== context.doc_type) {
     throw createDocumentRequestError(400, '目标目录与文档类型不一致，请重新选择文件夹');
   }
+  if (hasField('project_group_id')) {
+    const projectDomain = getManagedDocumentDomainForProjectGroup(body.project_group_id);
+    if (projectDomain && projectDomain !== context.domain) {
+      throw createDocumentRequestError(400, '目标目录与项目组归属域不一致，请重新选择文件夹');
+    }
+  }
   return context;
 }
 
@@ -6325,6 +6352,7 @@ function buildDocumentFolderContextResolver(rows = []) {
     const stage = pathRows[1] || null;
     const context = {
       folder: leaf,
+      pathRows,
       depth: pathRows.length,
       domain: normalizeDocumentDomain(leaf.domain || root.domain),
       project_group_id: leaf.project_group_id ?? root.project_group_id ?? null,
@@ -6336,9 +6364,19 @@ function buildDocumentFolderContextResolver(rows = []) {
   };
 }
 
-function runDocumentDirectoryUpdateIfChanged(updateDoc, doc, folderId, departmentKey, docType, projectCode, documentNo) {
+function runDocumentDirectoryUpdateIfChanged(
+  updateDoc,
+  doc,
+  domain,
+  folderId,
+  departmentKey,
+  docType,
+  projectCode,
+  documentNo,
+) {
   if (
-    Number(doc.folder_id || 0) === Number(folderId || 0)
+    String(doc.domain || '') === String(domain || '')
+    && Number(doc.folder_id || 0) === Number(folderId || 0)
     && String(doc.department_key || '') === String(departmentKey || '')
     && String(doc.doc_type || '') === String(docType || '')
     && String(doc.project_code || '') === String(projectCode || '')
@@ -6346,7 +6384,7 @@ function runDocumentDirectoryUpdateIfChanged(updateDoc, doc, folderId, departmen
   ) {
     return;
   }
-  updateDoc.run(folderId, departmentKey, docType, projectCode, documentNo, doc.id);
+  updateDoc.run(domain, folderId, departmentKey, docType, projectCode, documentNo, doc.id);
 }
 
 function ensureDocumentDirectoryBlueprint() {
@@ -6382,19 +6420,37 @@ function ensureDocumentDirectoryBlueprint() {
         targetMap.get(domain).set(department.key, stageMap);
       }
     }
-    const folderContextResolver = buildDocumentFolderContextResolver(
-      db.prepare('SELECT * FROM document_folders').all()
-    );
+    const folderRows = db.prepare('SELECT * FROM document_folders ORDER BY id ASC').all();
+    const folderContextResolver = buildDocumentFolderContextResolver(folderRows);
+    const folderByParentAndName = new Map();
+    folderRows.forEach(folder => {
+      const key = `${Number(folder.parent_id || 0)}\u0000${String(folder.name || '')}`;
+      if (!folderByParentAndName.has(key)) folderByParentAndName.set(key, folder);
+    });
+    const findCounterpartFolderId = (sourceContext, targetStageFolderId) => {
+      const fallbackId = Number(targetStageFolderId || 0) || null;
+      if (!fallbackId || !Array.isArray(sourceContext?.pathRows)) return fallbackId;
+      let parentId = fallbackId;
+      for (const sourceFolder of sourceContext.pathRows.slice(2)) {
+        const match = folderByParentAndName.get(`${parentId}\u0000${String(sourceFolder.name || '')}`);
+        if (!match) return fallbackId;
+        parentId = Number(match.id);
+      }
+      return parentId;
+    };
 
     const docs = db.prepare(`
-      SELECT d.*, f.department_key as folder_department_key, f.default_doc_type as folder_doc_type
+      SELECT d.*, f.department_key as folder_department_key, f.default_doc_type as folder_doc_type,
+        pg.code as project_group_code
       FROM documents d
       LEFT JOIN document_folders f ON d.folder_id = f.id
+      LEFT JOIN project_groups pg ON d.project_group_id = pg.id
       WHERE COALESCE(d.is_deleted, 0) = 0
         AND d.domain IN (${DOCUMENT_MANAGED_SPACE_DOMAINS.map(() => '?').join(',')})
     `).all(...DOCUMENT_MANAGED_SPACE_DOMAINS);
     const updateDoc = db.prepare(`
       UPDATE documents SET
+        domain = ?,
         folder_id = ?,
         department_key = ?,
         doc_type = ?,
@@ -6406,34 +6462,66 @@ function ensureDocumentDirectoryBlueprint() {
     docs.forEach(doc => {
       const currentFolderId = Number(doc.folder_id || 0);
       const currentFolderContext = currentFolderId ? folderContextResolver(currentFolderId) : null;
+      const projectDomain = getManagedDocumentDomainForProjectCode(doc.project_group_code);
       if (
         currentFolderContext
         && currentFolderContext.depth >= 3
         && isManagedDocumentSpace(currentFolderContext.domain)
         && !standardStageFolderIds.has(currentFolderId)
+        && (!projectDomain || projectDomain === currentFolderContext.domain)
       ) {
-        const domain = normalizeDocumentDomain(currentFolderContext.domain);
+        const domain = projectDomain || normalizeDocumentDomain(currentFolderContext.domain);
         const departmentKey = currentFolderContext.department_key;
         const docType = currentFolderContext.doc_type;
         const projectCode = doc.project_group_id
-          ? getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code)
+          ? (projectDomain
+            ? normalizeDocumentCode(doc.project_group_code, DOCUMENT_DOMAIN_CODES[domain])
+            : getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code))
           : DOCUMENT_DOMAIN_CODES[domain];
         const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, getDocumentYear(doc));
-        runDocumentDirectoryUpdateIfChanged(updateDoc, doc, currentFolderId, departmentKey, docType, projectCode, documentNo);
+        runDocumentDirectoryUpdateIfChanged(
+          updateDoc,
+          doc,
+          domain,
+          currentFolderId,
+          departmentKey,
+          docType,
+          projectCode,
+          documentNo,
+        );
         return;
       }
-      const domain = normalizeDocumentDomain(doc.domain);
-      const sourceDepartment = doc.department_key || doc.folder_department_key || 'OPS';
+      const domain = projectDomain || normalizeDocumentDomain(doc.domain);
+      const sourceDepartment = currentFolderContext?.department_key
+        || doc.department_key
+        || doc.folder_department_key
+        || 'OPS';
       const departmentKey = normalizeDocumentDirectoryDepartment(domain, sourceDepartment);
-      const docType = normalizeDocumentDirectoryType(doc.doc_type || doc.folder_doc_type || 'IMP');
-      const targetFolderId = getDocumentDirectoryStageFolderId(targetMap, domain, departmentKey, docType)
+      const docType = normalizeDocumentDirectoryType(
+        currentFolderContext?.doc_type || doc.doc_type || doc.folder_doc_type || 'IMP'
+      );
+      const targetStageFolderId = getDocumentDirectoryStageFolderId(targetMap, domain, departmentKey, docType)
         || getDocumentDirectoryStageFolderId(targetMap, domain, departmentKey, 'IMP');
-      if (!targetFolderId) return;
+      if (!targetStageFolderId) return;
+      const targetFolderId = projectDomain && currentFolderContext?.domain !== projectDomain
+        ? findCounterpartFolderId(currentFolderContext, targetStageFolderId)
+        : targetStageFolderId;
       const projectCode = doc.project_group_id
-        ? getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code)
+        ? (projectDomain
+          ? normalizeDocumentCode(doc.project_group_code, DOCUMENT_DOMAIN_CODES[domain])
+          : getProjectCodeForDocument(doc.project_group_id, domain, doc.project_code))
         : DOCUMENT_DOMAIN_CODES[domain];
       const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, getDocumentYear(doc));
-      runDocumentDirectoryUpdateIfChanged(updateDoc, doc, targetFolderId, departmentKey, docType, projectCode, documentNo);
+      runDocumentDirectoryUpdateIfChanged(
+        updateDoc,
+        doc,
+        domain,
+        targetFolderId,
+        departmentKey,
+        docType,
+        projectCode,
+        documentNo,
+      );
     });
 
     if (LEGACY_DOCUMENT_TEMPLATE_FOLDER_NAMES.length) {
@@ -7984,6 +8072,7 @@ function createDocumentRecord(body, user) {
     const docType = folderFields
       ? folderFields.doc_type
       : normalizeDocumentType(body.doc_type || 'TMP');
+    assertDocumentProjectGroupMatchesDomain(projectGroupId, domain);
     const documentKind = normalizeDocumentKind(body.document_kind);
     const projectCode = getProjectCodeForDocument(projectGroupId, domain, body.project_code);
     const globalSeq = getNextDocumentSequence();
@@ -9319,7 +9408,10 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   if (canApplyFolderFields && nextFolderId && !folder) return res.status(400).json({ error: '目标目录不存在' });
   if (canApplyFolderFields && nextFolderId) {
     try {
-      assertDocumentFolderMatchesRequest(nextFolderId, req.body || {});
+      assertDocumentFolderMatchesRequest(nextFolderId, {
+        ...(req.body || {}),
+        project_group_id: hasBodyField('project_group_id') ? req.body.project_group_id : doc.project_group_id,
+      });
     } catch (error) {
       return res.status(error.statusCode || 400).json({ error: error.message || '目标目录与文档属性不一致' });
     }
@@ -9343,6 +9435,13 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   const docType = canApplyFolderFields
     ? (folderFields?.doc_type || normalizeDocumentType(hasBodyField('doc_type') ? req.body.doc_type : doc.doc_type))
     : doc.doc_type;
+  if (canApplyFolderFields) {
+    try {
+      assertDocumentProjectGroupMatchesDomain(projectGroupId, domain);
+    } catch (error) {
+      return res.status(error.statusCode || 400).json({ error: error.message || '项目组与归属域不一致' });
+    }
+  }
   const content = canEditCurrentDocument && hasBodyField('content') ? req.body.content : doc.content;
   if (canEditCurrentDocument && hasBodyField('content') && (
     normalizeDocumentKind(doc.document_kind) === 'spreadsheet' || isSpreadsheetWorkbookValue(content)
@@ -9571,7 +9670,10 @@ app.post('/api/documents/:id/renumber', canWrite, (req, res) => {
   const folderId = req.body.folder_id || doc.folder_id;
   if (folderId) {
     try {
-      assertDocumentFolderMatchesRequest(folderId, req.body || {});
+      assertDocumentFolderMatchesRequest(folderId, {
+        ...(req.body || {}),
+        project_group_id: req.body.project_group_id ?? doc.project_group_id,
+      });
     } catch (error) {
       return res.status(error.statusCode || 400).json({ error: error.message || '目标目录与文档属性不一致' });
     }
@@ -9586,6 +9688,11 @@ app.post('/api/documents/:id/renumber', canWrite, (req, res) => {
   );
   const departmentKey = folderFields?.department_key || normalizeDocumentDepartment(req.body.department_key || doc.department_key);
   const docType = folderFields?.doc_type || normalizeDocumentType(req.body.doc_type || doc.doc_type);
+  try {
+    assertDocumentProjectGroupMatchesDomain(projectGroupId, domain);
+  } catch (error) {
+    return res.status(error.statusCode || 400).json({ error: error.message || '项目组与归属域不一致' });
+  }
   const year = String(req.body.year || doc.created_at || '').slice(0, 4) || new Date().getFullYear();
   const documentNo = formatDocumentNo(doc.global_seq, projectCode, departmentKey, docType, year);
   db.prepare(`
