@@ -63,10 +63,12 @@ import {
   StarFilled,
   StarOutlined,
   TableOutlined,
+  TeamOutlined,
   UndoOutlined,
   UpOutlined,
   UploadOutlined,
   UserAddOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/businessTime';
@@ -126,6 +128,11 @@ import {
   mergeAdjacentDocumentBlocks,
   shouldIgnoreGlobalDocumentDelete,
 } from '../utils/documentBlockKeyboard';
+import {
+  getDocumentTableHorizontalAutoScrollDelta,
+  resizeDocumentTableColumnWidths,
+  resolveDocumentTableStyleBounds,
+} from '../utils/documentTable';
 import {
   createDefaultSpreadsheetWorkbook,
   getDocumentContentSignature,
@@ -9393,6 +9400,32 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             style={{ width: '100%', marginTop: 8 }}
           />
         </div>
+        <Divider style={{ margin: '2px 0' }} />
+        <Space size={6} wrap>
+          {(draft.project_group_ids || []).map(id => {
+            const group = projectGroups.find(item => Number(item.id) === Number(id));
+            return <Tag key={`pg-${id}`} icon={<TeamOutlined />} color="blue">{group?.name || `项目组 ${id}`}</Tag>;
+          })}
+          {(draft.departments || []).map(key => (
+            <Tag key={`dept-${key}`} color="green">{orgDepartmentLabel[key] || key}</Tag>
+          ))}
+          {(draft.team_ids || []).map(id => {
+            const team = teams.find(item => Number(item.id) === Number(id));
+            return <Tag key={`team-${id}`} icon={<TeamOutlined />} color="purple">{team?.name || `小组 ${id}`}</Tag>;
+          })}
+          {(draft.user_ids || []).map(id => {
+            const item = users.find(user => Number(user.id) === Number(id));
+            const isDefaultUser = defaultDocumentCxoUserIdSet.has(Number(id));
+            return (
+              <Tag key={`user-${id}`} icon={<UserOutlined />} color={isDefaultUser ? 'purple' : 'orange'}>
+                {item?.display_name || item?.username || `用户 ${id}`}
+              </Tag>
+            );
+          })}
+          {draftToShares(draft).length === 0 && (
+            <Text type="secondary">{isBulk ? '尚未追加共享对象' : '仅创建人可访问'}</Text>
+          )}
+        </Space>
         </Space>
       </Spin>
     );
@@ -12533,14 +12566,14 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         || selectedRangeBounds.startColumnIndex !== selectedRangeBounds.endColumnIndex
       )
     );
-    const activeStyleBounds = wholeTableSelected
-      ? {
-        startRowIndex: 0,
-        endRowIndex: Math.max(0, normalizedRows.length - 1),
-        startColumnIndex: 0,
-        endColumnIndex: Math.max(0, columns.length - 1),
-      }
-      : (hasSelectedRange ? selectedRangeBounds : null);
+    const activeStyleBounds = resolveDocumentTableStyleBounds({
+      wholeTableSelected,
+      selectedRangeBounds,
+      hasSelectedRange,
+      selectedCell,
+      rowCount: normalizedRows.length,
+      columnCount: columns.length,
+    });
     const isCellInSelectedRange = (rowIndex, columnIndex) => (
       hasSelectedRange
       && rowIndex >= selectedRangeBounds.startRowIndex
@@ -12898,6 +12931,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     const beginTableCellSelection = (event, rowIndex, columnIndex) => {
       if (event.button !== 0) return;
+      const scrollContainer = event.currentTarget.closest?.('[data-document-table-scroll-container="true"]') || null;
       setSelectedBlockId(block.id);
       clearAreaBlockSelection();
       setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
@@ -12909,6 +12943,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         startX: event.clientX,
         startY: event.clientY,
         dragging: false,
+        pointerX: event.clientX,
+        pointerY: event.clientY,
+        scrollContainer,
+        autoScrollFrame: null,
         cleanup: null,
       };
       const applyRange = (targetCell) => {
@@ -12926,16 +12964,42 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           endColumnIndex: targetCell.columnIndex,
         });
       };
+      const runAutoScroll = () => {
+        selectionState.autoScrollFrame = null;
+        if (!selectionState.dragging || !selectionState.scrollContainer) return;
+        const container = selectionState.scrollContainer;
+        const rect = container.getBoundingClientRect();
+        const delta = getDocumentTableHorizontalAutoScrollDelta({
+          pointerX: selectionState.pointerX,
+          viewportLeft: rect.left,
+          viewportRight: rect.right,
+          scrollLeft: container.scrollLeft,
+          scrollWidth: container.scrollWidth,
+          clientWidth: container.clientWidth,
+        });
+        if (!delta) return;
+        container.scrollLeft += delta;
+        const sampleX = Math.max(rect.left + 2, Math.min(selectionState.pointerX, rect.right - 2));
+        const sampleY = Math.max(rect.top + 2, Math.min(selectionState.pointerY, rect.bottom - 2));
+        const targetCell = getTableCellFromPoint(sampleX, sampleY);
+        if (targetCell) applyRange(targetCell);
+        selectionState.autoScrollFrame = window.requestAnimationFrame(runAutoScroll);
+      };
+      const requestAutoScroll = () => {
+        if (selectionState.autoScrollFrame !== null) return;
+        selectionState.autoScrollFrame = window.requestAnimationFrame(runAutoScroll);
+      };
       const handleMouseMove = moveEvent => {
+        selectionState.pointerX = moveEvent.clientX;
+        selectionState.pointerY = moveEvent.clientY;
         const targetCell = getTableCellFromPoint(moveEvent.clientX, moveEvent.clientY);
-        if (!targetCell) return;
         const movedDistance = Math.hypot(moveEvent.clientX - selectionState.startX, moveEvent.clientY - selectionState.startY);
-        const sameCell = targetCell.rowIndex === rowIndex && targetCell.columnIndex === columnIndex;
         if (!selectionState.dragging) {
-          if (movedDistance < 6 || sameCell) return;
+          if (movedDistance < 6) return;
           selectionState.dragging = true;
         }
-        applyRange(targetCell);
+        if (targetCell) applyRange(targetCell);
+        requestAutoScroll();
         moveEvent.preventDefault();
       };
       const handleMouseUp = () => {
@@ -12943,6 +13007,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         selectionState.cleanup?.();
       };
       selectionState.cleanup = () => {
+        if (selectionState.autoScrollFrame !== null) {
+          window.cancelAnimationFrame(selectionState.autoScrollFrame);
+          selectionState.autoScrollFrame = null;
+        }
         window.removeEventListener('mousemove', handleMouseMove);
         window.removeEventListener('mouseup', handleMouseUp);
         if (tableCellSelectionRef.current === selectionState) tableCellSelectionRef.current = null;
@@ -12952,27 +13020,26 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     };
-    const beginColumnResize = (event, columnIndex) => {
+    const beginColumnResize = (event, columnIndex, colSpan = 1) => {
       event.preventDefault();
       event.stopPropagation();
       const startX = event.clientX;
-      const startWidth = columnWidths[columnIndex] || 160;
       pushEditorUndoSnapshot();
       const handleMouseMove = moveEvent => {
-        const nextWidth = Math.max(80, Math.round(startWidth + moveEvent.clientX - startX));
+        const nextWidths = resizeDocumentTableColumnWidths(columnWidths, {
+          columnIndex,
+          colSpan,
+          delta: moveEvent.clientX - startX,
+        });
         setEditorBlocks(prev => prev.map(item => {
           if (item.id !== block.id) return item;
           const currentMeta = { ...getDefaultBlockMeta(item.type), ...cloneMeta(item.meta) };
-          const nextWidths = columns.map((_, index) => (
-            index === columnIndex
-              ? nextWidth
-              : Math.max(80, Number(currentMeta.columnWidths?.[index]) || columnWidths[index] || 160)
-          ));
           const stored = buildStoredTableMetaFromVisibleRows(normalizedRows, columns, {
             mergedCells,
             columnWidths: nextWidths,
             horizontalCenter: currentMeta.horizontalCenter,
             verticalCenter: currentMeta.verticalCenter,
+            cellStyles: normalizeTableCellStyles(currentMeta.cellStyles || cellStyles, normalizedRows.length, columns.length),
           });
           return {
             ...item,
@@ -13182,7 +13249,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           style={{ maxWidth: '100%', position: 'relative', paddingBottom: tableMenuVisible ? 8 : 0, overflow: 'visible', outline: 'none' }}
         >
           {tableMenu}
-          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+          <div data-document-table-scroll-container="true" style={{ overflowX: 'auto', maxWidth: '100%' }}>
             <table
               onMouseDown={(event) => {
                 if (wholeTableSelected && !event.target?.closest?.('[contenteditable="true"]')) {
@@ -13224,7 +13291,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                         padding: 4,
                         verticalAlign: verticalCenter ? 'middle' : 'top',
                         textAlign: horizontalCenter ? 'center' : 'left',
-                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : (activeCell ? '#eef2ff' : cellBackground),
+                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : cellBackground,
                         color: cellStyle.color || '#111827',
                         boxShadow: wholeTableSelected ? 'none' : (activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
                       }}
@@ -13249,21 +13316,21 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                           textAlign: horizontalCenter ? 'center' : 'left',
                         }}
                       />
-                      {rowIndex === 0 && (
-                        <span
-                          role="presentation"
-                          onMouseDown={event => beginColumnResize(event, columnIndex)}
-                          style={{
-                            position: 'absolute',
-                            top: 0,
-                            right: -4,
-                            width: 8,
-                            height: '100%',
-                            cursor: 'col-resize',
-                            zIndex: 3,
-                          }}
-                        />
-                      )}
+                      <span
+                        role="presentation"
+                        aria-label="调整单元格宽度"
+                        title="拖动调整列宽"
+                        onMouseDown={event => beginColumnResize(event, columnIndex, colSpan)}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          right: -4,
+                          width: 8,
+                          height: '100%',
+                          cursor: 'col-resize',
+                          zIndex: 3,
+                        }}
+                      />
                     </td>
                       );
                     })()
