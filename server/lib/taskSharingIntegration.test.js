@@ -155,6 +155,7 @@ test('task users shared into attention can edit normal and COO self-assigned tas
       estimated_completion_date: '2026-07-24',
       status: 'pending',
       priority: 'medium',
+      task_type: '增长-客户',
       assigned_to: creatorId,
       shared_to: [sharedUserId],
     },
@@ -182,7 +183,15 @@ test('task users shared into attention can edit normal and COO self-assigned tas
   assert.equal(sharedTasks.status, 200, JSON.stringify(sharedTasks.payload));
   const updated = sharedTasks.payload.find(task => Number(task.id) === taskId);
   assert.equal(updated?.status, 'in_progress');
+  assert.equal(updated?.task_type, '增长-客户');
   assert.equal(Number(updated?.shared_to_me), 1);
+
+  const invalidTypeUpdate = await request(baseUrl, `/api/tasks/${taskId}`, {
+    method: 'PUT',
+    token: sharedUser.token,
+    body: { task_type: '其他' },
+  });
+  assert.equal(invalidTypeUpdate.status, 400, JSON.stringify(invalidTypeUpdate.payload));
 
   const completeUpdate = await request(baseUrl, `/api/tasks/${taskId}`, {
     method: 'PUT',
@@ -200,7 +209,7 @@ test('task users shared into attention can edit normal and COO self-assigned tas
   const titleOnlyUpdate = await request(baseUrl, `/api/tasks/${taskId}`, {
     method: 'PUT',
     token: sharedUser.token,
-    body: { title: '共享关注任务（改名）', status: 'done' },
+    body: { title: '共享关注任务（改名）', status: 'done', task_type: '组织' },
   });
   assert.equal(titleOnlyUpdate.status, 200, JSON.stringify(titleOnlyUpdate.payload));
   const renamedTasks = await request(baseUrl, '/api/tasks?parent_id=null', {
@@ -208,7 +217,20 @@ test('task users shared into attention can edit normal and COO self-assigned tas
   });
   const renamed = renamedTasks.payload.find(task => Number(task.id) === taskId);
   assert.equal(renamed?.title, '共享关注任务（改名）');
+  assert.equal(renamed?.task_type, '组织');
   assert.equal(renamed?.done_at, completed.done_at);
+
+  const clearTypeUpdate = await request(baseUrl, `/api/tasks/${taskId}`, {
+    method: 'PUT',
+    token: sharedUser.token,
+    body: { task_type: null },
+  });
+  assert.equal(clearTypeUpdate.status, 200, JSON.stringify(clearTypeUpdate.payload));
+  const tasksAfterTypeClear = await request(baseUrl, '/api/tasks?parent_id=null', {
+    token: sharedUser.token,
+  });
+  const clearedTypeTask = tasksAfterTypeClear.payload.find(task => Number(task.id) === taskId);
+  assert.equal(clearedTypeTask?.task_type, null);
 
   const cooSelfAssignedTask = await request(baseUrl, '/api/tasks', {
     method: 'POST',
@@ -233,6 +255,7 @@ test('task users shared into attention can edit normal and COO self-assigned tas
   assert.equal(sharedAttentionTasks.status, 200, JSON.stringify(sharedAttentionTasks.payload));
   const sharedCooTask = sharedAttentionTasks.payload.find(task => Number(task.id) === cooTaskId);
   assert.equal(sharedCooTask?.title, 'COO 明确共享的自派任务');
+  assert.equal(sharedCooTask?.task_type, null);
   assert.equal(Number(sharedCooTask?.shared_to_me), 1);
   assert.notEqual(Number(sharedCooTask?.assigned_to), sharedUserId);
 

@@ -2272,6 +2272,7 @@ db.exec(`
     estimated_hours REAL DEFAULT NULL,
     status      TEXT DEFAULT 'pending',
     priority    TEXT DEFAULT 'medium',
+    task_type   TEXT DEFAULT NULL,
     created_by  INTEGER NOT NULL,
     assigned_to INTEGER NOT NULL,
     team_id     INTEGER,
@@ -2312,6 +2313,9 @@ if (taskCols.length > 0 && !taskCols.includes('estimated_completion_date')) {
 }
 if (taskCols.length > 0 && !taskCols.includes('estimated_hours')) {
   db.exec("ALTER TABLE tasks ADD COLUMN estimated_hours REAL DEFAULT NULL");
+}
+if (taskCols.length > 0 && !taskCols.includes('task_type')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN task_type TEXT DEFAULT NULL");
 }
 if (taskCols.length > 0) {
   db.exec("UPDATE tasks SET estimated_completion_date = date WHERE estimated_completion_date IS NULL OR estimated_completion_date = ''");
@@ -11624,6 +11628,17 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
 
 // =========== 商务任务 API ===========
 const TASK_STATUSES = new Set(['pending', 'in_progress', 'done', 'suspended']);
+const TASK_TYPES = new Set(['认知', '增长-客户', '增长-产品', '组织']);
+
+function normalizeTaskType(value) {
+  if (value === undefined) return { value: undefined };
+  if (value === null || String(value).trim() === '') return { value: null };
+  const normalized = String(value).trim();
+  if (!TASK_TYPES.has(normalized)) {
+    return { error: '任务类型必须是：认知、增长-客户、增长-产品、组织' };
+  }
+  return { value: normalized };
+}
 
 function normalizeTaskEstimatedHours(value) {
   if (value === undefined || value === null || value === '') return { value: null };
@@ -11763,7 +11778,7 @@ app.get('/api/tasks/board', (req, res) => {
 
 // 创建任务
 app.post('/api/tasks', (req, res) => {
-  const { title, description, date, estimated_completion_date, estimated_hours, status, priority, assigned_to, team_id, parent_id, result, shared_to } = req.body;
+  const { title, description, date, estimated_completion_date, estimated_hours, status, priority, task_type, assigned_to, team_id, parent_id, result, shared_to } = req.body;
   const { id: me } = req.user;
   if (!title || !date || !estimated_completion_date || !assigned_to) {
     return res.status(400).json({ error: '标题、计划日期、预估完成日期、被指派人必填' });
@@ -11779,6 +11794,10 @@ app.post('/api/tasks', (req, res) => {
   const normalizedStatus = status || 'pending';
   if (!TASK_STATUSES.has(normalizedStatus)) {
     return res.status(400).json({ error: '任务状态不合法' });
+  }
+  const normalizedTaskType = normalizeTaskType(task_type);
+  if (normalizedTaskType.error) {
+    return res.status(400).json({ error: normalizedTaskType.error });
   }
 
   // 计算 depth
@@ -11797,8 +11816,8 @@ app.post('/api/tasks', (req, res) => {
 
   const enc = encryptRow('tasks', { title, description, result });
   const r = db.prepare(`
-    INSERT INTO tasks (title, description, date, estimated_completion_date, estimated_hours, status, priority, created_by, assigned_to, team_id, parent_id, depth, result)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    INSERT INTO tasks (title, description, date, estimated_completion_date, estimated_hours, status, priority, task_type, created_by, assigned_to, team_id, parent_id, depth, result)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `).run(
     enc.title,
     enc.description || null,
@@ -11807,6 +11826,7 @@ app.post('/api/tasks', (req, res) => {
     normalizedEstimatedHours.value,
     normalizedStatus,
     priority || 'medium',
+    normalizedTaskType.value ?? null,
     me,
     assignedToId,
     resolvedTeamId,
@@ -11825,7 +11845,7 @@ app.post('/api/tasks', (req, res) => {
 
 // 更新任务
 app.put('/api/tasks/:id', (req, res) => {
-  const { title, description, status, priority, date, estimated_completion_date, estimated_hours, result, shared_to } = req.body;
+  const { title, description, status, priority, task_type, date, estimated_completion_date, estimated_hours, result, shared_to } = req.body;
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
   if (status !== undefined && !TASK_STATUSES.has(status)) {
@@ -11837,6 +11857,10 @@ app.put('/api/tasks/:id', (req, res) => {
   const normalizedEstimatedHours = normalizeTaskEstimatedHours(estimated_hours);
   if (normalizedEstimatedHours.error) {
     return res.status(400).json({ error: normalizedEstimatedHours.error });
+  }
+  const normalizedTaskType = normalizeTaskType(task_type);
+  if (normalizedTaskType.error) {
+    return res.status(400).json({ error: normalizedTaskType.error });
   }
 
   const { id: me, role } = req.user;
@@ -11853,18 +11877,20 @@ app.put('/api/tasks/:id', (req, res) => {
     now,
   });
   const nextEstimatedHours = estimated_hours === undefined ? task.estimated_hours : normalizedEstimatedHours.value;
+  const nextTaskType = normalizedTaskType.value === undefined ? task.task_type : normalizedTaskType.value;
   const merged = encryptRow('tasks', {
     title: title ?? task.title,
     description: description ?? task.description,
     result: result !== undefined ? result : task.result,
   });
   db.prepare(`
-    UPDATE tasks SET title=?, description=?, status=?, priority=?, date=?, estimated_completion_date=?, estimated_hours=?, started_at=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+    UPDATE tasks SET title=?, description=?, status=?, priority=?, task_type=?, date=?, estimated_completion_date=?, estimated_hours=?, started_at=?, done_at=?, result=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(
     merged.title,
     merged.description,
     lifecycle.status,
     priority ?? task.priority,
+    nextTaskType,
     date ?? task.date,
     estimated_completion_date ?? task.estimated_completion_date ?? task.date,
     nextEstimatedHours,

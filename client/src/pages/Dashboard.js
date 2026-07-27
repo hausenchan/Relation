@@ -84,6 +84,13 @@ const priorityMap = {
   medium: { label: '中', color: 'orange' },
   low:    { label: '低', color: 'default' },
 };
+const taskTypeMap = {
+  '认知': { label: '认知', color: 'geekblue' },
+  '增长-客户': { label: '增长-客户', color: 'green' },
+  '增长-产品': { label: '增长-产品', color: 'cyan' },
+  '组织': { label: '组织', color: 'gold' },
+};
+const TASK_TYPE_VALUES = Object.keys(taskTypeMap);
 const AI_SUGGESTION_PRIORITY_VALUES = ['high', 'medium', 'low'];
 const AI_SUGGESTION_STATUS_VALUES = Object.keys(aiSuggestionStatusMap);
 
@@ -111,6 +118,7 @@ const taskSortableColumnKeys = new Set([
   'title',
   'task_source_label',
   'priority',
+  'task_type',
   'assigned_to_name',
   'created_by_name',
   'assigned_by_name',
@@ -180,6 +188,7 @@ const taskTableDefaultWidths = {
     title: 360,
     task_source_label: 100,
     priority: 80,
+    task_type: 110,
     assigned_to_name: 100,
     shared_to_names: 140,
     plan_date: 110,
@@ -194,6 +203,7 @@ const taskTableDefaultWidths = {
     title: 360,
     task_source_label: 100,
     priority: 80,
+    task_type: 110,
     created_by_name: 100,
     shared_to_names: 140,
     plan_date: 110,
@@ -208,6 +218,7 @@ const taskTableDefaultWidths = {
     title: 360,
     task_source_label: 100,
     priority: 80,
+    task_type: 110,
     assigned_by_name: 110,
     assigned_to_name: 110,
     shared_to_names: 140,
@@ -223,6 +234,7 @@ const taskTableDefaultWidths = {
     title: 360,
     task_source_label: 100,
     priority: 80,
+    task_type: 110,
     assigner_name: 110,
     follower_name: 110,
     shared_to_names: 140,
@@ -237,6 +249,7 @@ const taskTableDefaultWidths = {
 
 const taskTableMinWidths = {
   title: 180,
+  task_type: 96,
   shared_to_names: 100,
   estimated_completion_date: 112,
   display_result: 140,
@@ -832,6 +845,7 @@ export default function Dashboard() {
       date: dayjs(),
       estimated_completion_date: dayjs(),
       priority: 'medium',
+      task_type: null,
       assigned_to: user?.id,
       shared_to: [],
       status: 'pending',
@@ -925,6 +939,7 @@ export default function Dashboard() {
       ...values,
       date: values.date?.format('YYYY-MM-DD'),
       estimated_completion_date: values.estimated_completion_date?.format('YYYY-MM-DD'),
+      task_type: values.task_type || null,
     };
     setTaskSaving(true);
     try {
@@ -1051,6 +1066,14 @@ export default function Dashboard() {
           <Option value="medium"><Tag color="orange">中</Tag></Option>
           <Option value="low"><Tag color="default">低</Tag></Option>
         </Select>
+      </Form.Item>
+      <Form.Item label="任务类型" name="task_type">
+        <Select
+          allowClear
+          size={isMobile ? 'large' : undefined}
+          placeholder="选择任务类型"
+          options={TASK_TYPE_VALUES.map(value => ({ value, label: taskTypeMap[value].label }))}
+        />
       </Form.Item>
       {editing && (
         <Form.Item label="任务状态" name="status" rules={[{ required: true, message: '请选择任务状态' }]}>
@@ -1286,6 +1309,7 @@ export default function Dashboard() {
       date: dayjs(),
       estimated_completion_date: dayjs().add(suggestion.priority === 'high' ? 1 : suggestion.priority === 'medium' ? 2 : 3, 'day'),
       priority: suggestion.priority,
+      task_type: null,
       assigned_to: user?.id,
       shared_to: [],
       status: 'pending',
@@ -1334,6 +1358,16 @@ export default function Dashboard() {
     render: (_, record) => <Badge status={record.display_status_badge} text={record.display_status_label} />,
   };
 
+  const taskTypeColumn = {
+    title: '任务类型',
+    dataIndex: 'task_type',
+    key: 'task_type',
+    width: 110,
+    render: (value) => value
+      ? <Tag color={taskTypeMap[value]?.color || 'default'}>{taskTypeMap[value]?.label || value}</Tag>
+      : <Text type="secondary">-</Text>,
+  };
+
   const executionTaskColumns = [
     {
       title: '任务',
@@ -1356,6 +1390,7 @@ export default function Dashboard() {
       width: 80,
       render: (priority) => <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag>,
     },
+    taskTypeColumn,
     {
       title: '指派人',
       dataIndex: 'created_by_name',
@@ -1462,6 +1497,7 @@ export default function Dashboard() {
       width: 80,
       render: (priority) => priority ? <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag> : <Text type="secondary">-</Text>,
     },
+    taskTypeColumn,
     {
       title: '负责人',
       dataIndex: 'assigned_to_name',
@@ -1543,6 +1579,7 @@ export default function Dashboard() {
       width: 80,
       render: (priority) => priority ? <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag> : <Text type="secondary">-</Text>,
     },
+    taskTypeColumn,
     {
       title: '指派人',
       dataIndex: 'assigned_by_name',
@@ -1648,6 +1685,7 @@ export default function Dashboard() {
       width: 80,
       render: (priority) => priority ? <Tag color={priorityMap[priority]?.color}>{priorityMap[priority]?.label}</Tag> : <Text type="secondary">-</Text>,
     },
+    taskTypeColumn,
     {
       title: '指派人',
       dataIndex: 'assigner_name',
@@ -1740,6 +1778,7 @@ export default function Dashboard() {
 
             <Space wrap size={[6, 6]}>
               {record.priority && <Tag color={priorityMap[record.priority]?.color}>{priorityMap[record.priority]?.label}</Tag>}
+              {record.task_type && <Tag color={taskTypeMap[record.task_type]?.color || 'default'}>{taskTypeMap[record.task_type]?.label || record.task_type}</Tag>}
               {Number(record.shared_to_me) === 1 && <Tag color="cyan">共享给我</Tag>}
               {record.plan_date && <Tag>计划 {dayjs(record.plan_date).format('MM-DD')}</Tag>}
               {record.estimated_completion_date && <Tag>预估完成 {dayjs(record.estimated_completion_date).format('MM-DD')}</Tag>}
@@ -2684,6 +2723,11 @@ export default function Dashboard() {
                   <Tag color={priorityMap[detailRecord.priority]?.color}>{priorityMap[detailRecord.priority]?.label || detailRecord.priority}</Tag>
                 </Descriptions.Item>
               )}
+              <Descriptions.Item label="任务类型">
+                {detailRecord.task_type
+                  ? <Tag color={taskTypeMap[detailRecord.task_type]?.color || 'default'}>{taskTypeMap[detailRecord.task_type]?.label || detailRecord.task_type}</Tag>
+                  : '-'}
+              </Descriptions.Item>
               <Descriptions.Item label="计划日期">{detailRecord.plan_date || detailRecord.date || '-'}</Descriptions.Item>
               <Descriptions.Item label="预估完成日期">{detailRecord.estimated_completion_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="开始日期">{detailRecord.start_date || '-'}</Descriptions.Item>
