@@ -140,6 +140,10 @@ import {
   shouldShowDocumentTableContextMenu,
 } from '../utils/documentTable';
 import {
+  expandDocumentTableSelectionBounds,
+  resolveDocumentTableMergePlan,
+} from '../utils/documentTableMerge';
+import {
   createDefaultSpreadsheetWorkbook,
   getDocumentContentSignature,
   mergeSpreadsheetWorkbookSnapshots,
@@ -12673,7 +12677,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         endColumnIndex: Math.max(startColumnIndex, endColumnIndex),
       };
     };
-    const selectedRangeBounds = normalizeTableRange(activeTableRange);
+    const selectedRangeBounds = expandDocumentTableSelectionBounds(
+      normalizeTableRange(activeTableRange),
+      mergedCells,
+      { rowCount: normalizedRows.length, columnCount: columns.length },
+    );
     const wholeTableSelected = selectedAreaBlockIds.includes(block.id);
     const hasSelectedRange = Boolean(
       selectedRangeBounds
@@ -12711,17 +12719,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const getMergedAnchor = (rowIndex, columnIndex) => mergedLookup.anchorMap.get(buildTableMergeKey(rowIndex, columnIndex)) || null;
     const getMergedCover = (rowIndex, columnIndex) => mergedLookup.coveredMap.get(buildTableMergeKey(rowIndex, columnIndex)) || null;
     const getAnchorCellValue = (rowIndex, columnIndex) => String(normalizedRows[rowIndex]?.[columnIndex] || '');
-    const canMergeSelectedRange = Boolean(
-      hasSelectedRange
-      && selectedRangeBounds.startColumnIndex >= 0
-      && selectedRangeBounds.endColumnIndex >= 0
-      && mergedCells.every(merge => (
-        merge.rowIndex + merge.rowSpan - 1 < selectedRangeBounds.startRowIndex
-        || merge.rowIndex > selectedRangeBounds.endRowIndex
-        || merge.columnIndex + merge.colSpan - 1 < selectedRangeBounds.startColumnIndex
-        || merge.columnIndex > selectedRangeBounds.endColumnIndex
-      ))
-    );
+    const mergeSelectionPlan = resolveDocumentTableMergePlan(mergedCells, selectedRangeBounds);
+    const canMergeSelectedRange = hasSelectedRange && mergeSelectionPlan.canMerge;
     const persistTableMeta = (patch) => {
       const nextVisibleRows = Array.isArray(patch?.rows) ? patch.rows : normalizedRows;
       const nextColumns = Array.isArray(patch?.columns) ? patch.columns : columns;
@@ -12997,7 +12996,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         return '';
       }));
       const nextMergedCells = normalizeTableMergedCells([
-        ...mergedCells,
+        ...mergeSelectionPlan.retainedMergedCells,
         {
           rowIndex: anchorRowIndex,
           columnIndex: anchorColumnIndex,
@@ -13107,6 +13106,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         cleanup: null,
       };
       const applyRange = (targetCell) => {
+        const expandedRange = expandDocumentTableSelectionBounds({
+          startRowIndex: selectionState.startRowIndex,
+          startColumnIndex: selectionState.startColumnIndex,
+          endRowIndex: targetCell.rowIndex,
+          endColumnIndex: targetCell.columnIndex,
+        }, mergedCells, {
+          rowCount: normalizedRows.length,
+          columnCount: columns.length,
+        });
         setSelectedTableCell({
           blockId: block.id,
           type: targetCell.type,
@@ -13115,10 +13123,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         });
         setSelectedTableRange({
           blockId: block.id,
-          startRowIndex: selectionState.startRowIndex,
-          startColumnIndex: selectionState.startColumnIndex,
-          endRowIndex: targetCell.rowIndex,
-          endColumnIndex: targetCell.columnIndex,
+          ...expandedRange,
         });
       };
       const runAutoScroll = () => {
