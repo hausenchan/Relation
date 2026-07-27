@@ -134,6 +134,17 @@ export function resolveDocumentTableStyleBounds({
   };
 }
 
+export function shouldShowDocumentTableContextMenu({
+  activeStyleBounds = null,
+  blockId = null,
+  openMenuBlockId = null,
+} = {}) {
+  return Boolean(activeStyleBounds)
+    && openMenuBlockId !== null
+    && openMenuBlockId !== undefined
+    && openMenuBlockId === blockId;
+}
+
 export function resizeDocumentTableColumnWidths(columnWidths, {
   columnIndex,
   colSpan = 1,

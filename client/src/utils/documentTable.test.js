@@ -8,6 +8,7 @@ import {
   normalizeDocumentTableRowColumnWidths,
   resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableStyleBounds,
+  shouldShowDocumentTableContextMenu,
 } from './documentTable';
 
 describe('ordinary document table interactions', () => {
@@ -56,6 +57,35 @@ describe('ordinary document table interactions', () => {
       startColumnIndex: 0,
       endColumnIndex: 7,
     });
+  });
+
+  test('shows the cell operation menu only after an explicit context-menu request', () => {
+    const activeStyleBounds = {
+      startRowIndex: 1,
+      endRowIndex: 1,
+      startColumnIndex: 2,
+      endColumnIndex: 2,
+    };
+    expect(shouldShowDocumentTableContextMenu({
+      activeStyleBounds,
+      blockId: 'table-a',
+      openMenuBlockId: null,
+    })).toBe(false);
+    expect(shouldShowDocumentTableContextMenu({
+      activeStyleBounds,
+      blockId: 'table-a',
+      openMenuBlockId: 'table-a',
+    })).toBe(true);
+    expect(shouldShowDocumentTableContextMenu({
+      activeStyleBounds,
+      blockId: 'table-a',
+      openMenuBlockId: 'table-b',
+    })).toBe(false);
+    expect(shouldShowDocumentTableContextMenu({
+      activeStyleBounds: null,
+      blockId: 'table-a',
+      openMenuBlockId: 'table-a',
+    })).toBe(false);
   });
 
   test('resizes from the selected row downward without moving rows above it', () => {

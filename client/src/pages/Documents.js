@@ -137,6 +137,7 @@ import {
   normalizeDocumentTableRowColumnWidths,
   resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableStyleBounds,
+  shouldShowDocumentTableContextMenu,
 } from '../utils/documentTable';
 import {
   createDefaultSpreadsheetWorkbook,
@@ -3255,6 +3256,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [selectedBlockId, setSelectedBlockId] = useState(null);
   const [selectedTableCell, setSelectedTableCell] = useState(null);
   const [selectedTableRange, setSelectedTableRange] = useState(null);
+  const [openTableMenuBlockId, setOpenTableMenuBlockId] = useState(null);
   const [selectedSpreadsheetCell, setSelectedSpreadsheetCell] = useState({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
   const [spreadsheetCollaborators, setSpreadsheetCollaborators] = useState([]);
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
@@ -3878,6 +3880,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setEditorTitle('');
       setEditorBlocks([createBlock()]);
       setSelectedBlockId(null);
+      setSelectedTableCell(null);
+      setSelectedTableRange(null);
+      setOpenTableMenuBlockId(null);
       setSelectedSpreadsheetCell({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
       setHoveredBlockId(null);
       setOpenBlockMenuId(null);
@@ -4853,17 +4858,18 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   }, []);
 
   useEffect(() => {
-    if (!selectedTableCell && !selectedTableRange) return undefined;
+    if (!selectedTableCell && !selectedTableRange && !openTableMenuBlockId) return undefined;
     const handleTableOutsidePointerDown = (event) => {
       const target = event.target;
       if (target?.closest?.('[data-document-table-menu="true"]')) return;
       if (target?.closest?.('[data-document-table-shell="true"]')) return;
       setSelectedTableCell(null);
       setSelectedTableRange(null);
+      setOpenTableMenuBlockId(null);
     };
     document.addEventListener('pointerdown', handleTableOutsidePointerDown, true);
     return () => document.removeEventListener('pointerdown', handleTableOutsidePointerDown, true);
-  }, [selectedTableCell, selectedTableRange]);
+  }, [openTableMenuBlockId, selectedTableCell, selectedTableRange]);
 
   useEffect(() => {
     if (!docContextMenu.open) return undefined;
@@ -10004,6 +10010,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     clearAreaBlockSelection();
     setSelectedTableCell({ blockId: block.id, ...tableCell });
     setSelectedTableRange(null);
+    setOpenTableMenuBlockId(null);
     setInlineToolbar({
       blockId: block.id,
       tableCell,
@@ -13012,6 +13019,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setAreaBlockSelection([block.id]);
       setSelectedTableCell(null);
       setSelectedTableRange(null);
+      setOpenTableMenuBlockId(null);
       window.setTimeout(() => {
         document.getElementById(`doc-table-shell-${block.id}`)?.focus?.();
       }, 0);
@@ -13024,6 +13032,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       clearAreaBlockSelection();
       setSelectedTableCell({ blockId: block.id, rowIndex: nextRowIndex, columnIndex: nextColumnIndex });
       setSelectedTableRange(null);
+      setOpenTableMenuBlockId(null);
     };
     const applyCellStyleToBounds = (patch) => {
       if (!activeStyleBounds) return;
@@ -13083,6 +13092,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       clearAreaBlockSelection();
       setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
       setSelectedTableRange(null);
+      setOpenTableMenuBlockId(null);
       const selectionState = {
         blockId: block.id,
         startRowIndex: rowIndex,
@@ -13170,6 +13180,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const beginColumnResize = (event, rowIndex, columnIndex, colSpan = 1) => {
       event.preventDefault();
       event.stopPropagation();
+      setOpenTableMenuBlockId(null);
       const startX = event.clientX;
       pushEditorUndoSnapshot();
       const handleMouseMove = moveEvent => {
@@ -13309,7 +13320,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         </Button>
       </div>
     );
-    const tableMenuVisible = Boolean(activeStyleBounds);
+    const tableMenuVisible = shouldShowDocumentTableContextMenu({
+      activeStyleBounds,
+      blockId: block.id,
+      openMenuBlockId: openTableMenuBlockId,
+    });
     const tableMenu = tableMenuVisible ? (
       <div
         data-document-table-menu="true"
@@ -13366,10 +13381,17 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const insertParagraphAfterTable = () => {
       setSelectedTableCell(null);
       setSelectedTableRange(null);
+      setOpenTableMenuBlockId(null);
       clearAreaBlockSelection();
       addBlockAfter(block.id, 'paragraph', { content: '' });
     };
     const handleTableShellKeyDown = (event) => {
+      if (event.key === 'Escape' && openTableMenuBlockId === block.id) {
+        event.preventDefault();
+        event.stopPropagation();
+        setOpenTableMenuBlockId(null);
+        return;
+      }
       if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
       if (event.target?.closest?.('[contenteditable="true"]')) return;
       event.preventDefault();
@@ -13395,6 +13417,27 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         selectWholeTable();
       }
     };
+    const handleTableCellContextMenu = (event, rowIndex, columnIndex) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const anchor = getMergedCover(rowIndex, columnIndex);
+      const nextRowIndex = anchor?.rowIndex ?? rowIndex;
+      const nextColumnIndex = anchor?.columnIndex ?? columnIndex;
+      const keepSelectedRange = isCellInSelectedRange(nextRowIndex, nextColumnIndex);
+      setSelectedBlockId(block.id);
+      clearAreaBlockSelection();
+      if (!keepSelectedRange) {
+        setSelectedTableCell({
+          blockId: block.id,
+          type: 'body',
+          rowIndex: nextRowIndex,
+          columnIndex: nextColumnIndex,
+        });
+        setSelectedTableRange(null);
+      }
+      setInlineToolbar(null);
+      setOpenTableMenuBlockId(block.id);
+    };
     const renderEditableTableRow = (row, rowIndex) => (
       <tr key={`row-${rowIndex}`}>
         {row.map((cell, columnIndex) => {
@@ -13416,6 +13459,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
               rowSpan={rowSpan}
               colSpan={colSpan}
               onMouseDown={event => beginTableCellSelection(event, rowIndex, columnIndex)}
+              onContextMenu={event => handleTableCellContextMenu(event, rowIndex, columnIndex)}
               style={{
                 position: 'relative',
                 border: '1px solid #e5e7eb',
@@ -13474,6 +13518,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           data-document-table-shell="true"
           tabIndex={0}
           onKeyDown={handleTableShellKeyDown}
+          onMouseDown={event => {
+            if (event.button === 0 && !event.target?.closest?.('[data-document-table-menu="true"]')) {
+              setOpenTableMenuBlockId(null);
+            }
+          }}
           style={{ maxWidth: '100%', position: 'relative', paddingBottom: tableMenuVisible ? 8 : 0, overflow: 'visible', outline: 'none' }}
         >
           {tableMenu}
