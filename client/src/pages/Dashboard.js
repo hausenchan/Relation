@@ -85,7 +85,12 @@ const priorityMap = {
   medium: { label: '中', color: 'orange' },
   low:    { label: '低', color: 'default' },
 };
-const AI_SUGGESTION_PRIORITY_VALUES = ['high', 'medium', 'low'];
+const TASK_PRIORITY_VALUES = Object.keys(priorityMap);
+const TASK_PRIORITY_OPTIONS = TASK_PRIORITY_VALUES.map(value => ({
+  value,
+  label: priorityMap[value].label,
+}));
+const AI_SUGGESTION_PRIORITY_VALUES = [...TASK_PRIORITY_VALUES];
 const AI_SUGGESTION_STATUS_VALUES = Object.keys(aiSuggestionStatusMap);
 
 function CompletedBoostIcon() {
@@ -391,24 +396,28 @@ export default function Dashboard() {
 
   // 筛选条件 - 我指派
   const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [assignedTaskPriorityFilter, setAssignedTaskPriorityFilter] = useState([]);
   const [assignedTaskTypeFilter, setAssignedTaskTypeFilter] = useState([]);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
   const [assignedTaskTitleSearch, setAssignedTaskTitleSearch] = useState('');
 
   // 筛选条件 - 待执行
   const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [executionTaskPriorityFilter, setExecutionTaskPriorityFilter] = useState([]);
   const [executionTaskTypeFilter, setExecutionTaskTypeFilter] = useState([]);
   const [executionTaskDateRange, setExecutionTaskDateRange] = useState(null);
   const [executionTaskTitleSearch, setExecutionTaskTitleSearch] = useState('');
 
   // 筛选条件 - 需关注
   const [watchedTaskStatusFilter, setWatchedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [watchedTaskPriorityFilter, setWatchedTaskPriorityFilter] = useState([]);
   const [watchedTaskTypeFilter, setWatchedTaskTypeFilter] = useState([]);
   const [watchedTaskDateRange, setWatchedTaskDateRange] = useState(null);
   const [watchedTaskTitleSearch, setWatchedTaskTitleSearch] = useState('');
 
   // 筛选条件 - 团队
   const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [teamTaskPriorityFilter, setTeamTaskPriorityFilter] = useState([]);
   const [teamTaskTypeFilter, setTeamTaskTypeFilter] = useState([]);
   const [teamTaskDateRange, setTeamTaskDateRange] = useState(null);
   const [teamTaskAssignerFilter, setTeamTaskAssignerFilter] = useState([]);
@@ -741,17 +750,21 @@ export default function Dashboard() {
   const clearSecondaryTaskFiltersForTab = (tabKey) => {
     if (tabKey === TASK_TAB_KEYS.assigned) {
       setAssignedTaskTitleSearch('');
+      setAssignedTaskPriorityFilter([]);
       setAssignedTaskTypeFilter([]);
     } else if (tabKey === TASK_TAB_KEYS.watched) {
       setWatchedTaskTitleSearch('');
+      setWatchedTaskPriorityFilter([]);
       setWatchedTaskTypeFilter([]);
     } else if (tabKey === TASK_TAB_KEYS.team) {
       setTeamTaskTitleSearch('');
+      setTeamTaskPriorityFilter([]);
       setTeamTaskTypeFilter([]);
       setTeamTaskAssignerFilter([]);
       setTeamTaskFollowerFilter([]);
     } else {
       setExecutionTaskTitleSearch('');
+      setExecutionTaskPriorityFilter([]);
       setExecutionTaskTypeFilter([]);
     }
   };
@@ -1148,6 +1161,7 @@ export default function Dashboard() {
   const filteredAssignedTasks = assignedTasks.filter(t => {
     if (!isTitleSearchHit(t, assignedTaskTitleSearch)) return false;
     if (!assignedTaskStatusFilter.includes(t.display_status)) return false;
+    if (assignedTaskPriorityFilter.length > 0 && !assignedTaskPriorityFilter.includes(t.priority)) return false;
     if (assignedTaskTypeFilter.length > 0 && !assignedTaskTypeFilter.includes(t.task_type)) return false;
     if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.assigned) && !isWithinRange(t.plan_date, assignedTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.assigned);
@@ -1156,6 +1170,7 @@ export default function Dashboard() {
   const filteredExecutionTasks = executionTasks.filter(t => {
     if (!isTitleSearchHit(t, executionTaskTitleSearch)) return false;
     if (!executionTaskStatusFilter.includes(t.display_status)) return false;
+    if (executionTaskPriorityFilter.length > 0 && !executionTaskPriorityFilter.includes(t.priority)) return false;
     if (executionTaskTypeFilter.length > 0 && !executionTaskTypeFilter.includes(t.task_type)) return false;
     if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.execution) && !isWithinRange(t.plan_date, executionTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.execution);
@@ -1164,6 +1179,7 @@ export default function Dashboard() {
   const filteredWatchedTasks = watchedTasks.filter(t => {
     if (!isTitleSearchHit(t, watchedTaskTitleSearch)) return false;
     if (!watchedTaskStatusFilter.includes(t.display_status)) return false;
+    if (watchedTaskPriorityFilter.length > 0 && !watchedTaskPriorityFilter.includes(t.priority)) return false;
     if (watchedTaskTypeFilter.length > 0 && !watchedTaskTypeFilter.includes(t.task_type)) return false;
     if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.watched) && !isWithinRange(t.plan_date, watchedTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.watched);
@@ -1172,6 +1188,7 @@ export default function Dashboard() {
   const filteredTeamTasks = teamTasks.filter(t => {
     if (!isTitleSearchHit(t, teamTaskTitleSearch)) return false;
     if (!teamTaskStatusFilter.includes(t.display_status)) return false;
+    if (teamTaskPriorityFilter.length > 0 && !teamTaskPriorityFilter.includes(t.priority)) return false;
     if (teamTaskTypeFilter.length > 0 && !teamTaskTypeFilter.includes(t.task_type)) return false;
     if (teamTaskAssignerFilter.length > 0 && !teamTaskAssignerFilter.includes(t.assigner_name)) return false;
     if (teamTaskFollowerFilter.length > 0 && !teamTaskFollowerFilter.includes(t.follower_name)) return false;
@@ -1980,6 +1997,18 @@ export default function Dashboard() {
               <Select
                 mode="multiple"
                 allowClear
+                placeholder="优先级筛选"
+                value={executionTaskPriorityFilter}
+                onChange={value => {
+                  clearTaskStatFilterForTab(TASK_TAB_KEYS.execution);
+                  setExecutionTaskPriorityFilter(value);
+                }}
+                style={isMobile ? { width: '100%' } : { width: 160 }}
+                options={TASK_PRIORITY_OPTIONS}
+              />
+              <Select
+                mode="multiple"
+                allowClear
                 placeholder="任务类型筛选"
                 value={executionTaskTypeFilter}
                 onChange={value => {
@@ -1998,12 +2027,13 @@ export default function Dashboard() {
                 }}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(executionTaskTitleSearch.trim() || executionTaskStatusFilter.length !== TASK_STATUS_VALUES.length || executionTaskTypeFilter.length > 0 || executionTaskDateRange) && (
+              {(executionTaskTitleSearch.trim() || executionTaskStatusFilter.length !== TASK_STATUS_VALUES.length || executionTaskPriorityFilter.length > 0 || executionTaskTypeFilter.length > 0 || executionTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
                     setExecutionTaskTitleSearch('');
                     setExecutionTaskStatusFilter([...TASK_STATUS_VALUES]);
+                    setExecutionTaskPriorityFilter([]);
                     setExecutionTaskTypeFilter([]);
                     setExecutionTaskDateRange(null);
                     clearTaskStatFilterForTab(TASK_TAB_KEYS.execution);
@@ -2079,6 +2109,18 @@ export default function Dashboard() {
               <Select
                 mode="multiple"
                 allowClear
+                placeholder="优先级筛选"
+                value={assignedTaskPriorityFilter}
+                onChange={value => {
+                  clearTaskStatFilterForTab(TASK_TAB_KEYS.assigned);
+                  setAssignedTaskPriorityFilter(value);
+                }}
+                style={isMobile ? { width: '100%' } : { width: 160 }}
+                options={TASK_PRIORITY_OPTIONS}
+              />
+              <Select
+                mode="multiple"
+                allowClear
                 placeholder="任务类型筛选"
                 value={assignedTaskTypeFilter}
                 onChange={value => {
@@ -2097,12 +2139,13 @@ export default function Dashboard() {
                 }}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(assignedTaskTitleSearch.trim() || assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskTypeFilter.length > 0 || assignedTaskDateRange) && (
+              {(assignedTaskTitleSearch.trim() || assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskPriorityFilter.length > 0 || assignedTaskTypeFilter.length > 0 || assignedTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
                     setAssignedTaskTitleSearch('');
                     setAssignedTaskStatusFilter([...TASK_STATUS_VALUES]);
+                    setAssignedTaskPriorityFilter([]);
                     setAssignedTaskTypeFilter([]);
                     setAssignedTaskDateRange(null);
                     clearTaskStatFilterForTab(TASK_TAB_KEYS.assigned);
@@ -2177,6 +2220,18 @@ export default function Dashboard() {
             <Select
               mode="multiple"
               allowClear
+              placeholder="优先级筛选"
+              value={watchedTaskPriorityFilter}
+              onChange={value => {
+                clearTaskStatFilterForTab(TASK_TAB_KEYS.watched);
+                setWatchedTaskPriorityFilter(value);
+              }}
+              style={isMobile ? { width: '100%' } : { width: 160 }}
+              options={TASK_PRIORITY_OPTIONS}
+            />
+            <Select
+              mode="multiple"
+              allowClear
               placeholder="任务类型筛选"
               value={watchedTaskTypeFilter}
               onChange={value => {
@@ -2195,12 +2250,13 @@ export default function Dashboard() {
               }}
               style={isMobile ? { width: '100%' } : { width: 240 }}
             />
-            {(watchedTaskTitleSearch.trim() || watchedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || watchedTaskTypeFilter.length > 0 || watchedTaskDateRange) && (
+            {(watchedTaskTitleSearch.trim() || watchedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || watchedTaskPriorityFilter.length > 0 || watchedTaskTypeFilter.length > 0 || watchedTaskDateRange) && (
               <Button
                 size="small"
                 onClick={() => {
                   setWatchedTaskTitleSearch('');
                   setWatchedTaskStatusFilter([...TASK_STATUS_VALUES]);
+                  setWatchedTaskPriorityFilter([]);
                   setWatchedTaskTypeFilter([]);
                   setWatchedTaskDateRange(null);
                   clearTaskStatFilterForTab(TASK_TAB_KEYS.watched);
@@ -2275,6 +2331,18 @@ export default function Dashboard() {
               <Select
                 mode="multiple"
                 allowClear
+                placeholder="优先级筛选"
+                value={teamTaskPriorityFilter}
+                onChange={value => {
+                  clearTaskStatFilterForTab(TASK_TAB_KEYS.team);
+                  setTeamTaskPriorityFilter(value);
+                }}
+                style={isMobile ? { width: '100%' } : { width: 160 }}
+                options={TASK_PRIORITY_OPTIONS}
+              />
+              <Select
+                mode="multiple"
+                allowClear
                 placeholder="任务类型筛选"
                 value={teamTaskTypeFilter}
                 onChange={value => {
@@ -2315,12 +2383,13 @@ export default function Dashboard() {
                 }}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(teamTaskTitleSearch.trim() || teamTaskStatusFilter.length !== TASK_STATUS_VALUES.length || teamTaskTypeFilter.length > 0 || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
+              {(teamTaskTitleSearch.trim() || teamTaskStatusFilter.length !== TASK_STATUS_VALUES.length || teamTaskPriorityFilter.length > 0 || teamTaskTypeFilter.length > 0 || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
                 <Button
                   size="small"
                   onClick={() => {
                     setTeamTaskTitleSearch('');
                     setTeamTaskStatusFilter([...TASK_STATUS_VALUES]);
+                    setTeamTaskPriorityFilter([]);
                     setTeamTaskTypeFilter([]);
                     setTeamTaskDateRange(null);
                     setTeamTaskAssignerFilter([]);
