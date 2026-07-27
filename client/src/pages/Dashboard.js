@@ -16,7 +16,7 @@ import {
   DASHBOARD_TASK_STATUS_SORT_RANK,
   sortDashboardTasksByDefault,
 } from '../utils/dashboardTaskSort';
-import { TASK_TYPE_META as taskTypeMap, TASK_TYPE_VALUES } from '../utils/taskTypes';
+import { TASK_TYPE_META as taskTypeMap, TASK_TYPE_OPTIONS, TASK_TYPE_VALUES } from '../utils/taskTypes';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -391,21 +391,25 @@ export default function Dashboard() {
 
   // 筛选条件 - 我指派
   const [assignedTaskStatusFilter, setAssignedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [assignedTaskTypeFilter, setAssignedTaskTypeFilter] = useState([]);
   const [assignedTaskDateRange, setAssignedTaskDateRange] = useState(null);
   const [assignedTaskTitleSearch, setAssignedTaskTitleSearch] = useState('');
 
   // 筛选条件 - 待执行
   const [executionTaskStatusFilter, setExecutionTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [executionTaskTypeFilter, setExecutionTaskTypeFilter] = useState([]);
   const [executionTaskDateRange, setExecutionTaskDateRange] = useState(null);
   const [executionTaskTitleSearch, setExecutionTaskTitleSearch] = useState('');
 
   // 筛选条件 - 需关注
   const [watchedTaskStatusFilter, setWatchedTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [watchedTaskTypeFilter, setWatchedTaskTypeFilter] = useState([]);
   const [watchedTaskDateRange, setWatchedTaskDateRange] = useState(null);
   const [watchedTaskTitleSearch, setWatchedTaskTitleSearch] = useState('');
 
   // 筛选条件 - 团队
   const [teamTaskStatusFilter, setTeamTaskStatusFilter] = useState([...TASK_STATUS_VALUES]);
+  const [teamTaskTypeFilter, setTeamTaskTypeFilter] = useState([]);
   const [teamTaskDateRange, setTeamTaskDateRange] = useState(null);
   const [teamTaskAssignerFilter, setTeamTaskAssignerFilter] = useState([]);
   const [teamTaskFollowerFilter, setTeamTaskFollowerFilter] = useState([]);
@@ -737,14 +741,18 @@ export default function Dashboard() {
   const clearSecondaryTaskFiltersForTab = (tabKey) => {
     if (tabKey === TASK_TAB_KEYS.assigned) {
       setAssignedTaskTitleSearch('');
+      setAssignedTaskTypeFilter([]);
     } else if (tabKey === TASK_TAB_KEYS.watched) {
       setWatchedTaskTitleSearch('');
+      setWatchedTaskTypeFilter([]);
     } else if (tabKey === TASK_TAB_KEYS.team) {
       setTeamTaskTitleSearch('');
+      setTeamTaskTypeFilter([]);
       setTeamTaskAssignerFilter([]);
       setTeamTaskFollowerFilter([]);
     } else {
       setExecutionTaskTitleSearch('');
+      setExecutionTaskTypeFilter([]);
     }
   };
 
@@ -1140,6 +1148,7 @@ export default function Dashboard() {
   const filteredAssignedTasks = assignedTasks.filter(t => {
     if (!isTitleSearchHit(t, assignedTaskTitleSearch)) return false;
     if (!assignedTaskStatusFilter.includes(t.display_status)) return false;
+    if (assignedTaskTypeFilter.length > 0 && !assignedTaskTypeFilter.includes(t.task_type)) return false;
     if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.assigned) && !isWithinRange(t.plan_date, assignedTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.assigned);
   });
@@ -1147,6 +1156,7 @@ export default function Dashboard() {
   const filteredExecutionTasks = executionTasks.filter(t => {
     if (!isTitleSearchHit(t, executionTaskTitleSearch)) return false;
     if (!executionTaskStatusFilter.includes(t.display_status)) return false;
+    if (executionTaskTypeFilter.length > 0 && !executionTaskTypeFilter.includes(t.task_type)) return false;
     if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.execution) && !isWithinRange(t.plan_date, executionTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.execution);
   });
@@ -1154,6 +1164,7 @@ export default function Dashboard() {
   const filteredWatchedTasks = watchedTasks.filter(t => {
     if (!isTitleSearchHit(t, watchedTaskTitleSearch)) return false;
     if (!watchedTaskStatusFilter.includes(t.display_status)) return false;
+    if (watchedTaskTypeFilter.length > 0 && !watchedTaskTypeFilter.includes(t.task_type)) return false;
     if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.watched) && !isWithinRange(t.plan_date, watchedTaskDateRange)) return false;
     return isTaskStatFilterHit(t, TASK_TAB_KEYS.watched);
   });
@@ -1161,6 +1172,7 @@ export default function Dashboard() {
   const filteredTeamTasks = teamTasks.filter(t => {
     if (!isTitleSearchHit(t, teamTaskTitleSearch)) return false;
     if (!teamTaskStatusFilter.includes(t.display_status)) return false;
+    if (teamTaskTypeFilter.length > 0 && !teamTaskTypeFilter.includes(t.task_type)) return false;
     if (teamTaskAssignerFilter.length > 0 && !teamTaskAssignerFilter.includes(t.assigner_name)) return false;
     if (teamTaskFollowerFilter.length > 0 && !teamTaskFollowerFilter.includes(t.follower_name)) return false;
     if (!shouldUseTaskStatDateFilter(TASK_TAB_KEYS.team) && !isWithinRange(t.plan_date, teamTaskDateRange)) return false;
@@ -1965,6 +1977,18 @@ export default function Dashboard() {
                 style={isMobile ? { width: '100%' } : { minWidth: 200 }}
                 options={TASK_STATUS_OPTIONS}
               />
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="任务类型筛选"
+                value={executionTaskTypeFilter}
+                onChange={value => {
+                  clearTaskStatFilterForTab(TASK_TAB_KEYS.execution);
+                  setExecutionTaskTypeFilter(value);
+                }}
+                style={isMobile ? { width: '100%' } : { width: 180 }}
+                options={TASK_TYPE_OPTIONS}
+              />
               <RangePicker
                 placeholder={['开始日期', '结束日期']}
                 value={executionTaskDateRange}
@@ -1974,12 +1998,13 @@ export default function Dashboard() {
                 }}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(executionTaskTitleSearch.trim() || executionTaskStatusFilter.length !== TASK_STATUS_VALUES.length || executionTaskDateRange) && (
+              {(executionTaskTitleSearch.trim() || executionTaskStatusFilter.length !== TASK_STATUS_VALUES.length || executionTaskTypeFilter.length > 0 || executionTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
                     setExecutionTaskTitleSearch('');
                     setExecutionTaskStatusFilter([...TASK_STATUS_VALUES]);
+                    setExecutionTaskTypeFilter([]);
                     setExecutionTaskDateRange(null);
                     clearTaskStatFilterForTab(TASK_TAB_KEYS.execution);
                   }}
@@ -2051,6 +2076,18 @@ export default function Dashboard() {
                 style={isMobile ? { width: '100%' } : { minWidth: 200 }}
                 options={TASK_STATUS_OPTIONS}
               />
+              <Select
+                mode="multiple"
+                allowClear
+                placeholder="任务类型筛选"
+                value={assignedTaskTypeFilter}
+                onChange={value => {
+                  clearTaskStatFilterForTab(TASK_TAB_KEYS.assigned);
+                  setAssignedTaskTypeFilter(value);
+                }}
+                style={isMobile ? { width: '100%' } : { width: 180 }}
+                options={TASK_TYPE_OPTIONS}
+              />
               <RangePicker
                 placeholder={['开始日期', '结束日期']}
                 value={assignedTaskDateRange}
@@ -2060,12 +2097,13 @@ export default function Dashboard() {
                 }}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(assignedTaskTitleSearch.trim() || assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskDateRange) && (
+              {(assignedTaskTitleSearch.trim() || assignedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || assignedTaskTypeFilter.length > 0 || assignedTaskDateRange) && (
                 <Button
                   size="small"
                   onClick={() => {
                     setAssignedTaskTitleSearch('');
                     setAssignedTaskStatusFilter([...TASK_STATUS_VALUES]);
+                    setAssignedTaskTypeFilter([]);
                     setAssignedTaskDateRange(null);
                     clearTaskStatFilterForTab(TASK_TAB_KEYS.assigned);
                   }}
@@ -2136,6 +2174,18 @@ export default function Dashboard() {
               style={isMobile ? { width: '100%' } : { minWidth: 200 }}
               options={TASK_STATUS_OPTIONS}
             />
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="任务类型筛选"
+              value={watchedTaskTypeFilter}
+              onChange={value => {
+                clearTaskStatFilterForTab(TASK_TAB_KEYS.watched);
+                setWatchedTaskTypeFilter(value);
+              }}
+              style={isMobile ? { width: '100%' } : { width: 180 }}
+              options={TASK_TYPE_OPTIONS}
+            />
             <RangePicker
               placeholder={['开始日期', '结束日期']}
               value={watchedTaskDateRange}
@@ -2145,12 +2195,13 @@ export default function Dashboard() {
               }}
               style={isMobile ? { width: '100%' } : { width: 240 }}
             />
-            {(watchedTaskTitleSearch.trim() || watchedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || watchedTaskDateRange) && (
+            {(watchedTaskTitleSearch.trim() || watchedTaskStatusFilter.length !== TASK_STATUS_VALUES.length || watchedTaskTypeFilter.length > 0 || watchedTaskDateRange) && (
               <Button
                 size="small"
                 onClick={() => {
                   setWatchedTaskTitleSearch('');
                   setWatchedTaskStatusFilter([...TASK_STATUS_VALUES]);
+                  setWatchedTaskTypeFilter([]);
                   setWatchedTaskDateRange(null);
                   clearTaskStatFilterForTab(TASK_TAB_KEYS.watched);
                 }}
@@ -2223,6 +2274,18 @@ export default function Dashboard() {
               />
               <Select
                 mode="multiple"
+                allowClear
+                placeholder="任务类型筛选"
+                value={teamTaskTypeFilter}
+                onChange={value => {
+                  clearTaskStatFilterForTab(TASK_TAB_KEYS.team);
+                  setTeamTaskTypeFilter(value);
+                }}
+                style={isMobile ? { width: '100%' } : { width: 180 }}
+                options={TASK_TYPE_OPTIONS}
+              />
+              <Select
+                mode="multiple"
                 placeholder="指派人筛选"
                 value={teamTaskAssignerFilter}
                 onChange={value => {
@@ -2252,12 +2315,13 @@ export default function Dashboard() {
                 }}
                 style={isMobile ? { width: '100%' } : { width: 240 }}
               />
-              {(teamTaskTitleSearch.trim() || teamTaskStatusFilter.length !== TASK_STATUS_VALUES.length || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
+              {(teamTaskTitleSearch.trim() || teamTaskStatusFilter.length !== TASK_STATUS_VALUES.length || teamTaskTypeFilter.length > 0 || teamTaskDateRange || teamTaskAssignerFilter.length > 0 || teamTaskFollowerFilter.length > 0) && (
                 <Button
                   size="small"
                   onClick={() => {
                     setTeamTaskTitleSearch('');
                     setTeamTaskStatusFilter([...TASK_STATUS_VALUES]);
+                    setTeamTaskTypeFilter([]);
                     setTeamTaskDateRange(null);
                     setTeamTaskAssignerFilter([]);
                     setTeamTaskFollowerFilter([]);
