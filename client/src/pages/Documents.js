@@ -63,12 +63,10 @@ import {
   StarFilled,
   StarOutlined,
   TableOutlined,
-  TeamOutlined,
   UndoOutlined,
   UpOutlined,
   UploadOutlined,
   UserAddOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/businessTime';
@@ -9395,32 +9393,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             style={{ width: '100%', marginTop: 8 }}
           />
         </div>
-        <Divider style={{ margin: '2px 0' }} />
-        <Space size={6} wrap>
-          {(draft.project_group_ids || []).map(id => {
-            const group = projectGroups.find(item => Number(item.id) === Number(id));
-            return <Tag key={`pg-${id}`} icon={<TeamOutlined />} color="blue">{group?.name || `项目组 ${id}`}</Tag>;
-          })}
-          {(draft.departments || []).map(key => (
-            <Tag key={`dept-${key}`} color="green">{orgDepartmentLabel[key] || key}</Tag>
-          ))}
-          {(draft.team_ids || []).map(id => {
-            const team = teams.find(item => Number(item.id) === Number(id));
-            return <Tag key={`team-${id}`} icon={<TeamOutlined />} color="purple">{team?.name || `小组 ${id}`}</Tag>;
-          })}
-          {(draft.user_ids || []).map(id => {
-            const item = users.find(user => Number(user.id) === Number(id));
-            const isDefaultUser = defaultDocumentCxoUserIdSet.has(Number(id));
-            return (
-              <Tag key={`user-${id}`} icon={<UserOutlined />} color={isDefaultUser ? 'purple' : 'orange'}>
-                {item?.display_name || item?.username || `用户 ${id}`}
-              </Tag>
-            );
-          })}
-          {draftToShares(draft).length === 0 && (
-            <Text type="secondary">{isBulk ? '尚未追加共享对象' : '仅创建人可访问'}</Text>
-          )}
-        </Space>
         </Space>
       </Spin>
     );
