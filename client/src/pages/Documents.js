@@ -13349,6 +13349,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         }}
       >
         <div style={{ padding: '8px 10px' }}>
+          {renderTableMenuItem({ icon: '▣', label: '合并单元格', disabled: !canMergeSelectedRange, onClick: mergeSelectedCells })}
           {renderTableMenuItem({
             icon: '☰',
             label: '单元格文字居中',
@@ -13372,7 +13373,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           {renderTableMenuItem({ icon: '▭', label: '在下方插入一行', onClick: () => insertRow(menuRowIndex, 'after') })}
           {renderTableMenuItem({ icon: '▯', label: '在左边插入一列', onClick: () => insertColumn(menuColumnIndex, 'before') })}
           {renderTableMenuItem({ icon: '▯', label: '在右边插入一列', onClick: () => insertColumn(menuColumnIndex, 'after') })}
-          {renderTableMenuItem({ icon: '▣', label: '合并单元格', disabled: !canMergeSelectedRange, onClick: mergeSelectedCells })}
         </div>
         <Divider style={{ margin: 0 }} />
         <div style={{ padding: '8px 10px' }}>
@@ -13429,7 +13429,14 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       const nextRowIndex = anchor?.rowIndex ?? rowIndex;
       const nextColumnIndex = anchor?.columnIndex ?? columnIndex;
       const keepSelectedRange = isCellInSelectedRange(nextRowIndex, nextColumnIndex);
+      const cellRect = event.currentTarget?.getBoundingClientRect?.();
       const menuPosition = resolveDocumentTableContextMenuPosition({
+        anchorRect: cellRect ? {
+          left: cellRect.left,
+          right: cellRect.right,
+          top: cellRect.top,
+          bottom: cellRect.bottom,
+        } : null,
         anchorX: event.clientX,
         anchorY: event.clientY,
         viewportWidth: window.innerWidth,

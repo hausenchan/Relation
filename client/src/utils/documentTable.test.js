@@ -89,18 +89,31 @@ describe('ordinary document table interactions', () => {
     })).toBe(false);
   });
 
-  test('keeps the context menu inside a 13-inch viewport near right and bottom edges', () => {
+  test('places the context menu directly beside a left-side cell', () => {
     const position = resolveDocumentTableContextMenuPosition({
-      anchorX: 1210,
-      anchorY: 735,
+      anchorRect: { left: 72, right: 232, top: 300, bottom: 342 },
       viewportWidth: 1280,
       viewportHeight: 800,
     });
     expect(position).toEqual({
-      left: 902,
-      top: 87,
-      width: 300,
-      maxHeight: 640,
+      left: 240,
+      top: 300,
+      width: 280,
+      maxHeight: 488,
+    });
+  });
+
+  test('keeps the menu beside the cell and inside a 13-inch viewport at right and bottom edges', () => {
+    const position = resolveDocumentTableContextMenuPosition({
+      anchorRect: { left: 1140, right: 1230, top: 700, bottom: 742 },
+      viewportWidth: 1280,
+      viewportHeight: 800,
+    });
+    expect(position).toEqual({
+      left: 852,
+      top: 468,
+      width: 280,
+      maxHeight: 320,
     });
     expect(position.left + position.width).toBeLessThanOrEqual(1268);
     expect(position.top + position.maxHeight).toBeLessThanOrEqual(788);
@@ -108,16 +121,15 @@ describe('ordinary document table interactions', () => {
 
   test('shrinks and clamps the context menu on a narrow viewport', () => {
     const position = resolveDocumentTableContextMenuPosition({
-      anchorX: 310,
-      anchorY: 540,
-      viewportWidth: 320,
+      anchorRect: { left: 20, right: 120, top: 500, bottom: 542 },
+      viewportWidth: 260,
       viewportHeight: 568,
     });
     expect(position).toEqual({
       left: 12,
-      top: 72,
-      width: 296,
-      maxHeight: 484,
+      top: 236,
+      width: 236,
+      maxHeight: 320,
     });
   });
 

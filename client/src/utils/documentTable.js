@@ -146,12 +146,14 @@ export function shouldShowDocumentTableContextMenu({
 }
 
 export function resolveDocumentTableContextMenuPosition({
+  anchorRect = null,
   anchorX = 0,
   anchorY = 0,
   viewportWidth = 0,
   viewportHeight = 0,
-  menuWidth = 300,
+  menuWidth = 280,
   menuHeight = 640,
+  minimumMenuHeight = 320,
   viewportTop = 72,
   viewportMargin = 12,
   anchorOffset = 8,
@@ -166,25 +168,47 @@ export function resolveDocumentTableContextMenuPosition({
   const safeOffset = Math.max(0, Math.round(Number(anchorOffset) || 0));
   const availableWidth = Math.max(1, safeViewportWidth - (safeMargin * 2));
   const availableHeight = Math.max(1, safeViewportHeight - safeTop - safeMargin);
-  const width = Math.min(Math.max(1, Math.round(Number(menuWidth) || 300)), availableWidth);
-  const maxHeight = Math.min(Math.max(1, Math.round(Number(menuHeight) || 640)), availableHeight);
-  const safeAnchorX = Math.max(0, Math.min(safeViewportWidth, Number(anchorX) || 0));
-  const safeAnchorY = Math.max(0, Math.min(safeViewportHeight, Number(anchorY) || 0));
+  const width = Math.min(Math.max(1, Math.round(Number(menuWidth) || 280)), availableWidth);
+  const preferredHeight = Math.min(Math.max(1, Math.round(Number(menuHeight) || 640)), availableHeight);
+  const minimumHeight = Math.min(
+    preferredHeight,
+    Math.max(1, Math.round(Number(minimumMenuHeight) || 320)),
+  );
+  const fallbackX = Math.max(0, Math.min(safeViewportWidth, Number(anchorX) || 0));
+  const fallbackY = Math.max(0, Math.min(safeViewportHeight, Number(anchorY) || 0));
+  const rawLeft = Number(anchorRect?.left);
+  const rawRight = Number(anchorRect?.right);
+  const rawTop = Number(anchorRect?.top);
+  const rawBottom = Number(anchorRect?.bottom);
+  const normalizedLeft = Number.isFinite(rawLeft) ? rawLeft : fallbackX;
+  const normalizedRight = Number.isFinite(rawRight) ? rawRight : normalizedLeft;
+  const normalizedTop = Number.isFinite(rawTop) ? rawTop : fallbackY;
+  const normalizedBottom = Number.isFinite(rawBottom) ? rawBottom : normalizedTop;
+  const anchorLeft = Math.max(0, Math.min(safeViewportWidth, Math.min(normalizedLeft, normalizedRight)));
+  const anchorRight = Math.max(0, Math.min(safeViewportWidth, Math.max(normalizedLeft, normalizedRight)));
+  const anchorTop = Math.max(safeTop, Math.min(
+    safeViewportHeight - safeMargin,
+    Math.min(normalizedTop, normalizedBottom),
+  ));
   const maxLeft = Math.max(safeMargin, safeViewportWidth - safeMargin - width);
-  const maxTop = Math.max(safeTop, safeViewportHeight - safeMargin - maxHeight);
-  let left = safeAnchorX + safeOffset;
-  let top = safeAnchorY + safeOffset;
-
-  if (left + width > safeViewportWidth - safeMargin) {
-    left = safeAnchorX - width - safeOffset;
-  }
-  if (top + maxHeight > safeViewportHeight - safeMargin) {
-    top = safeAnchorY - maxHeight - safeOffset;
-  }
+  const viewportRight = safeViewportWidth - safeMargin;
+  const viewportBottom = safeViewportHeight - safeMargin;
+  const rightCandidate = anchorRight + safeOffset;
+  const leftCandidate = anchorLeft - width - safeOffset;
+  const fitsRight = rightCandidate + width <= viewportRight;
+  const fitsLeft = leftCandidate >= safeMargin;
+  const spaceRight = Math.max(0, viewportRight - anchorRight - safeOffset);
+  const spaceLeft = Math.max(0, anchorLeft - safeOffset - safeMargin);
+  const preferredLeft = fitsRight || (!fitsLeft && spaceRight >= spaceLeft)
+    ? rightCandidate
+    : leftCandidate;
+  const availableBelowAnchor = Math.max(0, viewportBottom - anchorTop);
+  const maxHeight = Math.min(preferredHeight, Math.max(minimumHeight, availableBelowAnchor));
+  const maxTop = Math.max(safeTop, viewportBottom - maxHeight);
 
   return {
-    left: Math.round(Math.max(safeMargin, Math.min(left, maxLeft))),
-    top: Math.round(Math.max(safeTop, Math.min(top, maxTop))),
+    left: Math.round(Math.max(safeMargin, Math.min(preferredLeft, maxLeft))),
+    top: Math.round(Math.max(safeTop, Math.min(anchorTop, maxTop))),
     width,
     maxHeight,
   };
