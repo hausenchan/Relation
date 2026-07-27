@@ -355,7 +355,7 @@ export default function Dashboard() {
   const [executionTasks, setExecutionTasks] = useState([]);
   const [watchedTasks, setWatchedTasks] = useState([]);
   const [teamTasks, setTeamTasks] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
   const [taskSaving, setTaskSaving] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -787,23 +787,16 @@ export default function Dashboard() {
     setLoading(true);
     try {
       const [
-        statsResult,
-        remindersResult,
         tasksResult,
         myTasksResult,
         followUpResult,
         watchedFollowUpResult,
       ] = await Promise.allSettled([
-        statsApi.get(),
-        remindersApi.list({ done: 0, limit: 120 }),
         tasksApi.list({ parent_id: 'null', limit: 300 }),
         tasksApi.list({ parent_id: 'null', mine: '1' }),
         followUpTasksApi.list(canManageTeamTasks ? { all: '1', limit: 300 } : { limit: 300 }),
         followUpTasksApi.watch({ limit: 200 }),
       ]);
-
-      if (statsResult.status === 'fulfilled') setStats(statsResult.value);
-      if (remindersResult.status === 'fulfilled') setReminders(remindersResult.value);
 
       const visibleTasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
       const myTasks = myTasksResult.status === 'fulfilled' ? myTasksResult.value : [];
@@ -814,6 +807,14 @@ export default function Dashboard() {
       setExecutionTasks(buildExecutionTasks(allTasks, allFollowUpData));
       setWatchedTasks(buildWatchedTasks(allTasks, watchedFollowUpData));
       setTeamTasks(buildTeamTasks(allTasks, allFollowUpData));
+      setLoading(false);
+
+      const [statsResult, remindersResult] = await Promise.allSettled([
+        statsApi.get(),
+        remindersApi.list({ done: 0, limit: 120 }),
+      ]);
+      if (statsResult.status === 'fulfilled') setStats(statsResult.value);
+      if (remindersResult.status === 'fulfilled') setReminders(remindersResult.value);
 
     } catch (err) {
       console.error('加载数据失败:', err);

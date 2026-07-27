@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { auditApiPerformance, percentile } = require('../../scripts/performance-audit');
+const {
+  DEFAULT_ENDPOINTS,
+  auditApiPerformance,
+  percentile,
+  timedFetch,
+} = require('../../scripts/performance-audit');
 
 test('calculates stable percentiles', () => {
   assert.equal(percentile([5, 1, 4, 2, 3], 0.5), 3);
@@ -30,4 +35,19 @@ test('marks slow and server-error endpoints as failed', async () => {
   });
   assert.equal(report.results[0].passed, true);
   assert.equal(report.results[1].passed, false);
+});
+
+test('covers the main menu list endpoints', () => {
+  assert.equal(DEFAULT_ENDPOINTS.includes('/documents?favorite=1&limit=50'), true);
+  assert.equal(DEFAULT_ENDPOINTS.includes('/opportunities?limit=50'), true);
+  assert.equal(DEFAULT_ENDPOINTS.includes('/media-management'), true);
+});
+
+test('captures server response time headers separately from round trip time', async () => {
+  const sample = await timedFetch(async () => new Response('[]', {
+    status: 200,
+    headers: { 'X-Response-Time': '42.5ms' },
+  }), 'http://local.test/api/fast');
+  assert.equal(sample.server_ms, 42.5);
+  assert.equal(sample.status, 200);
 });

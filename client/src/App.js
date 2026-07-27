@@ -663,25 +663,45 @@ function AppLayout() {
   }, [location.pathname, currentFullPath, user, workspaceTabsStorageKey, tabStorageKey]);
 
   useEffect(() => {
-    if (!user) return;
-    remindersApi.list({ done: 0 }).then(r => {
-      const upcoming = r.filter(item => {
-        const d = new Date(item.remind_date);
+    if (!user) return undefined;
+    let cancelled = false;
+    const canReview = ['leader', 'admin', 'sales_director'].includes(user.role);
+    const refreshMenuCounts = async () => {
+      if (document.visibilityState === 'hidden') return;
+      const [remindersResult, followUpResult, taskResult, giftsResult, tripsResult] = await Promise.allSettled([
+        remindersApi.list({ done: 0, limit: 100 }),
+        followUpTasksApi.count(),
+        tasksApi.count(),
+        canReview ? giftRequestsApi.list({ status: 'pending', limit: 100 }) : Promise.resolve([]),
+        canReview ? tripsApi.list({ status: 'pending', limit: 100 }) : Promise.resolve([]),
+      ]);
+      if (cancelled) return;
+      if (remindersResult.status === 'fulfilled') {
         const today = new Date();
-        const diff = Math.ceil((d - today) / (1000 * 60 * 60 * 24));
-        return diff <= 7;
-      });
-      setPendingCount(upcoming.length);
-    }).catch(() => {});
-    if (['leader', 'admin', 'sales_director'].includes(user.role)) {
-      giftRequestsApi.list({ status: 'pending' }).then(r => setPendingGiftCount(r.length)).catch(() => {});
-      tripsApi.list({ status: 'pending' }).then(r => setPendingTripCount(r.length)).catch(() => {});
-    }
-    // 待跟进任务数量（所有角色）
-    followUpTasksApi.count().then(r => setFollowUpCount(r.count)).catch(() => {});
-    // 今日未完成商务任务数（所有商务角色）
-    tasksApi.count().then(r => setTodayTaskCount(r.count)).catch(() => {});
-  }, [location, user]);
+        setPendingCount(remindersResult.value.filter(item => {
+          const diff = Math.ceil((new Date(item.remind_date) - today) / (1000 * 60 * 60 * 24));
+          return diff <= 7;
+        }).length);
+      }
+      if (followUpResult.status === 'fulfilled') setFollowUpCount(followUpResult.value.count);
+      if (taskResult.status === 'fulfilled') setTodayTaskCount(taskResult.value.count);
+      if (giftsResult.status === 'fulfilled') setPendingGiftCount(giftsResult.value.length);
+      if (tripsResult.status === 'fulfilled') setPendingTripCount(tripsResult.value.length);
+    };
+
+    const initialTimer = window.setTimeout(refreshMenuCounts, 1200 + Math.round(Math.random() * 800));
+    const interval = window.setInterval(refreshMenuCounts, 60000 + Math.round(Math.random() * 15000));
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshMenuCounts();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [user]);
 
   useEffect(() => {
     if (!hasInitializedMenuRouteState.current) {

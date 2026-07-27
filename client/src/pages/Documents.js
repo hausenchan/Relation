@@ -3235,7 +3235,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [globalSearchLoading, setGlobalSearchLoading] = useState(false);
   const [globalSearchResults, setGlobalSearchResults] = useState([]);
   const [selectedFolderId, setSelectedFolderId] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [propertySaving, setPropertySaving] = useState(false);
@@ -3334,6 +3334,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const selectedDocIdRef = useRef(null);
   const docTabStatesRef = useRef({});
   const documentSelectionVersionRef = useRef(0);
+  const documentListRequestRef = useRef(null);
+  const documentListRequestSequenceRef = useRef(0);
   const detailRequestIdsRef = useRef({});
   const activeDetailLoadingRef = useRef(null);
   const lastSavedSignatureRef = useRef({});
@@ -4002,25 +4004,35 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   };
 
   const loadFolderTreeDocuments = async () => {
-    try {
-      const rows = await documentsApi.list(buildDocumentQueryParams({ includeFolder: false }));
-      setFolderTreeDocuments(rows);
-    } catch (err) {
-      message.error(err.response?.data?.error || err.message || '加载目录文档失败');
+    const params = buildDocumentQueryParams({ includeFolder: false });
+    const requestKey = JSON.stringify(params);
+    if (documentListRequestRef.current?.key === requestKey) {
+      return documentListRequestRef.current.promise;
     }
-  };
-
-  const loadDocuments = async () => {
+    const requestSequence = documentListRequestSequenceRef.current + 1;
+    documentListRequestSequenceRef.current = requestSequence;
     setLoading(true);
-    try {
-      const params = buildDocumentQueryParams({ includeFolder: false, favoriteOnly: true });
-      const rows = await documentsApi.list(params);
-      setDocuments(rows);
-    } catch (err) {
-      message.error(err.response?.data?.error || err.message || '加载收藏文档失败');
-    } finally {
-      setLoading(false);
-    }
+    const request = documentsApi.list(params)
+      .then((rows) => {
+        if (documentListRequestSequenceRef.current !== requestSequence) return rows;
+        const normalizedRows = Array.isArray(rows) ? rows : [];
+        setFolderTreeDocuments(normalizedRows);
+        setDocuments(normalizedRows.filter(item => Number(item.is_favorite) === 1));
+        return normalizedRows;
+      })
+      .catch((err) => {
+        if (documentListRequestSequenceRef.current !== requestSequence) return [];
+        message.error(err.response?.data?.error || err.message || '加载目录文档失败');
+        return [];
+      })
+      .finally(() => {
+        if (documentListRequestSequenceRef.current === requestSequence) {
+          documentListRequestRef.current = null;
+          setLoading(false);
+        }
+      });
+    documentListRequestRef.current = { key: requestKey, promise: request };
+    return request;
   };
 
   const loadDetail = async (id, options = {}) => {
@@ -4244,16 +4256,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   }, []);
 
   useEffect(() => {
-    loadDocuments();
-  }, [domainFilter]);
-
-  useEffect(() => {
     loadFolderTreeDocuments();
   }, [domainFilter]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      loadDocuments();
       loadFolderTreeDocuments();
     }, 300);
     return () => clearTimeout(timer);
@@ -5017,7 +5024,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         setDocumentImportFileList([]);
         openDocumentTab(doc);
         await loadDetail(docId, { force: true });
-        await loadDocuments();
         await loadFolderTreeDocuments();
         const warnings = doc.import_meta?.warnings || [];
         if (warnings.length) {
@@ -5057,7 +5063,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setWolaiImportTargetDoc(null);
       setDocumentImportFileList([]);
       openDocumentTab(doc);
-      await loadDocuments();
       await loadFolderTreeDocuments();
       const warnings = doc.import_meta?.warnings || [];
       if (warnings.length) {
@@ -5159,7 +5164,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             },
           };
         });
-        await loadDocuments();
         await loadFolderTreeDocuments();
         message.success('文档属性已保存');
         return;
@@ -5181,7 +5185,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       message.success(`已创建 ${doc.document_no}`);
       setCreateOpen(false);
       openDocumentTab(doc);
-      await loadDocuments();
       await loadFolderTreeDocuments();
     } catch (err) {
       message.error(err.response?.data?.error || err.message || (editingPropertyDoc ? '保存文档属性失败' : '创建文档失败'));
@@ -5298,7 +5301,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setFolderTreeDocuments(prev => prev.map(item => (getDocTabId(item.id) === docId ? { ...item, ...updated } : item)));
       if (!silent && isActiveDocumentId(doc.id)) {
         await loadDetail(doc.id, { force: true });
-        await loadDocuments();
         await loadFolderTreeDocuments();
         message.success(`已保存 ${updated.document_no}`);
       }
@@ -5878,7 +5880,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       }
 
       if (savedResults.some(Boolean)) {
-        await loadDocuments();
         await loadFolderTreeDocuments();
       }
       message.success(savedResults.some(Boolean)
@@ -6100,7 +6101,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         // eslint-disable-next-line no-await-in-loop
         results.push(await documentsApi.addBulkShares(batch, shares));
       }
-      await loadDocuments();
       await loadFolderTreeDocuments();
       if (selectedDoc?.id && bulkSelectedDocIdSet.has(Number(selectedDoc.id))) {
         await loadDetail(selectedDoc.id, { force: true });
@@ -6138,7 +6138,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             : prev
         ));
       }
-      await loadDocuments();
       await loadFolderTreeDocuments();
       setShareOpen(false);
       message.success('共享范围已保存');
@@ -6227,7 +6226,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       }
       closeChangeLogEditor();
       await refreshSelectedDocMeta();
-      await loadDocuments();
+      await loadFolderTreeDocuments();
       message.success(editingChangeLog ? '改动记录已更新' : '改动记录已添加');
     } catch (err) {
       if (err?.errorFields) return;
@@ -6276,7 +6275,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     try {
       await documentsApi.restoreEditRecord(record.id);
       await loadDetail(selectedDoc.id, { force: true });
-      await loadDocuments();
       await loadFolderTreeDocuments();
       message.success('已恢复到此版本');
     } catch (err) {
@@ -6371,7 +6369,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       await documentsApi.delete(selectedDoc.id);
       message.success('文档已删除');
       removeDocTab(deletedDocId);
-      await loadDocuments();
       await loadFolderTreeDocuments();
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '删除失败');
@@ -6419,7 +6416,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setSelectedFolderId(Number(targetFolder.id));
       if (targetFolder.domain) setDomainFilter(targetFolder.domain);
       if (isActiveDoc) await loadDetail(targetDoc.id, { force: true });
-      await loadDocuments();
       await loadFolderTreeDocuments();
       message.success(`已移动到 ${targetFolder.name}`);
     } catch (err) {
@@ -6436,7 +6432,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       } else {
         await documentsApi.favorite(doc.id);
       }
-      await loadDocuments();
       await loadFolderTreeDocuments();
       if (selectedDoc?.id === doc.id) await loadDetail(doc.id, { force: true });
     } catch (err) {
@@ -6449,7 +6444,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const nextPinned = !doc.pinned_at;
     try {
       await requestDocumentPinState(doc.id, nextPinned);
-      await loadDocuments();
       await loadFolderTreeDocuments();
       if (selectedDoc?.id === doc.id) await loadDetail(doc.id, { force: true });
       message.success(nextPinned ? '已置顶' : '已取消置顶');
@@ -8730,7 +8724,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         setFolderTreeExpandedKeys(prev => Array.from(new Set([...prev, `folder-${parentId}`])));
       }
       await loadFolders();
-      await loadDocuments();
       await loadFolderTreeDocuments();
       if (selectedDoc?.id) await loadDetail(selectedDoc.id, { force: true });
       const movedFolders = Number(result?.moved_folders || 0);
@@ -15069,7 +15062,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                   />
                 </Tooltip>
                 <Tooltip title="刷新">
-                  <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadDocuments(); loadFolderTreeDocuments(); }} />
+                  <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadFolderTreeDocuments(); }} />
                 </Tooltip>
                 <Tooltip title="导入">
                   <Button icon={<DownloadOutlined />} aria-label="导入" onClick={openWolaiImport} />

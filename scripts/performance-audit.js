@@ -9,6 +9,7 @@ const DEFAULT_ENDPOINTS = [
   '/project-groups',
   '/document-folders',
   '/documents?limit=50',
+  '/documents?favorite=1&limit=50',
   '/persons?limit=50',
   '/interactions?limit=50',
   '/reminders?limit=50',
@@ -21,6 +22,7 @@ const DEFAULT_ENDPOINTS = [
   '/goals?limit=50',
   '/weekly-reports?limit=50',
   '/weekly-reports/writers',
+  '/opportunities?limit=50',
   '/leads?limit=50',
   '/leads/simple',
   '/strategies?limit=50',
@@ -29,6 +31,8 @@ const DEFAULT_ENDPOINTS = [
   '/company-subjects?limit=50',
   '/company-subjects/simple',
   '/product-assets?limit=50',
+  '/product-asset-reductions/simple',
+  '/media-management',
   '/budgets?limit=50',
   '/trips?limit=50',
   '/trips/stats/summary',
@@ -65,8 +69,11 @@ async function timedFetch(fetchImpl, url, options = {}) {
     signal: options.signal || AbortSignal.timeout(10_000),
   });
   const body = await response.arrayBuffer();
+  const responseTimeHeader = String(response.headers.get('x-response-time') || '');
+  const serverDuration = Number(responseTimeHeader.replace(/ms$/i, ''));
   return {
     duration_ms: performance.now() - startedAt,
+    server_ms: Number.isFinite(serverDuration) ? serverDuration : null,
     status: response.status,
     bytes: body.byteLength,
   };
@@ -96,11 +103,13 @@ async function auditApiPerformance(options = {}) {
   for (const endpoint of options.endpoints || DEFAULT_ENDPOINTS) {
     await timedFetch(fetchImpl, `${baseUrl}${endpoint}`, { headers });
     const measurements = [];
+    const serverMeasurements = [];
     let status = 0;
     let bytes = 0;
     for (let index = 0; index < samples; index += 1) {
       const sample = await timedFetch(fetchImpl, `${baseUrl}${endpoint}`, { headers });
       measurements.push(sample.duration_ms);
+      if (Number.isFinite(sample.server_ms)) serverMeasurements.push(sample.server_ms);
       status = sample.status;
       bytes = sample.bytes;
     }
@@ -110,6 +119,7 @@ async function auditApiPerformance(options = {}) {
       bytes,
       p50_ms: percentile(measurements, 0.5),
       p95_ms: percentile(measurements, 0.95),
+      server_p95_ms: serverMeasurements.length ? percentile(serverMeasurements, 0.95) : null,
       passed: status < 500 && percentile(measurements, 0.95) <= budgetMs,
     });
   }
@@ -131,6 +141,7 @@ async function main() {
     bytes: result.bytes,
     p50_ms: result.p50_ms.toFixed(1),
     p95_ms: result.p95_ms.toFixed(1),
+    server_p95_ms: Number.isFinite(result.server_p95_ms) ? result.server_p95_ms.toFixed(1) : '-',
     passed: result.passed,
   })));
   const failed = sorted.filter(result => !result.passed);

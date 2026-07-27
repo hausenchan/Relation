@@ -200,7 +200,7 @@ function Goals() {
   const [editorShareLoading, setEditorShareLoading] = useState(false);
   const [editorShareLoaded, setEditorShareLoaded] = useState(false);
   const [editorShareSaving, setEditorShareSaving] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [filtersReady, setFiltersReady] = useState(false);
   const [filters, setFilters] = useState({
     department: undefined,
@@ -235,6 +235,8 @@ function Goals() {
   const goalLiveSyncPendingRef = useRef(false);
   const persistGoalContentRef = useRef(null);
   const editorShareDirtyRef = useRef(false);
+  const goalOptionsLoadedRef = useRef(false);
+  const goalOptionsRequestRef = useRef(null);
   const goalType = Form.useWatch('goal_type', form);
   const scopeType = Form.useWatch('scope_type', form);
   const defaultShareUsers = useMemo(() => getDefaultDocumentCxoUsers(users), [users]);
@@ -267,11 +269,6 @@ function Goals() {
     if (!filtersReady) return;
     loadGoals();
   }, [filtersReady, filters]);
-
-  useEffect(() => {
-    if (!user) return;
-    loadGoalOptions();
-  }, [user]);
 
   const loadUsers = async () => {
     try {
@@ -312,17 +309,28 @@ function Goals() {
     }
   };
 
-  const loadGoalOptions = async () => {
-    try {
-      const data = await goalsApi.list();
-      setGoalOptions(data);
-    } catch {
-      message.error('加载上级目标选项失败');
-    }
+  const loadGoalOptions = async ({ force = false } = {}) => {
+    if (!force && goalOptionsLoadedRef.current) return goalOptions;
+    if (goalOptionsRequestRef.current) return goalOptionsRequestRef.current;
+    const request = goalsApi.list()
+      .then((data) => {
+        goalOptionsLoadedRef.current = true;
+        setGoalOptions(data);
+        return data;
+      })
+      .catch(() => {
+        message.error('加载上级目标选项失败');
+        return [];
+      })
+      .finally(() => {
+        if (goalOptionsRequestRef.current === request) goalOptionsRequestRef.current = null;
+      });
+    goalOptionsRequestRef.current = request;
+    return request;
   };
 
   const refreshGoals = async () => {
-    await Promise.all([loadGoals(), loadGoalOptions()]);
+    await Promise.all([loadGoals(), loadGoalOptions({ force: true })]);
   };
 
   const currentUserMeta = users.find(item => item.id === user?.id);
@@ -382,6 +390,7 @@ function Goals() {
   };
 
   const openCreateModal = () => {
+    loadGoalOptions();
     const now = dayjs();
     const currentQuarter = Math.ceil((now.month() + 1) / 3);
     setEditing(null);
@@ -415,6 +424,7 @@ function Goals() {
       message.warning('你没有编辑该目标的权限');
       return;
     }
+    loadGoalOptions();
     const values = getGoalEditorValues(record);
     setEditing(record);
     form.resetFields();

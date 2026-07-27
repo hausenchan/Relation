@@ -1,7 +1,18 @@
 import axios from 'axios';
 import { buildLoginPath, getBrowserPath } from '../utils/redirect';
+import { buildApiRequestCacheKey, createApiRequestCache } from '../utils/apiRequestCache';
 
 const api = axios.create({ baseURL: '/api' });
+const referenceRequestCache = createApiRequestCache({ ttlMs: 60000 });
+
+const cachedApiGet = (path, params) => referenceRequestCache.get(
+  buildApiRequestCacheKey(path, params),
+  () => api.get(path, { params }).then(response => response.data),
+);
+
+const invalidateReferenceData = (...prefixes) => {
+  prefixes.forEach(prefix => referenceRequestCache.invalidate(prefix));
+};
 
 // 自动带 token
 api.interceptors.request.use(config => {
@@ -15,6 +26,7 @@ api.interceptors.response.use(
   r => r,
   err => {
     if (err.response?.status === 401 && err.config?.url !== '/auth/login') {
+      referenceRequestCache.clear();
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = buildLoginPath(getBrowserPath());
@@ -31,6 +43,7 @@ function createFetchApiError(message, status = 0, data = null) {
 
 function handleFetchUnauthorized(status) {
   if (status !== 401) return;
+  referenceRequestCache.clear();
   localStorage.removeItem('token');
   localStorage.removeItem('user');
   window.location.href = buildLoginPath(getBrowserPath());
@@ -187,9 +200,15 @@ async function postEventStream(path, data, { onEvent, signal } = {}) {
 }
 
 export const authApi = {
-  login: (data) => api.post('/auth/login', data).then(r => r.data),
+  login: (data) => api.post('/auth/login', data).then(r => {
+    referenceRequestCache.clear();
+    return r.data;
+  }),
   me: () => api.get('/auth/me').then(r => r.data),
-  logout: () => api.post('/auth/logout').then(r => r.data),
+  logout: () => api.post('/auth/logout').then(r => {
+    referenceRequestCache.clear();
+    return r.data;
+  }),
   changePassword: (data) => api.put('/auth/password', data).then(r => r.data),
   getAiModelSetting: () => api.get('/auth/ai-model-setting').then(r => r.data),
   saveAiModelSetting: (data) => api.put('/auth/ai-model-setting', data).then(r => r.data),
@@ -198,27 +217,57 @@ export const authApi = {
 
 export const usersApi = {
   list: () => api.get('/users').then(r => r.data),
-  listSimple: (params) => api.get('/users/simple', { params }).then(r => r.data),
-  create: (data) => api.post('/users', data).then(r => r.data),
-  update: (id, data) => api.put(`/users/${id}`, data).then(r => r.data),
-  delete: (id) => api.delete(`/users/${id}`).then(r => r.data),
+  listSimple: (params) => cachedApiGet('/users/simple', params),
+  create: (data) => api.post('/users', data).then(r => {
+    invalidateReferenceData('/users/simple');
+    return r.data;
+  }),
+  update: (id, data) => api.put(`/users/${id}`, data).then(r => {
+    invalidateReferenceData('/users/simple');
+    return r.data;
+  }),
+  delete: (id) => api.delete(`/users/${id}`).then(r => {
+    invalidateReferenceData('/users/simple');
+    return r.data;
+  }),
   resetPassword: (id, data) => api.put(`/users/${id}/reset-password`, data).then(r => r.data),
-  updateAccountStatus: (id, data) => api.put(`/users/${id}/account-status`, data).then(r => r.data),
+  updateAccountStatus: (id, data) => api.put(`/users/${id}/account-status`, data).then(r => {
+    invalidateReferenceData('/users/simple');
+    return r.data;
+  }),
   getDirectorTeams: (id) => api.get(`/users/${id}/director-teams`).then(r => r.data),
 };
 
 export const teamsApi = {
-  list: (params) => api.get('/teams', { params }).then(r => r.data),
-  create: (data) => api.post('/teams', data).then(r => r.data),
-  update: (id, data) => api.put(`/teams/${id}`, data).then(r => r.data),
-  delete: (id) => api.delete(`/teams/${id}`).then(r => r.data),
+  list: (params) => cachedApiGet('/teams', params),
+  create: (data) => api.post('/teams', data).then(r => {
+    invalidateReferenceData('/teams', '/users/simple');
+    return r.data;
+  }),
+  update: (id, data) => api.put(`/teams/${id}`, data).then(r => {
+    invalidateReferenceData('/teams', '/users/simple');
+    return r.data;
+  }),
+  delete: (id) => api.delete(`/teams/${id}`).then(r => {
+    invalidateReferenceData('/teams', '/users/simple');
+    return r.data;
+  }),
 };
 
 export const projectGroupsApi = {
-  list: () => api.get('/project-groups').then(r => r.data),
-  create: (data) => api.post('/project-groups', data).then(r => r.data),
-  update: (id, data) => api.put(`/project-groups/${id}`, data).then(r => r.data),
-  delete: (id) => api.delete(`/project-groups/${id}`).then(r => r.data),
+  list: () => cachedApiGet('/project-groups'),
+  create: (data) => api.post('/project-groups', data).then(r => {
+    invalidateReferenceData('/project-groups', '/users/simple');
+    return r.data;
+  }),
+  update: (id, data) => api.put(`/project-groups/${id}`, data).then(r => {
+    invalidateReferenceData('/project-groups', '/users/simple');
+    return r.data;
+  }),
+  delete: (id) => api.delete(`/project-groups/${id}`).then(r => {
+    invalidateReferenceData('/project-groups', '/users/simple');
+    return r.data;
+  }),
 };
 
 export const personsApi = {
@@ -537,10 +586,19 @@ export const productAssetsApi = {
   delete: (id) => api.delete(`/product-assets/${id}`).then(r => r.data),
   importPreview: (payload) => api.post('/product-assets/import/preview', Array.isArray(payload) ? { rows: payload } : payload).then(r => r.data),
   import: (payload) => api.post('/product-assets/import', Array.isArray(payload) ? { rows: payload } : payload).then(r => r.data),
-  createReduction: (assetId, data) => api.post(`/product-assets/${assetId}/reductions`, data).then(r => r.data),
-  updateReduction: (id, data) => api.put(`/product-asset-reductions/${id}`, data).then(r => r.data),
-  deleteReduction: (id) => api.delete(`/product-asset-reductions/${id}`).then(r => r.data),
-  reductionsSimple: () => api.get('/product-asset-reductions/simple').then(r => r.data),
+  createReduction: (assetId, data) => api.post(`/product-assets/${assetId}/reductions`, data).then(r => {
+    invalidateReferenceData('/product-asset-reductions/simple');
+    return r.data;
+  }),
+  updateReduction: (id, data) => api.put(`/product-asset-reductions/${id}`, data).then(r => {
+    invalidateReferenceData('/product-asset-reductions/simple');
+    return r.data;
+  }),
+  deleteReduction: (id) => api.delete(`/product-asset-reductions/${id}`).then(r => {
+    invalidateReferenceData('/product-asset-reductions/simple');
+    return r.data;
+  }),
+  reductionsSimple: () => cachedApiGet('/product-asset-reductions/simple'),
 };
 
 export const mediaManagementApi = {

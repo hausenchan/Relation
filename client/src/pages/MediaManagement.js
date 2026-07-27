@@ -217,7 +217,7 @@ export default function MediaManagement() {
   const [rows, setRows] = useState([]);
   const [users, setUsers] = useState([]);
   const [filters, setFilters] = useState(initialFilters);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [formOpen, setFormOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -269,9 +269,9 @@ export default function MediaManagement() {
   }, [filters]);
 
   useEffect(() => {
-    const timer = window.setTimeout(loadRows, 220);
+    const timer = window.setTimeout(loadRows, filters.search ? 220 : 0);
     return () => window.clearTimeout(timer);
-  }, [loadRows]);
+  }, [filters.search, loadRows]);
 
   const userOptions = useMemo(() => users.map(user => ({
     value: Number(user.id),

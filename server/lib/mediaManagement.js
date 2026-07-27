@@ -413,6 +413,7 @@ function createMediaManagementRouter(deps) {
     canAccessMediaManagement: canAccessMediaManagementForUser,
     getVisibleDocument,
     canEditDocument,
+    getEditableDocumentIds,
     createDocumentRecord,
     getDefaultDocumentShares,
     addDocumentShares,
@@ -470,8 +471,7 @@ function createMediaManagementRouter(deps) {
   const getMediaRow = (id) => {
     return db.prepare(`
       SELECT m.*, u.display_name AS owner_name, u.username AS owner_username,
-        d.created_by AS document_created_by, d.content_text AS document_content_text,
-        d.updated_at AS document_updated_at
+        d.created_by AS document_created_by, d.updated_at AS document_updated_at
       FROM media_assets m
       INNER JOIN documents d ON d.id = m.document_id AND COALESCE(d.is_deleted, 0) = 0
       LEFT JOIN users u ON u.id = m.owner_id
@@ -479,7 +479,12 @@ function createMediaManagementRouter(deps) {
     `).get(Number(id));
   };
 
-  const serializeMedia = (row, user, deleteAllowed = canDeleteMediaForUser(user)) => {
+  const serializeMedia = (
+    row,
+    user,
+    deleteAllowed = canDeleteMediaForUser(user),
+    editableOverride = null,
+  ) => {
     if (!row) return null;
     const decrypted = decryptRow('media_assets', row);
     const document = {
@@ -497,7 +502,7 @@ function createMediaManagementRouter(deps) {
       document_id: Number(record.document_id),
       owner_id: record.owner_id ? Number(record.owner_id) : null,
       budget_types: parseBudgetTypes(record.budget_types),
-      can_edit: canEditDocument(user, document) ? 1 : 0,
+      can_edit: (editableOverride === null ? canEditDocument(user, document) : editableOverride) ? 1 : 0,
       can_delete: deleteAllowed ? 1 : 0,
     };
   };
@@ -537,9 +542,11 @@ function createMediaManagementRouter(deps) {
 
   router.get('/', (req, res) => {
     try {
+      const includeDocumentContent = Boolean(String(req.query.search || '').trim());
       let sql = `
         SELECT m.*, u.display_name AS owner_name, u.username AS owner_username,
-          d.created_by AS document_created_by, d.content_text AS document_content_text,
+          d.created_by AS document_created_by,
+          ${includeDocumentContent ? 'd.content_text' : 'NULL'} AS document_content_text,
           d.updated_at AS document_updated_at
         FROM media_assets m
         INNER JOIN documents d ON d.id = m.document_id AND COALESCE(d.is_deleted, 0) = 0
@@ -584,7 +591,15 @@ function createMediaManagementRouter(deps) {
         .filter(row => !requiredBudgets.length || requiredBudgets.every(value => parseBudgetTypes(row.budget_types).includes(value)))
         .filter(row => mediaMatchesSearch(row, req.query.search));
       const deleteAllowed = canDeleteMediaForUser(req.user);
-      return res.json(rows.map(row => serializeMedia(row, req.user, deleteAllowed)));
+      const editableDocumentIds = typeof getEditableDocumentIds === 'function'
+        ? new Set(getEditableDocumentIds(req.user, rows.map(row => row.document_id)).map(Number))
+        : null;
+      return res.json(rows.map(row => serializeMedia(
+        row,
+        req.user,
+        deleteAllowed,
+        editableDocumentIds ? editableDocumentIds.has(Number(row.document_id)) : null,
+      )));
     } catch (error) {
       return respondError(res, error, '加载媒体列表失败');
     }

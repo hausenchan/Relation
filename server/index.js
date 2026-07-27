@@ -799,8 +799,8 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 const DB_PATH = process.env.RELATION_DB_PATH || path.join(__dirname, 'data.db');
 const db = new Database(DB_PATH);
 const AI_SUGGESTION_DEFAULT_BUSINESS_LINE = 'zhixiao';
-const RUNTIME_CACHE_TTL_MS = Number(process.env.RELATION_RUNTIME_CACHE_TTL_MS || 5000);
-const AUTH_USER_CACHE_TTL_MS = Number(process.env.RELATION_AUTH_USER_CACHE_TTL_MS || 5000);
+const RUNTIME_CACHE_TTL_MS = Number(process.env.RELATION_RUNTIME_CACHE_TTL_MS || 60000);
+const AUTH_USER_CACHE_TTL_MS = Number(process.env.RELATION_AUTH_USER_CACHE_TTL_MS || 60000);
 const runtimeCache = new Map();
 
 function parseBoundedPositiveInt(value, fallback, max) {
@@ -3003,6 +3003,20 @@ db.exec(`
 
 addColumnIfMissing('goals', 'default_shares_initialized', 'INTEGER DEFAULT 0');
 addColumnIfMissing('weekly_reports', 'default_shares_initialized', 'INTEGER DEFAULT 0');
+createIndexesIfColumnsExist('goals', [
+  { name: 'idx_goals_parent_id', columnsSql: 'parent_id', columns: ['parent_id'] },
+  { name: 'idx_goals_owner_created', columnsSql: 'owner_id, created_at', columns: ['owner_id', 'created_at'] },
+  { name: 'idx_goals_team_id', columnsSql: 'team_id', columns: ['team_id'] },
+  { name: 'idx_goals_project_group_id', columnsSql: 'project_group_id', columns: ['project_group_id'] },
+  { name: 'idx_goals_status_period', columnsSql: 'status, period', columns: ['status', 'period'] },
+]);
+createIndexesIfColumnsExist('content_shares', [
+  {
+    name: 'idx_content_shares_entity_target_id',
+    columnsSql: 'entity_type, target_type, target_id, entity_id',
+    columns: ['entity_type', 'target_type', 'target_id', 'entity_id'],
+  },
+]);
 ensureMysqlLongTextColumn('weekly_reports', 'completed', 'NULL');
 ensureMysqlLongTextColumn('weekly_reports', 'next_week_plan', 'NULL');
 ensureMysqlLongTextColumn('weekly_reports', 'risks', 'NULL');
@@ -5377,7 +5391,8 @@ app.post('/api/auth/login', (req, res) => {
     JWT_SECRET,
     { expiresIn: '8h' }
   );
-  clearRuntimeCache();
+  clearRuntimeCache(`auth:user:${Number(user.id)}:`);
+  clearRuntimeCache(`auth:me:${Number(user.id)}:`);
   const currentUser = getAuthMePayload(user.id, user.password_version || 0);
   writeOperationLog({
     req,
@@ -5619,42 +5634,49 @@ app.get('/api/users/simple', auth, (req, res) => {
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const users = db.prepare(`
-      SELECT id, username, display_name, role, executive_role, account_status, team_id, leader_id, department
+      SELECT users.id, users.username, users.display_name, users.role, users.executive_role,
+        users.account_status, users.team_id, users.leader_id, users.department,
+        (
+          SELECT GROUP_CONCAT(ut.team_id)
+          FROM user_teams ut
+          WHERE ut.user_id = users.id
+        ) AS related_team_ids,
+        (
+          SELECT GROUP_CONCAT(ud.department_key)
+          FROM user_departments ud
+          WHERE ud.user_id = users.id
+        ) AS related_department_keys,
+        (
+          SELECT GROUP_CONCAT(upg.project_group_id)
+          FROM user_project_groups upg
+          WHERE upg.user_id = users.id
+        ) AS related_project_group_ids
       FROM users
       ${whereSql}
       ORDER BY COALESCE(account_status, 'active') ASC, display_name ASC
     `).all(...params);
-    const userTeams = db.prepare('SELECT user_id, team_id FROM user_teams').all();
-    const userDepartments = db.prepare('SELECT user_id, department_key FROM user_departments').all();
-    const userProjectGroups = db.prepare('SELECT user_id, project_group_id FROM user_project_groups').all();
-    const teamsByUser = new Map();
-    userTeams.forEach(row => {
-      if (!teamsByUser.has(row.user_id)) teamsByUser.set(row.user_id, []);
-      teamsByUser.get(row.user_id).push(row.team_id);
+    const parseCsv = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+    return users.map(user => {
+      const {
+        related_team_ids: relatedTeamIds,
+        related_department_keys: relatedDepartmentKeys,
+        related_project_group_ids: relatedProjectGroupIds,
+        ...u
+      } = user;
+      return {
+        ...u,
+        account_status: u.account_status || 'active',
+        departments: normalizeDepartmentKeys([
+          u.department,
+          ...parseCsv(relatedDepartmentKeys),
+        ]),
+        team_ids: [...new Set([
+          ...(u.team_id ? [u.team_id] : []),
+          ...parseCsv(relatedTeamIds).map(Number).filter(Boolean),
+        ])],
+        project_group_ids: [...new Set(parseCsv(relatedProjectGroupIds).map(Number).filter(Boolean))],
+      };
     });
-    const departmentsByUser = new Map();
-    userDepartments.forEach(row => {
-      if (!departmentsByUser.has(row.user_id)) departmentsByUser.set(row.user_id, []);
-      departmentsByUser.get(row.user_id).push(row.department_key);
-    });
-    const projectGroupsByUser = new Map();
-    userProjectGroups.forEach(row => {
-      if (!projectGroupsByUser.has(row.user_id)) projectGroupsByUser.set(row.user_id, []);
-      projectGroupsByUser.get(row.user_id).push(row.project_group_id);
-    });
-    return users.map(u => ({
-      ...u,
-      account_status: u.account_status || 'active',
-      departments: normalizeDepartmentKeys([
-        u.department,
-        ...(departmentsByUser.get(u.id) || []),
-      ]),
-      team_ids: [...new Set([
-        ...(u.team_id ? [u.team_id] : []),
-        ...(teamsByUser.get(u.id) || []),
-      ])],
-      project_group_ids: [...new Set(projectGroupsByUser.get(u.id) || [])],
-    }));
   });
   res.json(result);
 });
@@ -6830,6 +6852,24 @@ function canEditDocument(user, document) {
   );
 }
 
+function getEditableDocumentIds(user, documentIds = []) {
+  const ids = [...new Set(documentIds.map(Number).filter(Boolean))];
+  if (!ids.length || !canUseDocumentWriteActions(user)) return [];
+  if (canAdministrateDocuments(user)) return ids;
+  const target = buildShareTargetMatch(user, 'editable_document_share');
+  return db.prepare(`
+    SELECT DISTINCT editable_document.id
+    FROM documents editable_document
+    LEFT JOIN document_shares editable_document_share
+      ON editable_document_share.document_id = editable_document.id
+    WHERE editable_document.id IN (${ids.map(() => '?').join(',')})
+      AND (
+        editable_document.created_by = ?
+        OR (${target.sql})
+      )
+  `).all(...ids, user.id, ...target.params).map(row => Number(row.id));
+}
+
 function canPinDocument(user, document) {
   return canEditDocument(user, document);
 }
@@ -7752,10 +7792,13 @@ function serializeDocument(row, options = {}) {
   if (options.withAccessSummary) result.access_summary = getDocumentAccessSummary(row);
   if (options.user) {
     const canUseWrite = canUseDocumentWriteActions(options.user);
+    const canEdit = options.editableDocumentIds instanceof Set
+      ? options.editableDocumentIds.has(Number(row.id))
+      : (canUseWrite && canEditDocument(options.user, row));
     result.can_manage = canUseDocumentWriteActions(options.user) && canManageDocument(options.user, row) ? 1 : 0;
     result.can_move = canUseWrite && canMoveDocument(options.user, row) ? 1 : 0;
-    result.can_edit = canUseWrite && canEditDocument(options.user, row) ? 1 : 0;
-    result.can_pin = canUseWrite && canPinDocument(options.user, row) ? 1 : 0;
+    result.can_edit = canEdit ? 1 : 0;
+    result.can_pin = canEdit ? 1 : 0;
   }
   return result;
 }
@@ -7851,6 +7894,7 @@ app.use('/api/media-management', createMediaManagementRouter({
   canAccessMediaManagement,
   getVisibleDocument,
   canEditDocument,
+  getEditableDocumentIds,
   canManageDocument,
   createDocumentRecord,
   getDefaultDocumentShares,
@@ -8095,9 +8139,15 @@ app.get('/api/documents', (req, res) => {
     q += ' LIMIT ?';
     params.push(Math.min(Math.round(requestedLimit), 300));
   }
-  res.json(db.prepare(q).all(...params).map(row => {
+  const rows = db.prepare(q).all(...params);
+  const editableDocumentIds = new Set(getEditableDocumentIds(req.user, rows.map(row => row.id)));
+  res.json(rows.map(row => {
     const { search_content_text: searchContentText, ...documentRow } = row;
-    const document = serializeDocument(documentRow, { user: req.user, assumeVisible: true });
+    const document = serializeDocument(documentRow, {
+      user: req.user,
+      assumeVisible: true,
+      editableDocumentIds,
+    });
     if (searchText) {
       Object.assign(document, getDocumentSearchMatch({
         ...documentRow,
@@ -19500,6 +19550,48 @@ function serializeGoalLiveRecord(row, user = null) {
   };
 }
 
+function getGoalListPermissionContext(user) {
+  const canWriteGoal = Boolean(user && !['readonly', 'guest'].includes(user.role));
+  if (!canWriteGoal) {
+    return { canWriteGoal: false, canManageAll: false, manageableOwnerIds: new Set(), sharedGoalIds: new Set() };
+  }
+
+  const canManageAll = isAdmin(user.role);
+  const manageableOwnerIds = new Set([Number(user.id)].filter(Boolean));
+  if (!canManageAll && ['leader', 'sales_director'].includes(user.role)) {
+    const managedTeamIds = getManagedTeamIds(user.id, user.role) || [];
+    getUsersByTeamIds(managedTeamIds).forEach(ownerId => manageableOwnerIds.add(Number(ownerId)));
+  }
+
+  const sharedGoalIds = new Set();
+  if (!canManageAll) {
+    const target = buildShareTargetMatch(user, 'goal_permission_share');
+    db.prepare(`
+      SELECT DISTINCT goal_permission_share.entity_id
+      FROM content_shares goal_permission_share
+      WHERE goal_permission_share.entity_type = 'goal'
+        AND (${target.sql})
+    `).all(...target.params).forEach(row => sharedGoalIds.add(Number(row.entity_id)));
+  }
+
+  return { canWriteGoal, canManageAll, manageableOwnerIds, sharedGoalIds };
+}
+
+function getGoalListPermissionFlags(goal, context) {
+  const canManage = context.canWriteGoal && (
+    context.canManageAll || context.manageableOwnerIds.has(Number(goal.owner_id))
+  );
+  const canEdit = context.canWriteGoal && (
+    canManage || context.sharedGoalIds.has(Number(goal.id))
+  );
+  return {
+    can_edit: canEdit ? 1 : 0,
+    can_share: canEdit ? 1 : 0,
+    can_manage: canManage ? 1 : 0,
+    can_delete: canManage ? 1 : 0,
+  };
+}
+
 // 获取目标列表
 app.get('/api/goals', (req, res) => {
   const { department, status, goal_type, scope_type, period, parent_id, owner_id, owner_role, project_group_id, team_id } = req.query;
@@ -19513,7 +19605,8 @@ app.get('/api/goals', (req, res) => {
       p.title as parent_title,
       pg.name as project_group_name,
       tm.name as team_name,
-      tm.department as team_department
+      tm.department as team_department,
+      (SELECT COUNT(*) FROM goals child_goal WHERE child_goal.parent_id = g.id) as child_count
     FROM goals g
     LEFT JOIN users u ON g.owner_id = u.id
     LEFT JOIN goals p ON g.parent_id = p.id
@@ -19593,18 +19686,14 @@ app.get('/api/goals', (req, res) => {
       g.period DESC,
       g.created_at DESC
   `;
+  const permissionContext = getGoalListPermissionContext(req.user);
   const goals = decryptRows('goals', db.prepare(q).all(...params)).map(g => ({
     ...g,
+    child_count: Number(g.child_count || 0),
     parent_title: safeDecrypt(g.parent_title),
-    ...getGoalPermissionFlags(g, req.user),
+    department: g.department || g.team_department || g.owner_department || null,
+    ...getGoalListPermissionFlags(g, permissionContext),
   }));
-
-  // 为每个目标加载子目标数量
-  goals.forEach(g => {
-    const childCount = db.prepare('SELECT COUNT(*) as cnt FROM goals WHERE parent_id = ?').get(g.id);
-    g.child_count = childCount.cnt;
-    g.department = g.department || g.team_department || g.owner_department || null;
-  });
 
   res.json(goals);
 });
@@ -22777,16 +22866,16 @@ function serializeOperationalMeetingRow(row = {}, user = null, participant = nul
   const canViewAssignedPreparation = isActiveOperationalMeetingParticipant(accessParticipant)
     && Number(accessParticipant?.preparation_section_id || 0) > 0;
   const canViewPreparation = canViewAllPreparations || canViewAssignedPreparation;
-  const { _accessParticipant, ...publicRow } = row;
-  const sectionStats = row.id && canViewPreparation ? db.prepare(`
-    SELECT
-      COUNT(*) as total_sections,
-      SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
-      SUM(CASE WHEN is_required = 1 AND status IN ('submitted', 'locked') THEN 1 ELSE 0 END) as submitted_required_sections
-    FROM operational_meeting_sections
-    WHERE meeting_id = ?
-      ${canViewAllPreparations ? '' : 'AND owner_user_id = ?'}
-  `).get(...(canViewAllPreparations ? [row.id] : [row.id, user?.id])) : {};
+  const { _accessParticipant, _sectionStats, ...publicRow } = row;
+  const sectionStats = _sectionStats || (row.id && canViewPreparation ? db.prepare(`
+      SELECT
+        COUNT(*) as total_sections,
+        SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
+        SUM(CASE WHEN is_required = 1 AND status IN ('submitted', 'locked') THEN 1 ELSE 0 END) as submitted_required_sections
+      FROM operational_meeting_sections
+      WHERE meeting_id = ?
+        ${canViewAllPreparations ? '' : 'AND owner_user_id = ?'}
+    `).get(...(canViewAllPreparations ? [row.id] : [row.id, user?.id])) : {});
   return {
     ...publicRow,
     preparation_status: row.brief_status || 'draft',
@@ -23131,16 +23220,85 @@ app.get('/api/operational-meetings', requireOperationalMeetingAccess, (req, res)
   const rows = db.prepare(`
     SELECT m.*,
       creator.display_name as created_by_name,
-      updater.display_name as updated_by_name
+      updater.display_name as updated_by_name,
+      participant.id as participant_id,
+      participant.participant_type,
+      participant.preparation_section_id,
+      participant.preparation_template_id,
+      participant.can_generate_agenda,
+      participant.can_edit_decision,
+      participant.status as participant_status,
+      all_stats.total_sections as all_total_sections,
+      all_stats.required_sections as all_required_sections,
+      all_stats.submitted_required_sections as all_submitted_required_sections,
+      own_stats.total_sections as own_total_sections,
+      own_stats.required_sections as own_required_sections,
+      own_stats.submitted_required_sections as own_submitted_required_sections
     FROM operational_meetings m
     LEFT JOIN users creator ON creator.id = m.created_by
     LEFT JOIN users updater ON updater.id = m.updated_by
+    LEFT JOIN operational_meeting_participants participant
+      ON participant.meeting_id = m.id
+      AND participant.user_id = ?
+      AND participant.status = 'active'
+    LEFT JOIN (
+      SELECT meeting_id,
+        COUNT(*) as total_sections,
+        SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
+        SUM(CASE WHEN is_required = 1 AND status IN ('submitted', 'locked') THEN 1 ELSE 0 END) as submitted_required_sections
+      FROM operational_meeting_sections
+      GROUP BY meeting_id
+    ) all_stats ON all_stats.meeting_id = m.id
+    LEFT JOIN (
+      SELECT meeting_id, owner_user_id,
+        COUNT(*) as total_sections,
+        SUM(CASE WHEN is_required = 1 THEN 1 ELSE 0 END) as required_sections,
+        SUM(CASE WHEN is_required = 1 AND status IN ('submitted', 'locked') THEN 1 ELSE 0 END) as submitted_required_sections
+      FROM operational_meeting_sections
+      GROUP BY meeting_id, owner_user_id
+    ) own_stats ON own_stats.meeting_id = m.id AND own_stats.owner_user_id = ?
     WHERE m.deleted_at IS NULL
-    ORDER BY date(m.week_start) DESC, m.id DESC
-  `).all();
+    ORDER BY m.week_start DESC, m.id DESC
+  `).all(req.user.id, req.user.id);
   res.json(rows.map(row => {
-    const participant = getOperationalMeetingParticipant(row.id, req.user.id);
-    return serializeOperationalMeetingRow(row, req.user, participant);
+    const {
+      participant_id: participantId,
+      participant_type: participantType,
+      preparation_section_id: preparationSectionId,
+      preparation_template_id: preparationTemplateId,
+      can_generate_agenda: canGenerateAgenda,
+      can_edit_decision: canEditDecision,
+      participant_status: participantStatus,
+      all_total_sections: allTotalSections,
+      all_required_sections: allRequiredSections,
+      all_submitted_required_sections: allSubmittedRequiredSections,
+      own_total_sections: ownTotalSections,
+      own_required_sections: ownRequiredSections,
+      own_submitted_required_sections: ownSubmittedRequiredSections,
+      ...meeting
+    } = row;
+    const participant = participantId ? {
+      id: participantId,
+      meeting_id: meeting.id,
+      user_id: req.user.id,
+      participant_type: participantType,
+      preparation_section_id: preparationSectionId,
+      preparation_template_id: preparationTemplateId,
+      can_generate_agenda: canGenerateAgenda,
+      can_edit_decision: canEditDecision,
+      status: participantStatus,
+    } : null;
+    const canViewAllPreparations = isOperationalMeetingCxoForMeeting(req.user, participant);
+    const sectionStats = canViewAllPreparations ? {
+      total_sections: allTotalSections,
+      required_sections: allRequiredSections,
+      submitted_required_sections: allSubmittedRequiredSections,
+    } : {
+      total_sections: ownTotalSections,
+      required_sections: ownRequiredSections,
+      submitted_required_sections: ownSubmittedRequiredSections,
+    };
+    return serializeOperationalMeetingRow({ ...meeting, _sectionStats: sectionStats }, req.user, participant);
   }));
 });
 
@@ -23148,24 +23306,67 @@ app.get('/api/operational-meetings/annual-summary', requireOperationalMeetingAcc
   const year = String(req.query.year || new Date().getFullYear()).trim();
   if (!/^\d{4}$/.test(year)) return res.status(400).json({ error: '年份格式不正确' });
   const rows = db.prepare(`
-    SELECT m.id, m.title, m.week_start, m.week_end, m.status, m.agenda_status, m.decision_status, m.updated_at
+    SELECT m.id, m.title, m.week_start, m.week_end, m.status, m.agenda_status, m.decision_status, m.updated_at,
+      agenda.id as agenda_id,
+      agenda.meeting_id as agenda_meeting_id,
+      agenda.agenda_json,
+      agenda.agenda_ciphertext,
+      agenda.crypto_version as agenda_crypto_version,
+      agenda.model_provider,
+      agenda.model_name,
+      agenda.prompt_version,
+      agenda.safety_scan_status,
+      agenda.generated_by,
+      agenda.generated_at,
+      agenda.updated_at as agenda_updated_at,
+      decision.id as decision_id,
+      decision.meeting_id as decision_meeting_id,
+      decision.decision_json,
+      decision.decision_ciphertext,
+      decision.crypto_version as decision_crypto_version,
+      decision.status as decision_record_status,
+      decision.updated_at as decision_updated_at
     FROM operational_meetings m
+    LEFT JOIN operational_meeting_agendas agenda ON agenda.meeting_id = m.id
+    LEFT JOIN operational_meeting_decisions decision ON decision.meeting_id = m.id
     WHERE m.deleted_at IS NULL
       AND substr(m.week_start, 1, 4) = ?
-    ORDER BY date(m.week_start) DESC, m.id DESC
+    ORDER BY m.week_start DESC, m.id DESC
   `).all(year);
-  const result = rows.map(meeting => {
-    const agenda = db.prepare(`
-      SELECT id, meeting_id, agenda_json, agenda_ciphertext, crypto_version, model_provider, model_name,
-        prompt_version, safety_scan_status, generated_by, generated_at, updated_at
-      FROM operational_meeting_agendas
-      WHERE meeting_id = ?
-    `).get(meeting.id);
-    const decision = db.prepare(`
-      SELECT id, meeting_id, decision_json, decision_ciphertext, crypto_version, status, updated_at
-      FROM operational_meeting_decisions
-      WHERE meeting_id = ?
-    `).get(meeting.id);
+  const result = rows.map(row => {
+    const meeting = {
+      id: row.id,
+      title: row.title,
+      week_start: row.week_start,
+      week_end: row.week_end,
+      status: row.status,
+      agenda_status: row.agenda_status,
+      decision_status: row.decision_status,
+      updated_at: row.updated_at,
+    };
+    const agenda = row.agenda_id ? {
+      id: row.agenda_id,
+      meeting_id: row.agenda_meeting_id,
+      agenda_json: row.agenda_json,
+      agenda_ciphertext: row.agenda_ciphertext,
+      crypto_version: row.agenda_crypto_version,
+      model_provider: row.model_provider,
+      model_name: row.model_name,
+      prompt_version: row.prompt_version,
+      safety_scan_status: row.safety_scan_status,
+      generated_by: row.generated_by,
+      generated_at: row.generated_at,
+      updated_at: row.agenda_updated_at,
+    } : null;
+    const decision = row.decision_id ? {
+      id: row.decision_id,
+      meeting_id: row.decision_meeting_id,
+      decision_json: row.decision_json,
+      decision_ciphertext: row.decision_ciphertext,
+      crypto_version: row.decision_crypto_version,
+      status: row.decision_record_status,
+      updated_at: row.decision_updated_at,
+    } : null;
     return {
       meeting,
       agenda: serializeOperationalAgenda(agenda),

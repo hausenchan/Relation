@@ -132,7 +132,7 @@ export default function OperationalMeeting() {
   const { meetingId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, canAccessMenu, canAccessSensitiveModule, isExecutive } = useAuth();
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [meetings, setMeetings] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -240,12 +240,14 @@ export default function OperationalMeeting() {
   const loadMeetings = useCallback(async () => {
     setLoading(true);
     try {
-      const [meetingRows, templateRows, participantRows] = await Promise.all([
-        operationalMeetingsApi.list(),
+      const meetingRows = await operationalMeetingsApi.list();
+      setMeetings(Array.isArray(meetingRows) ? meetingRows : []);
+      setLoading(false);
+
+      const [templateRows, participantRows] = await Promise.all([
         operationalMeetingsApi.templates(),
         cxoIdentity ? operationalMeetingsApi.eligibleParticipants() : Promise.resolve([]),
       ]);
-      setMeetings(Array.isArray(meetingRows) ? meetingRows : []);
       setTemplates(Array.isArray(templateRows) ? templateRows : []);
       setEligibleParticipants(Array.isArray(participantRows) ? participantRows : []);
     } catch (error) {
