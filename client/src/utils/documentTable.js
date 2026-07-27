@@ -14,6 +14,84 @@ function columnWidthsEqual(left, right) {
   return left.length === right.length && left.every((width, index) => width === right[index]);
 }
 
+function getColumnWidthsTotal(columnWidths) {
+  return columnWidths.reduce((total, width) => total + width, 0);
+}
+
+// Reclaim total-width drift from unchanged columns first so older scoped widths keep their intended resize.
+function getDocumentTableWidthCompensationOrder(columnWidths, baseWidths) {
+  const lastColumnIndex = columnWidths.length - 1;
+  const changedColumnIndices = columnWidths
+    .map((width, columnIndex) => ({
+      columnIndex,
+      difference: Math.abs(width - baseWidths[columnIndex]),
+    }))
+    .filter(item => item.difference > 0.001);
+  const primaryColumnIndex = changedColumnIndices.reduce((primary, item) => (
+    item.difference > primary.difference ? item : primary
+  ), { columnIndex: lastColumnIndex, difference: -1 }).columnIndex;
+  const changedColumns = new Set(changedColumnIndices.map(item => item.columnIndex));
+  const surroundingColumns = primaryColumnIndex === lastColumnIndex
+    ? Array.from({ length: primaryColumnIndex }, (_, columnIndex) => columnIndex)
+    : [
+      ...Array.from(
+        { length: lastColumnIndex - primaryColumnIndex },
+        (_, offset) => primaryColumnIndex + offset + 1,
+      ),
+      ...Array.from({ length: primaryColumnIndex }, (_, offset) => primaryColumnIndex - offset - 1),
+    ];
+  return [
+    ...surroundingColumns.filter(columnIndex => !changedColumns.has(columnIndex)),
+    ...surroundingColumns.filter(columnIndex => changedColumns.has(columnIndex)),
+    primaryColumnIndex,
+  ];
+}
+
+function balanceDocumentTableColumnWidths(columnWidths, baseWidths, minWidth = 80) {
+  const balancedWidths = normalizeColumnWidths(columnWidths, baseWidths.length, minWidth);
+  if (!balancedWidths.length) return balancedWidths;
+  let remainingDifference = getColumnWidthsTotal(balancedWidths) - getColumnWidthsTotal(baseWidths);
+  if (Math.abs(remainingDifference) <= 0.001) return balancedWidths;
+  const compensationOrder = getDocumentTableWidthCompensationOrder(balancedWidths, baseWidths);
+
+  if (remainingDifference > 0) {
+    compensationOrder.forEach(columnIndex => {
+      if (remainingDifference <= 0.001) return;
+      const reduction = Math.min(remainingDifference, balancedWidths[columnIndex] - minWidth);
+      balancedWidths[columnIndex] -= reduction;
+      remainingDifference -= reduction;
+    });
+  } else {
+    balancedWidths[compensationOrder[0]] += Math.abs(remainingDifference);
+  }
+  return balancedWidths;
+}
+
+function resizeDocumentTableColumnWidthsWithinRow(columnWidths, {
+  columnIndex,
+  colSpan = 1,
+  delta = 0,
+  minWidth = 80,
+} = {}) {
+  const widths = normalizeColumnWidths(columnWidths, columnWidths?.length || 0, minWidth);
+  if (widths.length < 2 || !Number.isInteger(Number(columnIndex))) return widths;
+  const startColumnIndex = clampInteger(columnIndex, 0, widths.length - 1);
+  const safeColSpan = Math.max(1, Math.round(Number(colSpan) || 1));
+  const resizeColumnIndex = Math.min(widths.length - 1, startColumnIndex + safeColSpan - 1);
+  const compensationColumnIndex = resizeColumnIndex < widths.length - 1
+    ? resizeColumnIndex + 1
+    : startColumnIndex - 1;
+  const widthDelta = Number(delta);
+  if (compensationColumnIndex < 0 || !Number.isFinite(widthDelta)) return widths;
+  const appliedDelta = Math.max(
+    minWidth - widths[resizeColumnIndex],
+    Math.min(widths[compensationColumnIndex] - minWidth, Math.round(widthDelta)),
+  );
+  widths[resizeColumnIndex] += appliedDelta;
+  widths[compensationColumnIndex] -= appliedDelta;
+  return widths;
+}
+
 export function resolveDocumentTableStyleBounds({
   wholeTableSelected = false,
   selectedRangeBounds = null,
@@ -87,9 +165,9 @@ export function normalizeDocumentTableRowColumnWidths(
   return Object.entries(rowColumnWidths).reduce((result, [rowKey, widths]) => {
     const rowIndex = Number(rowKey);
     if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= rowCount || !Array.isArray(widths)) return result;
-    const normalized = Array.from({ length: columnCount }, (_, columnIndex) => (
+    const normalized = balanceDocumentTableColumnWidths(Array.from({ length: columnCount }, (_, columnIndex) => (
       Math.max(minWidth, Number(widths[columnIndex]) || baseWidths[columnIndex])
-    ));
+    )), baseWidths, minWidth);
     if (!columnWidthsEqual(normalized, baseWidths)) result[rowIndex] = normalized;
     return result;
   }, {});
@@ -100,9 +178,9 @@ export function getDocumentTableRowColumnWidths(columnWidths, rowColumnWidths, r
   const baseWidths = normalizeColumnWidths(columnWidths, columnCount, minWidth);
   const scopedWidths = rowColumnWidths?.[Number(rowIndex)];
   if (!Array.isArray(scopedWidths)) return baseWidths;
-  return Array.from({ length: columnCount }, (_, columnIndex) => (
+  return balanceDocumentTableColumnWidths(Array.from({ length: columnCount }, (_, columnIndex) => (
     Math.max(minWidth, Number(scopedWidths[columnIndex]) || baseWidths[columnIndex])
-  ));
+  )), baseWidths, minWidth);
 }
 
 export function resizeDocumentTableScopedColumnWidths(columnWidths, rowColumnWidths, {
@@ -126,14 +204,14 @@ export function resizeDocumentTableScopedColumnWidths(columnWidths, rowColumnWid
   const startRowIndex = clampInteger(rowIndex, 0, rowCount - 1);
   const resizeOptions = { columnIndex, colSpan, delta, minWidth };
   const nextBaseWidths = startRowIndex === 0
-    ? resizeDocumentTableColumnWidths(baseWidths, resizeOptions)
+    ? resizeDocumentTableColumnWidthsWithinRow(baseWidths, resizeOptions)
     : baseWidths;
   const nextScopedWidths = {};
 
   for (let currentRowIndex = 0; currentRowIndex < rowCount; currentRowIndex += 1) {
     const currentWidths = getDocumentTableRowColumnWidths(baseWidths, scopedWidths, currentRowIndex, minWidth);
     const nextWidths = currentRowIndex >= startRowIndex
-      ? resizeDocumentTableColumnWidths(currentWidths, resizeOptions)
+      ? resizeDocumentTableColumnWidthsWithinRow(currentWidths, resizeOptions)
       : currentWidths;
     if (!columnWidthsEqual(nextWidths, nextBaseWidths)) nextScopedWidths[currentRowIndex] = nextWidths;
   }
@@ -234,7 +312,7 @@ export function insertDocumentTableColumnWidths(columnWidths, rowColumnWidths, {
   const nextScopedWidths = {};
   Object.entries(scopedWidths).forEach(([rowKey, widths]) => {
     const nextWidths = [...widths];
-    nextWidths.splice(safeInsertIndex, 0, widths[safeSourceColumnIndex]);
+    nextWidths.splice(safeInsertIndex, 0, baseWidths[safeSourceColumnIndex]);
     nextScopedWidths[rowKey] = nextWidths;
   });
   return {

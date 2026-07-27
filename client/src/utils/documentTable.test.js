@@ -5,6 +5,7 @@ import {
   getDocumentTableRowColumnWidths,
   insertDocumentTableColumnWidths,
   insertDocumentTableRowWidths,
+  normalizeDocumentTableRowColumnWidths,
   resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableStyleBounds,
 } from './documentTable';
@@ -68,8 +69,12 @@ describe('ordinary document table interactions', () => {
     expect(result.columnWidths).toEqual([120, 140, 160, 180]);
     expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 0)).toEqual([120, 140, 160, 180]);
     expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 1)).toEqual([120, 140, 160, 180]);
-    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)).toEqual([120, 140, 185, 180]);
-    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 3)).toEqual([120, 140, 185, 180]);
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)).toEqual([120, 140, 185, 155]);
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 3)).toEqual([120, 140, 185, 155]);
+    expect(result.columnWidths.reduce((sum, width) => sum + width, 0)).toBe(
+      getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)
+        .reduce((sum, width) => sum + width, 0),
+    );
 
     const clamped = resizeDocumentTableScopedColumnWidths([120, 90], {}, {
       rowIndex: 1,
@@ -78,7 +83,61 @@ describe('ordinary document table interactions', () => {
       delta: -100,
     });
     expect(getDocumentTableRowColumnWidths(clamped.columnWidths, clamped.rowColumnWidths, 0)).toEqual([120, 90]);
-    expect(getDocumentTableRowColumnWidths(clamped.columnWidths, clamped.rowColumnWidths, 1)).toEqual([120, 80]);
+    expect(getDocumentTableRowColumnWidths(clamped.columnWidths, clamped.rowColumnWidths, 1)).toEqual([130, 80]);
+  });
+
+  test('keeps the outer edge aligned when resizing a merged cell at the end of a row', () => {
+    const result = resizeDocumentTableScopedColumnWidths([130, 160, 160, 160], {}, {
+      rowIndex: 2,
+      rowCount: 4,
+      columnIndex: 1,
+      colSpan: 3,
+      delta: 80,
+    });
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 0)).toEqual([130, 160, 160, 160]);
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)).toEqual([80, 160, 160, 210]);
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 3)).toEqual([80, 160, 160, 210]);
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)
+      .reduce((sum, width) => sum + width, 0)).toBe(610);
+  });
+
+  test('preserves total width and minimum widths across every resize boundary', () => {
+    const baseWidths = [120, 140, 160, 180];
+    const baseTotal = baseWidths.reduce((sum, width) => sum + width, 0);
+    [
+      { columnIndex: 0, colSpan: 1, delta: 30 },
+      { columnIndex: 1, colSpan: 1, delta: -90 },
+      { columnIndex: 3, colSpan: 1, delta: 50 },
+      { columnIndex: 0, colSpan: 4, delta: 50 },
+    ].forEach(resizeOptions => {
+      const result = resizeDocumentTableScopedColumnWidths(baseWidths, {}, {
+        rowIndex: 1,
+        rowCount: 2,
+        ...resizeOptions,
+      });
+      const resizedWidths = getDocumentTableRowColumnWidths(
+        result.columnWidths,
+        result.rowColumnWidths,
+        1,
+      );
+      expect(resizedWidths.reduce((sum, width) => sum + width, 0)).toBe(baseTotal);
+      expect(resizedWidths.every(width => width >= 80)).toBe(true);
+    });
+  });
+
+  test('repairs row widths saved by the previous unbalanced implementation', () => {
+    const repaired = normalizeDocumentTableRowColumnWidths(
+      { 2: [130, 160, 160, 240], 3: [130, 160, 160, 240] },
+      4,
+      4,
+      [130, 160, 160, 160],
+    );
+    expect(repaired).toEqual({
+      2: [80, 130, 160, 240],
+      3: [80, 130, 160, 240],
+    });
+    expect(getDocumentTableRowColumnWidths([130, 160, 160, 160], repaired, 2)
+      .reduce((sum, width) => sum + width, 0)).toBe(610);
   });
 
   test('resizing the first row updates the base while retaining lower-row differences', () => {
@@ -87,27 +146,27 @@ describe('ordinary document table interactions', () => {
       { 2: [120, 180, 160], 3: [120, 180, 160] },
       { rowIndex: 0, rowCount: 4, columnIndex: 1, delta: 20 },
     );
-    expect(result.columnWidths).toEqual([120, 160, 160]);
-    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 0)).toEqual([120, 160, 160]);
-    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)).toEqual([120, 200, 160]);
+    expect(result.columnWidths).toEqual([120, 160, 140]);
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 0)).toEqual([120, 160, 140]);
+    expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)).toEqual([120, 200, 100]);
   });
 
   test('keeps scoped widths aligned while inserting and deleting rows and columns', () => {
     const baseWidths = [120, 140, 160];
-    const scopedWidths = { 2: [120, 180, 160], 3: [120, 180, 160] };
+    const scopedWidths = { 2: [120, 180, 120], 3: [120, 180, 120] };
     const insertedRows = insertDocumentTableRowWidths(baseWidths, scopedWidths, {
       insertIndex: 2,
       sourceRowIndex: 2,
       rowCount: 4,
     });
-    expect(getDocumentTableRowColumnWidths(baseWidths, insertedRows, 2)).toEqual([120, 180, 160]);
-    expect(getDocumentTableRowColumnWidths(baseWidths, insertedRows, 4)).toEqual([120, 180, 160]);
+    expect(getDocumentTableRowColumnWidths(baseWidths, insertedRows, 2)).toEqual([120, 180, 120]);
+    expect(getDocumentTableRowColumnWidths(baseWidths, insertedRows, 4)).toEqual([120, 180, 120]);
     const deletedRows = deleteDocumentTableRowWidths(baseWidths, insertedRows, {
       startRowIndex: 1,
       endRowIndex: 2,
       rowCount: 5,
     });
-    expect(getDocumentTableRowColumnWidths(baseWidths, deletedRows, 1)).toEqual([120, 180, 160]);
+    expect(getDocumentTableRowColumnWidths(baseWidths, deletedRows, 1)).toEqual([120, 180, 120]);
 
     const insertedColumns = insertDocumentTableColumnWidths(baseWidths, scopedWidths, {
       insertIndex: 1,
@@ -119,7 +178,7 @@ describe('ordinary document table interactions', () => {
       insertedColumns.columnWidths,
       insertedColumns.rowColumnWidths,
       2,
-    )).toEqual([120, 180, 180, 160]);
+    )).toEqual([120, 140, 180, 120]);
     const deletedColumns = deleteDocumentTableColumnWidths(
       insertedColumns.columnWidths,
       insertedColumns.rowColumnWidths,
@@ -130,7 +189,7 @@ describe('ordinary document table interactions', () => {
       deletedColumns.columnWidths,
       deletedColumns.rowColumnWidths,
       2,
-    )).toEqual([120, 180, 160]);
+    )).toEqual([120, 180, 120]);
   });
 
   test('scrolls continuously toward either horizontal edge while drag-selecting', () => {
