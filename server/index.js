@@ -4738,10 +4738,23 @@ function canEditTaskRecord(user, task) {
   return isTaskSharedWithUser(task.id, user.id);
 }
 
-function buildExecutiveSelfAssignedTaskPrivacyFilter(userId, tableAlias, creatorColumn, assigneeColumn) {
+function buildExecutiveSelfAssignedTaskPrivacyFilter(
+  userId,
+  tableAlias,
+  creatorColumn,
+  assigneeColumn,
+  { sharedTaskIdColumn = null } = {},
+) {
   const prefix = tableAlias ? `${tableAlias}.` : '';
   const executiveRoles = [...EXECUTIVE_ROLES];
   const placeholders = executiveRoles.map(() => '?').join(',');
+  const explicitShareException = sharedTaskIdColumn ? `
+      AND NOT EXISTS (
+        SELECT 1
+        FROM task_shared_users privacy_share
+        WHERE privacy_share.task_id = ${prefix}${sharedTaskIdColumn}
+          AND privacy_share.user_id = ?
+      )` : '';
   return {
     sql: ` AND NOT (
       ${prefix}${creatorColumn} = ${prefix}${assigneeColumn}
@@ -4755,8 +4768,14 @@ function buildExecutiveSelfAssignedTaskPrivacyFilter(userId, tableAlias, creator
             OR task_owner.executive_role IN (${placeholders})
           )
       )
+      ${explicitShareException}
     )`,
-    params: [userId, ...executiveRoles, ...executiveRoles],
+    params: [
+      userId,
+      ...executiveRoles,
+      ...executiveRoles,
+      ...(sharedTaskIdColumn ? [userId] : []),
+    ],
   };
 }
 
@@ -4771,7 +4790,13 @@ function getTaskVisibleScope(userId, role, executiveRole = null) {
 
 function buildTaskVisibilityFilter(userId, role, executiveRole = null) {
   const scope = getTaskVisibleScope(userId, role, executiveRole);
-  const selfAssignedPrivacy = buildExecutiveSelfAssignedTaskPrivacyFilter(userId, 't', 'created_by', 'assigned_to');
+  const selfAssignedPrivacy = buildExecutiveSelfAssignedTaskPrivacyFilter(
+    userId,
+    't',
+    'created_by',
+    'assigned_to',
+    { sharedTaskIdColumn: 'id' },
+  );
   if (scope.all) return selfAssignedPrivacy;
 
   const conditions = [
@@ -5917,6 +5942,7 @@ app.delete('/api/project-groups/:id', auth, adminOnly, (req, res) => {
 const DOCUMENT_DOMAIN_CODES = {
   domestic_project: 'DOMESTIC',
   overseas_project: 'OVERSEAS',
+  hr_administration: 'HRADM',
   executive_management: 'MGT',
   general: 'GEN',
   cross_region: 'CR',
@@ -5926,6 +5952,8 @@ const DOCUMENT_DEPARTMENTS = [
   { key: 'BD', name: '商务' },
   { key: 'RD', name: '研发' },
   { key: 'ADS', name: '投放' },
+  { key: 'HR', name: '人力' },
+  { key: 'ADMIN', name: '行政' },
 ];
 const DOCUMENT_SPACE_DIRECTORY_BLUEPRINT = {
   domestic_project: [
@@ -5937,6 +5965,10 @@ const DOCUMENT_SPACE_DIRECTORY_BLUEPRINT = {
   overseas_project: [
     { key: 'BD', name: '商务', order: 10 },
     { key: 'ADS', name: '投放', order: 20 },
+  ],
+  hr_administration: [
+    { key: 'HR', name: '人力', order: 10 },
+    { key: 'ADMIN', name: '行政', order: 20 },
   ],
 };
 const DOCUMENT_STAGE_FOLDERS = [
@@ -7944,7 +7976,7 @@ app.post('/api/document-folders', canWrite, (req, res) => {
   if (!String(name || '').trim()) return res.status(400).json({ error: '目录名称必填' });
   const parent = getDocumentFolderById(parent_id);
   if (!parent) return res.status(400).json({ error: '请选择二级目录或其下级目录作为父目录' });
-  if (!isManagedDocumentSpace(parent.domain)) return res.status(400).json({ error: '仅国内项目和海外项目支持自定义目录' });
+  if (!isManagedDocumentSpace(parent.domain)) return res.status(400).json({ error: '仅国内项目、海外项目和人力行政支持自定义目录' });
   const parentDepth = getDocumentFolderDepth(parent.id);
   if (parentDepth < 2) return res.status(400).json({ error: '只能在二级目录后新增子文件夹' });
   if (parentDepth >= DOCUMENT_MAX_FOLDER_DEPTH) return res.status(400).json({ error: `目录最多支持 ${DOCUMENT_MAX_FOLDER_DEPTH} 级` });
@@ -7971,7 +8003,7 @@ app.put('/api/document-folders/:id', canWrite, (req, res) => {
   if (!isDocumentFolderManager(req.user)) return res.status(403).json({ error: '只有小组长和 CXO 可以编辑目录' });
   const existing = getDocumentFolderById(req.params.id);
   if (!existing) return res.status(404).json({ error: '目录不存在' });
-  if (!isManagedDocumentSpace(existing.domain)) return res.status(400).json({ error: '仅国内项目和海外项目支持编辑目录' });
+  if (!isManagedDocumentSpace(existing.domain)) return res.status(400).json({ error: '仅国内项目、海外项目和人力行政支持编辑目录' });
   const existingMeta = serializeDocumentFolder(existing, req.user);
   if (existingMeta.is_protected || existingMeta.depth < 3) return res.status(403).json({ error: '系统默认目录不允许编辑' });
   const { name, sort_order } = req.body;
@@ -7994,7 +8026,7 @@ app.delete('/api/document-folders/:id', canWrite, (req, res) => {
   if (!isDocumentFolderManager(req.user)) return res.status(403).json({ error: '只有小组长和 CXO 可以编辑目录' });
   const existing = getDocumentFolderById(req.params.id);
   if (!existing) return res.status(404).json({ error: '目录不存在' });
-  if (!isManagedDocumentSpace(existing.domain)) return res.status(400).json({ error: '仅国内项目和海外项目支持删除目录' });
+  if (!isManagedDocumentSpace(existing.domain)) return res.status(400).json({ error: '仅国内项目、海外项目和人力行政支持删除目录' });
   const existingMeta = serializeDocumentFolder(existing, req.user);
   if (existingMeta.is_protected || existingMeta.depth < 3) return res.status(403).json({ error: '系统默认目录不允许删除' });
   const folderId = Number(existing.id);

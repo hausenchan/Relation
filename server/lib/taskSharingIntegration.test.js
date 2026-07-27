@@ -73,7 +73,7 @@ async function createUser(baseUrl, token, input) {
   return Number(response.payload.id);
 }
 
-test('task users shared into attention can edit normal task status', { timeout: 30000 }, async t => {
+test('task users shared into attention can edit normal and COO self-assigned tasks', { timeout: 30000 }, async t => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-task-sharing-'));
   const databasePath = path.join(tempDir, 'data.db');
   const port = await getFreePort();
@@ -103,8 +103,17 @@ test('task users shared into attention can edit normal task status', { timeout: 
   const suffix = `${process.pid}_${Date.now()}`;
   const password = 'task-share-test-123';
   const creatorUsername = `task_creator_${suffix}`;
+  const cooUsername = `task_coo_${suffix}`;
   const sharedUsername = `task_shared_${suffix}`;
   const outsiderUsername = `task_outsider_${suffix}`;
+
+  const teamResponse = await request(baseUrl, '/api/teams', {
+    method: 'POST',
+    token: adminToken,
+    body: { name: '研发小组', department: 'rd' },
+  });
+  assert.equal(teamResponse.status, 200, JSON.stringify(teamResponse.payload));
+  const rdTeamId = Number(teamResponse.payload.id);
 
   const creatorId = await createUser(baseUrl, adminToken, {
     username: creatorUsername,
@@ -115,14 +124,24 @@ test('task users shared into attention can edit normal task status', { timeout: 
     username: sharedUsername,
     display_name: '任务共享人',
     password,
+    team_ids: [rdTeamId],
+  });
+  const cooId = await createUser(baseUrl, adminToken, {
+    username: cooUsername,
+    display_name: '任务 COO',
+    password,
+    role: 'coo',
+    team_ids: [rdTeamId],
   });
   await createUser(baseUrl, adminToken, {
     username: outsiderUsername,
     display_name: '任务无关人',
     password,
+    team_ids: [rdTeamId],
   });
 
   const creator = await login(baseUrl, creatorUsername, password);
+  const coo = await login(baseUrl, cooUsername, password);
   const sharedUser = await login(baseUrl, sharedUsername, password);
   const outsider = await login(baseUrl, outsiderUsername, password);
 
@@ -190,6 +209,44 @@ test('task users shared into attention can edit normal task status', { timeout: 
   const renamed = renamedTasks.payload.find(task => Number(task.id) === taskId);
   assert.equal(renamed?.title, '共享关注任务（改名）');
   assert.equal(renamed?.done_at, completed.done_at);
+
+  const cooSelfAssignedTask = await request(baseUrl, '/api/tasks', {
+    method: 'POST',
+    token: coo.token,
+    body: {
+      title: 'COO 明确共享的自派任务',
+      description: '研发小组普通成员需要能在工作台需关注中看到',
+      date: '2026-07-27',
+      estimated_completion_date: '2026-07-28',
+      status: 'pending',
+      priority: 'medium',
+      assigned_to: cooId,
+      shared_to: [sharedUserId],
+    },
+  });
+  assert.equal(cooSelfAssignedTask.status, 200, JSON.stringify(cooSelfAssignedTask.payload));
+  const cooTaskId = Number(cooSelfAssignedTask.payload.id);
+
+  const sharedAttentionTasks = await request(baseUrl, '/api/tasks?parent_id=null&limit=300', {
+    token: sharedUser.token,
+  });
+  assert.equal(sharedAttentionTasks.status, 200, JSON.stringify(sharedAttentionTasks.payload));
+  const sharedCooTask = sharedAttentionTasks.payload.find(task => Number(task.id) === cooTaskId);
+  assert.equal(sharedCooTask?.title, 'COO 明确共享的自派任务');
+  assert.equal(Number(sharedCooTask?.shared_to_me), 1);
+  assert.notEqual(Number(sharedCooTask?.assigned_to), sharedUserId);
+
+  const outsiderTasks = await request(baseUrl, '/api/tasks?parent_id=null', {
+    token: outsider.token,
+  });
+  assert.equal(outsiderTasks.status, 200, JSON.stringify(outsiderTasks.payload));
+  assert.equal(outsiderTasks.payload.some(task => Number(task.id) === cooTaskId), false);
+
+  const adminTasks = await request(baseUrl, '/api/tasks?parent_id=null', {
+    token: adminToken,
+  });
+  assert.equal(adminTasks.status, 200, JSON.stringify(adminTasks.payload));
+  assert.equal(adminTasks.payload.some(task => Number(task.id) === cooTaskId), false);
 });
 
 test('mine task query is not truncated by the dashboard visible task limit', { timeout: 60000 }, async t => {

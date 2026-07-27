@@ -145,6 +145,7 @@ const domainOptions = [
   { value: 'all', label: '全部' },
   { value: 'domestic_project', label: '国内项目' },
   { value: 'overseas_project', label: '海外项目' },
+  { value: 'hr_administration', label: '人力行政' },
   { value: 'executive_management', label: '经营管理' },
   { value: 'general', label: '通用文档' },
   { value: 'cross_region', label: '跨区域' },
@@ -155,6 +156,8 @@ const departmentOptions = [
   { value: 'BD', label: '商务' },
   { value: 'RD', label: '研发' },
   { value: 'ADS', label: '投放' },
+  { value: 'HR', label: '人力' },
+  { value: 'ADMIN', label: '行政' },
   { value: 'MGT', label: '经营管理' },
   { value: 'ALL', label: '通用' },
 ];
@@ -367,7 +370,7 @@ function normalizeDocumentIconFormValue(value) {
   return value === defaultDocumentIconFormValue ? null : (value || null);
 }
 
-const primaryDocumentSpaceDomains = ['domestic_project', 'overseas_project'];
+const primaryDocumentSpaceDomains = ['domestic_project', 'overseas_project', 'hr_administration'];
 const validBlockTypes = new Set(blockTypeOptions.map(item => item.value));
 const blockTypeMap = Object.fromEntries(blockTypeOptions.map(item => [item.value, item]));
 const documentAdminRoles = new Set(['admin']);
@@ -16162,10 +16165,12 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       >
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <Text>
-            将确保国内项目下包含产运、商务、研发、投放，海外项目下包含商务、投放。
+            将确保国内项目下包含产运、商务、研发、投放，海外项目下包含商务、投放，
+            人力行政下包含人力、行政。
           </Text>
           <Text type="secondary">
-            每个一级目录会自动包含规划、落地、沉淀、团队四个二级目录；已有项目文档会按目录规则归到新的阶段目录中。
+            每个一级目录会自动包含规划、落地、沉淀、团队四个二级目录；系统目录名称固定，
+            四类目录及其后代可继续新建自定义子文件夹。已有项目文档会按目录规则归到新的阶段目录中。
           </Text>
         </Space>
       </Modal>
