@@ -7,6 +7,7 @@ import {
   insertDocumentTableRowWidths,
   normalizeDocumentTableRowColumnWidths,
   resizeDocumentTableScopedColumnWidths,
+  resolveDocumentTableContextMenuPosition,
   resolveDocumentTableStyleBounds,
   shouldShowDocumentTableContextMenu,
 } from './documentTable';
@@ -86,6 +87,38 @@ describe('ordinary document table interactions', () => {
       blockId: 'table-a',
       openMenuBlockId: 'table-a',
     })).toBe(false);
+  });
+
+  test('keeps the context menu inside a 13-inch viewport near right and bottom edges', () => {
+    const position = resolveDocumentTableContextMenuPosition({
+      anchorX: 1210,
+      anchorY: 735,
+      viewportWidth: 1280,
+      viewportHeight: 800,
+    });
+    expect(position).toEqual({
+      left: 902,
+      top: 87,
+      width: 300,
+      maxHeight: 640,
+    });
+    expect(position.left + position.width).toBeLessThanOrEqual(1268);
+    expect(position.top + position.maxHeight).toBeLessThanOrEqual(788);
+  });
+
+  test('shrinks and clamps the context menu on a narrow viewport', () => {
+    const position = resolveDocumentTableContextMenuPosition({
+      anchorX: 310,
+      anchorY: 540,
+      viewportWidth: 320,
+      viewportHeight: 568,
+    });
+    expect(position).toEqual({
+      left: 12,
+      top: 72,
+      width: 296,
+      maxHeight: 484,
+    });
   });
 
   test('resizes from the selected row downward without moving rows above it', () => {

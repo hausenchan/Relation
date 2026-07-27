@@ -145,6 +145,51 @@ export function shouldShowDocumentTableContextMenu({
     && openMenuBlockId === blockId;
 }
 
+export function resolveDocumentTableContextMenuPosition({
+  anchorX = 0,
+  anchorY = 0,
+  viewportWidth = 0,
+  viewportHeight = 0,
+  menuWidth = 300,
+  menuHeight = 640,
+  viewportTop = 72,
+  viewportMargin = 12,
+  anchorOffset = 8,
+} = {}) {
+  const safeViewportWidth = Math.max(1, Math.round(Number(viewportWidth) || 0));
+  const safeViewportHeight = Math.max(1, Math.round(Number(viewportHeight) || 0));
+  const safeMargin = Math.max(0, Math.round(Number(viewportMargin) || 0));
+  const safeTop = Math.max(safeMargin, Math.min(
+    Math.round(Number(viewportTop) || safeMargin),
+    Math.max(safeMargin, safeViewportHeight - safeMargin - 1),
+  ));
+  const safeOffset = Math.max(0, Math.round(Number(anchorOffset) || 0));
+  const availableWidth = Math.max(1, safeViewportWidth - (safeMargin * 2));
+  const availableHeight = Math.max(1, safeViewportHeight - safeTop - safeMargin);
+  const width = Math.min(Math.max(1, Math.round(Number(menuWidth) || 300)), availableWidth);
+  const maxHeight = Math.min(Math.max(1, Math.round(Number(menuHeight) || 640)), availableHeight);
+  const safeAnchorX = Math.max(0, Math.min(safeViewportWidth, Number(anchorX) || 0));
+  const safeAnchorY = Math.max(0, Math.min(safeViewportHeight, Number(anchorY) || 0));
+  const maxLeft = Math.max(safeMargin, safeViewportWidth - safeMargin - width);
+  const maxTop = Math.max(safeTop, safeViewportHeight - safeMargin - maxHeight);
+  let left = safeAnchorX + safeOffset;
+  let top = safeAnchorY + safeOffset;
+
+  if (left + width > safeViewportWidth - safeMargin) {
+    left = safeAnchorX - width - safeOffset;
+  }
+  if (top + maxHeight > safeViewportHeight - safeMargin) {
+    top = safeAnchorY - maxHeight - safeOffset;
+  }
+
+  return {
+    left: Math.round(Math.max(safeMargin, Math.min(left, maxLeft))),
+    top: Math.round(Math.max(safeTop, Math.min(top, maxTop))),
+    width,
+    maxHeight,
+  };
+}
+
 export function resizeDocumentTableColumnWidths(columnWidths, {
   columnIndex,
   colSpan = 1,

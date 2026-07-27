@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Alert,
   Button,
@@ -136,6 +137,7 @@ import {
   insertDocumentTableRowWidths,
   normalizeDocumentTableRowColumnWidths,
   resizeDocumentTableScopedColumnWidths,
+  resolveDocumentTableContextMenuPosition,
   resolveDocumentTableStyleBounds,
   shouldShowDocumentTableContextMenu,
 } from '../utils/documentTable';
@@ -3260,7 +3262,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [selectedBlockId, setSelectedBlockId] = useState(null);
   const [selectedTableCell, setSelectedTableCell] = useState(null);
   const [selectedTableRange, setSelectedTableRange] = useState(null);
-  const [openTableMenuBlockId, setOpenTableMenuBlockId] = useState(null);
+  const [tableMenuContext, setTableMenuContext] = useState(null);
   const [selectedSpreadsheetCell, setSelectedSpreadsheetCell] = useState({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
   const [spreadsheetCollaborators, setSpreadsheetCollaborators] = useState([]);
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
@@ -3886,7 +3888,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setSelectedBlockId(null);
       setSelectedTableCell(null);
       setSelectedTableRange(null);
-      setOpenTableMenuBlockId(null);
+      setTableMenuContext(null);
       setSelectedSpreadsheetCell({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
       setHoveredBlockId(null);
       setOpenBlockMenuId(null);
@@ -4862,18 +4864,18 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   }, []);
 
   useEffect(() => {
-    if (!selectedTableCell && !selectedTableRange && !openTableMenuBlockId) return undefined;
+    if (!selectedTableCell && !selectedTableRange && !tableMenuContext) return undefined;
     const handleTableOutsidePointerDown = (event) => {
       const target = event.target;
       if (target?.closest?.('[data-document-table-menu="true"]')) return;
       if (target?.closest?.('[data-document-table-shell="true"]')) return;
       setSelectedTableCell(null);
       setSelectedTableRange(null);
-      setOpenTableMenuBlockId(null);
+      setTableMenuContext(null);
     };
     document.addEventListener('pointerdown', handleTableOutsidePointerDown, true);
     return () => document.removeEventListener('pointerdown', handleTableOutsidePointerDown, true);
-  }, [openTableMenuBlockId, selectedTableCell, selectedTableRange]);
+  }, [selectedTableCell, selectedTableRange, tableMenuContext]);
 
   useEffect(() => {
     if (!docContextMenu.open) return undefined;
@@ -10014,7 +10016,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     clearAreaBlockSelection();
     setSelectedTableCell({ blockId: block.id, ...tableCell });
     setSelectedTableRange(null);
-    setOpenTableMenuBlockId(null);
+    setTableMenuContext(null);
     setInlineToolbar({
       blockId: block.id,
       tableCell,
@@ -13018,7 +13020,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setAreaBlockSelection([block.id]);
       setSelectedTableCell(null);
       setSelectedTableRange(null);
-      setOpenTableMenuBlockId(null);
+      setTableMenuContext(null);
       window.setTimeout(() => {
         document.getElementById(`doc-table-shell-${block.id}`)?.focus?.();
       }, 0);
@@ -13031,7 +13033,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       clearAreaBlockSelection();
       setSelectedTableCell({ blockId: block.id, rowIndex: nextRowIndex, columnIndex: nextColumnIndex });
       setSelectedTableRange(null);
-      setOpenTableMenuBlockId(null);
+      setTableMenuContext(null);
     };
     const applyCellStyleToBounds = (patch) => {
       if (!activeStyleBounds) return;
@@ -13091,7 +13093,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       clearAreaBlockSelection();
       setSelectedTableCell({ blockId: block.id, rowIndex, columnIndex });
       setSelectedTableRange(null);
-      setOpenTableMenuBlockId(null);
+      setTableMenuContext(null);
       const selectionState = {
         blockId: block.id,
         startRowIndex: rowIndex,
@@ -13185,7 +13187,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const beginColumnResize = (event, rowIndex, columnIndex, colSpan = 1) => {
       event.preventDefault();
       event.stopPropagation();
-      setOpenTableMenuBlockId(null);
+      setTableMenuContext(null);
       const startX = event.clientX;
       pushEditorUndoSnapshot();
       const handleMouseMove = moveEvent => {
@@ -13233,10 +13235,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     const menuColumnIndex = hasSelectedRange ? selectedRangeBounds.startColumnIndex : (selectedColumnIndex >= 0 ? selectedColumnIndex : 0);
     const menuRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : (selectedRowIndex >= 0 ? selectedRowIndex : 0);
-    const menuRowColumnWidths = getRowColumnWidths(menuRowIndex);
-    const selectedColumnLeft = menuRowColumnWidths.slice(0, menuColumnIndex).reduce((sum, width) => sum + width, 0);
-    const tableMenuLeft = Math.max(12, Math.min(selectedColumnLeft + menuRowColumnWidths[menuColumnIndex] / 2 + 8, Math.max(12, tableWidth - 260)));
-    const tableMenuTop = Math.max(0, Math.min(44 + Math.max(0, menuRowIndex) * 42, 24));
     const renderTableMenuIcon = (icon) => (
       <span style={{ width: 28, minWidth: 28, color: '#7a7a7a', fontSize: 20, lineHeight: 1, textAlign: 'center' }}>{icon}</span>
     );
@@ -13328,25 +13326,26 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const tableMenuVisible = shouldShowDocumentTableContextMenu({
       activeStyleBounds,
       blockId: block.id,
-      openMenuBlockId: openTableMenuBlockId,
+      openMenuBlockId: tableMenuContext?.blockId,
     });
-    const tableMenu = tableMenuVisible ? (
+    const tableMenu = tableMenuVisible && typeof document !== 'undefined' ? createPortal(
       <div
         data-document-table-menu="true"
         onMouseDown={event => event.preventDefault()}
         style={{
-          position: 'absolute',
-          left: tableMenuLeft,
-          top: tableMenuTop,
-          width: 300,
+          position: 'fixed',
+          left: tableMenuContext.left,
+          top: tableMenuContext.top,
+          width: tableMenuContext.width,
           background: '#fff',
           border: '1px solid #e4e4e7',
           borderRadius: 6,
           boxShadow: '0 14px 36px rgba(15, 23, 42, 0.18)',
-          zIndex: 20,
+          zIndex: 1050,
           overflowY: 'auto',
           overflowX: 'hidden',
-          maxHeight: 'min(560px, calc(100vh - 180px))',
+          maxHeight: tableMenuContext.maxHeight,
+          overscrollBehavior: 'contain',
         }}
       >
         <div style={{ padding: '8px 10px' }}>
@@ -13381,20 +13380,21 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           {renderTableMenuItem({ icon: '▭×', label: '删除当前行', disabled: normalizedRows.length <= 1, onClick: deleteSelectedRow })}
           {renderTableMenuItem({ icon: '▯×', label: '删除当前列', disabled: columns.length <= 1, onClick: deleteSelectedColumn })}
         </div>
-      </div>
+      </div>,
+      document.body,
     ) : null;
     const insertParagraphAfterTable = () => {
       setSelectedTableCell(null);
       setSelectedTableRange(null);
-      setOpenTableMenuBlockId(null);
+      setTableMenuContext(null);
       clearAreaBlockSelection();
       addBlockAfter(block.id, 'paragraph', { content: '' });
     };
     const handleTableShellKeyDown = (event) => {
-      if (event.key === 'Escape' && openTableMenuBlockId === block.id) {
+      if (event.key === 'Escape' && tableMenuContext?.blockId === block.id) {
         event.preventDefault();
         event.stopPropagation();
-        setOpenTableMenuBlockId(null);
+        setTableMenuContext(null);
         return;
       }
       if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -13429,6 +13429,12 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       const nextRowIndex = anchor?.rowIndex ?? rowIndex;
       const nextColumnIndex = anchor?.columnIndex ?? columnIndex;
       const keepSelectedRange = isCellInSelectedRange(nextRowIndex, nextColumnIndex);
+      const menuPosition = resolveDocumentTableContextMenuPosition({
+        anchorX: event.clientX,
+        anchorY: event.clientY,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+      });
       setSelectedBlockId(block.id);
       clearAreaBlockSelection();
       if (!keepSelectedRange) {
@@ -13441,7 +13447,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         setSelectedTableRange(null);
       }
       setInlineToolbar(null);
-      setOpenTableMenuBlockId(block.id);
+      setTableMenuContext({ blockId: block.id, ...menuPosition });
     };
     const renderEditableTableRow = (row, rowIndex) => (
       <tr key={`row-${rowIndex}`}>
@@ -13525,10 +13531,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           onKeyDown={handleTableShellKeyDown}
           onMouseDown={event => {
             if (event.button === 0 && !event.target?.closest?.('[data-document-table-menu="true"]')) {
-              setOpenTableMenuBlockId(null);
+              setTableMenuContext(null);
             }
           }}
-          style={{ maxWidth: '100%', position: 'relative', paddingBottom: tableMenuVisible ? 8 : 0, overflow: 'visible', outline: 'none' }}
+          style={{ maxWidth: '100%', position: 'relative', overflow: 'visible', outline: 'none' }}
         >
           {tableMenu}
           <div data-document-table-scroll-container="true" style={{ overflowX: 'auto', maxWidth: '100%' }}>
