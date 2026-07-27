@@ -127,8 +127,14 @@ import {
   shouldIgnoreGlobalDocumentDelete,
 } from '../utils/documentBlockKeyboard';
 import {
+  deleteDocumentTableColumnWidths,
+  deleteDocumentTableRowWidths,
+  getDocumentTableRowColumnWidths,
   getDocumentTableHorizontalAutoScrollDelta,
-  resizeDocumentTableColumnWidths,
+  insertDocumentTableColumnWidths,
+  insertDocumentTableRowWidths,
+  normalizeDocumentTableRowColumnWidths,
+  resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableStyleBounds,
 } from '../utils/documentTable';
 import {
@@ -12506,8 +12512,18 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const columns = Array.from({ length: columnCount }, (_, index) => storedColumns[index] || `字段 ${index + 1}`);
     const normalizedRows = storedRows.map(row => Array.from({ length: columnCount }, (_, index) => row?.[index] || ''));
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
+    const rowColumnWidths = normalizeDocumentTableRowColumnWidths(
+      meta.rowColumnWidths,
+      normalizedRows.length,
+      columns.length,
+      columnWidths,
+    );
+    const getRowColumnWidths = rowIndex => getDocumentTableRowColumnWidths(columnWidths, rowColumnWidths, rowIndex);
     const mergedLookup = buildTableMergedLookup(meta.mergedCells, normalizedRows.length, columns.length);
     const mergedCells = mergedLookup.normalized;
+    const hasVerticalMergedCells = mergedCells.some(merge => merge.rowSpan > 1);
+    const useRowScopedWidths = Object.keys(rowColumnWidths).length > 0
+      && !hasVerticalMergedCells;
     const cellStyles = normalizeTableCellStyles(meta.cellStyles, normalizedRows.length, columns.length);
     const selectedCell = selectedTableCell?.blockId === block.id ? selectedTableCell : null;
     const selectedTableCellIsBody = !selectedCell?.type || selectedCell.type === 'body';
@@ -12553,7 +12569,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       && columnIndex >= selectedRangeBounds.startColumnIndex
       && columnIndex <= selectedRangeBounds.endColumnIndex
     );
-    const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
+    const minimumTableWidth = isMobile ? 320 : 560;
+    const getRenderedRowWidth = rowIndex => Math.max(
+      getRowColumnWidths(rowIndex).reduce((sum, width) => sum + width, 0),
+      minimumTableWidth,
+    );
+    const tableWidth = Math.max(
+      minimumTableWidth,
+      ...normalizedRows.map((_, rowIndex) => getRenderedRowWidth(rowIndex)),
+    );
     const horizontalCenter = Boolean(meta.horizontalCenter);
     const verticalCenter = Boolean(meta.verticalCenter);
     const getMergedAnchor = (rowIndex, columnIndex) => mergedLookup.anchorMap.get(buildTableMergeKey(rowIndex, columnIndex)) || null;
@@ -12574,12 +12598,19 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       const nextVisibleRows = Array.isArray(patch?.rows) ? patch.rows : normalizedRows;
       const nextColumns = Array.isArray(patch?.columns) ? patch.columns : columns;
       const nextColumnWidths = patch?.columnWidths ?? columnWidths;
+      const nextRowColumnWidths = normalizeDocumentTableRowColumnWidths(
+        patch?.rowColumnWidths ?? rowColumnWidths,
+        nextVisibleRows.length,
+        nextColumns.length,
+        nextColumnWidths,
+      );
       const nextHorizontalCenter = patch?.horizontalCenter ?? horizontalCenter;
       const nextVerticalCenter = patch?.verticalCenter ?? verticalCenter;
       const nextMergedCells = patch?.mergedCells ?? mergedCells;
       const nextCellStyles = patch?.cellStyles ?? cellStyles;
       const stored = buildStoredTableMetaFromVisibleRows(nextVisibleRows, nextColumns, {
         columnWidths: nextColumnWidths,
+        rowColumnWidths: nextRowColumnWidths,
         horizontalCenter: nextHorizontalCenter,
         verticalCenter: nextVerticalCenter,
         mergedCells: nextMergedCells,
@@ -12651,6 +12682,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       const insertIndex = position === 'before' ? safeIndex : safeIndex + 1;
       const nextRows = [...normalizedRows];
       nextRows.splice(insertIndex, 0, columns.map(() => ''));
+      const nextRowColumnWidths = insertDocumentTableRowWidths(columnWidths, rowColumnWidths, {
+        insertIndex,
+        sourceRowIndex: safeIndex,
+        rowCount: normalizedRows.length,
+      });
       const nextMergedCells = normalizeTableMergedCells(mergedCells.map(merge => {
         if (merge.rowIndex >= insertIndex) {
           return { ...merge, rowIndex: merge.rowIndex + 1 };
@@ -12660,7 +12696,12 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         }
         return merge;
       }), nextRows.length, columns.length);
-      persistTableMeta({ rows: nextRows, mergedCells: nextMergedCells, cellStyles: shiftCellStylesForInsertedRow(insertIndex) });
+      persistTableMeta({
+        rows: nextRows,
+        rowColumnWidths: nextRowColumnWidths,
+        mergedCells: nextMergedCells,
+        cellStyles: shiftCellStylesForInsertedRow(insertIndex),
+      });
       setSelectedTableCell({ blockId: block.id, type: 'body', rowIndex: insertIndex, columnIndex: Math.max(0, selectedColumnIndex) });
       setSelectedTableRange(null);
     };
@@ -12674,8 +12715,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         nextRow.splice(insertIndex, 0, '');
         return nextRow;
       });
-      const nextWidths = [...columnWidths];
-      nextWidths.splice(insertIndex, 0, columnWidths[safeIndex] || 160);
+      const nextWidthState = insertDocumentTableColumnWidths(columnWidths, rowColumnWidths, {
+        insertIndex,
+        sourceColumnIndex: safeIndex,
+        rowCount: normalizedRows.length,
+      });
       const nextMergedCells = normalizeTableMergedCells(mergedCells.map(merge => {
         if (merge.columnIndex >= insertIndex) {
           return { ...merge, columnIndex: merge.columnIndex + 1 };
@@ -12688,7 +12732,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       persistTableMeta({
         columns: nextColumns,
         rows: nextRows,
-        columnWidths: nextWidths,
+        columnWidths: nextWidthState.columnWidths,
+        rowColumnWidths: nextWidthState.rowColumnWidths,
         mergedCells: nextMergedCells,
         cellStyles: shiftCellStylesForInsertedColumn(insertIndex),
       });
@@ -12717,6 +12762,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       const nextRows = normalizedRows.filter((_, index) => (
         index < startRowIndex || index > endRowIndex
       ));
+      const nextRowColumnWidths = deleteDocumentTableRowWidths(columnWidths, rowColumnWidths, {
+        startRowIndex,
+        endRowIndex,
+        rowCount: normalizedRows.length,
+      });
       const nextMergedCells = normalizeTableMergedCells(mergedCells.flatMap(merge => {
         const mergeEnd = merge.rowIndex + merge.rowSpan - 1;
         if (mergeEnd < startRowIndex) return [merge];
@@ -12736,6 +12786,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       }), nextRows.length, columns.length);
       persistTableMeta({
         rows: nextRows,
+        rowColumnWidths: nextRowColumnWidths,
         mergedCells: nextMergedCells,
         cellStyles: shiftCellStylesForDeletedRows(startRowIndex, endRowIndex),
       });
@@ -12759,9 +12810,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       const nextRows = normalizedRows.map(row => row.filter((_, index) => (
         index < startColumnIndex || index > endColumnIndex
       )));
-      const nextWidths = columnWidths.filter((_, index) => (
-        index < startColumnIndex || index > endColumnIndex
-      ));
+      const nextWidthState = deleteDocumentTableColumnWidths(columnWidths, rowColumnWidths, {
+        startColumnIndex,
+        endColumnIndex,
+        rowCount: normalizedRows.length,
+      });
       const nextMergedCells = normalizeTableMergedCells(mergedCells.flatMap(merge => {
         const mergeEnd = merge.columnIndex + merge.colSpan - 1;
         if (mergeEnd < startColumnIndex) return [merge];
@@ -12782,7 +12835,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       persistTableMeta({
         columns: nextColumns,
         rows: nextRows,
-        columnWidths: nextWidths,
+        columnWidths: nextWidthState.columnWidths,
+        rowColumnWidths: nextWidthState.rowColumnWidths,
         mergedCells: nextMergedCells,
         cellStyles: shiftCellStylesForDeletedColumns(startColumnIndex, endColumnIndex),
       });
@@ -12829,7 +12883,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     const distributeSelectedColumnWidths = () => {
       const averageWidth = Math.max(80, Math.round(tableWidth / columns.length));
-      persistTableMeta({ columnWidths: columns.map(() => averageWidth) });
+      persistTableMeta({ columnWidths: columns.map(() => averageWidth), rowColumnWidths: {} });
     };
     const selectWholeTable = () => {
       clearNativeEditorSelection();
@@ -12992,13 +13046,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     };
-    const beginColumnResize = (event, columnIndex, colSpan = 1) => {
+    const beginColumnResize = (event, rowIndex, columnIndex, colSpan = 1) => {
       event.preventDefault();
       event.stopPropagation();
       const startX = event.clientX;
       pushEditorUndoSnapshot();
       const handleMouseMove = moveEvent => {
-        const nextWidths = resizeDocumentTableColumnWidths(columnWidths, {
+        const nextWidthState = resizeDocumentTableScopedColumnWidths(columnWidths, rowColumnWidths, {
+          rowIndex: hasVerticalMergedCells ? 0 : rowIndex,
+          rowCount: normalizedRows.length,
           columnIndex,
           colSpan,
           delta: moveEvent.clientX - startX,
@@ -13008,7 +13064,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           const currentMeta = { ...getDefaultBlockMeta(item.type), ...cloneMeta(item.meta) };
           const stored = buildStoredTableMetaFromVisibleRows(normalizedRows, columns, {
             mergedCells,
-            columnWidths: nextWidths,
+            columnWidths: nextWidthState.columnWidths,
+            rowColumnWidths: nextWidthState.rowColumnWidths,
             horizontalCenter: currentMeta.horizontalCenter,
             verticalCenter: currentMeta.verticalCenter,
             cellStyles: normalizeTableCellStyles(currentMeta.cellStyles || cellStyles, normalizedRows.length, columns.length),
@@ -13039,8 +13096,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     const menuColumnIndex = hasSelectedRange ? selectedRangeBounds.startColumnIndex : (selectedColumnIndex >= 0 ? selectedColumnIndex : 0);
     const menuRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : (selectedRowIndex >= 0 ? selectedRowIndex : 0);
-    const selectedColumnLeft = columnWidths.slice(0, menuColumnIndex).reduce((sum, width) => sum + width, 0);
-    const tableMenuLeft = Math.max(12, Math.min(selectedColumnLeft + columnWidths[menuColumnIndex] / 2 + 8, Math.max(12, tableWidth - 260)));
+    const menuRowColumnWidths = getRowColumnWidths(menuRowIndex);
+    const selectedColumnLeft = menuRowColumnWidths.slice(0, menuColumnIndex).reduce((sum, width) => sum + width, 0);
+    const tableMenuLeft = Math.max(12, Math.min(selectedColumnLeft + menuRowColumnWidths[menuColumnIndex] / 2 + 8, Math.max(12, tableWidth - 260)));
     const tableMenuTop = Math.max(0, Math.min(44 + Math.max(0, menuRowIndex) * 42, 24));
     const renderTableMenuIcon = (icon) => (
       <span style={{ width: 28, minWidth: 28, color: '#7a7a7a', fontSize: 20, lineHeight: 1, textAlign: 'center' }}>{icon}</span>
@@ -13211,6 +13269,83 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         updateCell(rowIndex, columnIndex, sanitizeInlineHtml(target.innerHTML));
       }, 0);
     };
+    const handleTableMouseDown = (event) => {
+      if (wholeTableSelected && !event.target?.closest?.('[contenteditable="true"]')) {
+        selectWholeTable();
+      }
+    };
+    const renderEditableTableRow = (row, rowIndex) => (
+      <tr key={`row-${rowIndex}`}>
+        {row.map((cell, columnIndex) => {
+          const mergedCell = getMergedCover(rowIndex, columnIndex);
+          if (mergedCell && !mergedCell.isAnchor) return null;
+          const rowSpan = mergedCell?.rowSpan || 1;
+          const colSpan = mergedCell?.colSpan || 1;
+          const selectedInRange = isCellInSelectedRange(rowIndex, columnIndex);
+          const activeCell = selectedTableCellIsBody && selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex;
+          const cellStyle = cellStyles[buildTableMergeKey(rowIndex, columnIndex)] || {};
+          const cellBackground = cellStyle.backgroundColor || '#fff';
+          return (
+            <td
+              key={`cell-${rowIndex}-${columnIndex}`}
+              data-document-table-cell="true"
+              data-table-block-id={block.id}
+              data-row-index={rowIndex}
+              data-column-index={columnIndex}
+              rowSpan={rowSpan}
+              colSpan={colSpan}
+              onMouseDown={event => beginTableCellSelection(event, rowIndex, columnIndex)}
+              style={{
+                position: 'relative',
+                border: '1px solid #e5e7eb',
+                padding: 4,
+                verticalAlign: verticalCenter ? 'middle' : 'top',
+                textAlign: horizontalCenter ? 'center' : 'left',
+                background: wholeTableSelected || selectedInRange ? '#fde2e2' : cellBackground,
+                color: cellStyle.color || '#111827',
+                boxShadow: wholeTableSelected ? 'none' : (activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
+              }}
+            >
+              <InlineRichTextEditor
+                id={`doc-table-cell-input-${block.id}-body-${rowIndex}-${columnIndex}`}
+                value={getAnchorCellValue(rowIndex, columnIndex)}
+                placeholder=""
+                onFocus={() => selectTableCell(rowIndex, columnIndex)}
+                onChange={value => updateCell(rowIndex, columnIndex, value)}
+                onMouseUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
+                onKeyUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
+                onKeyDown={event => handleTableCellKeyDown(event, rowIndex, columnIndex)}
+                onBlur={hideTableInlineToolbarOnBlur}
+                style={{
+                  minHeight: Math.max(28, rowSpan * 42 - 12),
+                  padding: 4,
+                  lineHeight: 1.55,
+                  fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
+                  background: 'transparent',
+                  color: cellStyle.color || '#111827',
+                  textAlign: horizontalCenter ? 'center' : 'left',
+                }}
+              />
+              <span
+                role="presentation"
+                aria-label="调整单元格宽度"
+                title="拖动调整列宽"
+                onMouseDown={event => beginColumnResize(event, rowIndex, columnIndex, colSpan)}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  right: -4,
+                  width: 8,
+                  height: '100%',
+                  cursor: 'col-resize',
+                  zIndex: 3,
+                }}
+              />
+            </td>
+          );
+        })}
+      </tr>
+    );
     return (
       <div style={{ width: '100%' }}>
         <div
@@ -13222,96 +13357,40 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         >
           {tableMenu}
           <div data-document-table-scroll-container="true" style={{ overflowX: 'auto', maxWidth: '100%' }}>
-            <table
-              onMouseDown={(event) => {
-                if (wholeTableSelected && !event.target?.closest?.('[contenteditable="true"]')) {
-                  selectWholeTable();
-                }
-              }}
-              style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}
-            >
-            <colgroup>
-              {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
-            </colgroup>
-            <tbody>
-              {normalizedRows.map((row, rowIndex) => (
-                <tr key={`row-${rowIndex}`}>
-                  {row.map((cell, columnIndex) => {
-                    const mergedCell = getMergedCover(rowIndex, columnIndex);
-                    if (mergedCell && !mergedCell.isAnchor) return null;
-                    const rowSpan = mergedCell?.rowSpan || 1;
-                    const colSpan = mergedCell?.colSpan || 1;
-                    return (
-                      (() => {
-                      const selectedInRange = isCellInSelectedRange(rowIndex, columnIndex);
-                      const activeCell = selectedTableCellIsBody && selectedRowIndex === rowIndex && selectedColumnIndex === columnIndex;
-                      const cellStyle = cellStyles[buildTableMergeKey(rowIndex, columnIndex)] || {};
-                      const cellBackground = cellStyle.backgroundColor || '#fff';
-                      return (
-                    <td
-                      key={`cell-${rowIndex}-${columnIndex}`}
-                      data-document-table-cell="true"
-                      data-table-block-id={block.id}
-                      data-row-index={rowIndex}
-                      data-column-index={columnIndex}
-                      rowSpan={rowSpan}
-                      colSpan={colSpan}
-                      onMouseDown={event => beginTableCellSelection(event, rowIndex, columnIndex)}
+            {useRowScopedWidths ? (
+              <div onMouseDown={handleTableMouseDown} style={{ width: tableWidth, minWidth: isMobile ? 320 : 360 }}>
+                {normalizedRows.map((row, rowIndex) => {
+                  const widths = getRowColumnWidths(rowIndex);
+                  return (
+                    <table
+                      key={`scoped-row-${rowIndex}`}
                       style={{
-                        position: 'relative',
-                        border: '1px solid #e5e7eb',
-                        padding: 4,
-                        verticalAlign: verticalCenter ? 'middle' : 'top',
-                        textAlign: horizontalCenter ? 'center' : 'left',
-                        background: wholeTableSelected || selectedInRange ? '#fde2e2' : cellBackground,
-                        color: cellStyle.color || '#111827',
-                        boxShadow: wholeTableSelected ? 'none' : (activeCell ? 'inset 0 0 0 1px #6366f1' : (selectedInRange ? 'inset 0 0 0 1px rgba(99, 102, 241, 0.55)' : 'none')),
+                        width: getRenderedRowWidth(rowIndex),
+                        maxWidth: 'none',
+                        borderCollapse: 'collapse',
+                        tableLayout: 'fixed',
+                        marginTop: rowIndex === 0 ? 0 : -1,
                       }}
                     >
-                      <InlineRichTextEditor
-                        id={`doc-table-cell-input-${block.id}-body-${rowIndex}-${columnIndex}`}
-                        value={getAnchorCellValue(rowIndex, columnIndex)}
-                        placeholder=""
-                        onFocus={() => selectTableCell(rowIndex, columnIndex)}
-                        onChange={value => updateCell(rowIndex, columnIndex, value)}
-                        onMouseUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
-                        onKeyUp={event => handleTableCellTextSelection(block, { type: 'body', rowIndex, columnIndex }, event)}
-                        onKeyDown={event => handleTableCellKeyDown(event, rowIndex, columnIndex)}
-                        onBlur={hideTableInlineToolbarOnBlur}
-                        style={{
-                          minHeight: Math.max(28, rowSpan * 42 - 12),
-                          padding: 4,
-                          lineHeight: 1.55,
-                          fontSize: selectedDoc?.small_font_enabled ? 13 : 14,
-                          background: 'transparent',
-                          color: cellStyle.color || '#111827',
-                          textAlign: horizontalCenter ? 'center' : 'left',
-                        }}
-                      />
-                      <span
-                        role="presentation"
-                        aria-label="调整单元格宽度"
-                        title="拖动调整列宽"
-                        onMouseDown={event => beginColumnResize(event, columnIndex, colSpan)}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          right: -4,
-                          width: 8,
-                          height: '100%',
-                          cursor: 'col-resize',
-                          zIndex: 3,
-                        }}
-                      />
-                    </td>
-                      );
-                    })()
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-            </table>
+                      <colgroup>
+                        {widths.map((width, index) => <col key={`row-${rowIndex}-col-width-${index}`} style={{ width }} />)}
+                      </colgroup>
+                      <tbody>{renderEditableTableRow(row, rowIndex)}</tbody>
+                    </table>
+                  );
+                })}
+              </div>
+            ) : (
+              <table
+                onMouseDown={handleTableMouseDown}
+                style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}
+              >
+                <colgroup>
+                  {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
+                </colgroup>
+                <tbody>{normalizedRows.map(renderEditableTableRow)}</tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
@@ -13843,40 +13922,85 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [];
     const mergedLookup = buildTableMergedLookup(meta.mergedCells, rows.length, columns.length);
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
-    const tableWidth = Math.max(columnWidths.reduce((sum, width) => sum + width, 0), isMobile ? 320 : 560);
+    const rowColumnWidths = normalizeDocumentTableRowColumnWidths(
+      meta.rowColumnWidths,
+      rows.length,
+      columns.length,
+      columnWidths,
+    );
+    const useRowScopedWidths = Object.keys(rowColumnWidths).length > 0
+      && !mergedLookup.normalized.some(merge => merge.rowSpan > 1);
+    const minimumTableWidth = isMobile ? 320 : 560;
+    const getPresentationRowWidths = rowIndex => getDocumentTableRowColumnWidths(
+      columnWidths,
+      rowColumnWidths,
+      rowIndex,
+    );
+    const getPresentationRowWidth = rowIndex => Math.max(
+      getPresentationRowWidths(rowIndex).reduce((sum, width) => sum + width, 0),
+      minimumTableWidth,
+    );
+    const tableWidth = Math.max(
+      minimumTableWidth,
+      ...rows.map((_, rowIndex) => getPresentationRowWidth(rowIndex)),
+    );
     if (!columns.length && !rows.length) {
       return <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{block.content}</div>;
     }
+    const renderPresentationRow = (row, rowIndex) => (
+      <tr key={`row-${rowIndex}`}>
+        {(row || []).map((cell, cellIndex) => {
+          const mergedCell = mergedLookup.coveredMap.get(buildTableMergeKey(rowIndex, cellIndex));
+          if (mergedCell && !mergedCell.isAnchor) return null;
+          return (
+            <td
+              key={`cell-${rowIndex}-${cellIndex}`}
+              rowSpan={mergedCell?.rowSpan || 1}
+              colSpan={mergedCell?.colSpan || 1}
+              style={{ borderBottom: '1px solid #e5e7eb', padding: '10px 12px', verticalAlign: 'top' }}
+            >
+              <InlineHtmlView value={cell} />
+            </td>
+          );
+        })}
+      </tr>
+    );
     return (
       <div style={{ overflowX: 'auto' }}>
         {block.content && <Text strong style={{ display: 'block', marginBottom: 10, fontSize: isMobile ? 18 : 22 }}>{block.content}</Text>}
-        <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: isMobile ? 16 : 20 }}>
-          {columns.length > 0 && (
-            <colgroup>
-              {columnWidths.map((width, index) => <col key={`presentation-col-${index}`} style={{ width }} />)}
-            </colgroup>
-          )}
-          <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={`row-${rowIndex}`}>
-                {(row || []).map((cell, cellIndex) => {
-                  const mergedCell = mergedLookup.coveredMap.get(buildTableMergeKey(rowIndex, cellIndex));
-                  if (mergedCell && !mergedCell.isAnchor) return null;
-                  return (
-                    <td
-                      key={`cell-${rowIndex}-${cellIndex}`}
-                      rowSpan={mergedCell?.rowSpan || 1}
-                      colSpan={mergedCell?.colSpan || 1}
-                      style={{ borderBottom: '1px solid #e5e7eb', padding: '10px 12px', verticalAlign: 'top' }}
-                    >
-                      <InlineHtmlView value={cell} />
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {useRowScopedWidths ? (
+          <div style={{ width: tableWidth }}>
+            {rows.map((row, rowIndex) => {
+              const widths = getPresentationRowWidths(rowIndex);
+              return (
+                <table
+                  key={`presentation-scoped-row-${rowIndex}`}
+                  style={{
+                    width: getPresentationRowWidth(rowIndex),
+                    maxWidth: 'none',
+                    borderCollapse: 'collapse',
+                    tableLayout: 'fixed',
+                    fontSize: isMobile ? 16 : 20,
+                  }}
+                >
+                  <colgroup>
+                    {widths.map((width, index) => <col key={`presentation-row-${rowIndex}-col-${index}`} style={{ width }} />)}
+                  </colgroup>
+                  <tbody>{renderPresentationRow(row, rowIndex)}</tbody>
+                </table>
+              );
+            })}
+          </div>
+        ) : (
+          <table style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', fontSize: isMobile ? 16 : 20 }}>
+            {columns.length > 0 && (
+              <colgroup>
+                {columnWidths.map((width, index) => <col key={`presentation-col-${index}`} style={{ width }} />)}
+              </colgroup>
+            )}
+            <tbody>{rows.map(renderPresentationRow)}</tbody>
+          </table>
+        )}
       </div>
     );
   };
