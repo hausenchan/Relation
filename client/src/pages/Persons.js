@@ -1211,6 +1211,11 @@ export default function Persons() {
       ),
     },
     {
+      title: '公司',
+      render: (_, r) => r.company_name || r.company || r.current_company || '-',
+      ellipsis: true,
+    },
+    {
       title: '圈子',
       dataIndex: 'person_category',
       render: v => {
@@ -1275,11 +1280,6 @@ export default function Persons() {
       dataIndex: 'address',
       ellipsis: true,
       render: v => v || '-',
-    },
-    {
-      title: '公司',
-      render: (_, r) => r.company || r.current_company || '-',
-      ellipsis: true,
     },
     {
       title: '职位',

@@ -94,14 +94,20 @@ test('opportunity type stays in sync with interaction and competitor follow-up t
   const token = admin.token;
   const adminId = Number(admin.user.id);
   const suffix = `${process.pid}_${Date.now()}`;
+  const personCompany = `互动搜索公司 ${suffix}`;
 
   const personResponse = await request(baseUrl, '/api/persons', {
     method: 'POST',
     token,
-    body: { name: `商机类型人脉 ${suffix}`, person_category: 'business' },
+    body: { name: `商机类型人脉 ${suffix}`, company: personCompany, person_category: 'business' },
   });
   assert.equal(personResponse.status, 200, JSON.stringify(personResponse.payload));
   const personId = Number(personResponse.payload.id);
+
+  const personsByCompany = await request(baseUrl, `/api/persons?search=${encodeURIComponent(personCompany)}`, { token });
+  assert.equal(personsByCompany.status, 200, JSON.stringify(personsByCompany.payload));
+  assert.equal(personsByCompany.payload.length, 1);
+  assert.equal(personsByCompany.payload[0].company_name, personCompany);
 
   const invalidInteraction = await request(baseUrl, '/api/interactions', {
     method: 'POST',
@@ -138,6 +144,12 @@ test('opportunity type stays in sync with interaction and competitor follow-up t
   });
   assert.equal(interaction.status, 200, JSON.stringify(interaction.payload));
   const interactionId = Number(interaction.payload.id);
+
+  const interactionsByCompany = await request(baseUrl, `/api/interactions?search=${encodeURIComponent(personCompany)}`, { token });
+  assert.equal(interactionsByCompany.status, 200, JSON.stringify(interactionsByCompany.payload));
+  assert.equal(interactionsByCompany.payload.length, 1);
+  assert.equal(Number(interactionsByCompany.payload[0].id), interactionId);
+  assert.equal(interactionsByCompany.payload[0].company_name, personCompany);
 
   let opportunities = await request(baseUrl, '/api/opportunities', { token });
   assert.equal(opportunities.status, 200, JSON.stringify(opportunities.payload));

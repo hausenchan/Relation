@@ -30,6 +30,11 @@ const {
 } = require('./lib/documentCollaboration');
 const { buildDefaultDocumentShares } = require('./lib/documentDefaultShares');
 const { buildContentRevisionChanges } = require('./lib/contentRevisionDiff');
+const {
+  getPersonCompanyName,
+  matchesInteractionSearch,
+  matchesPersonSearch,
+} = require('./lib/businessContactSearch');
 const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
 const { createRequestPerformanceMiddleware } = require('./lib/performanceBudget');
 const { applyBusinessTimeMigration } = require('./lib/businessTimeMigration');
@@ -10326,14 +10331,12 @@ app.get('/api/persons', (req, res) => {
   }
 
   query += ' ORDER BY p.updated_at DESC';
-  const rows = decryptRows('persons', db.prepare(query).all(...params));
+  const rows = decryptRows('persons', db.prepare(query).all(...params)).map(row => ({
+    ...row,
+    company_name: getPersonCompanyName(row),
+  }));
   if (search) {
-    const s = String(search).toLowerCase();
-    const hit = v => v && String(v).toLowerCase().includes(s);
-    return res.json(rows.filter(r =>
-      hit(r.name) || hit(r.company) || hit(r.current_company) ||
-      hit(r.phone) || hit(r.tags) || hit(r.skills) || hit(r.success_traits)
-    ));
+    return res.json(rows.filter(row => matchesPersonSearch(row, search)));
   }
   res.json(rows);
 });
@@ -11193,7 +11196,7 @@ app.post('/api/persons/import', canWrite, (req, res) => {
 
 // =========== 互动记录 API ===========
 app.get('/api/interactions', (req, res) => {
-  const { person_id, type, city, weight, importance, date_start, date_end, created_by, visibility_scope } = req.query;
+  const { search, person_id, type, city, weight, importance, date_start, date_end, created_by, visibility_scope } = req.query;
   const { id: me, role } = req.user;
   let query = `
     SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company, p.city, p.weight,
@@ -11234,13 +11237,19 @@ app.get('/api/interactions', (req, res) => {
   query += ' ORDER BY i.date DESC';
   const rows = db.prepare(query).all(...params);
   // interactions.* 用 interactions 解密；p.name/company/current_company 来自 persons
-  const out = decryptRows('interactions', rows).map(r => ({
-    ...r,
-    person_name: safeDecrypt(r.person_name),
-    company: safeDecrypt(r.company),
-    current_company: safeDecrypt(r.current_company),
-  }));
-  res.json(out);
+  const out = decryptRows('interactions', rows).map(r => {
+    const personFields = {
+      person_name: safeDecrypt(r.person_name),
+      company: safeDecrypt(r.company),
+      current_company: safeDecrypt(r.current_company),
+    };
+    return {
+      ...r,
+      ...personFields,
+      company_name: getPersonCompanyName(personFields),
+    };
+  });
+  res.json(search ? out.filter(row => matchesInteractionSearch(row, search)) : out);
 });
 
 const TASK_TYPE_VALUES = ['认知', '增长-客户', '增长-产品', '组织'];

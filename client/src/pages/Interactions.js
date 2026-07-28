@@ -63,6 +63,8 @@ export default function Interactions() {
   const canFilterVisibility = isExecutiveUser(user);
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [searchDraft, setSearchDraft] = useState('');
+  const [filterSearch, setFilterSearch] = useState('');
   const [filterType, setFilterType] = useState('');
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
@@ -93,6 +95,7 @@ export default function Interactions() {
   const load = useCallback(async () => {
     setLoading(true);
     const params = {};
+    if (filterSearch) params.search = filterSearch;
     if (filterType) params.type = filterType;
     if (filterCity) params.city = filterCity;
     if (filterWeight) params.weight = filterWeight;
@@ -103,7 +106,7 @@ export default function Interactions() {
     const res = await interactionsApi.list(params);
     setData(res);
     setLoading(false);
-  }, [filterType, filterCity, filterWeight, filterImportance, filterCreatedBy, filterVisibility, canFilterVisibility, dateRange]);
+  }, [filterSearch, filterType, filterCity, filterWeight, filterImportance, filterCreatedBy, filterVisibility, canFilterVisibility, dateRange]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -179,6 +182,12 @@ export default function Interactions() {
       },
     },
     {
+      title: '公司',
+      dataIndex: 'company_name',
+      ellipsis: true,
+      render: (value, record) => value || record.company || record.current_company || '-',
+    },
+    {
       title: '姓名',
       dataIndex: 'person_name',
       render: (v, record) => (
@@ -239,6 +248,7 @@ export default function Interactions() {
     const type = typeMap[record.type] || { label: record.type, color: 'default' };
     const importance = importanceMap[record.importance] || importanceMap.normal;
     const opportunity = record.opportunity_title ? (opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status, color: 'default' }) : null;
+    const companyName = record.company_name || record.company || record.current_company || '-';
 
     return (
       <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
@@ -256,6 +266,9 @@ export default function Interactions() {
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.person_name || '-'}</div>
+                <Text type="secondary" ellipsis={{ tooltip: companyName }} style={{ display: 'block', marginBottom: 6 }}>
+                  {companyName}
+                </Text>
                 <Space wrap size={[6, 6]}>
                   {isPrivateInteraction(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
                   {record.person_category && <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>}
@@ -317,6 +330,18 @@ export default function Interactions() {
         <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加记录</Button>
       </div>
       <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
+        <Input.Search
+          placeholder="搜索公司、姓名、描述、结果"
+          allowClear
+          value={searchDraft}
+          style={{ width: isMobile ? '100%' : 240 }}
+          onSearch={value => setFilterSearch(value.trim())}
+          onChange={event => {
+            const value = event.target.value;
+            setSearchDraft(value);
+            if (!value) setFilterSearch('');
+          }}
+        />
         <Select placeholder="互动类型" allowClear style={{ width: isMobile ? '100%' : 120 }} onChange={setFilterType}>
           {Object.entries(typeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
         </Select>
@@ -611,6 +636,7 @@ export default function Interactions() {
                 <Descriptions.Item label="圈子">
                   {cat ? <Tag color={cat.color}>{cat.label}</Tag> : '-'}
                 </Descriptions.Item>
+                <Descriptions.Item label="公司">{r.company_name || r.company || r.current_company || '-'}</Descriptions.Item>
                 <Descriptions.Item label="姓名">{r.person_name || '-'}</Descriptions.Item>
                 <Descriptions.Item label="日期">{r.date || '-'}</Descriptions.Item>
                 <Descriptions.Item label="类型">
