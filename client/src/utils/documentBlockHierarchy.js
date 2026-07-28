@@ -32,7 +32,7 @@ export function buildDocumentNumberedListValues(blocks = [], maxIndent = 9) {
     const indent = getDocumentBlockHierarchyIndent(block, maxIndent);
     counters.length = indent + 1;
     if (block.type !== 'numbered') {
-      counters.length = indent;
+      if (HIERARCHICAL_LIST_TYPES.has(block.type)) counters.length = indent;
       return;
     }
 

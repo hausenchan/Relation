@@ -45,4 +45,34 @@ describe('document block hierarchy', () => {
     expect(numberedValues.get('second')).toEqual({ index: 2, indent: 0 });
     expect(numberedValues.get('next-list')).toEqual({ index: 1, indent: 0 });
   });
+
+  test('table children do not restart numbered siblings at the same indent', () => {
+    const numberedValues = buildDocumentNumberedListValues([
+      { id: 'section', type: 'numbered', meta: { indent: 1 } },
+      { id: 'first', type: 'numbered', meta: { indent: 2 } },
+      { id: 'first-table', type: 'table-simple', meta: { hierarchy: 'list', indent: 2 } },
+      { id: 'second', type: 'numbered', meta: { indent: 2 } },
+      { id: 'second-table', type: 'table-simple', meta: { hierarchy: 'list', indent: 2 } },
+      { id: 'third', type: 'numbered', meta: { indent: 2 } },
+    ]);
+
+    expect(numberedValues.get('section')).toEqual({ index: 1, indent: 1 });
+    expect(numberedValues.get('first')).toEqual({ index: 1, indent: 2 });
+    expect(numberedValues.get('second')).toEqual({ index: 2, indent: 2 });
+    expect(numberedValues.get('third')).toEqual({ index: 3, indent: 2 });
+  });
+
+  test('switching to another list type still restarts numbered siblings', () => {
+    const numberedValues = buildDocumentNumberedListValues([
+      { id: 'first', type: 'numbered', meta: { indent: 1 } },
+      { id: 'table', type: 'table-simple', meta: { hierarchy: 'list', indent: 1 } },
+      { id: 'second', type: 'numbered', meta: { indent: 1 } },
+      { id: 'bullet', type: 'bullet', meta: { indent: 1 } },
+      { id: 'after-bullet', type: 'numbered', meta: { indent: 1 } },
+    ]);
+
+    expect(numberedValues.get('first')).toEqual({ index: 1, indent: 1 });
+    expect(numberedValues.get('second')).toEqual({ index: 2, indent: 1 });
+    expect(numberedValues.get('after-bullet')).toEqual({ index: 1, indent: 1 });
+  });
 });
