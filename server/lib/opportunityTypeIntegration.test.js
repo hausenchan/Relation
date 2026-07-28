@@ -150,6 +150,7 @@ test('opportunity type stays in sync with interaction and competitor follow-up t
   assert.equal(interactionsByCompany.payload.length, 1);
   assert.equal(Number(interactionsByCompany.payload[0].id), interactionId);
   assert.equal(interactionsByCompany.payload[0].company_name, personCompany);
+  assert.equal(interactionsByCompany.payload[0].created_by_name, admin.user.display_name);
 
   let opportunities = await request(baseUrl, '/api/opportunities', { token });
   assert.equal(opportunities.status, 200, JSON.stringify(opportunities.payload));

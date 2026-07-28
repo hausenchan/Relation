@@ -1215,6 +1215,12 @@ export default function Persons() {
       render: (_, r) => r.company_name || r.company || r.current_company || '-',
       ellipsis: true,
     },
+    { title: '创建人', dataIndex: 'created_by_name', render: v => v || '-' },
+    {
+      title: '城市',
+      dataIndex: 'city',
+      render: v => v || '-',
+    },
     {
       title: '圈子',
       dataIndex: 'person_category',
@@ -1271,11 +1277,6 @@ export default function Persons() {
       },
     ] : []),
     {
-      title: '城市',
-      dataIndex: 'city',
-      render: v => v || '-',
-    },
-    {
       title: '详细地址',
       dataIndex: 'address',
       ellipsis: true,
@@ -1296,7 +1297,6 @@ export default function Persons() {
         </Space>
       ),
     },
-    { title: '创建人', dataIndex: 'created_by_name', render: v => v || '-' },
     {
       title: '共享人',
       dataIndex: 'shared_to_names',

@@ -11200,10 +11200,12 @@ app.get('/api/interactions', (req, res) => {
   const { id: me, role } = req.user;
   let query = `
     SELECT i.*, p.name as person_name, p.person_category, p.company, p.current_company, p.city, p.weight,
+      u.display_name as created_by_name,
       p.visibility_scope as person_visibility_scope,
       p.private_owner_id as person_private_owner_id
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
+    LEFT JOIN users u ON i.created_by = u.id
     WHERE 1=1
   `;
   const params = [];

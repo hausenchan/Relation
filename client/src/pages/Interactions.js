@@ -175,19 +175,6 @@ export default function Interactions() {
 
   const columns = [
     {
-      title: '圈子',
-      render: (_, r) => {
-        const m = categoryMap[r.person_category];
-        return m ? <Tag color={m.color}>{m.label}</Tag> : null;
-      },
-    },
-    {
-      title: '公司',
-      dataIndex: 'company_name',
-      ellipsis: true,
-      render: (value, record) => value || record.company || record.current_company || '-',
-    },
-    {
       title: '姓名',
       dataIndex: 'person_name',
       render: (v, record) => (
@@ -196,6 +183,27 @@ export default function Interactions() {
           {isPrivateInteraction(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
         </Space>
       ),
+    },
+    {
+      title: '公司',
+      dataIndex: 'company_name',
+      ellipsis: true,
+      render: (value, record) => value || record.company || record.current_company || '-',
+    },
+    {
+      title: '创建人',
+      dataIndex: 'created_by_name',
+      render: (value, record) => {
+        const creator = creatorUsers.find(item => Number(item.id) === Number(record.created_by));
+        return value || creator?.display_name || creator?.username || '-';
+      },
+    },
+    {
+      title: '圈子',
+      render: (_, r) => {
+        const m = categoryMap[r.person_category];
+        return m ? <Tag color={m.color}>{m.label}</Tag> : null;
+      },
     },
     { title: '日期', dataIndex: 'date', sorter: (a, b) => a.date.localeCompare(b.date) },
     {
