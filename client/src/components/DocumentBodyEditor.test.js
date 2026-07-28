@@ -735,6 +735,53 @@ describe('DocumentBodyEditor block copy', () => {
       ]);
   });
 
+  test('Enter confirming an IME candidate does not split the current block', () => {
+    const onChange = jest.fn();
+    flushSync(() => {
+      root.render(
+        <DocumentBodyEditor
+          value={{
+            format: DOCUMENT_BODY_FORMAT,
+            blocks: [{ id: 'ime', type: 'paragraph', content: '完成/申请率', meta: {} }],
+          }}
+          onChange={onChange}
+        />
+      );
+    });
+    const inlineEditor = container.querySelector('[data-document-body-block-id="ime"] [contenteditable="true"]');
+    inlineEditor.focus();
+
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: 'UV' }));
+      inlineEditor.innerHTML = '完成UV/申请率';
+      inlineEditor.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: 'UV' }));
+    });
+
+    let enterEvent;
+    flushSync(() => {
+      enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+      inlineEditor.dispatchEvent(enterEvent);
+    });
+
+    expect(enterEvent.defaultPrevented).toBe(true);
+    const nextValue = onChange.mock.calls.at(-1)[0];
+    expect(nextValue.blocks).toHaveLength(1);
+    expect(nextValue.blocks[0].content).toBe('完成UV/申请率');
+
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.setStart(inlineEditor.firstChild, 4);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    flushSync(() => {
+      inlineEditor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    });
+
+    const splitValue = onChange.mock.calls.at(-1)[0];
+    expect(splitValue.blocks.map(block => block.content)).toEqual(['完成UV', '/申请率']);
+  });
+
   test('Enter preserves inline formatting on both sides of the split point', () => {
     const onChange = jest.fn();
     flushSync(() => {

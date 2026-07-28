@@ -39,6 +39,10 @@ import {
   flattenDocumentClipboardHtml,
 } from '../utils/documentClipboard';
 import { splitContentEditableAtSelection } from '../utils/contentEditableSplit';
+import {
+  isContentEditableComposing,
+  shouldSuppressEnterAfterComposition,
+} from '../utils/contentEditableComposition';
 import { wrapInlineRangeContents } from '../utils/inlineTextFormatting';
 import MentionPicker, {
   getContentEditableMentionTrigger,
@@ -350,6 +354,7 @@ function InlineBlockEditor({
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const composingRef = useRef(false);
+  const compositionEndedAtRef = useRef(0);
   const localHtmlRef = useRef(sanitizeDocumentBodyInlineHtml(value));
 
   useLayoutEffect(() => {
@@ -425,11 +430,16 @@ function InlineBlockEditor({
         onBlur={() => {
           focusedRef.current = false;
           composingRef.current = false;
+          compositionEndedAtRef.current = 0;
           emitChange();
         }}
-        onCompositionStart={() => { composingRef.current = true; }}
+        onCompositionStart={() => {
+          composingRef.current = true;
+          compositionEndedAtRef.current = 0;
+        }}
         onCompositionEnd={() => {
           composingRef.current = false;
+          compositionEndedAtRef.current = Date.now();
           emitChange();
         }}
         onInput={() => {
@@ -445,6 +455,13 @@ function InlineBlockEditor({
         }}
         onPaste={onPaste}
         onKeyDown={(event) => {
+          if (isContentEditableComposing(event, composingRef.current)) return;
+          if (shouldSuppressEnterAfterComposition(event, compositionEndedAtRef.current)) {
+            compositionEndedAtRef.current = 0;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           if (event.key === 'Tab') {
             event.preventDefault();
             onIndent?.(event.shiftKey ? -1 : 1);

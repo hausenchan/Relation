@@ -118,6 +118,10 @@ import {
   shouldSkipNestedClipboardListElement,
 } from '../utils/documentClipboard';
 import { splitContentEditableAtSelection } from '../utils/contentEditableSplit';
+import {
+  isContentEditableComposing,
+  shouldSuppressEnterAfterComposition,
+} from '../utils/contentEditableComposition';
 import { wrapInlineRangeContents } from '../utils/inlineTextFormatting';
 import {
   buildBulkShareTreeCheckState,
@@ -3053,6 +3057,7 @@ function InlineRichTextEditor({
   const editorRef = useRef(null);
   const focusedRef = useRef(false);
   const composingRef = useRef(false);
+  const compositionEndedAtRef = useRef(0);
   const localHtmlRef = useRef(sanitizeInlineHtml(value || ''));
   const [draftHtml, setDraftHtml] = useState(() => sanitizeInlineHtml(value || ''));
 
@@ -3117,15 +3122,18 @@ function InlineRichTextEditor({
         onBlur={(event) => {
           focusedRef.current = false;
           composingRef.current = false;
+          compositionEndedAtRef.current = 0;
           emitChange();
           onBlur?.(event);
         }}
         onCompositionStart={(event) => {
           composingRef.current = true;
+          compositionEndedAtRef.current = 0;
           onCompositionStart?.(event);
         }}
         onCompositionEnd={(event) => {
           composingRef.current = false;
+          compositionEndedAtRef.current = Date.now();
           emitChange();
           onCompositionEnd?.(event);
         }}
@@ -3145,6 +3153,13 @@ function InlineRichTextEditor({
           }
         }}
         onKeyDown={(event) => {
+          if (isContentEditableComposing(event, composingRef.current)) return;
+          if (shouldSuppressEnterAfterComposition(event, compositionEndedAtRef.current)) {
+            compositionEndedAtRef.current = 0;
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
           const simpleDelete = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && !composingRef.current;
           if ((event.key === 'Delete' || event.key === 'Backspace') && simpleDelete) {
             if (removeAdjacentMentionFromContentEditable(editorRef.current, event)) {
