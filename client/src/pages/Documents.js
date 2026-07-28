@@ -120,6 +120,7 @@ import {
 import { splitContentEditableAtSelection } from '../utils/contentEditableSplit';
 import {
   isContentEditableComposing,
+  removeContentEditableLineBreakBeforeCaret,
   shouldSuppressEnterAfterComposition,
 } from '../utils/contentEditableComposition';
 import { wrapInlineRangeContents } from '../utils/inlineTextFormatting';
@@ -135,13 +136,17 @@ import {
 } from '../utils/documentBlockKeyboard';
 import {
   deleteDocumentTableColumnWidths,
+  deleteDocumentTableRowHeights,
   deleteDocumentTableRowWidths,
   getDocumentTableRowColumnWidths,
   getDocumentTableHorizontalAutoScrollDelta,
   insertDocumentTableColumnWidths,
+  insertDocumentTableRowHeights,
   insertDocumentTableRowWidths,
+  normalizeDocumentTableRowHeights,
   normalizeDocumentTableRowColumnWidths,
   resizeDocumentTableOverallWidth,
+  resizeDocumentTableRowHeight,
   resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableContextMenuPosition,
   resolveDocumentTableStyleBounds,
@@ -876,7 +881,7 @@ function normalizeTransientBlockInput(block, nextValue) {
 function getDefaultBlockMeta(type) {
   const columnCount = getColumnCount(type);
   if (columnCount) return { cells: Array.from({ length: columnCount }, (_, index) => `分栏 ${index + 1}`) };
-  if (type === 'table-simple') return { columns: ['名称', '说明'], rows: [['', '']], mergedCells: [] };
+  if (type === 'table-simple') return { columns: ['名称', '说明'], rows: [['', '']], mergedCells: [], rowHeights: {} };
   if (type === 'database-embed') {
     return {
       tableName: '',
@@ -12677,6 +12682,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     );
     const columns = Array.from({ length: columnCount }, (_, index) => storedColumns[index] || `字段 ${index + 1}`);
     const normalizedRows = storedRows.map(row => Array.from({ length: columnCount }, (_, index) => row?.[index] || ''));
+    const rowHeights = normalizeDocumentTableRowHeights(meta.rowHeights, normalizedRows.length);
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
     const rowColumnWidths = normalizeDocumentTableRowColumnWidths(
       meta.rowColumnWidths,
@@ -12765,6 +12771,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         nextColumns.length,
         nextColumnWidths,
       );
+      const nextRowHeights = normalizeDocumentTableRowHeights(
+        patch?.rowHeights ?? rowHeights,
+        nextVisibleRows.length,
+      );
       const nextHorizontalCenter = patch?.horizontalCenter ?? horizontalCenter;
       const nextVerticalCenter = patch?.verticalCenter ?? verticalCenter;
       const nextMergedCells = patch?.mergedCells ?? mergedCells;
@@ -12772,6 +12782,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       const stored = buildStoredTableMetaFromVisibleRows(nextVisibleRows, nextColumns, {
         columnWidths: nextColumnWidths,
         rowColumnWidths: nextRowColumnWidths,
+        rowHeights: nextRowHeights,
         horizontalCenter: nextHorizontalCenter,
         verticalCenter: nextVerticalCenter,
         mergedCells: nextMergedCells,
@@ -12848,6 +12859,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         sourceRowIndex: safeIndex,
         rowCount: normalizedRows.length,
       });
+      const nextRowHeights = insertDocumentTableRowHeights(rowHeights, {
+        insertIndex,
+        sourceRowIndex: safeIndex,
+        rowCount: normalizedRows.length,
+      });
       const nextMergedCells = normalizeTableMergedCells(mergedCells.map(merge => {
         if (merge.rowIndex >= insertIndex) {
           return { ...merge, rowIndex: merge.rowIndex + 1 };
@@ -12860,6 +12876,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       persistTableMeta({
         rows: nextRows,
         rowColumnWidths: nextRowColumnWidths,
+        rowHeights: nextRowHeights,
         mergedCells: nextMergedCells,
         cellStyles: shiftCellStylesForInsertedRow(insertIndex),
       });
@@ -12928,6 +12945,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         endRowIndex,
         rowCount: normalizedRows.length,
       });
+      const nextRowHeights = deleteDocumentTableRowHeights(rowHeights, {
+        startRowIndex,
+        endRowIndex,
+        rowCount: normalizedRows.length,
+      });
       const nextMergedCells = normalizeTableMergedCells(mergedCells.flatMap(merge => {
         const mergeEnd = merge.rowIndex + merge.rowSpan - 1;
         if (mergeEnd < startRowIndex) return [merge];
@@ -12948,6 +12970,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       persistTableMeta({
         rows: nextRows,
         rowColumnWidths: nextRowColumnWidths,
+        rowHeights: nextRowHeights,
         mergedCells: nextMergedCells,
         cellStyles: shiftCellStylesForDeletedRows(startRowIndex, endRowIndex),
       });
@@ -13265,6 +13288,65 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     };
+    const beginRowResize = (event, rowIndex, rowSpan = 1) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setTableMenuContext(null);
+      const resizeRowIndex = Math.min(
+        normalizedRows.length - 1,
+        rowIndex + Math.max(1, Number(rowSpan) || 1) - 1,
+      );
+      const rowElement = document.getElementById(`doc-table-shell-${block.id}`)
+        ?.querySelector?.(`[data-document-table-row-index="${resizeRowIndex}"]`);
+      const startY = event.clientY;
+      const startHeight = Math.max(
+        42,
+        Number(rowElement?.getBoundingClientRect?.().height) || rowHeights[resizeRowIndex] || 42,
+      );
+      pushEditorUndoSnapshot();
+      const handleMouseMove = moveEvent => {
+        const nextRowHeights = resizeDocumentTableRowHeight(rowHeights, {
+          rowIndex: resizeRowIndex,
+          rowCount: normalizedRows.length,
+          currentHeight: startHeight,
+          delta: moveEvent.clientY - startY,
+        });
+        setEditorBlocks(prev => prev.map(item => {
+          if (item.id !== block.id) return item;
+          const currentMeta = { ...getDefaultBlockMeta(item.type), ...cloneMeta(item.meta) };
+          const stored = buildStoredTableMetaFromVisibleRows(normalizedRows, columns, {
+            mergedCells,
+            columnWidths,
+            rowColumnWidths,
+            rowHeights: nextRowHeights,
+            horizontalCenter: currentMeta.horizontalCenter,
+            verticalCenter: currentMeta.verticalCenter,
+            cellStyles: normalizeTableCellStyles(currentMeta.cellStyles || cellStyles, normalizedRows.length, columns.length),
+          });
+          return {
+            ...item,
+            meta: {
+              ...currentMeta,
+              ...stored,
+            },
+          };
+        }));
+      };
+      const handleMouseUp = () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        tableResizeRef.current = null;
+      };
+      if (tableResizeRef.current?.cleanup) tableResizeRef.current.cleanup();
+      tableResizeRef.current = {
+        cleanup: () => {
+          window.removeEventListener('mousemove', handleMouseMove);
+          window.removeEventListener('mouseup', handleMouseUp);
+        },
+      };
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    };
     const beginTableWidthResize = (event, side = 'right') => {
       event.preventDefault();
       event.stopPropagation();
@@ -13485,6 +13567,16 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       insertParagraphAfterTable();
     };
     const handleTableCellKeyDown = (event, rowIndex, columnIndex) => {
+      const simpleBackspace = event.key === 'Backspace'
+        && !event.shiftKey
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.altKey;
+      if (simpleBackspace && removeContentEditableLineBreakBeforeCaret(event.currentTarget)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey) return;
       event.preventDefault();
       event.stopPropagation();
@@ -13538,7 +13630,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setTableMenuContext({ blockId: block.id, ...menuPosition });
     };
     const renderEditableTableRow = (row, rowIndex) => (
-      <tr key={`row-${rowIndex}`}>
+      <tr
+        key={`row-${rowIndex}`}
+        data-document-table-row-index={rowIndex}
+        style={rowHeights[rowIndex] ? { height: rowHeights[rowIndex] } : undefined}
+      >
         {row.map((cell, columnIndex) => {
           const mergedCell = getMergedCover(rowIndex, columnIndex);
           if (mergedCell && !mergedCell.isAnchor) return null;
@@ -13605,6 +13701,24 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                   zIndex: 3,
                 }}
               />
+              {!isMobile && (
+                <span
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="调整行高"
+                  title="拖动调整行高"
+                  onMouseDown={event => beginRowResize(event, rowIndex, rowSpan)}
+                  style={{
+                    position: 'absolute',
+                    bottom: -4,
+                    left: 0,
+                    width: '100%',
+                    height: 8,
+                    cursor: 'row-resize',
+                    zIndex: 2,
+                  }}
+                />
+              )}
             </td>
           );
         })}
@@ -14267,6 +14381,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const columns = Array.isArray(meta.columns) && meta.columns.length ? meta.columns : [];
     const rows = Array.isArray(meta.rows) && meta.rows.length ? meta.rows : [];
     const mergedLookup = buildTableMergedLookup(meta.mergedCells, rows.length, columns.length);
+    const rowHeights = normalizeDocumentTableRowHeights(meta.rowHeights, rows.length);
     const columnWidths = columns.map((_, index) => Math.max(80, Number(meta.columnWidths?.[index]) || (isMobile ? 120 : 160)));
     const rowColumnWidths = normalizeDocumentTableRowColumnWidths(
       meta.rowColumnWidths,
@@ -14294,7 +14409,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       return <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{block.content}</div>;
     }
     const renderPresentationRow = (row, rowIndex) => (
-      <tr key={`row-${rowIndex}`}>
+      <tr key={`row-${rowIndex}`} style={rowHeights[rowIndex] ? { height: rowHeights[rowIndex] } : undefined}>
         {(row || []).map((cell, cellIndex) => {
           const mergedCell = mergedLookup.coveredMap.get(buildTableMergeKey(rowIndex, cellIndex));
           if (mergedCell && !mergedCell.isAnchor) return null;

@@ -78,17 +78,36 @@ function resizeDocumentTableColumnWidthsWithinRow(columnWidths, {
   const startColumnIndex = clampInteger(columnIndex, 0, widths.length - 1);
   const safeColSpan = Math.max(1, Math.round(Number(colSpan) || 1));
   const resizeColumnIndex = Math.min(widths.length - 1, startColumnIndex + safeColSpan - 1);
-  const compensationColumnIndex = resizeColumnIndex < widths.length - 1
-    ? resizeColumnIndex + 1
-    : startColumnIndex - 1;
   const widthDelta = Number(delta);
-  if (compensationColumnIndex < 0 || !Number.isFinite(widthDelta)) return widths;
-  const appliedDelta = Math.max(
-    minWidth - widths[resizeColumnIndex],
-    Math.min(widths[compensationColumnIndex] - minWidth, Math.round(widthDelta)),
-  );
+  if (!Number.isFinite(widthDelta)) return widths;
+  // Reclaim space from the far edge first so intervening cells follow the dragged boundary.
+  const compensationColumnIndices = resizeColumnIndex < widths.length - 1
+    ? Array.from(
+      { length: widths.length - resizeColumnIndex - 1 },
+      (_, offset) => widths.length - offset - 1,
+    )
+    : Array.from({ length: startColumnIndex }, (_, index) => index);
+  if (!compensationColumnIndices.length) return widths;
+
+  const requestedDelta = Math.round(widthDelta);
+  if (requestedDelta > 0) {
+    const availableWidth = compensationColumnIndices.reduce((total, compensationColumnIndex) => (
+      total + Math.max(0, widths[compensationColumnIndex] - minWidth)
+    ), 0);
+    let remainingDelta = Math.min(requestedDelta, availableWidth);
+    widths[resizeColumnIndex] += remainingDelta;
+    compensationColumnIndices.forEach(compensationColumnIndex => {
+      if (remainingDelta <= 0) return;
+      const reduction = Math.min(remainingDelta, widths[compensationColumnIndex] - minWidth);
+      widths[compensationColumnIndex] -= reduction;
+      remainingDelta -= reduction;
+    });
+    return widths;
+  }
+
+  const appliedDelta = Math.max(minWidth - widths[resizeColumnIndex], requestedDelta);
   widths[resizeColumnIndex] += appliedDelta;
-  widths[compensationColumnIndex] -= appliedDelta;
+  widths[compensationColumnIndices[0]] -= appliedDelta;
   return widths;
 }
 
@@ -423,6 +442,108 @@ export function deleteDocumentTableRowWidths(columnWidths, rowColumnWidths, {
     columnCount,
     baseWidths,
     minWidth,
+  );
+}
+
+export function normalizeDocumentTableRowHeights(
+  rowHeights,
+  rowCount,
+  minHeight = 42,
+  maxHeight = 1200,
+) {
+  const safeRowCount = Math.max(0, Math.round(Number(rowCount) || 0));
+  if (!rowHeights || typeof rowHeights !== 'object' || !safeRowCount) return {};
+  const safeMinHeight = Math.max(24, Math.round(Number(minHeight) || 42));
+  const safeMaxHeight = Math.max(safeMinHeight, Math.round(Number(maxHeight) || 1200));
+  return Object.entries(rowHeights).reduce((result, [rowKey, height]) => {
+    const rowIndex = Number(rowKey);
+    const numericHeight = Number(height);
+    if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= safeRowCount) return result;
+    if (!Number.isFinite(numericHeight) || numericHeight <= 0) return result;
+    result[rowIndex] = Math.max(safeMinHeight, Math.min(safeMaxHeight, Math.round(numericHeight)));
+    return result;
+  }, {});
+}
+
+export function resizeDocumentTableRowHeight(rowHeights, {
+  rowIndex,
+  rowCount,
+  currentHeight,
+  delta = 0,
+  minHeight = 42,
+  maxHeight = 1200,
+} = {}) {
+  const normalized = normalizeDocumentTableRowHeights(rowHeights, rowCount, minHeight, maxHeight);
+  const safeRowCount = Math.max(0, Math.round(Number(rowCount) || 0));
+  if (!safeRowCount) return normalized;
+  const targetRowIndex = clampInteger(rowIndex, 0, safeRowCount - 1);
+  const safeMinHeight = Math.max(24, Math.round(Number(minHeight) || 42));
+  const safeMaxHeight = Math.max(safeMinHeight, Math.round(Number(maxHeight) || 1200));
+  const startHeight = Math.max(
+    safeMinHeight,
+    Number(currentHeight) || normalized[targetRowIndex] || safeMinHeight,
+  );
+  const heightDelta = Number(delta);
+  if (!Number.isFinite(heightDelta)) return normalized;
+  return {
+    ...normalized,
+    [targetRowIndex]: Math.max(
+      safeMinHeight,
+      Math.min(safeMaxHeight, Math.round(startHeight + heightDelta)),
+    ),
+  };
+}
+
+export function insertDocumentTableRowHeights(rowHeights, {
+  insertIndex,
+  sourceRowIndex = insertIndex,
+  rowCount,
+  minHeight = 42,
+  maxHeight = 1200,
+} = {}) {
+  const safeRowCount = Math.max(0, Math.round(Number(rowCount) || 0));
+  if (!safeRowCount) return {};
+  const normalized = normalizeDocumentTableRowHeights(rowHeights, safeRowCount, minHeight, maxHeight);
+  const safeInsertIndex = clampInteger(insertIndex, 0, safeRowCount);
+  const inheritedRowIndex = clampInteger(sourceRowIndex, 0, safeRowCount - 1);
+  const nextRowHeights = {};
+  Object.entries(normalized).forEach(([rowKey, height]) => {
+    const rowIndex = Number(rowKey);
+    nextRowHeights[rowIndex >= safeInsertIndex ? rowIndex + 1 : rowIndex] = height;
+  });
+  if (normalized[inheritedRowIndex]) nextRowHeights[safeInsertIndex] = normalized[inheritedRowIndex];
+  return normalizeDocumentTableRowHeights(
+    nextRowHeights,
+    safeRowCount + 1,
+    minHeight,
+    maxHeight,
+  );
+}
+
+export function deleteDocumentTableRowHeights(rowHeights, {
+  startRowIndex,
+  endRowIndex,
+  rowCount,
+  minHeight = 42,
+  maxHeight = 1200,
+} = {}) {
+  const safeRowCount = Math.max(0, Math.round(Number(rowCount) || 0));
+  if (!safeRowCount) return {};
+  const normalized = normalizeDocumentTableRowHeights(rowHeights, safeRowCount, minHeight, maxHeight);
+  const start = clampInteger(startRowIndex, 0, safeRowCount - 1);
+  const end = clampInteger(endRowIndex, start, safeRowCount - 1);
+  const deleteCount = end - start + 1;
+  const nextRowHeights = {};
+  Object.entries(normalized).forEach(([rowKey, height]) => {
+    const rowIndex = Number(rowKey);
+    if (rowIndex >= start && rowIndex <= end) return;
+    nextRowHeights[rowIndex > end ? rowIndex - deleteCount : rowIndex] = height;
+  });
+  return normalizeDocumentTableRowHeights(
+    nextRowHeights,
+    safeRowCount - deleteCount,
+    minHeight,
+    maxHeight,
   );
 }
 

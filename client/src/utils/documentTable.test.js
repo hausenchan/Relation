@@ -1,12 +1,16 @@
 import {
   deleteDocumentTableColumnWidths,
+  deleteDocumentTableRowHeights,
   deleteDocumentTableRowWidths,
   getDocumentTableHorizontalAutoScrollDelta,
   getDocumentTableRowColumnWidths,
   insertDocumentTableColumnWidths,
+  insertDocumentTableRowHeights,
   insertDocumentTableRowWidths,
+  normalizeDocumentTableRowHeights,
   normalizeDocumentTableRowColumnWidths,
   resizeDocumentTableOverallWidth,
+  resizeDocumentTableRowHeight,
   resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableContextMenuPosition,
   resolveDocumentTableStyleBounds,
@@ -162,6 +166,25 @@ describe('ordinary document table interactions', () => {
     expect(getDocumentTableRowColumnWidths(clamped.columnWidths, clamped.rowColumnWidths, 1)).toEqual([130, 80]);
   });
 
+  test('uses later right-side columns when the adjacent column is already at minimum width', () => {
+    const result = resizeDocumentTableScopedColumnWidths([80, 80, 80, 80, 100, 440], {}, {
+      rowIndex: 0,
+      rowCount: 2,
+      columnIndex: 1,
+      delta: 100,
+    });
+
+    expect(result.columnWidths).toEqual([80, 180, 80, 80, 100, 340]);
+    expect(result.rowColumnWidths).toEqual({});
+    const getCellStarts = widths => widths.map((_, index) => (
+      widths.slice(0, index).reduce((sum, width) => sum + width, 0)
+    ));
+    expect(getCellStarts(result.columnWidths).slice(2)).toEqual(
+      getCellStarts([80, 80, 80, 80, 100, 440]).slice(2).map(offset => offset + 100),
+    );
+    expect(result.columnWidths.reduce((sum, width) => sum + width, 0)).toBe(860);
+  });
+
   test('keeps the outer edge aligned when resizing a merged cell at the end of a row', () => {
     const result = resizeDocumentTableScopedColumnWidths([130, 160, 160, 160], {}, {
       rowIndex: 2,
@@ -295,6 +318,41 @@ describe('ordinary document table interactions', () => {
       deletedColumns.rowColumnWidths,
       2,
     )).toEqual([120, 180, 120]);
+  });
+
+  test('persists only manually resized row heights and clamps drag bounds', () => {
+    expect(normalizeDocumentTableRowHeights({ 0: 20, 1: 96, 4: 120, bad: 80 }, 3)).toEqual({
+      0: 42,
+      1: 96,
+    });
+    expect(resizeDocumentTableRowHeight({}, {
+      rowIndex: 1,
+      rowCount: 3,
+      currentHeight: 84,
+      delta: 36,
+    })).toEqual({ 1: 120 });
+    expect(resizeDocumentTableRowHeight({ 1: 120 }, {
+      rowIndex: 1,
+      rowCount: 3,
+      currentHeight: 120,
+      delta: -200,
+    })).toEqual({ 1: 42 });
+  });
+
+  test('moves manual row heights with inserted and deleted rows', () => {
+    const inserted = insertDocumentTableRowHeights({ 1: 88, 3: 120 }, {
+      insertIndex: 2,
+      sourceRowIndex: 1,
+      rowCount: 4,
+    });
+    expect(inserted).toEqual({ 1: 88, 2: 88, 4: 120 });
+
+    const deleted = deleteDocumentTableRowHeights(inserted, {
+      startRowIndex: 1,
+      endRowIndex: 2,
+      rowCount: 5,
+    });
+    expect(deleted).toEqual({ 2: 120 });
   });
 
   test('scrolls continuously toward either horizontal edge while drag-selecting', () => {
