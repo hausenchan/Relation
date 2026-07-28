@@ -103,6 +103,7 @@ import {
   createSpreadsheetPresenceSessionId,
   filterRemoteSpreadsheetCollaborators,
 } from '../utils/spreadsheetPresence';
+import { activateDocumentLink } from '../utils/documentLinkNavigation';
 import {
   buildCollapsedDocumentBlockIds,
   buildDocumentBlockGuideMap,
@@ -4216,6 +4217,21 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setSelectedDoc(null);
       loadDetail(docId, { force: true });
     }
+  };
+
+  const handleDocumentContentLinkClick = (event) => {
+    const anchor = event.target?.closest?.('a[href]');
+    if (!anchor || !event.currentTarget?.contains?.(anchor)) return;
+    const selection = window.getSelection?.();
+    if (selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    activateDocumentLink(anchor.getAttribute('href'), {
+      currentUrl: window.location.href,
+      openDocument: openDocumentTab,
+      openExternal: url => window.open(url, '_blank', 'noopener,noreferrer'),
+    });
   };
 
   const applySelectedDocMeta = (detail, docId = getDocTabId(detail?.id)) => {
@@ -14517,6 +14533,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         ref={presentationRef}
         role="dialog"
         aria-modal="true"
+        onClickCapture={handleDocumentContentLinkClick}
         style={{
           position: 'fixed',
           inset: 0,
@@ -15859,6 +15876,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                       id="document-editor-blocks"
                       tabIndex={0}
                       aria-label="文档正文编辑区"
+                      onClickCapture={handleDocumentContentLinkClick}
                       onMouseDown={handleEditorAreaMouseDown}
                       onPaste={handleEditorPaste}
                       onDragOver={handleEditorDragOver}
