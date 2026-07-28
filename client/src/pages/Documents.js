@@ -137,6 +137,7 @@ import {
   insertDocumentTableColumnWidths,
   insertDocumentTableRowWidths,
   normalizeDocumentTableRowColumnWidths,
+  resizeDocumentTableOverallWidth,
   resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableContextMenuPosition,
   resolveDocumentTableStyleBounds,
@@ -12723,7 +12724,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       && columnIndex >= selectedRangeBounds.startColumnIndex
       && columnIndex <= selectedRangeBounds.endColumnIndex
     );
-    const minimumTableWidth = isMobile ? 320 : 560;
+    const minimumTableWidth = Math.max(columns.length * 80, isMobile ? 240 : 160);
     const getRenderedRowWidth = rowIndex => Math.max(
       getRowColumnWidths(rowIndex).reduce((sum, width) => sum + width, 0),
       minimumTableWidth,
@@ -13249,6 +13250,55 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
     };
+    const beginTableWidthResize = (event, side = 'right') => {
+      event.preventDefault();
+      event.stopPropagation();
+      setTableMenuContext(null);
+      const startX = event.clientX;
+      const startWidth = tableWidth;
+      pushEditorUndoSnapshot();
+      const handleMouseMove = moveEvent => {
+        const delta = moveEvent.clientX - startX;
+        const nextWidth = startWidth + (side === 'left' ? -delta : delta);
+        const nextWidthState = resizeDocumentTableOverallWidth(columnWidths, rowColumnWidths, {
+          targetWidth: nextWidth,
+          rowCount: normalizedRows.length,
+        });
+        setEditorBlocks(prev => prev.map(item => {
+          if (item.id !== block.id) return item;
+          const currentMeta = { ...getDefaultBlockMeta(item.type), ...cloneMeta(item.meta) };
+          const stored = buildStoredTableMetaFromVisibleRows(normalizedRows, columns, {
+            mergedCells,
+            columnWidths: nextWidthState.columnWidths,
+            rowColumnWidths: nextWidthState.rowColumnWidths,
+            horizontalCenter: currentMeta.horizontalCenter,
+            verticalCenter: currentMeta.verticalCenter,
+            cellStyles: normalizeTableCellStyles(currentMeta.cellStyles || cellStyles, normalizedRows.length, columns.length),
+          });
+          return {
+            ...item,
+            meta: {
+              ...currentMeta,
+              ...stored,
+            },
+          };
+        }));
+      };
+      const handleMouseUp = () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        tableResizeRef.current = null;
+      };
+      if (tableResizeRef.current?.cleanup) tableResizeRef.current.cleanup();
+      tableResizeRef.current = {
+        cleanup: () => {
+          window.removeEventListener('mousemove', handleMouseMove);
+          window.removeEventListener('mouseup', handleMouseUp);
+        },
+      };
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    };
     const menuColumnIndex = hasSelectedRange ? selectedRangeBounds.startColumnIndex : (selectedColumnIndex >= 0 ? selectedColumnIndex : 0);
     const menuRowIndex = hasSelectedRange ? selectedRangeBounds.startRowIndex : (selectedRowIndex >= 0 ? selectedRowIndex : 0);
     const renderTableMenuIcon = (icon) => (
@@ -13562,7 +13612,28 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           {tableMenu}
           <div data-document-table-scroll-container="true" style={{ overflowX: 'auto', maxWidth: '100%' }}>
             {useRowScopedWidths ? (
-              <div onMouseDown={handleTableMouseDown} style={{ width: tableWidth, minWidth: isMobile ? 320 : 360 }}>
+              <div
+                onMouseDown={handleTableMouseDown}
+                style={{ width: tableWidth, minWidth: minimumTableWidth, position: 'relative' }}
+              >
+                {!isMobile && (
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整表格整体宽度"
+                    title="拖动调整表格整体宽度"
+                    onMouseDown={event => beginTableWidthResize(event, 'left')}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: -5,
+                      width: 10,
+                      height: '100%',
+                      cursor: 'col-resize',
+                      zIndex: 4,
+                    }}
+                  />
+                )}
                 {normalizedRows.map((row, rowIndex) => {
                   const widths = getRowColumnWidths(rowIndex);
                   return (
@@ -13583,17 +13654,73 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                     </table>
                   );
                 })}
+                {!isMobile && (
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整表格整体宽度"
+                    title="拖动调整表格整体宽度"
+                    onMouseDown={event => beginTableWidthResize(event, 'right')}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      right: -5,
+                      width: 10,
+                      height: '100%',
+                      cursor: 'col-resize',
+                      zIndex: 4,
+                    }}
+                  />
+                )}
               </div>
             ) : (
-              <table
-                onMouseDown={handleTableMouseDown}
-                style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: isMobile ? 320 : 360 }}
-              >
-                <colgroup>
-                  {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
-                </colgroup>
-                <tbody>{normalizedRows.map(renderEditableTableRow)}</tbody>
-              </table>
+              <div style={{ width: tableWidth, minWidth: minimumTableWidth, position: 'relative' }}>
+                {!isMobile && (
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整表格整体宽度"
+                    title="拖动调整表格整体宽度"
+                    onMouseDown={event => beginTableWidthResize(event, 'left')}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: -5,
+                      width: 10,
+                      height: '100%',
+                      cursor: 'col-resize',
+                      zIndex: 4,
+                    }}
+                  />
+                )}
+                <table
+                  onMouseDown={handleTableMouseDown}
+                  style={{ width: tableWidth, maxWidth: 'none', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: minimumTableWidth }}
+                >
+                  <colgroup>
+                    {columnWidths.map((width, index) => <col key={`col-width-${index}`} style={{ width }} />)}
+                  </colgroup>
+                  <tbody>{normalizedRows.map(renderEditableTableRow)}</tbody>
+                </table>
+                {!isMobile && (
+                  <span
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整表格整体宽度"
+                    title="拖动调整表格整体宽度"
+                    onMouseDown={event => beginTableWidthResize(event, 'right')}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      right: -5,
+                      width: 10,
+                      height: '100%',
+                      cursor: 'col-resize',
+                      zIndex: 4,
+                    }}
+                  />
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -14134,7 +14261,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     );
     const useRowScopedWidths = Object.keys(rowColumnWidths).length > 0
       && !mergedLookup.normalized.some(merge => merge.rowSpan > 1);
-    const minimumTableWidth = isMobile ? 320 : 560;
+    const minimumTableWidth = Math.max(columns.length * 80, isMobile ? 240 : 160);
     const getPresentationRowWidths = rowIndex => getDocumentTableRowColumnWidths(
       columnWidths,
       rowColumnWidths,

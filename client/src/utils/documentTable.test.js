@@ -6,6 +6,7 @@ import {
   insertDocumentTableColumnWidths,
   insertDocumentTableRowWidths,
   normalizeDocumentTableRowColumnWidths,
+  resizeDocumentTableOverallWidth,
   resizeDocumentTableScopedColumnWidths,
   resolveDocumentTableContextMenuPosition,
   resolveDocumentTableStyleBounds,
@@ -224,6 +225,35 @@ describe('ordinary document table interactions', () => {
     expect(result.columnWidths).toEqual([120, 160, 140]);
     expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 0)).toEqual([120, 160, 140]);
     expect(getDocumentTableRowColumnWidths(result.columnWidths, result.rowColumnWidths, 2)).toEqual([120, 200, 100]);
+  });
+
+  test('resizes the whole table by scaling all columns instead of filling the editor width', () => {
+    const result = resizeDocumentTableOverallWidth([200, 200, 200, 200], {}, {
+      targetWidth: 520,
+      rowCount: 3,
+    });
+    expect(result.columnWidths).toEqual([130, 130, 130, 130]);
+    expect(result.rowColumnWidths).toEqual({});
+
+    const clamped = resizeDocumentTableOverallWidth([120, 120], {}, {
+      targetWidth: 120,
+      rowCount: 1,
+    });
+    expect(clamped.columnWidths).toEqual([80, 80]);
+  });
+
+  test('resizes row-scoped table widths to the same outer edge', () => {
+    const result = resizeDocumentTableOverallWidth(
+      [120, 160, 200],
+      { 1: [100, 180, 200] },
+      { targetWidth: 360, rowCount: 2 },
+    );
+    expect(result.columnWidths.reduce((sum, width) => sum + width, 0)).toBe(360);
+    expect(getDocumentTableRowColumnWidths(
+      result.columnWidths,
+      result.rowColumnWidths,
+      1,
+    ).reduce((sum, width) => sum + width, 0)).toBe(360);
   });
 
   test('keeps scoped widths aligned while inserting and deleting rows and columns', () => {

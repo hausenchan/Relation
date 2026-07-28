@@ -301,6 +301,63 @@ export function resizeDocumentTableScopedColumnWidths(columnWidths, rowColumnWid
   };
 }
 
+function scaleDocumentTableWidthsToTotal(widths, targetWidth, minWidth = 80) {
+  const normalized = normalizeColumnWidths(widths, widths?.length || 0, minWidth);
+  if (!normalized.length) return normalized;
+  const minimumTotal = normalized.length * minWidth;
+  const nextTotal = Math.max(minimumTotal, Math.round(Number(targetWidth) || 0));
+  const currentTotal = getColumnWidthsTotal(normalized);
+  if (currentTotal <= 0) return normalized;
+  const ratio = nextTotal / currentTotal;
+  let scaled = normalized.map(width => Math.max(minWidth, Math.round(width * ratio)));
+  let drift = nextTotal - getColumnWidthsTotal(scaled);
+
+  while (drift !== 0) {
+    const adjustableIndex = drift > 0
+      ? scaled.length - 1
+      : scaled.findIndex(width => width > minWidth);
+    if (adjustableIndex < 0) break;
+    const step = drift > 0 ? drift : -Math.min(Math.abs(drift), scaled[adjustableIndex] - minWidth);
+    if (step === 0) break;
+    scaled[adjustableIndex] += step;
+    drift = nextTotal - getColumnWidthsTotal(scaled);
+  }
+  return scaled;
+}
+
+export function resizeDocumentTableOverallWidth(columnWidths, rowColumnWidths, {
+  targetWidth,
+  rowCount,
+  minWidth = 80,
+} = {}) {
+  const columnCount = Array.isArray(columnWidths) ? columnWidths.length : 0;
+  const baseWidths = normalizeColumnWidths(columnWidths, columnCount, minWidth);
+  if (!columnCount) return { columnWidths: [], rowColumnWidths: {} };
+  const nextBaseWidths = scaleDocumentTableWidthsToTotal(baseWidths, targetWidth, minWidth);
+  const scopedWidths = normalizeDocumentTableRowColumnWidths(
+    rowColumnWidths,
+    rowCount,
+    columnCount,
+    baseWidths,
+    minWidth,
+  );
+  const nextScopedWidths = {};
+  Object.entries(scopedWidths).forEach(([rowKey, widths]) => {
+    const nextWidths = scaleDocumentTableWidthsToTotal(widths, targetWidth, minWidth);
+    if (!columnWidthsEqual(nextWidths, nextBaseWidths)) nextScopedWidths[rowKey] = nextWidths;
+  });
+  return {
+    columnWidths: nextBaseWidths,
+    rowColumnWidths: normalizeDocumentTableRowColumnWidths(
+      nextScopedWidths,
+      rowCount,
+      columnCount,
+      nextBaseWidths,
+      minWidth,
+    ),
+  };
+}
+
 export function insertDocumentTableRowWidths(columnWidths, rowColumnWidths, {
   insertIndex,
   sourceRowIndex = insertIndex,

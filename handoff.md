@@ -2,6 +2,22 @@
 
 最后更新：2026-07-27
 
+## 文档中心普通表格整体宽度优化（2026-07-28）
+
+### 已完成
+
+- 普通文档表格块不再使用固定桌面最小宽度撑满页面，默认宽度按当前列宽合计和列数最小宽度计算，
+  两三列表格可按实际内容收缩，大表仍保留横向滚动。
+- 编辑态表格左右外边缘新增整体宽度拖拽热区，拖动时按比例缩放全部列宽，并保持每列不低于 80px。
+- 行级列宽表格同步支持整体缩放，缩放后各行右边界保持对齐；只读/演示态使用同一内容宽度口径。
+
+### 已验证
+
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand src/utils/documentTable.test.js src/utils/documentTableMerge.test.js` 通过，19/19。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand` 通过，35 个套件、197 条测试；仅有既有 `act(...)` 警告。
+- `cd client && BUILD_PATH=/tmp/relation-table-width-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-table-width-build npm run performance:frontend` 通过：首屏 JavaScript `328.9KB / 400KB`，76 个异步 chunk，最大 `420.8KB / 500KB`。
+
 ## 文档中心正文链接跳转（2026-07-28）
 
 ### 已完成
