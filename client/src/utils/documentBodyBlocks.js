@@ -1,5 +1,10 @@
 import DOMPurify from 'dompurify';
 import { shouldSkipNestedClipboardListElement } from './documentClipboard';
+import {
+  buildOfficeClipboardEnvelope,
+  buildOfficeTableHtml,
+  buildOfficeTextBlockHtml,
+} from './documentOfficeClipboard';
 
 export const DOCUMENT_BODY_FORMAT = 'relation_document_blocks_v1';
 export const DOCUMENT_BODY_CLIPBOARD_MIME = 'application/x-relation-document-blocks';
@@ -456,24 +461,32 @@ function documentBodyBlockToClipboardText(block) {
 
 function documentBodyBlockToClipboardHtml(block) {
   if (!block) return '';
-  if (block.type === 'divider') return '<hr>';
+  if (block.type === 'divider') return buildOfficeTextBlockHtml({ type: 'divider' });
   if (block.type === 'table-simple') {
-    const rows = (block.meta?.rows || []).map(row => (
-      `<tr>${(Array.isArray(row) ? row : []).map(cell => `<td>${sanitizeDocumentBodyInlineHtml(cell)}</td>`).join('')}</tr>`
-    )).join('');
-    return rows ? `<table data-document-table-block="true"><tbody>${rows}</tbody></table>` : '';
+    const rows = Array.isArray(block.meta?.rows) ? block.meta.rows : [];
+    if (!rows.length) return '';
+    return buildOfficeTableHtml({
+      rows,
+      columnWidths: block.meta?.columnWidths,
+      rowColumnWidths: block.meta?.rowColumnWidths,
+      rowHeights: block.meta?.rowHeights,
+      mergedCells: block.meta?.mergedCells,
+      cellStyles: block.meta?.cellStyles,
+      horizontalCenter: Boolean(block.meta?.horizontalCenter),
+      verticalCenter: Boolean(block.meta?.verticalCenter),
+      sanitizeCellHtml: sanitizeDocumentBodyInlineHtml,
+      tableAttributes: 'data-document-table-block="true"',
+    });
   }
   const indent = Math.max(0, Number(block.meta?.indent || 0));
   const content = sanitizeDocumentBodyInlineHtml(block.content || '');
-  const headingLevel = String(block.type || '').match(/^heading([1-4])$/)?.[1];
-  const tag = headingLevel ? `h${headingLevel}` : (block.type === 'quote' ? 'blockquote' : 'div');
-  const attributes = [
-    `data-block-type="${escapeClipboardHtml(block.type || 'paragraph')}"`,
-    `data-indent="${indent}"`,
-    `aria-level="${indent + 1}"`,
-  ];
-  if (block.type === 'todo') attributes.push(`data-checked="${block.checked ? 'true' : 'false'}"`);
-  return `<${tag} ${attributes.join(' ')}>${content}</${tag}>`;
+  return buildOfficeTextBlockHtml({
+    type: block.type,
+    content,
+    checked: block.checked,
+    indent,
+    body: sanitizeDocumentBodyInlineHtml(block.meta?.body || ''),
+  });
 }
 
 function isClipboardListBlock(block) {
@@ -553,10 +566,13 @@ export function buildDocumentBodyClipboardPayload(blocks = []) {
   const source = (Array.isArray(blocks) ? blocks : []).filter(Boolean);
   const structuredBlocks = normalizeClipboardPayloadBlocks(source);
   const html = documentBodyBlocksToClipboardHtml(source);
-  const encoded = escapeClipboardHtml(encodeURIComponent(JSON.stringify({ blocks: structuredBlocks })));
+  const encoded = encodeURIComponent(JSON.stringify({ blocks: structuredBlocks }));
   return {
     text: source.map(documentBodyBlockToClipboardText).filter(Boolean).join('\n'),
-    html: `<div ${DOCUMENT_BODY_CLIPBOARD_HTML_ATTR}="${encoded}">${html}</div>`,
+    html: buildOfficeClipboardEnvelope(html, {
+      attributeName: DOCUMENT_BODY_CLIPBOARD_HTML_ATTR,
+      encodedPayload: encoded,
+    }),
     blocks: structuredBlocks,
   };
 }

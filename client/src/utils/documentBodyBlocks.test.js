@@ -152,6 +152,35 @@ b. IAP 本周消耗 $4753`);
     ]);
   });
 
+  test('copies a formatted table with Word-compatible borders, merges, widths, and colors', () => {
+    const payload = buildDocumentBodyClipboardPayload([{
+      id: 'table',
+      type: 'table-simple',
+      content: '',
+      meta: {
+        rows: [
+          ['<strong>员工试用期工作计划</strong>', '', ''],
+          ['考核项', '计划', '评分'],
+        ],
+        columnWidths: [360, 420, 180],
+        rowColumnWidths: { 1: [240, 540, 180] },
+        rowHeights: { 0: 52 },
+        mergedCells: [{ rowIndex: 0, columnIndex: 0, rowSpan: 1, colSpan: 3 }],
+        cellStyles: { '0:0': { backgroundColor: '#dbeafe' } },
+        verticalCenter: true,
+      },
+    }]);
+
+    expect(payload.html).toContain('<table data-document-table-block="true"');
+    expect(payload.html).toContain('border-collapse: collapse');
+    expect(payload.html).toContain('mso-border-alt: solid #e5e7eb .75pt');
+    expect(payload.html).toContain('colspan="3"');
+    expect(payload.html).toContain('height="52"');
+    expect(payload.html).toContain('bgcolor="#dbeafe"');
+    expect(payload.html).toContain('<strong>员工试用期工作计划</strong>');
+    expect(payload.html).toContain('<table data-document-table-block="true" width="624"');
+  });
+
   test('pastes structured blocks with fresh ids and preserved hierarchy', () => {
     const clipboardData = {
       getData: type => (type === DOCUMENT_BODY_CLIPBOARD_MIME ? JSON.stringify({
