@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Grid, List, Typography, Descriptions, Upload } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, RiseOutlined, UploadOutlined, EyeOutlined, LockOutlined } from '@ant-design/icons';
+import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Drawer, Grid, List, Typography, Descriptions, Upload } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, FilterOutlined, RiseOutlined, UploadOutlined, EyeOutlined, LockOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
@@ -66,6 +66,7 @@ export default function Interactions() {
   const [searchDraft, setSearchDraft] = useState('');
   const [filterSearch, setFilterSearch] = useState('');
   const [filterType, setFilterType] = useState('');
+  const [cityDraft, setCityDraft] = useState('');
   const [filterCity, setFilterCity] = useState('');
   const [filterWeight, setFilterWeight] = useState('');
   const [filterImportance, setFilterImportance] = useState('');
@@ -73,6 +74,7 @@ export default function Interactions() {
   const [filterVisibility, setFilterVisibility] = useState('');
   const [dateRange, setDateRange] = useState(null); // { start, end, label }
   const [customPickerOpen, setCustomPickerOpen] = useState(false);
+  const [filterDrawerOpen, setFilterDrawerOpen] = useState(false);
   const [users, setUsers] = useState([]);
   const [creatorUsers, setCreatorUsers] = useState([]);
 
@@ -257,6 +259,8 @@ export default function Interactions() {
     const importance = importanceMap[record.importance] || importanceMap.normal;
     const opportunity = record.opportunity_title ? (opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status, color: 'default' }) : null;
     const companyName = record.company_name || record.company || record.current_company || '-';
+    const creator = creatorUsers.find(item => Number(item.id) === Number(record.created_by));
+    const creatorName = record.created_by_name || creator?.display_name || creator?.username || '-';
 
     return (
       <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
@@ -287,9 +291,10 @@ export default function Interactions() {
               <Text type="secondary" style={{ fontSize: 12 }}>{record.date || '-'}</Text>
             </div>
 
-            {(record.city || record.weight) && (
+            {(record.city || record.weight || creatorName) && (
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 {record.city && <Text type="secondary">城市：{record.city}</Text>}
+                <Text type="secondary">创建人：{creatorName}</Text>
                 {record.weight && <Text type="secondary">权重：{record.weight}</Text>}
               </div>
             )}
@@ -332,120 +337,176 @@ export default function Interactions() {
     );
   };
 
-  return (
-    <div style={{ padding: isMobile ? 0 : undefined }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加记录</Button>
-      </div>
-      <Space style={{ marginBottom: 16, width: isMobile ? '100%' : undefined }} wrap direction={isMobile ? 'vertical' : 'horizontal'}>
-        <Input.Search
-          placeholder="搜索公司、姓名、描述、结果"
-          allowClear
-          value={searchDraft}
-          style={{ width: isMobile ? '100%' : 240 }}
-          onSearch={value => setFilterSearch(value.trim())}
-          onChange={event => {
-            const value = event.target.value;
-            setSearchDraft(value);
-            if (!value) setFilterSearch('');
-          }}
-        />
-        <Select placeholder="互动类型" allowClear style={{ width: isMobile ? '100%' : 120 }} onChange={setFilterType}>
-          {Object.entries(typeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
-        </Select>
-        <Input.Search
-          placeholder="城市"
+  const activeFilterCount = [
+    filterSearch,
+    filterType,
+    filterCity,
+    filterWeight,
+    filterImportance,
+    filterCreatedBy,
+    canFilterVisibility && filterVisibility,
+    dateRange,
+  ].filter(Boolean).length;
+
+  const resetFilters = () => {
+    setSearchDraft('');
+    setFilterSearch('');
+    setFilterType('');
+    setCityDraft('');
+    setFilterCity('');
+    setFilterWeight('');
+    setFilterImportance('');
+    setFilterCreatedBy(undefined);
+    setFilterVisibility('');
+    setDateRange(null);
+    setCustomPickerOpen(false);
+  };
+
+  const applyMobileFilters = () => {
+    setFilterSearch(searchDraft.trim());
+    setFilterCity(cityDraft.trim());
+    setFilterDrawerOpen(false);
+  };
+
+  const filterControls = (
+    <Space
+      style={{ marginBottom: isMobile ? 0 : 16, width: isMobile ? '100%' : undefined }}
+      wrap
+      direction={isMobile ? 'vertical' : 'horizontal'}
+    >
+      <Input.Search
+        placeholder="搜索公司、姓名、描述、结果"
+        allowClear
+        value={searchDraft}
+        style={{ width: isMobile ? '100%' : 240 }}
+        onSearch={value => setFilterSearch(value.trim())}
+        onChange={event => {
+          const value = event.target.value;
+          setSearchDraft(value);
+          if (!value) setFilterSearch('');
+        }}
+      />
+      <Select
+        placeholder="互动类型"
+        allowClear
+        style={{ width: isMobile ? '100%' : 120 }}
+        value={filterType || undefined}
+        onChange={value => setFilterType(value || '')}
+      >
+        {Object.entries(typeMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+      </Select>
+      <Input.Search
+        placeholder="城市"
+        allowClear
+        value={cityDraft}
+        style={{ width: isMobile ? '100%' : 120 }}
+        onSearch={value => setFilterCity(value.trim())}
+        onChange={event => {
+          const value = event.target.value;
+          setCityDraft(value);
+          if (!value) setFilterCity('');
+        }}
+      />
+      <Select placeholder="人脉权重" allowClear style={{ width: isMobile ? '100%' : 110 }} value={filterWeight || undefined} onChange={v => setFilterWeight(v || '')}>
+        <Option value="high"><Tag color="red">高</Tag></Option>
+        <Option value="medium"><Tag color="orange">中</Tag></Option>
+        <Option value="low"><Tag color="default">低</Tag></Option>
+      </Select>
+      <Select placeholder="信息重要程度" allowClear style={{ width: isMobile ? '100%' : 130 }} value={filterImportance || undefined} onChange={v => setFilterImportance(v || '')}>
+        {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
+      </Select>
+      <Select
+        placeholder="创建人"
+        allowClear
+        showSearch
+        optionFilterProp="label"
+        style={{ width: isMobile ? '100%' : 140 }}
+        value={filterCreatedBy}
+        onChange={setFilterCreatedBy}
+        options={creatorUsers.map(u => ({
+          value: u.id,
+          label: u.id === user?.id
+            ? `${u.display_name || u.username || '我'}（我）`
+            : `${u.display_name || u.username}${u.account_status === 'departed' ? '（已离职）' : ''}`,
+        }))}
+      />
+      {canFilterVisibility && (
+        <Select
+          placeholder="可见范围"
           allowClear
           style={{ width: isMobile ? '100%' : 120 }}
-          onSearch={setFilterCity}
-          onChange={e => !e.target.value && setFilterCity('')}
-        />
-        <Select placeholder="人脉权重" allowClear style={{ width: isMobile ? '100%' : 110 }} value={filterWeight || undefined} onChange={v => setFilterWeight(v || '')}>
-          <Option value="high"><Tag color="red">高</Tag></Option>
-          <Option value="medium"><Tag color="orange">中</Tag></Option>
-          <Option value="low"><Tag color="default">低</Tag></Option>
-        </Select>
-        <Select placeholder="信息重要程度" allowClear style={{ width: isMobile ? '100%' : 130 }} value={filterImportance || undefined} onChange={v => setFilterImportance(v || '')}>
-          {Object.entries(importanceMap).map(([k, v]) => <Option key={k} value={k}><Tag color={v.color}>{v.label}</Tag></Option>)}
-        </Select>
-        <Select
-          placeholder="创建人"
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          style={{ width: isMobile ? '100%' : 140 }}
-          value={filterCreatedBy}
-          onChange={setFilterCreatedBy}
-          options={creatorUsers.map(u => ({
-            value: u.id,
-            label: u.id === user?.id
-              ? `${u.display_name || u.username || '我'}（我）`
-              : `${u.display_name || u.username}${u.account_status === 'departed' ? '（已离职）' : ''}`,
-          }))}
-        />
-        {canFilterVisibility && (
-          <Select
-            placeholder="可见范围"
-            allowClear
-            style={{ width: isMobile ? '100%' : 120 }}
-            value={filterVisibility || undefined}
-            onChange={v => setFilterVisibility(v || '')}
-          >
-            <Option value={COMPANY_PERSON_SCOPE}>公司共享</Option>
-            <Option value={PRIVATE_PERSON_SCOPE}>个人私密</Option>
-          </Select>
-        )}
-
-        {/* 日期范围选择器 */}
-        <Dropdown
-          trigger={['click']}
-          open={customPickerOpen}
-          onOpenChange={open => { if (!open) setCustomPickerOpen(false); }}
-          dropdownRender={() => (
-            <div style={{ background: '#fff', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 12, minWidth: 240 }}>
-              <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>快捷选择</div>
-              <Space wrap style={{ marginBottom: 12 }}>
-                {DATE_SHORTCUTS.map(s => (
-                  <Button
-                    key={s.label}
-                    size="small"
-                    type={dateRange?.label === s.label ? 'primary' : 'default'}
-                    onClick={() => { setDateRange({ ...s.getRange(), label: s.label }); setCustomPickerOpen(false); }}
-                  >
-                    {s.label}
-                  </Button>
-                ))}
-              </Space>
-              <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>自定义范围</div>
-              <DatePicker.RangePicker
-                size="small"
-                style={{ width: '100%' }}
-                onChange={(_, strs) => {
-                  if (strs[0] && strs[1]) {
-                    setDateRange({ start: strs[0], end: strs[1], label: `${strs[0]} ~ ${strs[1]}` });
-                    setCustomPickerOpen(false);
-                  }
-                }}
-              />
-            </div>
-          )}
+          value={filterVisibility || undefined}
+          onChange={v => setFilterVisibility(v || '')}
         >
-          <Button
-            icon={<CalendarOutlined />}
-            type={dateRange ? 'primary' : 'default'}
-            ghost={!!dateRange}
-            onClick={() => setCustomPickerOpen(v => !v)}
-          >
-            {dateRange ? dateRange.label : '日期范围'}
-            {dateRange && (
-              <CloseCircleOutlined
-                style={{ marginLeft: 6, fontSize: 12 }}
-                onClick={e => { e.stopPropagation(); setDateRange(null); setCustomPickerOpen(false); }}
-              />
-            )}
-          </Button>
-        </Dropdown>
-      </Space>
+          <Option value={COMPANY_PERSON_SCOPE}>公司共享</Option>
+          <Option value={PRIVATE_PERSON_SCOPE}>个人私密</Option>
+        </Select>
+      )}
+      <Dropdown
+        trigger={['click']}
+        open={customPickerOpen}
+        onOpenChange={open => { if (!open) setCustomPickerOpen(false); }}
+        popupRender={() => (
+          <div style={{ background: '#fff', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 12, minWidth: 240 }}>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>快捷选择</div>
+            <Space wrap style={{ marginBottom: 12 }}>
+              {DATE_SHORTCUTS.map(s => (
+                <Button
+                  key={s.label}
+                  size="small"
+                  type={dateRange?.label === s.label ? 'primary' : 'default'}
+                  onClick={() => { setDateRange({ ...s.getRange(), label: s.label }); setCustomPickerOpen(false); }}
+                >
+                  {s.label}
+                </Button>
+              ))}
+            </Space>
+            <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>自定义范围</div>
+            <DatePicker.RangePicker
+              size="small"
+              style={{ width: '100%' }}
+              onChange={(_, strs) => {
+                if (strs[0] && strs[1]) {
+                  setDateRange({ start: strs[0], end: strs[1], label: `${strs[0]} ~ ${strs[1]}` });
+                  setCustomPickerOpen(false);
+                }
+              }}
+            />
+          </div>
+        )}
+      >
+        <Button
+          icon={<CalendarOutlined />}
+          type={dateRange ? 'primary' : 'default'}
+          ghost={!!dateRange}
+          style={{ width: isMobile ? '100%' : undefined }}
+          onClick={() => setCustomPickerOpen(v => !v)}
+        >
+          {dateRange ? dateRange.label : '日期范围'}
+          {dateRange && (
+            <CloseCircleOutlined
+              style={{ marginLeft: 6, fontSize: 12 }}
+              onClick={event => { event.stopPropagation(); setDateRange(null); setCustomPickerOpen(false); }}
+            />
+          )}
+        </Button>
+      </Dropdown>
+    </Space>
+  );
+
+  return (
+    <div style={{ padding: isMobile ? 0 : undefined }}>
+      <div style={{ marginBottom: 16 }}>
+        <Space direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAdd} style={{ width: isMobile ? '100%' : undefined }}>添加记录</Button>
+          {isMobile && (
+            <Button icon={<FilterOutlined />} onClick={() => setFilterDrawerOpen(true)} style={{ width: '100%' }}>
+              筛选{activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}
+            </Button>
+          )}
+        </Space>
+      </div>
+      {!isMobile && filterControls}
       {isMobile ? (
         <List
           dataSource={data}
@@ -471,6 +532,22 @@ export default function Interactions() {
           })}
         />
       )}
+
+      <Drawer
+        title="筛选互动记录"
+        placement="right"
+        width="100%"
+        open={filterDrawerOpen}
+        onClose={() => setFilterDrawerOpen(false)}
+        footer={
+          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Button onClick={resetFilters}>重置</Button>
+            <Button type="primary" onClick={applyMobileFilters}>完成</Button>
+          </Space>
+        }
+      >
+        {filterControls}
+      </Drawer>
 
       <Modal
         title={editing ? '编辑互动记录' : '添加互动记录'}
