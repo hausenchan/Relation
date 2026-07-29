@@ -154,11 +154,69 @@ function validateReleasePayload(payload = {}) {
   return errors.length ? { errors, values } : { values };
 }
 
+function stripAnsiText(value) {
+  return String(value || '').replace(/[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g, '');
+}
+
 function sanitizeLogText(value) {
-  return String(value || '')
+  return stripAnsiText(value)
     .replace(/Bearer\s+[A-Za-z0-9._~-]+/gi, 'Bearer [REDACTED]')
     .replace(/((?:authorization|token|cookie|password|credential|private[_ -]?key|identity[_ -]?key|secret)[^=:\n]*[=:])\s*[^\s,;]+/gi, '$1 [REDACTED]')
     .replace(/(?:\/Users\/|\/home\/|[A-Za-z]:\\)[^\s\n]+/g, '[PATH_REDACTED]');
+}
+
+function normalizeFailureLine(value) {
+  return sanitizeLogText(value)
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+function extractCommandFailureReason(output, fallback = '脚本执行失败，请查看脚本运行日志') {
+  const sanitized = sanitizeLogText(output);
+  const lines = sanitized
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  const content = lines.join('\n');
+
+  const moduleMatch = content.match(/(?:cannot\s+(?:resolve|find)\s+module|module\s+not\s+found(?::|\s).*?(?:can't\s+resolve|cannot\s+resolve))\s+['"]([^'"]+)['"]/i);
+  if (moduleMatch) {
+    return `缺少依赖 ${moduleMatch[1]}，请检查代码模版项目依赖配置，安装该依赖后重试`;
+  }
+
+  const commandNotFound = content.match(/(?:command not found|not recognized as an internal or external command):?\s*([^\s'"]+)/i);
+  if (commandNotFound) return `命令 ${commandNotFound[1]} 不存在，请在服务器安装后重试`;
+
+  const spawnMissing = content.match(/(?:spawn\s+([^\s]+)\s+ENOENT|ENOENT.*spawn\s+([^\s]+))/i);
+  if (spawnMissing) return `命令 ${spawnMissing[1] || spawnMissing[2]} 不存在，请在服务器安装后重试`;
+
+  const permissionLine = lines.find(line => /(?:EACCES|permission denied|operation not permitted|权限不足|没有权限)/i.test(line));
+  if (permissionLine) return `执行权限不足：${normalizeFailureLine(permissionLine)}`;
+
+  const npmLine = lines.find(line => /npm ERR!|npm error/i.test(line));
+  if (npmLine) return `npm 执行失败：${normalizeFailureLine(npmLine).replace(/^npm (?:ERR!|error)\s*/i, '')}`;
+
+  const gitLine = lines.find(line => /fatal:|git .*failed|git .*失败|repository not found|could not read from remote repository/i.test(line));
+  if (gitLine) return `Git 操作失败：${normalizeFailureLine(gitLine).replace(/^fatal:\s*/i, '')}`;
+
+  const explicitUploadLine = lines.find(line => /上传失败[:：]/.test(line));
+  if (explicitUploadLine) return normalizeFailureLine(explicitUploadLine).replace(/^上传失败[:：]\s*/, '');
+
+  const minidevLine = lines.find(line => /minidev/i.test(line) && /(?:error|failed|失败|异常|not found|缺少|missing)/i.test(line));
+  if (minidevLine) return `minidev 执行失败：${normalizeFailureLine(minidevLine)}`;
+
+  const errorLine = lines.find(line => /(?:^|\s)(?:Error|TypeError|ReferenceError|SyntaxError|RangeError):\s+/i.test(line));
+  if (errorLine) return normalizeFailureLine(errorLine);
+
+  const failedLine = lines.find(line => /(?:失败|异常|failed|error)/i.test(line) && !/task was failed/i.test(line));
+  if (failedLine) return normalizeFailureLine(failedLine);
+
+  return fallback;
 }
 
 function emitCommandOutput(onOutput, streamName, chunk) {
@@ -332,6 +390,7 @@ async function runUploadScript(options) {
   if (options.versionDescription) args.push('--version-description', options.versionDescription);
 
   const result = await runCommand(process.execPath, args, {
+    label: 'upload.js',
     cwd: path.dirname(scriptPath),
     timeoutMs: Number(options.timeoutMs || process.env.PRODUCT_TEMPLATE_UPLOAD_TIMEOUT_MS || 15 * 60 * 1000),
     onOutput: options.onLog
@@ -377,6 +436,7 @@ function checkRuntime() {
 
 function runCommand(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
+    const commandLabel = options.label || path.basename(command) || command;
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env || process.env,
@@ -388,7 +448,7 @@ function runCommand(command, args = [], options = {}) {
     const timeout = Number(options.timeoutMs || 10 * 60 * 1000);
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      const error = new Error(`${command} 执行超时`);
+      const error = new Error(`${commandLabel} 执行超时，请检查脚本是否卡住或网络依赖是否无响应`);
       error.code = 'COMMAND_TIMEOUT';
       reject(error);
     }, timeout);
@@ -404,13 +464,16 @@ function runCommand(command, args = [], options = {}) {
     });
     child.once('error', error => {
       clearTimeout(timer);
-      reject(error);
+      const next = new Error(`${commandLabel} 启动失败：${extractCommandFailureReason(error.message, error.message)}`);
+      next.code = error.code || 'COMMAND_START_FAILED';
+      reject(next);
     });
     child.once('close', code => {
       clearTimeout(timer);
       if (code === 0) return resolve({ stdout, stderr });
       const detail = [stderr, stdout].filter(Boolean).join('\n').slice(-2000);
-      const error = new Error(`${command} 执行失败（${code}）${detail ? `：${detail}` : ''}`);
+      const reason = extractCommandFailureReason(detail, '脚本执行失败，请查看脚本运行日志');
+      const error = new Error(`${commandLabel} 执行失败（${code}）：${reason}`);
       error.code = 'COMMAND_FAILED';
       error.exitCode = code;
       error.stdout = stdout;
@@ -429,6 +492,7 @@ module.exports = {
   appendLog,
   checkRuntime,
   copyProjectDirectory,
+  extractCommandFailureReason,
   getMinidevRuntime,
   getUploadScriptPath,
   getWorkRoot,
@@ -438,6 +502,7 @@ module.exports = {
   runCommand,
   runUploadScript,
   sanitizeLogText,
+  stripAnsiText,
   uploadWithMinidev,
   validateReleaseDomains,
   validateReleasePayload,
