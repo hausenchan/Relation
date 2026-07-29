@@ -664,6 +664,22 @@ export default function SpreadsheetDocumentEditor({
     }
     if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
     if ((event.metaKey || event.ctrlKey) && ['c', 'v'].includes(event.key.toLowerCase())) return;
+    if (
+      canEdit
+      && !event.altKey
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.isComposing
+      && event.key
+      && event.key.length === 1
+    ) {
+      event.preventDefault();
+      const transactionKey = `cell:${activeSheet.id}:${activeCellKey}`;
+      beginInputTransaction(transactionKey);
+      updateCellValue(activeRowIndex, activeColumnIndex, event.key, { recordHistory: false });
+      setEditingCellKey(buildSpreadsheetCellKey(activeRowIndex, activeColumnIndex));
+      return;
+    }
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
       clearSelection(false);

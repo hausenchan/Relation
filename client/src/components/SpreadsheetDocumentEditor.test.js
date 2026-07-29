@@ -212,6 +212,29 @@ test('applies native spreadsheet basic formatting to the selected cell', () => {
   container.remove();
 });
 
+test('starts editing the selected cell when typing a printable key', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'X', bubbles: true, cancelable: true })));
+
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('X');
+  expect(container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"] input')?.value)
+    .toBe('X');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('keeps Excel import and cell editing disabled for readonly users while allowing export', () => {
   const onImportXlsx = jest.fn();
   const onExportXlsx = jest.fn();

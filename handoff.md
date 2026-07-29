@@ -6,6 +6,11 @@
 
 ### 已完成
 
+- 线上文档 `https://relation.midongtech.com/documents?doc=480` 复现到“单击单元格后直接键盘输入无效”：
+  真实 printable key 只触发网格 `keydown`，旧逻辑只处理删除、方向键、Enter/Tab 和撤销重做，没有把
+  普通字符转成单元格编辑。
+- 已修复：可编辑状态下，普通字符键会覆盖当前选中单元格、进入单元格编辑态，并继续复用同一次
+  输入事务；输入框、公式栏、组合输入和快捷键仍按原逻辑处理。
 - 新增独立 PRD：`文档中心-在线表格原生基础版PRD.md`，明确近期在线表格从 Univer 验证路线调整为
   原生自研基础版路线。
 - PRD 按用户截图中的范围拆解一期能力：基础录入、复制粘贴、行列增删、简单公式和常用函数、
@@ -28,6 +33,8 @@
 
 - `CI=true npx react-scripts test --watchAll=false --runInBand src/utils/spreadsheetWorkbook.test.js src/components/SpreadsheetDocumentEditor.test.js`
   通过，2 个套件、32 条测试全部成功。
+- printable key 输入修复新增回归：单击选中单元格后按普通字符键会立即写入当前单元格并进入编辑态；
+  `src/components/SpreadsheetDocumentEditor.test.js` 16/16 通过。
 - 隔离生产构建 `/tmp/relation-native-spreadsheet-build` 成功；构建输出未出现 Univer 大 chunk。
 - 前端性能预算通过：首屏 JavaScript `329.5KB / 400KB`，76 个异步 chunk，最大 `420.8KB / 500KB`。
 
