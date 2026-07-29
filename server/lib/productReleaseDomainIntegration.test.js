@@ -267,4 +267,38 @@ console.log('上传版本: fake-domain-1.0.0');
   const uploadArgs = JSON.parse(fs.readFileSync(uploadArgsPath, 'utf8'));
   assert.equal(uploadArgs[uploadArgs.indexOf('--project') + 1], 'src');
   assert.equal(uploadArgs[uploadArgs.indexOf('--short-drama-template') + 1], '0');
+
+  fs.writeFileSync(uploadScriptPath, `
+console.log('build error');
+console.error("\\u001b[31mError: cannot resolve module 'crypto-js'\\u001b[39m");
+console.error('Error: task was failed');
+process.exit(1);
+`, { mode: 0o700 });
+  const failingAsset = await request(baseUrl, '/api/product-assets', {
+    method: 'POST',
+    token,
+    body: {
+      app_name: '提版失败原因产品',
+      budget_type: 'zhixiao',
+      company_subject_id: subjectId,
+      appid: '2026072700010003',
+      platform: 'mini_program',
+    },
+  });
+  assert.equal(failingAsset.status, 200, JSON.stringify(failingAsset.payload));
+  const failingRelease = await request(baseUrl, `/api/product-assets/${failingAsset.payload.id}/releases`, {
+    method: 'POST',
+    token,
+    body: {
+      app_id: '2026072700010003',
+      template_id: template.payload.id,
+      release_version: '1.0.1',
+      release_note: '验证失败原因提炼',
+    },
+  });
+  assert.equal(failingRelease.status, 202, JSON.stringify(failingRelease.payload));
+  const failedTask = await waitForTaskStatus(baseUrl, token, failingRelease.payload.id, 'failed');
+  assert.match(failedTask.task.error_message, /缺少依赖 crypto-js/);
+  assert.doesNotMatch(failedTask.task.error_message, /\u001b|\[31m|task was failed/);
+  assert.match(failedTask.task.log_text, /upload\.js stderr: Error: cannot resolve module 'crypto-js'/);
 });

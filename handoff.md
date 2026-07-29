@@ -50,6 +50,43 @@
 - `390x844` 继续走移动布局，紧凑桌面模式未串入，表格宽度限制在视口内且 Sheet 栏可见；页面无新增
   runtime error 或控制台警告。
 
+## 产品提版失败展示与 minidev 自动安装（2026-07-29）
+
+### 已完成
+
+- 提版进度弹窗失败态去掉重复的任务详情和“失败原因”卡片，仅保留顶部失败摘要与脚本运行日志区域。
+- 点击“确认提版”创建任务成功后，只关闭参数弹窗并展示提版进度弹窗，不再自动打开产品资产详情抽屉。
+- 顶部失败摘要固定高度滚动展示，避免异常堆栈或构建输出过长时撑高整个弹窗。
+- 脚本执行失败时会清洗 ANSI 颜色码，并优先提炼缺依赖、命令缺失、权限、git/npm/minidev 等具体原因；
+  例如 `cannot resolve module 'crypto-js'` 会展示为缺少 `crypto-js` 依赖。
+- `utils/upload.js` 在未检测到可用 `minidev.upload` 接口时，会自动执行
+  `npm install --no-save --package-lock=false --no-audit --no-fund minidev` 安装依赖后继续上传。
+- 测试 `offer-wall/newsWall` 时发现模版已声明 `crypto-js`，但临时项目复制时会排除 `node_modules`，
+  原脚本又未安装项目依赖，导致 minidev 构建报 `cannot resolve module 'crypto-js'`；已修复为临时项目
+  上传前如存在 `package.json` 自动执行 `npm install --no-audit --no-fund --legacy-peer-deps`。
+- 自动安装支持 `MINIDEV_AUTO_INSTALL=0` 禁用，支持 `MINIDEV_INSTALL_CWD`、`MINIDEV_PACKAGE`、
+  `MINIDEV_MODULE` 和 `NPM_BIN` 覆盖安装目录、包名、模块名和 npm 命令。
+- 临时项目依赖安装支持 `UPLOAD_SKIP_NPM_INSTALL=1` 跳过，便于服务器已预置依赖或排障时使用。
+- 同步更新 `client/src/utils/upload.js` 镜像，避免两份上传脚本逻辑漂移。
+- 新增产品资产页面回归测试：确认提版创建任务成功后只展示执行进度弹窗，不再自动请求并弹出产品资产详情。
+- 提版任务轮询到成功、失败或取消终态后，会自动刷新产品资产列表，确保最近提版模版/提版状态等字段及时更新。
+
+### 验证
+
+- `CI=true npx react-scripts test --watchAll=false --runInBand src/pages/ProductAssets.test.js` 通过，覆盖确认提版后不弹产品详情、
+  提版完成后自动刷新产品资产列表。
+- `node --check utils/upload.js`、`node --check client/src/utils/upload.js`、`node --check server/index.js`
+  通过。
+- `node --test server/lib/productTemplateRelease.test.js` 通过，12/12，包含 minidev 自动安装、临时项目依赖安装和
+  脚本失败原因提炼回归。
+- `node --test server/lib/productReleaseDomainIntegration.test.js` 通过，覆盖产品资产提版成功链路，以及 fake
+  `upload.js` 返回 `cannot resolve module 'crypto-js'` 时任务 API 的失败原因提炼。
+- `CI=true npx react-scripts test --watchAll=false --runInBand` 通过，41 个套件、229 条测试全部成功；
+  仅有既有 Ant Design 弃用和 React `act(...)` 警告。
+- `BUILD_PATH=/tmp/relation-build npm run build` 隔离生产构建成功。
+- 真实外联上传测试未执行：该操作会通过 git/npm/minidev 与外部服务交互并可能传递本地代码与提版参数，
+  本轮仅执行隔离安全链路测试和本地 fake npm/minidev 回归。
+
 ## 产品模版与提版功能合并 main（2026-07-29）
 
 ### 已完成
