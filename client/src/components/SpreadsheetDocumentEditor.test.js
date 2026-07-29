@@ -79,6 +79,60 @@ test('fills a frameless document workspace while keeping every spreadsheet regio
   container.remove();
 });
 
+test('reports grid scrolling and keeps the workspace focus toggle pinned beside the toolbar', () => {
+  const onViewportScroll = jest.fn();
+  const onWorkspaceFocusModeChange = jest.fn();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const renderEditor = workspaceFocusMode => (
+    <SpreadsheetDocumentEditor
+      workbook={createDefaultSpreadsheetWorkbook()}
+      canEdit
+      fillAvailableHeight
+      frameless
+      workspaceFocusMode={workspaceFocusMode}
+      onWorkspaceFocusModeChange={onWorkspaceFocusModeChange}
+      onViewportScroll={onViewportScroll}
+      selectedCell={{ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 }}
+      onSelectedCellChange={() => {}}
+      onWorkbookChange={() => {}}
+    />
+  );
+
+  act(() => root.render(renderEditor(false)));
+  const grid = container.querySelector('[data-spreadsheet-grid="true"]');
+  Object.defineProperty(grid, 'scrollHeight', { configurable: true, value: 900 });
+  Object.defineProperty(grid, 'clientHeight', { configurable: true, value: 500 });
+  grid.scrollTop = 32;
+  grid.scrollLeft = 18;
+  act(() => grid.dispatchEvent(new Event('scroll', { bubbles: true })));
+  expect(onViewportScroll).toHaveBeenLastCalledWith({
+    scrollTop: 32,
+    scrollLeft: 18,
+    scrollHeight: 900,
+    clientHeight: 500,
+  });
+
+  const collapseButton = container.querySelector('[data-spreadsheet-focus-toggle="true"]');
+  expect(collapseButton.getAttribute('aria-label')).toBe('收起标题与菜单');
+  expect(collapseButton.closest('.relation-spreadsheet-focus-toggle-slot')).not.toBeNull();
+  act(() => collapseButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(onWorkspaceFocusModeChange).toHaveBeenCalledWith(true);
+
+  act(() => root.render(renderEditor(true)));
+  expect(container.querySelector('[data-spreadsheet-editor-root="true"]')
+    .classList.contains('relation-spreadsheet-editor--focus-mode')).toBe(true);
+  expect(container.querySelector('[data-spreadsheet-menu-bar="true"]').hidden).toBe(true);
+  expect(container.querySelector('[data-spreadsheet-toolbar="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-formula-bar="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-focus-toggle="true"]')
+    .getAttribute('aria-label')).toBe('展开标题与菜单');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('virtualizes a large worksheet and renders calculated formula values', () => {
   const workbook = createDefaultSpreadsheetWorkbook();
   workbook.sheets[0] = {

@@ -16,6 +16,45 @@
   flex: 0 0 auto;
 }
 
+.relation-spreadsheet-toolbar-shell {
+  display: flex;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.relation-spreadsheet-toolbar-scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  scrollbar-width: thin;
+}
+
+.relation-spreadsheet-focus-toggle-slot {
+  display: flex;
+  flex: 0 0 38px;
+  align-items: center;
+  justify-content: center;
+  border-left: 1px solid #eef0f3;
+  background: #fff;
+}
+
+.relation-spreadsheet-focus-toggle.ant-btn {
+  width: 32px;
+  min-width: 32px;
+  height: 30px;
+  padding: 0;
+  border-radius: 2px;
+  color: #525866;
+}
+
+.relation-spreadsheet-focus-toggle.ant-btn:hover {
+  background: #f1f3f5;
+  color: #1677d2;
+}
+
+.relation-spreadsheet-focus-toggle .anticon {
+  font-size: 12px;
+}
+
 .relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input,
 .relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input-affix-wrapper {
   height: 28px;

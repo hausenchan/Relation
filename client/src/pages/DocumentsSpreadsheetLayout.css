@@ -24,6 +24,37 @@
   background: #fff;
 }
 
+.documents-layout--spreadsheet .documents-editor-tabs,
+.documents-layout--spreadsheet .documents-spreadsheet-header {
+  overflow: hidden;
+  transition:
+    flex-basis 160ms ease,
+    min-height 160ms ease,
+    padding 160ms ease,
+    border-color 160ms ease,
+    opacity 120ms ease;
+}
+
+.documents-layout--spreadsheet-context-collapsed .documents-editor-tabs,
+.documents-layout--spreadsheet-context-collapsed .documents-spreadsheet-header {
+  min-height: 0 !important;
+  overflow: hidden;
+  border-bottom-width: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.documents-layout--spreadsheet-context-collapsed .documents-editor-tabs {
+  flex-basis: 0;
+  padding: 0 8px !important;
+}
+
+.documents-layout--spreadsheet-context-collapsed .documents-spreadsheet-header {
+  flex-basis: 0;
+  padding: 0 10px 0 12px;
+}
+
 .documents-layout--spreadsheet .documents-open-tabs {
   scrollbar-width: thin;
 }
@@ -133,5 +164,12 @@
 
   .documents-spreadsheet-title-input.ant-input {
     width: clamp(140px, 25vw, 260px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .documents-layout--spreadsheet .documents-editor-tabs,
+  .documents-layout--spreadsheet .documents-spreadsheet-header {
+    transition: none;
   }
 }

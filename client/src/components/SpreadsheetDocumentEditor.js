@@ -6,6 +6,7 @@ import {
   BoldOutlined,
   BorderInnerOutlined,
   CaretDownOutlined,
+  CaretUpOutlined,
   ClearOutlined,
   DeleteColumnOutlined,
   DeleteRowOutlined,
@@ -195,6 +196,9 @@ export default function SpreadsheetDocumentEditor({
   mentionContext,
   fillAvailableHeight = false,
   frameless = false,
+  workspaceFocusMode = false,
+  onWorkspaceFocusModeChange,
+  onViewportScroll,
 }) {
   const workbook = useMemo(() => normalizeSpreadsheetWorkbook(workbookValue), [workbookValue]);
   const activeSheet = workbook.sheets.find(sheet => sheet.id === selectedCell?.sheetId)
@@ -1154,7 +1158,7 @@ export default function SpreadsheetDocumentEditor({
   return (
     <section
       ref={editorRef}
-      className={`relation-spreadsheet-editor${fillAvailableHeight ? ' relation-spreadsheet-editor--fill' : ''}${frameless ? ' relation-spreadsheet-editor--frameless' : ''}`}
+      className={`relation-spreadsheet-editor${fillAvailableHeight ? ' relation-spreadsheet-editor--fill' : ''}${frameless ? ' relation-spreadsheet-editor--frameless' : ''}${workspaceFocusMode ? ' relation-spreadsheet-editor--focus-mode' : ''}`}
       aria-label="在线表格编辑区"
       data-spreadsheet-editor-root="true"
       tabIndex={0}
@@ -1178,9 +1182,11 @@ export default function SpreadsheetDocumentEditor({
         style={{ borderBottom: '1px solid #e5e7eb', background: fillAvailableHeight ? '#fff' : '#fafafa' }}
       >
         <div
+          className="relation-spreadsheet-menu-bar"
           data-spreadsheet-menu-bar="true"
+          hidden={workspaceFocusMode}
           style={{
-            display: 'flex',
+            display: workspaceFocusMode ? 'none' : 'flex',
             alignItems: 'center',
             gap: 2,
             minHeight: fillAvailableHeight ? 30 : undefined,
@@ -1270,17 +1276,19 @@ export default function SpreadsheetDocumentEditor({
             }}
           />
         </div>
-        <div
-          data-spreadsheet-toolbar="true"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 2,
-            minHeight: fillAvailableHeight ? 34 : undefined,
-            overflowX: 'auto',
-            padding: fillAvailableHeight ? '2px 8px 4px' : '4px 8px 7px',
-          }}
-        >
+        <div className="relation-spreadsheet-toolbar-shell">
+          <div
+            className="relation-spreadsheet-toolbar-scroll"
+            data-spreadsheet-toolbar="true"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              minHeight: fillAvailableHeight ? 34 : undefined,
+              overflowX: 'auto',
+              padding: fillAvailableHeight ? '2px 8px 4px' : '4px 8px 7px',
+            }}
+          >
           <SpreadsheetToolbarButton title="在上方插入行" disabled={!canEdit} icon={<InsertRowAboveOutlined />} onClick={insertRow} />
           <SpreadsheetToolbarButton title="删除当前行" disabled={!canEdit || activeSheet.rowCount <= 1} danger icon={<DeleteRowOutlined />} onClick={deleteRow} />
           <SpreadsheetToolbarButton title="在左侧插入列" disabled={!canEdit} icon={<InsertRowRightOutlined />} onClick={insertColumn} />
@@ -1435,6 +1443,24 @@ export default function SpreadsheetDocumentEditor({
               </Button>
             </Dropdown>
           </Tooltip>
+          </div>
+          {typeof onWorkspaceFocusModeChange === 'function' && (
+            <div className="relation-spreadsheet-focus-toggle-slot">
+              <Tooltip title={workspaceFocusMode ? '展开标题与菜单' : '收起标题与菜单'} placement="left">
+                <Button
+                  type="text"
+                  size="small"
+                  className="relation-spreadsheet-focus-toggle"
+                  data-spreadsheet-focus-toggle="true"
+                  aria-label={workspaceFocusMode ? '展开标题与菜单' : '收起标题与菜单'}
+                  aria-pressed={workspaceFocusMode}
+                  icon={workspaceFocusMode ? <CaretDownOutlined /> : <CaretUpOutlined />}
+                  onKeyDown={event => event.stopPropagation()}
+                  onClick={() => onWorkspaceFocusModeChange(!workspaceFocusMode)}
+                />
+              </Tooltip>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1496,12 +1522,18 @@ export default function SpreadsheetDocumentEditor({
         aria-rowcount={activeSheet.rowCount}
         aria-colcount={activeSheet.columnCount}
         onScroll={event => {
-          const { scrollTop, scrollLeft } = event.currentTarget;
+          const {
+            scrollTop,
+            scrollLeft,
+            scrollHeight,
+            clientHeight,
+          } = event.currentTarget;
           setScrollState(current => ({
             ...current,
             top: scrollTop,
             left: scrollLeft,
           }));
+          onViewportScroll?.({ scrollTop, scrollLeft, scrollHeight, clientHeight });
         }}
         style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative', background: '#f8fafc' }}
       >

@@ -104,6 +104,10 @@ import {
   createSpreadsheetPresenceSessionId,
   filterRemoteSpreadsheetCollaborators,
 } from '../utils/spreadsheetPresence';
+import {
+  getSpreadsheetWorkspaceChromeState,
+  resolveSpreadsheetContextAutoCollapsed,
+} from '../utils/spreadsheetWorkspaceLayout';
 import { activateDocumentLink } from '../utils/documentLinkNavigation';
 import {
   buildCollapsedDocumentBlockIds,
@@ -3432,6 +3436,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [tableMenuContext, setTableMenuContext] = useState(null);
   const [selectedSpreadsheetCell, setSelectedSpreadsheetCell] = useState({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
   const [spreadsheetCollaborators, setSpreadsheetCollaborators] = useState([]);
+  const [spreadsheetContextAutoCollapsed, setSpreadsheetContextAutoCollapsed] = useState(false);
+  const [spreadsheetFocusMode, setSpreadsheetFocusMode] = useState(false);
   const [selectedAreaBlockIds, setSelectedAreaBlockIds] = useState([]);
   const [hoveredBlockId, setHoveredBlockId] = useState(null);
   const [openBlockMenuId, setOpenBlockMenuId] = useState(null);
@@ -3810,6 +3816,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   }, [folderSidebarCollapsed]);
 
   useEffect(() => {
+    setSpreadsheetContextAutoCollapsed(false);
+  }, [selectedDocId]);
+
+  useEffect(() => {
     const nextPreviewFlag = getUniverSpreadsheetPreviewSearchFlag(searchParams);
     if (nextPreviewFlag === null) return;
     persistUniverSpreadsheetPreviewFlag(nextPreviewFlag);
@@ -3895,6 +3905,10 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     ? getFolderInnerPathLabel(selectedDocFolder, folderPathMap)
     : (selectedDoc?.folder_name || '');
   const compactSpreadsheetWorkspace = !embedded && !isMobile && isSpreadsheetDocument(selectedDoc);
+  const spreadsheetWorkspaceChrome = getSpreadsheetWorkspaceChromeState({
+    autoCollapsed: spreadsheetContextAutoCollapsed,
+    focusMode: spreadsheetFocusMode,
+  });
   const deepLinkedDocId = useMemo(() => {
     const embeddedId = Number(embeddedDocumentId);
     if (embedded && Number.isInteger(embeddedId) && embeddedId > 0) return embeddedId;
@@ -15145,6 +15159,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     selectedDoc?.id,
   );
   const canEditSelectedSpreadsheet = canEditDoc(selectedDoc);
+  const handleSpreadsheetViewportScroll = metrics => {
+    setSpreadsheetContextAutoCollapsed(current => (
+      resolveSpreadsheetContextAutoCollapsed(current, metrics)
+    ));
+  };
   const legacySpreadsheetEditor = (
     <LegacySpreadsheetDocumentEditor
       key={`legacy-${selectedDoc?.id || 'spreadsheet'}`}
@@ -15163,6 +15182,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       mentionContext={documentMentionContext}
       fillAvailableHeight={compactSpreadsheetWorkspace}
       frameless={compactSpreadsheetWorkspace}
+      workspaceFocusMode={compactSpreadsheetWorkspace && spreadsheetWorkspaceChrome.menuCollapsed}
+      onWorkspaceFocusModeChange={compactSpreadsheetWorkspace ? setSpreadsheetFocusMode : undefined}
+      onViewportScroll={compactSpreadsheetWorkspace ? handleSpreadsheetViewportScroll : undefined}
     />
   );
   const univerSpreadsheetEditor = (
@@ -15769,7 +15791,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   };
 
   return (
-    <div className={`documents-layout${compactSpreadsheetWorkspace ? ' documents-layout--spreadsheet' : ''}`} style={{
+    <div className={`documents-layout${compactSpreadsheetWorkspace ? ' documents-layout--spreadsheet' : ''}${compactSpreadsheetWorkspace && spreadsheetWorkspaceChrome.contextCollapsed ? ' documents-layout--spreadsheet-context-collapsed' : ''}${compactSpreadsheetWorkspace && spreadsheetFocusMode ? ' documents-layout--spreadsheet-focus-mode' : ''}`} style={{
       display: 'flex',
       gap: embedded || isMobile || isFolderSidebarCollapsed ? 0 : 16,
       height: compactSpreadsheetWorkspace
@@ -16110,6 +16132,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         {!isMobile && !embedded && (
           <div
             className="documents-editor-tabs"
+            aria-hidden={compactSpreadsheetWorkspace && spreadsheetWorkspaceChrome.contextCollapsed}
             style={{
               display: 'flex',
               alignItems: compactSpreadsheetWorkspace ? 'center' : 'flex-start',
@@ -16224,7 +16247,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
               )}
 
               {compactSpreadsheetWorkspace && (
-                <header className="documents-spreadsheet-header" data-spreadsheet-document-header="true">
+                <header
+                  className="documents-spreadsheet-header"
+                  data-spreadsheet-document-header="true"
+                  aria-hidden={spreadsheetWorkspaceChrome.contextCollapsed}
+                >
                   <div className="documents-spreadsheet-header-main">
                     <TableOutlined className="documents-spreadsheet-header-icon" aria-hidden="true" />
                     <Tooltip title={editorTitle || selectedDoc.title || '未命名表格'}>
