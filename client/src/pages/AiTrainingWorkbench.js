@@ -6,12 +6,13 @@ import {
 import {
   ArrowLeftOutlined, BarChartOutlined, CheckCircleOutlined, DislikeOutlined,
   FileAddOutlined, FolderAddOutlined, LikeOutlined, MessageOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, PlusOutlined, ReadOutlined, ReloadOutlined,
+  PlusOutlined, ReadOutlined, ReloadOutlined,
   SendOutlined, SettingOutlined, TeamOutlined, ToolOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { aiTrainingApi } from '../api';
 import { useAuth } from '../AuthContext';
+import SidebarToggleButton from '../components/SidebarToggleButton';
 import { formatBusinessDateTime } from '../utils/businessTime';
 
 const { Title, Text, Paragraph } = Typography;
@@ -1077,7 +1078,8 @@ export default function AiTrainingWorkbench() {
     { title: '案例库沉淀', value: overview.published_cases, foot: '已进入团队案例库' },
     { title: '待审核候选', value: overview.pending_candidates, foot: '等待负责人处理' },
   ];
-  const isSessionListCollapsed = !isMobile && sessionListCollapsed;
+  const canCollapseSessionList = Boolean(screens.xl);
+  const isSessionListCollapsed = canCollapseSessionList && sessionListCollapsed;
 
   const sessionTab = (
     <div>
@@ -1105,51 +1107,10 @@ export default function AiTrainingWorkbench() {
       </Space>
 
       <Row gutter={[12, 12]}>
-        <Col xs={24} xl={isSessionListCollapsed ? 1 : 6}>
-          {isSessionListCollapsed ? (
-            <div
-              style={{
-                minHeight: 420,
-                border: '1px solid #f0f0f0',
-                borderRadius: 8,
-                background: '#fff',
-                display: 'flex',
-                justifyContent: 'center',
-                paddingTop: 10,
-              }}
-            >
-              <Tooltip title="展开会话列表">
-                <Button
-                  type="text"
-                  size="small"
-                  aria-label="展开会话列表"
-                  aria-expanded={false}
-                  icon={<MenuUnfoldOutlined />}
-                  onClick={() => setSessionListCollapsed(false)}
-                  style={{ width: 32, height: 32 }}
-                />
-              </Tooltip>
-            </div>
-          ) : (
+        {!isSessionListCollapsed && (
+          <Col xs={24} xl={6}>
             <Card
-              title={
-                <Space size={8}>
-                  {!isMobile && (
-                    <Tooltip title="收起会话列表">
-                      <Button
-                        type="text"
-                        size="small"
-                        aria-label="收起会话列表"
-                        aria-expanded
-                        icon={<MenuFoldOutlined />}
-                        onClick={() => setSessionListCollapsed(true)}
-                        style={{ width: 32, height: 32 }}
-                      />
-                    </Tooltip>
-                  )}
-                  <span>会话列表</span>
-                </Space>
-              }
+              title="会话列表"
               extra={
                 <Space>
                   <Button icon={<ReloadOutlined />} onClick={loadSessions} />
@@ -1200,12 +1161,30 @@ export default function AiTrainingWorkbench() {
                 )}
               </Spin>
             </Card>
-          )}
-        </Col>
+          </Col>
+        )}
 
-        <Col xs={24} xl={isSessionListCollapsed ? 16 : 11}>
+        <Col xs={24} xl={isSessionListCollapsed ? 17 : 11}>
           <Card
-            title={currentSession ? currentSession.title : '聊天主窗口'}
+            title={
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {canCollapseSessionList && (
+                  <SidebarToggleButton
+                    collapsed={isSessionListCollapsed}
+                    onToggle={() => setSessionListCollapsed(prev => !prev)}
+                    expandLabel="展开会话列表"
+                    collapseLabel="收起会话列表"
+                    tooltipPlacement="right"
+                  />
+                )}
+                <span
+                  title={currentSession?.title || '聊天主窗口'}
+                  style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {currentSession ? currentSession.title : '聊天主窗口'}
+                </span>
+              </div>
+            }
             extra={
               currentSession ? (
                 <Space wrap>

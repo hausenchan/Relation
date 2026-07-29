@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client';
 const mockListTrips = jest.fn();
 const mockListSchedules = jest.fn();
 const mockListUsers = jest.fn();
+let mockBreakpoints = { md: true };
 
 jest.mock('antd', () => {
   const actual = jest.requireActual('antd');
@@ -11,7 +12,7 @@ jest.mock('antd', () => {
     ...actual,
     Grid: {
       ...actual.Grid,
-      useBreakpoint: () => ({ md: true }),
+      useBreakpoint: () => mockBreakpoints,
     },
   };
 });
@@ -55,6 +56,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  mockBreakpoints = { md: true };
+  window.localStorage.removeItem('relation.tripCollaborationListCollapsed.v1');
   mockListTrips.mockResolvedValue([{
     id: 7,
     name: '华东客户行程',
@@ -67,6 +70,38 @@ beforeEach(() => {
   }]);
   mockListSchedules.mockResolvedValue([]);
   mockListUsers.mockResolvedValue([]);
+});
+
+test('moves the list toggle into the schedule header and removes the collapsed rail', async () => {
+  window.localStorage.setItem('relation.tripCollaborationListCollapsed.v1', '1');
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () => {
+    root.render(<TripCollaboration />);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  });
+  await act(async () => {
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  });
+
+  const aside = container.querySelector('aside');
+  const section = container.querySelector('section');
+  const expandButton = section?.querySelector('button[aria-label="展开行程列表"]');
+  expect(aside?.style.width).toBe('0px');
+  expect(aside?.style.minWidth).toBe('0');
+  expect(expandButton).not.toBeNull();
+  expect(aside?.querySelector('button[aria-label="展开行程列表"]')).toBeNull();
+
+  await act(async () => {
+    expandButton.click();
+  });
+  expect(aside?.style.width).toBe('360px');
+  expect(section?.querySelector('button[aria-label="收起行程列表"]')).not.toBeNull();
+
+  act(() => root.unmount());
+  container.remove();
 });
 
 test('marks the date row, period column, and corner for two-axis sticky scrolling', async () => {
@@ -86,6 +121,31 @@ test('marks the date row, period column, and corner for two-axis sticky scrollin
   expect(container.querySelectorAll('.trip-collaboration-grid-date')).toHaveLength(3);
   expect(container.querySelectorAll('.trip-collaboration-grid-period')).toHaveLength(4);
   expect(container.querySelector('.trip-collaboration-grid-corner')).not.toBeNull();
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('keeps the trip list visible on mobile even when desktop state is collapsed', async () => {
+  mockBreakpoints = { md: false };
+  window.localStorage.setItem('relation.tripCollaborationListCollapsed.v1', '1');
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () => {
+    root.render(<TripCollaboration />);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  });
+  await act(async () => {
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  });
+
+  const aside = container.querySelector('aside');
+  expect(aside?.style.width).toBe('100%');
+  expect(aside?.textContent).toContain('出差协同');
+  expect(container.querySelector('button[aria-label="展开行程列表"]')).toBeNull();
+  expect(container.querySelector('button[aria-label="收起行程列表"]')).toBeNull();
 
   act(() => root.unmount());
   container.remove();

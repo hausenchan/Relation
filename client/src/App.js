@@ -8,12 +8,13 @@ import {
   ApartmentOutlined, LockOutlined, ThunderboltOutlined, MenuOutlined,
   CheckSquareOutlined, FileTextOutlined, AimOutlined, FunnelPlotOutlined,
   BranchesOutlined, SolutionOutlined, ToolOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, SearchOutlined,
+  SearchOutlined,
   AppstoreOutlined, HistoryOutlined, GlobalOutlined, CloseOutlined,
   RobotOutlined, ScheduleOutlined
 } from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
+import SidebarToggleButton from './components/SidebarToggleButton';
 import './App.css';
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
@@ -1147,6 +1148,21 @@ function AppLayout() {
           }}
         />
       </div>
+      {!isMobile && (
+        <div
+          className="app-sidebar-footer"
+          style={{ justifyContent: collapsed ? 'center' : 'flex-end' }}
+        >
+          <SidebarToggleButton
+            collapsed={collapsed}
+            onToggle={handleMenuIconClick}
+            expandLabel="展开全局菜单"
+            collapseLabel="收起全局菜单"
+            tooltipPlacement={collapsed ? 'right' : 'top'}
+            className="app-sidebar-toggle"
+          />
+        </div>
+      )}
     </>
   );
 
@@ -1191,10 +1207,11 @@ function AppLayout() {
 
       {!isMobile && (
         <Sider
+          className="app-global-sider"
           collapsed={collapsed}
           collapsedWidth={DS.sidebar.collapsedWidth}
           width={DS.sidebar.width}
-          style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', minHeight: '100vh', overflow: 'hidden', position: 'sticky', top: 0, left: 0, borderRight: '1px solid rgba(255,255,255,0.04)', alignSelf: 'stretch' }}
+          style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', height: '100vh', minHeight: '100vh', maxHeight: '100vh', overflow: 'hidden', position: 'sticky', top: 0, left: 0, borderRight: '1px solid rgba(255,255,255,0.04)', alignSelf: 'stretch' }}
         >
           {menuContent}
         </Sider>
@@ -1231,18 +1248,29 @@ function AppLayout() {
           boxShadow: 'none', position: 'sticky', top: 0, zIndex: 10,
           minWidth: 0,
         }}>
-          <span
-            onClick={handleMenuIconClick}
-            style={{
-              fontSize: 18, cursor: 'pointer', color: '#6b7280', marginRight: isMobile ? 8 : 12,
-              width: 32, height: 32, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              transition: 'background 0.2s, color 0.2s',
-            }}
-            onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#374151'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#6b7280'; }}
-          >
-            {isMobile ? <MenuOutlined /> : (collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />)}
-          </span>
+          {isMobile && (
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label="打开全局菜单"
+              onClick={handleMenuIconClick}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  handleMenuIconClick();
+                }
+              }}
+              style={{
+                fontSize: 18, cursor: 'pointer', color: '#6b7280', marginRight: 8,
+                width: 32, height: 32, borderRadius: 6, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                transition: 'background 0.2s, color 0.2s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#374151'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#6b7280'; }}
+            >
+              <MenuOutlined />
+            </span>
+          )}
           <WorkspaceTabs
             tabs={workspaceTabs}
             activeKey={activeTabKey}

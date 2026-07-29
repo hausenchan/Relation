@@ -24,8 +24,6 @@ import {
   DeleteOutlined,
   EditOutlined,
   EnvironmentOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
   PlusOutlined,
   ReloadOutlined,
   TeamOutlined,
@@ -33,6 +31,7 @@ import {
 import dayjs from 'dayjs';
 import { tripCollaborationApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
+import SidebarToggleButton from '../components/SidebarToggleButton';
 import './TripCollaboration.css';
 
 const { Text, Title } = Typography;
@@ -654,7 +653,7 @@ export default function TripCollaboration() {
     <div
       style={{
         display: 'flex',
-        gap: isMobile ? 0 : 16,
+        gap: isMobile || isListCollapsed ? 0 : 16,
         height: isMobile ? 'auto' : 'calc(100vh - 120px)',
         minHeight: isMobile ? 'calc(100vh - 80px)' : 640,
         overflow: isMobile ? 'visible' : 'hidden',
@@ -663,33 +662,22 @@ export default function TripCollaboration() {
     >
       <aside
         style={{
-          width: isMobile ? '100%' : (isListCollapsed ? 32 : 360),
-          minWidth: isMobile ? '100%' : (isListCollapsed ? 32 : 340),
-          borderRight: isMobile ? 'none' : '1px solid #f0f0f0',
+          width: isMobile ? '100%' : (isListCollapsed ? 0 : 360),
+          minWidth: isMobile ? '100%' : (isListCollapsed ? 0 : 340),
+          maxWidth: isMobile ? '100%' : (isListCollapsed ? 0 : 360),
+          borderRight: isMobile || isListCollapsed ? 'none' : '1px solid #f0f0f0',
           paddingRight: isMobile ? 0 : (isListCollapsed ? 0 : 16),
           marginBottom: isMobile ? 16 : 0,
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          transition: 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease',
+          flex: '0 0 auto',
+          transition: 'width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease, padding 0.2s ease',
         }}
       >
         <div style={{ flex: '0 0 auto', background: '#fff', paddingBottom: isListCollapsed ? 0 : 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
             <Space size={8} align="center" style={{ minWidth: 0 }}>
-              {!isMobile && (
-                <Tooltip title={isListCollapsed ? '展开行程列表' : '收起行程列表'}>
-                  <Button
-                    type="text"
-                    size="small"
-                    aria-label={isListCollapsed ? '展开行程列表' : '收起行程列表'}
-                    aria-expanded={!isListCollapsed}
-                    icon={isListCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                    onClick={() => setListCollapsed(prev => !prev)}
-                    style={{ width: 32, height: 32, color: '#6b7280' }}
-                  />
-                </Tooltip>
-              )}
               {!isListCollapsed && <Title level={4} style={{ margin: 0 }}>出差协同</Title>}
             </Space>
             {!isListCollapsed && (
@@ -765,15 +753,26 @@ export default function TripCollaboration() {
             marginBottom: 0,
           }}
         >
-          <div style={{ minWidth: 0 }}>
-            <Space size={8} wrap>
-              <Title level={4} style={{ margin: 0 }}>{selectedTrip?.name || '请选择行程'}</Title>
-              {selectedTrip && <Tag color="blue">{selectedTrip.start_date} 至 {selectedTrip.end_date}</Tag>}
-            </Space>
-            <div style={{ marginTop: 6 }}>
-              <Text type="secondary">
-                {selectedTrip ? `${tripDays.length} 天 · ${schedules.length} 个当前筛选日程` : '左侧选择行程后查看日程安排'}
-              </Text>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
+            {!isMobile && (
+              <SidebarToggleButton
+                collapsed={isListCollapsed}
+                onToggle={() => setListCollapsed(prev => !prev)}
+                expandLabel="展开行程列表"
+                collapseLabel="收起行程列表"
+                tooltipPlacement="right"
+              />
+            )}
+            <div style={{ minWidth: 0 }}>
+              <Space size={8} wrap>
+                <Title level={4} style={{ margin: 0 }}>{selectedTrip?.name || '请选择行程'}</Title>
+                {selectedTrip && <Tag color="blue">{selectedTrip.start_date} 至 {selectedTrip.end_date}</Tag>}
+              </Space>
+              <div style={{ marginTop: 6 }}>
+                <Text type="secondary">
+                  {selectedTrip ? `${tripDays.length} 天 · ${schedules.length} 个当前筛选日程` : '左侧选择行程后查看日程安排'}
+                </Text>
+              </div>
             </div>
           </div>
           <Space size={8} wrap>

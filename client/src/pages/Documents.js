@@ -74,6 +74,7 @@ import { formatBusinessDateTime, parseBusinessDateTime } from '../utils/business
 import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
+import SidebarToggleButton from '../components/SidebarToggleButton';
 import SpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
 import MentionPicker, {
   getContentEditableMentionTrigger,
@@ -9242,13 +9243,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         role="tablist"
         style={{
           display: 'flex',
+          flex: 1,
+          minWidth: 0,
           gap: 4,
           alignItems: 'center',
           overflowX: 'auto',
           overflowY: 'hidden',
           padding: '0 2px 8px',
-          marginBottom: 10,
-          borderBottom: '1px solid #edf0f5',
         }}
       >
         {openDocTabs.map((tab, index) => {
@@ -15669,7 +15670,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   return (
     <div style={{
       display: 'flex',
-      gap: embedded || isMobile ? 0 : 16,
+      gap: embedded || isMobile || isFolderSidebarCollapsed ? 0 : 16,
       height: embedded ? 'min(780px, calc(100vh - 180px))' : (isMobile ? 'auto' : 'calc(100vh - 120px)'),
       minHeight: embedded ? 620 : (isMobile ? 'calc(100vh - 80px)' : 640),
       flexDirection: 'row',
@@ -15686,15 +15687,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       {showDocumentLibrary && (
       <aside style={{
         position: 'relative',
-        width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : folderSidebarWidth),
-        minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : folderSidebarWidth),
-        maxWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 32 : folderSidebarWidth),
-        borderRight: isMobile ? 'none' : '1px solid #f0f0f0',
+        width: isMobile ? '100%' : (isFolderSidebarCollapsed ? 0 : folderSidebarWidth),
+        minWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 0 : folderSidebarWidth),
+        maxWidth: isMobile ? '100%' : (isFolderSidebarCollapsed ? 0 : folderSidebarWidth),
+        borderRight: isMobile || isFolderSidebarCollapsed ? 'none' : '1px solid #f0f0f0',
         paddingRight: isMobile ? 0 : (isFolderSidebarCollapsed ? 0 : 16),
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        transition: isFolderSidebarCollapsed ? 'width 0.2s ease, min-width 0.2s ease, padding 0.2s ease' : 'padding 0.2s ease',
+        transition: 'width 0.2s ease, min-width 0.2s ease, max-width 0.2s ease, padding 0.2s ease',
       }}>
         <div
           style={{
@@ -15707,29 +15708,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', flex: '0 0 32px', width: 32, minWidth: 32 }}>
-              {!isMobile && (
-                <Tooltip title={isFolderSidebarCollapsed ? '展开文档目录' : '收起文档目录'}>
-                  <Button
-                    type="text"
-                    size="small"
-                    aria-label={isFolderSidebarCollapsed ? '展开文档目录' : '收起文档目录'}
-                    aria-expanded={!isFolderSidebarCollapsed}
-                    icon={isFolderSidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                    onClick={() => setFolderSidebarCollapsed(prev => !prev)}
-                    style={{
-                      width: 32,
-                      height: 32,
-                      color: '#6b7280',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flex: '0 0 auto',
-                    }}
-                  />
-                </Tooltip>
-              )}
-            </div>
             {!isFolderSidebarCollapsed && (
               <Space size={6} style={{ flex: '1 1 220px', minWidth: 0, justifyContent: 'flex-end' }} wrap>
                 <Tooltip title="搜索文档">
@@ -16016,7 +15994,19 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
 
       {showDocumentEditor && (
       <main style={{ flex: 1, minWidth: 0, width: '100%', overflow: isMobile ? 'visible' : 'auto' }}>
-        {!isMobile && !embedded && renderDocTabs()}
+        {!isMobile && !embedded && (
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minHeight: 42, marginBottom: 10, borderBottom: '1px solid #edf0f5' }}>
+            <SidebarToggleButton
+              collapsed={isFolderSidebarCollapsed}
+              onToggle={() => setFolderSidebarCollapsed(prev => !prev)}
+              expandLabel="展开文档目录"
+              collapseLabel="收起文档目录"
+              tooltipPlacement="right"
+              style={{ marginTop: 1 }}
+            />
+            {renderDocTabs()}
+          </div>
+        )}
         {!selectedDoc ? (
           <div style={{
             minHeight: isMobile ? 'calc(100vh - 96px)' : '100%',
