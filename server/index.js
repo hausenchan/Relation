@@ -21174,56 +21174,8 @@ app.delete('/api/leads/:id', (req, res) => {
 });
 
 // =========== 产品资产 API ===========
-function applyProductAssetVisibility(q, params, userId, role) {
-  if (role === 'member') {
-    const teamIds = getUserTeamIds(userId);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...teamIds, ...crossTeams])];
-
-    if (allTeamIds.length > 0) {
-      const visibleMembers = getUsersByTeamIds(allTeamIds);
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?';
-      params.push(userId, userId);
-      if (visibleMembers.length > 0) {
-        q += ' OR pa.owner_id IN (' + visibleMembers.map(() => '?').join(',') + ') OR pa.created_by IN (' + visibleMembers.map(() => '?').join(',') + ')';
-        params.push(...visibleMembers, ...visibleMembers);
-      }
-      q += ')';
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
-
-    if (allTeamIds.length) {
-      const members = getUsersByTeamIds(allTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      } else {
-        q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-        params.push(userId, userId);
-      }
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'sales_director') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      }
-    }
-  }
-
+function applyProductAssetVisibility(q) {
+  // 产品资产读取以 /product-assets 菜单入口为边界，不再按负责人或团队裁剪。
   return q;
 }
 
