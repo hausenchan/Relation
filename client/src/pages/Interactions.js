@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Table, Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, InputNumber, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Drawer, Grid, List, Typography, Descriptions, Upload } from 'antd';
-import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, FilterOutlined, RiseOutlined, UploadOutlined, EyeOutlined, LockOutlined } from '@ant-design/icons';
+import { Select, Tag, Space, Popconfirm, Button, Modal, Form, Input, DatePicker, Row, Col, message, Dropdown, Collapse, Divider, Drawer, Grid, List, Descriptions, Upload, Tooltip } from 'antd';
+import { DeleteOutlined, EditOutlined, PlusOutlined, CalendarOutlined, CloseCircleOutlined, FilterOutlined, RiseOutlined, UploadOutlined, LockOutlined, MoreOutlined } from '@ant-design/icons';
 import { interactionsApi, personsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import ResizableTable from '../components/ResizableTable';
@@ -10,9 +10,9 @@ import { RichTextEditor, RichTextView, richTextToPlain } from '../components/Ric
 import dayjs from 'dayjs';
 import { formatBusinessDateTime } from '../utils/businessTime';
 import { TASK_TYPE_META, TASK_TYPE_OPTIONS } from '../utils/taskTypes';
+import './Interactions.css';
 
 
-const { Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 const PRIVATE_PERSON_SCOPE = 'executive_private';
@@ -37,6 +37,12 @@ const importanceMap = {
   high: { label: '重要', color: 'red' },
   medium: { label: '中等', color: 'orange' },
   normal: { label: '一般', color: 'default' },
+};
+
+const personWeightMap = {
+  high: { label: '高' },
+  medium: { label: '中' },
+  low: { label: '低' },
 };
 
 const categoryMap = {
@@ -89,6 +95,7 @@ export default function Interactions() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [actionRecord, setActionRecord] = useState(null);
   const [persons, setPersons] = useState([]);
   const [fileList, setFileList] = useState([]);
   const [form] = Form.useForm();
@@ -143,6 +150,48 @@ export default function Interactions() {
     });
     setFileList([]);
     setModalOpen(true);
+  };
+
+  const openMobileActions = (record, event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    setActionRecord(record);
+  };
+
+  const editFromActions = (record) => {
+    if (!record) return;
+    setActionRecord(null);
+    setDetailRecord(current => Number(current?.id) === Number(record.id) ? null : current);
+    openEdit(record);
+  };
+
+  const confirmDeleteRecord = (record) => {
+    if (!record) return;
+    setActionRecord(null);
+    Modal.confirm({
+      title: '删除互动记录？',
+      content: '删除后无法恢复，请确认是否继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        await handleDelete(record.id);
+        setDetailRecord(current => Number(current?.id) === Number(record.id) ? null : current);
+        message.success('删除成功');
+      },
+    });
+  };
+
+  const actionMenuItems = [
+    { key: 'edit', icon: <EditOutlined />, label: '编辑记录' },
+    { type: 'divider' },
+    { key: 'delete', icon: <DeleteOutlined />, label: '删除记录', danger: true },
+  ];
+
+  const handleActionMenuClick = (record, { key, domEvent }) => {
+    domEvent?.stopPropagation?.();
+    if (key === 'edit') editFromActions(record);
+    if (key === 'delete') confirmDeleteRecord(record);
   };
 
   const handleSave = async () => {
@@ -226,20 +275,38 @@ export default function Interactions() {
     { title: '下次跟进', dataIndex: 'next_action', ellipsis: true },
     { title: '跟进日期', dataIndex: 'next_action_date' },
     {
-      title: '商机',
-      render: (_, r) => {
-        if (!r.opportunity_title) return null;
-        const s = opportunityStatusMap[r.opportunity_status] || { label: r.opportunity_status, color: 'default' };
-        return (
-          <Space size={4} wrap>
-            <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
-            <Tag color={s.color}>{s.label}</Tag>
-            {r.opportunity_type && (
-              <Tag color={TASK_TYPE_META[r.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[r.opportunity_type]?.label || r.opportunity_type}</Tag>
-            )}
-          </Space>
-        );
+      title: '商机标题',
+      dataIndex: 'opportunity_title',
+      key: 'opportunity_title',
+      width: 200,
+      ellipsis: true,
+      render: value => value ? (
+        <Tooltip title={value}>
+          <span className="interaction-opportunity-title">{value}</span>
+        </Tooltip>
+      ) : '-',
+    },
+    {
+      title: '商机状态',
+      dataIndex: 'opportunity_status',
+      key: 'opportunity_status',
+      width: 104,
+      render: (value, record) => {
+        if (!record.opportunity_title || !value) return '-';
+        const status = opportunityStatusMap[value] || { label: value, color: 'default' };
+        return <Tag className="interaction-opportunity-tag" color={status.color}>{status.label}</Tag>;
       },
+    },
+    {
+      title: '商机类型',
+      dataIndex: 'opportunity_type',
+      key: 'opportunity_type',
+      width: 124,
+      render: value => value ? (
+        <Tag className="interaction-opportunity-tag" color={TASK_TYPE_META[value]?.color || 'default'}>
+          {TASK_TYPE_META[value]?.label || value}
+        </Tag>
+      ) : '-',
     },
     {
       title: '操作',
@@ -257,81 +324,102 @@ export default function Interactions() {
   const renderInteractionCard = (record) => {
     const type = typeMap[record.type] || { label: record.type, color: 'default' };
     const importance = importanceMap[record.importance] || importanceMap.normal;
-    const opportunity = record.opportunity_title ? (opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status, color: 'default' }) : null;
-    const companyName = record.company_name || record.company || record.current_company || '-';
+    const opportunity = record.opportunity_title && record.opportunity_status
+      ? (opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status, color: 'default' })
+      : null;
+    const companyName = record.company_name || record.company || record.current_company || '';
     const creator = creatorUsers.find(item => Number(item.id) === Number(record.created_by));
     const creatorName = record.created_by_name || creator?.display_name || creator?.username || '-';
+    const weightLabel = personWeightMap[record.weight]?.label || '';
+    const metadata = [
+      record.city,
+      `创建人 ${creatorName}`,
+      weightLabel ? `人脉权重 ${weightLabel}` : '',
+    ].filter(Boolean);
+    const summaries = [
+      { key: 'description', label: '描述', value: richTextToPlain(record.description) },
+      { key: 'outcome', label: '结果', value: record.outcome },
+      { key: 'next-action', label: '下次跟进', value: record.next_action },
+    ].filter(item => item.value);
+
+    const openDetail = () => setDetailRecord(record);
+    const handleCardKeyDown = (event) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openDetail();
+      }
+    };
 
     return (
-      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <List.Item className="interaction-mobile-list-item">
         <div
-          style={{
-            width: '100%',
-            padding: 14,
-            border: '1px solid #f0f0f0',
-            borderRadius: 12,
-            background: '#fff',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-          }}
+          className="interaction-mobile-card"
+          role="button"
+          tabIndex={0}
+          aria-label={`查看${record.person_name || ''}的互动记录详情`}
+          onClick={openDetail}
+          onKeyDown={handleCardKeyDown}
         >
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f1f1f', marginBottom: 4 }}>{record.person_name || '-'}</div>
-                <Text type="secondary" ellipsis={{ tooltip: companyName }} style={{ display: 'block', marginBottom: 6 }}>
-                  {companyName}
-                </Text>
-                <Space wrap size={[6, 6]}>
-                  {isPrivateInteraction(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
-                  {record.person_category && <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>}
-                  <Tag color={type.color}>{type.label}</Tag>
-                  <Tag color={importance.color}>{importance.label}</Tag>
-                </Space>
-              </div>
-              <Text type="secondary" style={{ fontSize: 12 }}>{record.date || '-'}</Text>
+          <div className="interaction-mobile-card-header">
+            <div className="interaction-mobile-card-identity">
+              <div className="interaction-mobile-card-name">{record.person_name || '-'}</div>
+              {companyName && (
+                <Tooltip title={companyName}>
+                  <div className="interaction-mobile-card-company">{companyName}</div>
+                </Tooltip>
+              )}
             </div>
+            <div className="interaction-mobile-card-header-actions">
+              <span className="interaction-mobile-card-date">{record.date || '-'}</span>
+              <Button
+                type="text"
+                size="small"
+                className="interaction-mobile-card-more"
+                icon={<MoreOutlined />}
+                aria-label={`更多操作：${record.person_name || '互动记录'}`}
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => openMobileActions(record, event)}
+              />
+            </div>
+          </div>
 
-            {(record.city || record.weight || creatorName) && (
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                {record.city && <Text type="secondary">城市：{record.city}</Text>}
-                <Text type="secondary">创建人：{creatorName}</Text>
-                {record.weight && <Text type="secondary">权重：{record.weight}</Text>}
-              </div>
-            )}
+          <div className="interaction-mobile-card-tags">
+            {isPrivateInteraction(record) && <Tag color="red" icon={<LockOutlined />}>私密</Tag>}
+            {record.person_category && <Tag color={categoryMap[record.person_category]?.color}>{categoryMap[record.person_category]?.label}</Tag>}
+            <Tag color={type.color}>{type.label}</Tag>
+            <Tag className="interaction-mobile-card-importance" color={importance.color}>信息·{importance.label}</Tag>
+          </div>
 
-            {record.description && (
-              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                描述：{richTextToPlain(record.description)}
-              </Typography.Paragraph>
-            )}
-            {record.outcome && (
-              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                结果：{record.outcome}
-              </Typography.Paragraph>
-            )}
-            {record.next_action && (
-              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                下次跟进：{record.next_action}
-              </Typography.Paragraph>
-            )}
+          {metadata.length > 0 && (
+            <div className="interaction-mobile-card-metadata">{metadata.join(' · ')}</div>
+          )}
 
-            {record.opportunity_title && (
-              <Space wrap size={[6, 6]}>
-                <Tag color="blue" icon={<RiseOutlined />}>{record.opportunity_title}</Tag>
-                {opportunity && <Tag color={opportunity.color}>{opportunity.label}</Tag>}
-                {record.opportunity_type && (
-                  <Tag color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[record.opportunity_type]?.label || record.opportunity_type}</Tag>
-                )}
-              </Space>
-            )}
+          {summaries.length > 0 && (
+            <div className="interaction-mobile-card-summaries">
+              {summaries.map(item => (
+                <div className="interaction-mobile-card-summary" key={item.key}>
+                  <span className="interaction-mobile-card-summary-label">{item.label}</span>
+                  <span className="interaction-mobile-card-summary-value">{item.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
-            <Space size="small" wrap>
-              <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
-              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
-              </Popconfirm>
-            </Space>
-          </Space>
+          {record.opportunity_title && (
+            <div className="interaction-mobile-card-opportunity">
+              <RiseOutlined className="interaction-mobile-card-opportunity-icon" />
+              <Tooltip title={record.opportunity_title}>
+                <span className="interaction-mobile-card-opportunity-title">{record.opportunity_title}</span>
+              </Tooltip>
+              {opportunity && <Tag color={opportunity.color}>{opportunity.label}</Tag>}
+              {record.opportunity_type && (
+                <Tag color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'}>
+                  {TASK_TYPE_META[record.opportunity_type]?.label || record.opportunity_type}
+                </Tag>
+              )}
+            </div>
+          )}
         </div>
       </List.Item>
     );
@@ -524,7 +612,6 @@ export default function Interactions() {
           rowKey="id"
           loading={loading}
           size="small"
-          scroll={{ x: 900 }}
           pagination={{ defaultPageSize: 20 }}
           onRow={(record) => ({
             onDoubleClick: () => setDetailRecord(record),
@@ -547,6 +634,39 @@ export default function Interactions() {
         }
       >
         {filterControls}
+      </Drawer>
+
+      <Drawer
+        className="interaction-mobile-action-sheet"
+        placement="bottom"
+        height={224}
+        closable={false}
+        zIndex={1100}
+        open={isMobile && !!actionRecord}
+        onClose={() => setActionRecord(null)}
+        styles={{ body: { padding: '8px 12px calc(10px + env(safe-area-inset-bottom))' } }}
+      >
+        <div className="interaction-mobile-action-list" role="menu" aria-label="互动记录操作">
+          <Button
+            type="text"
+            icon={<EditOutlined />}
+            role="menuitem"
+            onClick={() => editFromActions(actionRecord)}
+          >
+            编辑记录
+          </Button>
+          <Button
+            type="text"
+            danger
+            icon={<DeleteOutlined />}
+            role="menuitem"
+            onClick={() => confirmDeleteRecord(actionRecord)}
+          >
+            删除记录
+          </Button>
+          <Divider />
+          <Button type="text" role="menuitem" onClick={() => setActionRecord(null)}>取消</Button>
+        </div>
       </Drawer>
 
       <Modal
@@ -691,7 +811,31 @@ export default function Interactions() {
       </Modal>
 
       <Modal
-        title="互动记录详情"
+        title={(
+          <div className="interaction-detail-title">
+            <span>互动记录详情</span>
+            {detailRecord && (isMobile ? (
+              <Button
+                type="text"
+                size="small"
+                icon={<MoreOutlined />}
+                aria-label="更多互动记录操作"
+                onClick={event => openMobileActions(detailRecord, event)}
+              />
+            ) : (
+              <Dropdown
+                trigger={['click']}
+                placement="bottomRight"
+                menu={{
+                  items: actionMenuItems,
+                  onClick: info => handleActionMenuClick(detailRecord, info),
+                }}
+              >
+                <Button type="text" size="small" icon={<MoreOutlined />} aria-label="更多互动记录操作" />
+              </Dropdown>
+            ))}
+          </div>
+        )}
         open={!!detailRecord}
         onCancel={() => setDetailRecord(null)}
         width={isMobile ? '100%' : 720}
@@ -705,7 +849,7 @@ export default function Interactions() {
           const cat = categoryMap[r.person_category];
           const t = typeMap[r.type] || { label: r.type, color: 'default' };
           const imp = importanceMap[r.importance] || importanceMap.normal;
-          const oppStatus = r.opportunity_title
+          const oppStatus = r.opportunity_title && r.opportunity_status
             ? (opportunityStatusMap[r.opportunity_status] || { label: r.opportunity_status, color: 'default' })
             : null;
           const assignee = users.find(u => u.id === r.opportunity_assignee);
@@ -716,7 +860,7 @@ export default function Interactions() {
                 size="small"
                 column={isMobile ? 1 : 2}
                 bordered
-                labelStyle={{ width: 110 }}
+                styles={{ label: { width: 110 } }}
               >
                 <Descriptions.Item label="圈子">
                   {cat ? <Tag color={cat.color}>{cat.label}</Tag> : '-'}
@@ -731,18 +875,18 @@ export default function Interactions() {
                   <Tag color={imp.color}>{imp.label}</Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label="城市">{r.city || '-'}</Descriptions.Item>
-                <Descriptions.Item label="人脉权重">{r.weight || '-'}</Descriptions.Item>
-                <Descriptions.Item label="跟进日期">{r.next_action_date || '-'}</Descriptions.Item>
-                <Descriptions.Item label="描述" span={2}>
+                <Descriptions.Item label="人脉权重">{personWeightMap[r.weight]?.label || '-'}</Descriptions.Item>
+                <Descriptions.Item label="跟进日期" span={isMobile ? 1 : 2}>{r.next_action_date || '-'}</Descriptions.Item>
+                <Descriptions.Item label="描述" span={isMobile ? 1 : 2}>
                   <RichTextView value={r.description} />
                 </Descriptions.Item>
-                <Descriptions.Item label="结果" span={2}>
+                <Descriptions.Item label="结果" span={isMobile ? 1 : 2}>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
                 </Descriptions.Item>
-                <Descriptions.Item label="下次跟进" span={2}>
+                <Descriptions.Item label="下次跟进" span={isMobile ? 1 : 2}>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
                 </Descriptions.Item>
-                <Descriptions.Item label="商机" span={2}>
+                <Descriptions.Item label="商机" span={isMobile ? 1 : 2}>
                   {r.opportunity_title ? (
                     <Space size={4} wrap>
                       <Tag color="blue" icon={<RiseOutlined />}>{r.opportunity_title}</Tag>
@@ -758,7 +902,7 @@ export default function Interactions() {
                     ? <Tag color={TASK_TYPE_META[r.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[r.opportunity_type]?.label || r.opportunity_type}</Tag>
                     : '-'}
                 </Descriptions.Item>
-                <Descriptions.Item label="商机说明" span={isMobile ? 1 : 1}>
+                <Descriptions.Item label="商机说明" span={isMobile ? 1 : 2}>
                   <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
                 </Descriptions.Item>
                 <Descriptions.Item label="创建人">
