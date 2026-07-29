@@ -142,12 +142,48 @@ describe('spreadsheet workbook model', () => {
       B2: '=SUM(A1:A2)',
       C1: '=AVERAGE(A1:A2)',
       C2: '=IF(B2=30,"是","否")',
+      D1: '=AND(A1=10,A2=20)',
+      D2: '=OR(A1=0,A2=20)',
+      E1: '=CONCAT(LEFT("增长中台",2),RIGHT("表格",1))',
+      E2: '=MID("ABCDEFG",3,2)',
     });
     const evaluator = createSpreadsheetFormulaEvaluator(workbook);
     expect(evaluator.getValue('sheet_1', 0, 1)).toBe(50);
     expect(evaluator.getValue('sheet_1', 1, 1)).toBe(30);
     expect(evaluator.getValue('sheet_1', 0, 2)).toBe(15);
     expect(evaluator.getValue('sheet_1', 1, 2)).toBe('是');
+    expect(evaluator.getValue('sheet_1', 0, 3)).toBe(true);
+    expect(evaluator.getValue('sheet_1', 1, 3)).toBe(true);
+    expect(evaluator.getValue('sheet_1', 0, 4)).toBe('增长格');
+    expect(evaluator.getValue('sheet_1', 1, 4)).toBe('CD');
+  });
+
+  test('calculates lookup and conditional aggregate functions', () => {
+    const workbook = workbookWithCells({
+      A1: '产品',
+      B1: '收入',
+      C1: '负责人',
+      A2: 'A',
+      B2: '10',
+      C2: '张三',
+      A3: 'B',
+      B3: '20',
+      C3: '李四',
+      A4: 'C',
+      B4: '30',
+      C4: '李四',
+      E1: '=VLOOKUP("B",A2:C4,2,FALSE)',
+      E2: '=XLOOKUP("C",A2:A4,C2:C4,"未找到")',
+      E3: '=SUMIF(C2:C4,"李四",B2:B4)',
+      E4: '=COUNTIF(B2:B4,">=20")',
+      E5: '=XLOOKUP("D",A2:A4,C2:C4,"未找到")',
+    });
+    const evaluator = createSpreadsheetFormulaEvaluator(workbook);
+    expect(evaluator.getValue('sheet_1', 0, 4)).toBe('20');
+    expect(evaluator.getValue('sheet_1', 1, 4)).toBe('李四');
+    expect(evaluator.getValue('sheet_1', 2, 4)).toBe(50);
+    expect(evaluator.getValue('sheet_1', 3, 4)).toBe(2);
+    expect(evaluator.getValue('sheet_1', 4, 4)).toBe('未找到');
   });
 
   test('calculates cross-sheet references and reports formula errors', () => {

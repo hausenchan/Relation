@@ -48,15 +48,21 @@ import {
 } from '../utils/spreadsheetWorkbook';
 
 const { Text } = Typography;
-const ROW_HEADER_WIDTH = 48;
-const COLUMN_HEADER_HEIGHT = 32;
-const DEFAULT_ROW_HEIGHT = 30;
-const DEFAULT_COLUMN_WIDTH = 120;
+const ROW_HEADER_WIDTH = 46;
+const COLUMN_HEADER_HEIGHT = 24;
+const DEFAULT_ROW_HEIGHT = 24;
+const DEFAULT_COLUMN_WIDTH = 96;
 const VIRTUAL_OVERSCAN = 4;
 const MAX_FROZEN_ROWS = 100;
 const MAX_FROZEN_COLUMNS = 50;
 const MAX_HISTORY_ENTRIES = 30;
 const MAX_HISTORY_BYTES = 24 * 1024 * 1024;
+const DEFAULT_FONT_FAMILY = 'Arial';
+const DEFAULT_FONT_SIZE = 13;
+const FONT_FAMILY_OPTIONS = ['Arial', 'PingFang SC', 'Microsoft YaHei', 'SimSun', 'Times New Roman'];
+const FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32];
+const TEXT_COLOR_OPTIONS = ['#111827', '#374151', '#dc2626', '#d97706', '#15803d', '#1677ff', '#4338ca', '#7e22ce'];
+const FILL_COLOR_OPTIONS = ['#ffffff', '#f8fafc', '#fef3c7', '#ffedd5', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
 
 function serializeWorkbookSnapshot(value) {
   return JSON.stringify(value || {});
@@ -486,6 +492,8 @@ export default function SpreadsheetDocumentEditor({
   const selectedCellObject = getSpreadsheetCellObject(activeSheet, activeRowIndex, activeColumnIndex);
   const selectedCellRawValue = getSpreadsheetCellRawValue(activeSheet, activeRowIndex, activeColumnIndex);
   const selectedCellStyle = selectedCellObject.style || {};
+  const selectedFontFamily = selectedCellStyle.fontFamily || DEFAULT_FONT_FAMILY;
+  const selectedFontSize = Number(selectedCellStyle.fontSize) || DEFAULT_FONT_SIZE;
   const selectionLabel = rangeIsSingleCell(currentSelection)
     ? activeCellKey
     : `${buildSpreadsheetCellKey(currentSelection.startRow, currentSelection.startColumn)}:${buildSpreadsheetCellKey(currentSelection.endRow, currentSelection.endColumn)}`;
@@ -955,6 +963,18 @@ export default function SpreadsheetDocumentEditor({
     const rawValue = getSpreadsheetCellRawValue(activeSheet, rowIndex, columnIndex);
     const displayValue = evaluator.getValue(activeSheet.id, rowIndex, columnIndex);
     const style = cell.style || {};
+    const cellFontSize = clamp(Number(style.fontSize) || DEFAULT_FONT_SIZE, 8, 48) * Math.min(1.15, zoom);
+    const cellTextColor = evaluator.isError(displayValue) ? '#dc2626' : (style.color || '#111827');
+    const justifyContent = style.horizontalAlign === 'center'
+      ? 'center'
+      : style.horizontalAlign === 'right'
+        ? 'flex-end'
+        : 'flex-start';
+    const alignItems = style.verticalAlign === 'top'
+      ? 'flex-start'
+      : style.verticalAlign === 'bottom'
+        ? 'flex-end'
+        : 'center';
     const selected = spreadsheetRangeContainsCell(currentSelection, rowIndex, columnIndex);
     const active = rowIndex === activeRowIndex && columnIndex === activeColumnIndex;
     const remoteCollaborator = activeRemoteCollaborators.find(item => (
@@ -966,6 +986,8 @@ export default function SpreadsheetDocumentEditor({
         key={`cell-${rowIndex}-${columnIndex}`}
         role="gridcell"
         aria-selected={selected}
+        data-spreadsheet-row-index={rowIndex}
+        data-spreadsheet-column-index={columnIndex}
         data-spreadsheet-remote-selection={remoteCollaborator?.session_id || undefined}
         title={remoteCollaborator ? `${remoteCollaborator.user_name} 的选区` : undefined}
         onMouseDown={event => {
@@ -1008,6 +1030,8 @@ export default function SpreadsheetDocumentEditor({
           boxSizing: 'border-box',
           borderRight: '1px solid #e5e7eb',
           borderBottom: '1px solid #e5e7eb',
+          borderTop: style.border ? `1px solid ${style.border.color || '#cbd5e1'}` : undefined,
+          borderLeft: style.border ? `1px solid ${style.border.color || '#cbd5e1'}` : undefined,
           background: selected
             ? '#eaf3ff'
             : (remoteCollaborator ? `${remoteCollaborator.color || '#389e0d'}1f` : (style.backgroundColor || '#fff')),
@@ -1054,20 +1078,32 @@ export default function SpreadsheetDocumentEditor({
               padding: '0 6px',
               borderRadius: 0,
               background: '#fff',
+              fontFamily: style.fontFamily || DEFAULT_FONT_FAMILY,
+              fontSize: cellFontSize,
               fontWeight: style.bold ? 700 : 400,
-              color: evaluator.isError(displayValue) ? '#dc2626' : undefined,
+              fontStyle: style.italic ? 'italic' : 'normal',
+              textDecoration: style.underline ? 'underline' : 'none',
+              color: cellTextColor,
+              textAlign: style.horizontalAlign || 'left',
             }}
           />
         ) : (
           <div style={{
             height: '100%',
-            padding: '4px 6px',
+            padding: '0 6px',
             overflow: 'hidden',
-            whiteSpace: 'nowrap',
+            display: 'flex',
+            alignItems,
+            justifyContent,
+            whiteSpace: style.wrap ? 'normal' : 'nowrap',
             textOverflow: 'ellipsis',
+            lineHeight: '18px',
+            fontFamily: style.fontFamily || DEFAULT_FONT_FAMILY,
             fontWeight: style.bold ? 700 : 400,
-            color: evaluator.isError(displayValue) ? '#dc2626' : '#111827',
-            fontSize: 13 * Math.min(1.15, zoom),
+            fontStyle: style.italic ? 'italic' : 'normal',
+            textDecoration: style.underline ? 'underline' : 'none',
+            color: cellTextColor,
+            fontSize: cellFontSize,
           }}>
             {String(displayValue ?? '')}
           </div>
@@ -1185,8 +1221,101 @@ export default function SpreadsheetDocumentEditor({
           <SpreadsheetToolbarButton title="在左侧插入列" disabled={!canEdit} icon={<InsertRowRightOutlined />} onClick={insertColumn} />
           <SpreadsheetToolbarButton title="删除当前列" disabled={!canEdit || activeSheet.columnCount <= 1} danger icon={<DeleteColumnOutlined />} onClick={deleteColumn} />
           <div style={{ width: 1, height: 20, background: '#d9d9d9', margin: '0 4px' }} />
+          <Select
+            aria-label="字体"
+            size="small"
+            disabled={!canEdit}
+            value={selectedFontFamily}
+            style={{ width: 118 }}
+            options={FONT_FAMILY_OPTIONS.map(value => ({ value, label: value }))}
+            onChange={value => updateRangeStyle({ fontFamily: value === DEFAULT_FONT_FAMILY ? null : value })}
+          />
+          <Select
+            aria-label="字号"
+            size="small"
+            disabled={!canEdit}
+            value={selectedFontSize}
+            style={{ width: 72 }}
+            options={FONT_SIZE_OPTIONS.map(value => ({ value, label: `${value}` }))}
+            onChange={value => updateRangeStyle({ fontSize: value === DEFAULT_FONT_SIZE ? null : value })}
+          />
           <SpreadsheetToolbarButton title="加粗" disabled={!canEdit} active={Boolean(selectedCellStyle.bold)} icon={<BoldOutlined />} onClick={() => updateRangeStyle({ bold: selectedCellStyle.bold ? null : true })} />
-          <SpreadsheetToolbarButton title="填充色" disabled={!canEdit} active={Boolean(selectedCellStyle.backgroundColor)} icon={<BgColorsOutlined />} onClick={() => updateRangeStyle({ backgroundColor: selectedCellStyle.backgroundColor ? null : '#fef3c7' })} />
+          <Tooltip title="斜体">
+            <Button
+              aria-label="斜体"
+              type={selectedCellStyle.italic ? 'primary' : 'text'}
+              size="small"
+              disabled={!canEdit}
+              onClick={() => updateRangeStyle({ italic: selectedCellStyle.italic ? null : true })}
+              style={{ fontStyle: 'italic', fontFamily: 'Times New Roman, serif' }}
+            >
+              I
+            </Button>
+          </Tooltip>
+          <Tooltip title="下划线">
+            <Button
+              aria-label="下划线"
+              type={selectedCellStyle.underline ? 'primary' : 'text'}
+              size="small"
+              disabled={!canEdit}
+              onClick={() => updateRangeStyle({ underline: selectedCellStyle.underline ? null : true })}
+              style={{ textDecoration: 'underline' }}
+            >
+              U
+            </Button>
+          </Tooltip>
+          <Dropdown menu={{ items: TEXT_COLOR_OPTIONS.map(value => ({
+            key: value,
+            label: <span><span style={{ display: 'inline-block', width: 12, height: 12, marginRight: 8, background: value, border: '1px solid #d9d9d9', verticalAlign: -1 }} />{value}</span>,
+          })), onClick: ({ key }) => updateRangeStyle({ color: key === '#111827' ? null : key }) }}>
+            <Button aria-label="文字颜色" type="text" size="small" disabled={!canEdit} style={{ color: selectedCellStyle.color || '#111827' }}>A</Button>
+          </Dropdown>
+          <Dropdown menu={{ items: FILL_COLOR_OPTIONS.map(value => ({
+            key: value,
+            label: <span><span style={{ display: 'inline-block', width: 12, height: 12, marginRight: 8, background: value, border: '1px solid #d9d9d9', verticalAlign: -1 }} />{value}</span>,
+          })), onClick: ({ key }) => updateRangeStyle({ backgroundColor: key === '#ffffff' ? null : key }) }}>
+            <Button aria-label="填充色" type="text" size="small" disabled={!canEdit} icon={<BgColorsOutlined />} />
+          </Dropdown>
+          <Dropdown menu={{ items: [
+            { key: 'left', label: '左对齐' },
+            { key: 'center', label: '居中' },
+            { key: 'right', label: '右对齐' },
+          ], onClick: ({ key }) => updateRangeStyle({ horizontalAlign: key === 'left' ? null : key }) }}>
+            <Button aria-label="水平对齐" type="text" size="small" disabled={!canEdit}>
+              {selectedCellStyle.horizontalAlign === 'center' ? '居中' : selectedCellStyle.horizontalAlign === 'right' ? '右' : '左'}
+            </Button>
+          </Dropdown>
+          <Dropdown menu={{ items: [
+            { key: 'top', label: '顶部对齐' },
+            { key: 'middle', label: '垂直居中' },
+            { key: 'bottom', label: '底部对齐' },
+          ], onClick: ({ key }) => updateRangeStyle({ verticalAlign: key === 'middle' ? null : key }) }}>
+            <Button aria-label="垂直对齐" type="text" size="small" disabled={!canEdit}>
+              {selectedCellStyle.verticalAlign === 'top' ? '上' : selectedCellStyle.verticalAlign === 'bottom' ? '下' : '中'}
+            </Button>
+          </Dropdown>
+          <Tooltip title="自动换行">
+            <Button
+              aria-label="自动换行"
+              type={selectedCellStyle.wrap ? 'primary' : 'text'}
+              size="small"
+              disabled={!canEdit}
+              onClick={() => updateRangeStyle({ wrap: selectedCellStyle.wrap ? null : true })}
+            >
+              换行
+            </Button>
+          </Tooltip>
+          <Tooltip title="边框">
+            <Button
+              aria-label="边框"
+              type={selectedCellStyle.border ? 'primary' : 'text'}
+              size="small"
+              disabled={!canEdit}
+              onClick={() => updateRangeStyle({ border: selectedCellStyle.border ? null : { color: '#cbd5e1' } })}
+            >
+              □
+            </Button>
+          </Tooltip>
           <SpreadsheetToolbarButton title={findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex) ? '取消合并' : '合并选区'} disabled={!canEdit || (rangeIsSingleCell(currentSelection) && !findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex))} active={Boolean(findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex))} icon={<MergeCellsOutlined />} onClick={toggleMerge} />
           <SpreadsheetToolbarButton title="清空内容" disabled={!canEdit} icon={<ClearOutlined />} onClick={() => clearSelection(false)} />
           <div style={{ width: 1, height: 20, background: '#d9d9d9', margin: '0 4px' }} />
@@ -1194,6 +1323,12 @@ export default function SpreadsheetDocumentEditor({
             { key: 'SUM', label: 'SUM 求和' },
             { key: 'AVERAGE', label: 'AVERAGE 平均值' },
             { key: 'COUNT', label: 'COUNT 计数' },
+            { key: 'MAX', label: 'MAX 最大值' },
+            { key: 'MIN', label: 'MIN 最小值' },
+            { key: 'SUMIF', label: 'SUMIF 条件求和' },
+            { key: 'COUNTIF', label: 'COUNTIF 条件计数' },
+            { key: 'VLOOKUP', label: 'VLOOKUP 纵向查找' },
+            { key: 'XLOOKUP', label: 'XLOOKUP 查找' },
           ], onClick: ({ key }) => insertFormula(key) }}>
             <Button aria-label="常用公式" type="text" size="small" icon={<FunctionOutlined />} disabled={!canEdit} />
           </Dropdown>

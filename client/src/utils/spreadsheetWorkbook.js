@@ -690,6 +690,12 @@ function toFormulaNumber(value) {
   return number;
 }
 
+function toFormulaText(value) {
+  propagateFormulaError(value);
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
 function compareFormulaValues(left, operator, right) {
   propagateFormulaError([left, right]);
   const numeric = Number.isFinite(Number(left)) && Number.isFinite(Number(right));
@@ -702,6 +708,49 @@ function compareFormulaValues(left, operator, right) {
   if (operator === '<=') return a <= b;
   if (operator === '>=') return a >= b;
   return false;
+}
+
+function formulaValueIsTruthy(value) {
+  propagateFormulaError(value);
+  if (Array.isArray(value)) return formulaValueIsTruthy(flattenFormulaValues(value)[0]);
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const text = String(value ?? '').trim();
+  if (!text) return false;
+  if (/^false$/i.test(text)) return false;
+  if (/^true$/i.test(text)) return true;
+  const number = Number(text);
+  return Number.isFinite(number) ? number !== 0 : true;
+}
+
+function getFormulaMatrix(value) {
+  propagateFormulaError(value);
+  if (Array.isArray(value)) return value.map(row => Array.isArray(row) ? row : [row]);
+  return [[value]];
+}
+
+function getFormulaCriteriaMatcher(criteria) {
+  propagateFormulaError(criteria);
+  const raw = Array.isArray(criteria) ? flattenFormulaValues(criteria)[0] : criteria;
+  const text = String(raw ?? '');
+  const match = text.match(/^(<=|>=|<>|=|<|>)(.*)$/);
+  if (match) {
+    const operator = match[1];
+    const expectedText = match[2];
+    return actual => compareFormulaValues(actual, operator, expectedText);
+  }
+  return actual => compareFormulaValues(actual, '=', raw);
+}
+
+function getFormulaLookupComparable(value) {
+  propagateFormulaError(value);
+  if (Array.isArray(value)) return getFormulaLookupComparable(flattenFormulaValues(value)[0]);
+  const number = Number(value);
+  return Number.isFinite(number) && String(value ?? '').trim() !== '' ? number : String(value ?? '');
+}
+
+function formulaLookupValuesEqual(left, right) {
+  return compareFormulaValues(left, '=', right);
 }
 
 function runFormulaFunction(name, args) {
@@ -717,9 +766,92 @@ function runFormulaFunction(name, args) {
     case 'MAX': return numericValues.length ? Math.max(...numericValues) : 0;
     case 'COUNT': return numericValues.length;
     case 'COUNTA': return values.filter(value => value !== '' && value !== null && value !== undefined).length;
-    case 'IF': return args[0] ? (args[1] ?? true) : (args[2] ?? false);
+    case 'IF': return formulaValueIsTruthy(args[0]) ? (args[1] ?? true) : (args[2] ?? false);
+    case 'AND': return args.every(formulaValueIsTruthy);
+    case 'OR': return args.some(formulaValueIsTruthy);
     case 'ROUND': return Number(toFormulaNumber(args[0]).toFixed(Math.max(0, Number(args[1]) || 0)));
     case 'ABS': return Math.abs(toFormulaNumber(args[0]));
+    case 'TODAY': {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return today.toISOString().slice(0, 10);
+    }
+    case 'NOW': return new Date().toISOString();
+    case 'LEN': return Array.from(toFormulaText(args[0])).length;
+    case 'LEFT': {
+      const text = toFormulaText(args[0]);
+      const count = Math.max(0, Math.floor(args[1] === undefined ? 1 : toFormulaNumber(args[1])));
+      return Array.from(text).slice(0, count).join('');
+    }
+    case 'RIGHT': {
+      const text = toFormulaText(args[0]);
+      const count = Math.max(0, Math.floor(args[1] === undefined ? 1 : toFormulaNumber(args[1])));
+      return Array.from(text).slice(-count).join('');
+    }
+    case 'MID': {
+      const text = Array.from(toFormulaText(args[0]));
+      const start = Math.max(1, Math.floor(toFormulaNumber(args[1])));
+      const count = Math.max(0, Math.floor(toFormulaNumber(args[2])));
+      return text.slice(start - 1, start - 1 + count).join('');
+    }
+    case 'CONCAT': return values.map(value => toFormulaText(value)).join('');
+    case 'COUNTIF': {
+      const matcher = getFormulaCriteriaMatcher(args[1]);
+      return flattenFormulaValues(args[0]).filter(value => matcher(value)).length;
+    }
+    case 'SUMIF': {
+      const criteriaValues = flattenFormulaValues(args[0]);
+      const sumValues = args[2] === undefined ? criteriaValues : flattenFormulaValues(args[2]);
+      const matcher = getFormulaCriteriaMatcher(args[1]);
+      return criteriaValues.reduce((sum, value, index) => (
+        matcher(value) ? sum + toFormulaNumber(sumValues[index] ?? 0) : sum
+      ), 0);
+    }
+    case 'VLOOKUP': {
+      const lookupValue = args[0];
+      const table = getFormulaMatrix(args[1]);
+      const columnIndex = Math.floor(toFormulaNumber(args[2])) - 1;
+      if (columnIndex < 0) formulaError('#VALUE!');
+      const approximate = args[3] === undefined ? true : formulaValueIsTruthy(args[3]);
+      let approximateRow = null;
+      table.forEach(row => {
+        const firstValue = row[0];
+        if (formulaLookupValuesEqual(firstValue, lookupValue)) approximateRow = row;
+        if (approximate && compareFormulaValues(firstValue, '<=', lookupValue)) approximateRow = row;
+      });
+      const row = approximateRow || (!approximate ? table.find(item => formulaLookupValuesEqual(item[0], lookupValue)) : null);
+      if (!row) formulaError('#VALUE!');
+      if (columnIndex >= row.length) formulaError('#REF!');
+      return row[columnIndex] ?? '';
+    }
+    case 'XLOOKUP': {
+      const lookupValue = args[0];
+      const lookupValues = flattenFormulaValues(args[1]);
+      const returnValues = flattenFormulaValues(args[2]);
+      const notFound = args[3];
+      const matchMode = args[4] === undefined ? 0 : toFormulaNumber(args[4]);
+      const searchMode = args[5] === undefined ? 1 : toFormulaNumber(args[5]);
+      const indexes = lookupValues.map((_, index) => index);
+      if (searchMode === -1) indexes.reverse();
+      let matchIndex = indexes.find(index => formulaLookupValuesEqual(lookupValues[index], lookupValue));
+      if (matchIndex === undefined && matchMode !== 0) {
+        const comparableLookup = getFormulaLookupComparable(lookupValue);
+        const candidates = indexes
+          .map(index => ({ index, value: getFormulaLookupComparable(lookupValues[index]) }))
+          .filter(item => typeof item.value === typeof comparableLookup);
+        if (matchMode === -1) {
+          matchIndex = candidates
+            .filter(item => item.value <= comparableLookup)
+            .sort((left, right) => left.value > right.value ? -1 : 1)[0]?.index;
+        } else if (matchMode === 1) {
+          matchIndex = candidates
+            .filter(item => item.value >= comparableLookup)
+            .sort((left, right) => left.value < right.value ? -1 : 1)[0]?.index;
+        }
+      }
+      if (matchIndex === undefined) return notFound ?? formulaError('#VALUE!');
+      return returnValues[matchIndex] ?? '';
+    }
     default: return formulaError('#NAME?');
   }
 }

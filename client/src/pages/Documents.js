@@ -171,7 +171,14 @@ import {
 } from '../utils/spreadsheetWorkbook';
 import DOMPurify from 'dompurify';
 
-const UniverSpreadsheetDocumentEditor = React.lazy(() => import('../components/UniverSpreadsheetDocumentEditor'));
+const loadUniverSpreadsheetDocumentEditor = () => {
+  if (typeof window !== 'undefined' && typeof window.__RELATION_LOAD_UNIVER_SPREADSHEET__ === 'function') {
+    return window.__RELATION_LOAD_UNIVER_SPREADSHEET__();
+  }
+  return Promise.reject(new Error('Univer preview loader is not registered'));
+};
+
+const UniverSpreadsheetDocumentEditor = React.lazy(loadUniverSpreadsheetDocumentEditor);
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;

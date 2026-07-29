@@ -183,6 +183,35 @@ test('invokes Excel import and export callbacks for editable users', () => {
   container.remove();
 });
 
+test('applies native spreadsheet basic formatting to the selected cell', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = { A1: { v: '格式' } };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  act(() => container.querySelector('[aria-label="斜体"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  act(() => container.querySelector('[aria-label="下划线"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  act(() => container.querySelector('[aria-label="自动换行"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  act(() => container.querySelector('[aria-label="边框"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].cells.A1.style).toMatchObject({
+    italic: true,
+    underline: true,
+    wrap: true,
+    border: { color: '#cbd5e1' },
+  });
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('keeps Excel import and cell editing disabled for readonly users while allowing export', () => {
   const onImportXlsx = jest.fn();
   const onExportXlsx = jest.fn();
@@ -356,8 +385,9 @@ test('renders remote collaborators and reports the complete local selection', ()
   expect(remoteCell).not.toBeNull();
   expect(remoteCell.style.boxShadow).toContain('#389e0d');
 
-  const cells = container.querySelectorAll('[role="gridcell"]');
-  act(() => cells[12].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })));
+  const localCell = container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="1"]');
+  expect(localCell).not.toBeNull();
+  act(() => localCell.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })));
   expect(onSelectionChange).toHaveBeenLastCalledWith({
     sheetId: 'sheet_1',
     selection: { startRow: 1, endRow: 1, startColumn: 1, endColumn: 1 },

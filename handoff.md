@@ -2,6 +2,42 @@
 
 最后更新：2026-07-29
 
+## 在线表格原生基础版一期实现（2026-07-29）
+
+### 已完成
+
+- 新增独立 PRD：`文档中心-在线表格原生基础版PRD.md`，明确近期在线表格从 Univer 验证路线调整为
+  原生自研基础版路线。
+- PRD 按用户截图中的范围拆解一期能力：基础录入、复制粘贴、行列增删、简单公式和常用函数、
+  排序、普通筛选、冻结、合并、基础格式、Excel 简单导入导出，以及 Relation 权限、历史、协作结合。
+- 用户已确认：本期保留 Univer 依赖和线上预览开关但默认关闭；原生基础版 UI 仍要求像素级对齐
+  石墨表格工作区；常用函数增加 `VLOOKUP`、`XLOOKUP`、`SUMIF`、`COUNTIF`；移动端只做查看和
+  轻量编辑；`.xlsm` 只保留公式和值及可解析基础样式，不处理宏。
+- 明确一期不做完整 Excel 函数全集、数据透视表、图表、条件格式、复杂条件筛选、附件/图片浮动对象
+  和 VBA 宏处理。
+- 原生 `SpreadsheetDocumentEditor` 对齐石墨类表格工作区密度：默认行高 `24px`、列宽 `96px`、
+  列头高 `24px`、行号宽 `46px`、默认字号 `13px`，弱化 Ant Design 卡片感并保持表格软件工具栏。
+- 工具栏补齐基础格式能力：字体、字号、加粗、斜体、下划线、文字颜色、填充色、水平/垂直对齐、
+  自动换行和基础边框；单元格渲染同步应用这些样式。
+- 常用公式菜单补齐 `MAX`、`MIN`、`SUMIF`、`COUNTIF`、`VLOOKUP`、`XLOOKUP`；公式引擎新增文本、
+  逻辑、条件聚合和查找函数，公式原文继续保留，不使用 `eval`。
+- 正式在线表格默认继续走原生编辑器；Univer 预览入口保留本地开关，但改为外部 loader
+  `window.__RELATION_LOAD_UNIVER_SPREADSHEET__`，避免常规生产构建把 Univer 大 chunk 打入包体。
+
+### 验证
+
+- `CI=true npx react-scripts test --watchAll=false --runInBand src/utils/spreadsheetWorkbook.test.js src/components/SpreadsheetDocumentEditor.test.js`
+  通过，2 个套件、32 条测试全部成功。
+- 隔离生产构建 `/tmp/relation-native-spreadsheet-build` 成功；构建输出未出现 Univer 大 chunk。
+- 前端性能预算通过：首屏 JavaScript `329.5KB / 400KB`，76 个异步 chunk，最大 `420.8KB / 500KB`。
+
+### 注意
+
+- 当前 UI 已按石墨密度和基础控件方向收敛，但像素级验收仍需补石墨截图基线和 Playwright
+  截图/像素检查，覆盖工具栏高度、公式栏高度、网格线、选区、Sheet 标签和移动宽度。
+- Univer 预览保留但默认不可用；如需再次验证 Univer，需要由单独预览包或线上脚本注册
+  `window.__RELATION_LOAD_UNIVER_SPREADSHEET__`。
+
 ## 全局侧栏收起宽度优化（2026-07-29）
 
 ### 已完成
@@ -916,6 +952,42 @@
 - `BUILD_PATH=/tmp/relation-operational-agenda-build npm run performance:frontend` 通过；门禁口径下
   首屏 JS 327.9KB gzip、75 个异步 chunk、最大异步 chunk 420.8KB gzip。
 
+## 媒体管理附件与合同有效期（2026-07-23）
+
+### 已完成
+
+- 新增媒体弹窗增加附件选择区，样式和限制复用互动记录附件上传：最多 10 个、单个最大 100MB；
+  保存媒体成功后逐个上传到该媒体的关联文档附件表。
+- 双击媒体进入详情页后新增“媒体附件”区域，展示新增媒体时上传的附件，并支持下载。
+- 媒体字段新增 `contract_valid_until` 合同有效期，服务端支持旧库增量加列、日期校验、创建、
+  编辑、搜索和详情返回。
+- 列设置新增“合同有效期”，默认不选中，顺序位于“最新媒体发版时间”和“最新支持功能”之间；
+  新增/编辑表单和详情页同步展示该日期字段。
+
+### 已验证
+
+- `node --check server/lib/mediaManagement.js` 通过。
+- `node --check server/index.js` 通过。
+- `node --test server/lib/mediaManagement.test.js` 通过，8/8。
+- `cd client && BUILD_PATH=/tmp/relation-media-attachments-build npm run build` 通过。
+
+## Wolai 剪贴板重复内容修复（2026-07-23）
+
+### 根因与修复
+
+- Wolai 的列表项 `<li>` 内包含用于排版的 `<div>/<p>`；文档中心先解析整个列表项，又把这些
+  子节点解析成普通段落，导致同一内容出现“列表格式一份 + 纯文本一份”。
+- 新增共享候选节点过滤规则：列表项已经包含的排版子节点不再二次生成块；嵌套列表项、表格、
+  图片及列表外段落继续保留。
+- 文档中心完整编辑器和 `DocumentBodyEditor` 共用该规则，避免目标、周报、经营周会粘贴行为漂移。
+
+### 已验证
+
+- Wolai 列表结构回归测试通过，确认 `<li>` 内 `div/p` 被过滤，嵌套表格和图片保留。
+- 剪贴板目标测试 17/17 通过；前端全量 23 个套件、121 条测试通过。
+- `BUILD_PATH=/tmp/relation-wolai-paste-fix-build npm run build` 通过。
+- 本机 `3001` 后端未运行，未执行登录后的浏览器端到端粘贴；前端登录页与开发服务可正常加载。
+
 ## 全系统业务时间统一（2026-07-23）
 
 ### 根因
@@ -1009,19 +1081,16 @@
   APK/AAB/IPA 安装包。
 - `multer` 文件超限统一返回 `413 UPLOAD_FILE_TOO_LARGE`，附带当前限制，文档中心附件块上传
   失败时显示明确中文提示，不再只展示 Axios 的 `Request failed with status code 413`。
-- Wolai MCP 远程图片抓取限制从通用附件上传上限中解耦，默认继续按 100MB 兜底，避免放大服务端
-  远程下载风险。
 - 文档中心附件新增分片上传兜底：超过 8MB 的附件按 768KB 顺序分片上传，再由服务端校验总大小、
   合并并写入原附件表，避免 25MB APK 因代理单请求体限制直接返回 413。
 - 分片临时目录按文档、用户和上传 ID 隔离，合并成功或异常失败后自动清理。
-
+- Wolai MCP 远程图片抓取限制从通用附件上传上限中解耦，默认继续按 100MB 兜底，避免放大服务端
+  远程下载风险。
 
 ### 已验证
 
 - `node --check server/index.js` 通过。
 - `cd client && CI=true npx react-scripts test --watchAll=false --runInBand src/utils/documentHistory.test.js src/utils/documentKind.test.js` 通过。
-- `node --test server/lib/wolaiMcpImport.test.js server/lib/wolaiMcpImportFoldState.test.js` 通过，6/6。
-- `cd client && BUILD_PATH=/tmp/relation-document-attachment-upload-build npm run build` 通过。
 - `cd client && BUILD_PATH=/tmp/relation-document-attachment-chunk-build npm run build` 通过。
 
 ### 本轮任务文件
@@ -1029,6 +1098,37 @@
 - `server/index.js`
 - `client/src/pages/Documents.js`
 - `handoff.md`
+
+## 媒体关联文档 Wolai MCP 导入格式修复（2026-07-22）
+
+### 已完成
+
+- 修复 `server/lib/wolaiMcpImport.js`：Wolai MCP 导入的折叠列表和折叠标题在缺少明确折叠状态时默认展开，避免首次导入后大量子块被隐藏。
+- 新增 `server/lib/wolaiMcpImportFoldState.test.js`，覆盖 Wolai 折叠列表导入后展开、保留 `hasChildren` 和子块缩进。
+- 修复 Wolai `todo_list` 父子树导入：待办块现在会按 Wolai 父子关系写入 `meta.indent`，保留 0/1/2/3 级层级。
+- 修复 Wolai `callout` 导入：callout 现在映射为 Relation 强调块，并把子段落合并到同一个块内，避免灰底区域被拆散。
+
+### 已验证
+
+- `node --test server/lib/wolaiMcpImportFoldState.test.js server/lib/wolaiMcpImport.test.js server/lib/mediaManagement.test.js` 通过，13/13。
+- `node --check server/lib/wolaiMcpImport.js` 通过。
+- `node --check server/index.js` 通过。
+- 使用真实 Wolai 页面只读导入摘要校验：99 个块，包含 19 个折叠列表、14 个待办、3 个强调块、8 张图片、2 个视频、1 个表格；待办缩进集合为 0/1/2/3，截图中的“媒体要求”合并为单个强调块。测试输出未记录 Token 或完整正文。
+
+### 本轮任务文件
+
+- `server/lib/wolaiMcpImport.js`
+- `server/lib/wolaiMcpImportFoldState.test.js`
+- `handoff.md`（仅记录本轮验证，不随本次提交暂存，避免混入既有未提交交接差异）
+
+## 文档中心在线表格文档（2026-07-22）
+
+状态：文档中心在线表格第一至四期开发和独立验收已完成；文档形态、可编辑网格、公式、排序筛选、
+冻结、合并、Excel 导入导出、大表虚拟滚动、原子 operation、在线成员与 SSE 均已落地，准备随
+本次提交交付到 `gitee/main`。
+
+目标：在文档中心新增类 Excel / 石墨表格的在线表格文档形态，复用现有标题、文件夹、共享、
+收藏、历史、权限和多人更新底座，并与普通文档块编辑器保持兼容。
 
 ## 响应变慢排查与修复（2026-07-22）
 
@@ -1041,61 +1141,28 @@
   blocks、cells、html、markdown、payload 和二进制文件字段只记录摘要，不再深度遍历正文。
 - 同步处理 2026-07-21 媒体文档归档改动的启动扫描风险：`media_assets.document_id` 补充显式索引，
   降低启动归档检查和媒体文档关联查询成本。
+- 继续排查本次用户反馈的工作台 3 分钟 loading 和文档中心更慢问题，定位到旧文档
+  `content_text` 启动回填会同步读取并解析全部 `documents.content`，大 Wolai 文档/表格文档会阻塞
+  服务启动和事件循环。
+- 将文档 `content_text` 回填改为服务监听后后台小批次执行，默认每次最多 20 条，并在存在
+  `document_kind` 字段时跳过在线表格工作簿，避免启动阶段全量解析大正文。
+- 文档详情页编辑记录列表不再 `SELECT e.*` 读取最近 80 条完整 `content_before/content_after`；
+  列表只读元数据和快照存在标记，恢复单条记录时才读取完整快照。
+- 文档编辑记录对大正文快照增加 512KB 默认上限，避免每次自动保存把大文档正文复制两份写入
+  `document_edit_records`，保留 diff 和正文文本用于审计展示。
+- 工作台数据加载改为并发 `Promise.allSettled`，并给提醒、任务、跟进和关注任务请求加受控
+  `limit`；单个接口失败或变慢不再锁住整个工作台 loading。
+- 为工作台常用查询补充任务、待跟进、提醒和关注人组合索引，降低列表、关注和提醒查询成本。
 
 ### 已验证
 
 - `node --check server/index.js` 通过。
-- `node --test server/lib/mediaManagement.test.js` 通过，7/7。
+- `node --test server/lib/mediaManagement.test.js server/lib/mediaManagementRouter.test.js` 通过，8/8。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand` 通过，19 个套件、102 条测试。
+- `cd client && BUILD_PATH=/tmp/relation-performance-build npm run build` 通过。
+- `PORT=3102 NODE_ENV=test RELATION_DB_PATH=/tmp/relation-performance-smoke.db node server/index.js` 隔离库启动冒烟通过，
+  约 1.1 秒开始监听。
 - `git diff --check -- server/index.js server/lib/mediaManagement.js server/lib/mediaManagement.test.js` 通过。
-
-状态：媒体管理列表字段体验优化已完成，准备随本次提交交付到 `gitee/main`。
-
-目标：媒体管理列表不再默认平铺所有长字段，改为核心列默认展示、扩展列可配置、预算标签
-折叠、表格密度可切换，并优化移动端卡片信息层级。
-
-## 媒体管理列表体验优化（2026-07-21）
-
-### 已完成
-
-- 默认列表仅展示核心字段：CID、媒体、重要程度、类目、YYZ版本、展示样式、预算、对接进度、
-  负责人、更新时间和上线时间。
-- 增加“列设置”，支持用户勾选域名、版本号、最新支持功能、任务配置要求、特殊入口信息等
-  扩展字段；配置保存到 `localStorage`。
-- 增加标准/紧凑两种表格密度，配置保存到 `localStorage`。
-- 预算字段在列表中最多展示 2 个标签，超出显示 `+N`，鼠标悬停可查看完整预算。
-- 表格横向宽度按当前可见列自动计算，不再固定为全字段超宽表格。
-- 移动端卡片改为媒体名 + 对接进度优先，补充 CID、类目、负责人、YYZ版本、展示样式、预算
-  摘要和更新时间。
-- 长字段仍在详情抽屉完整展示，不改变媒体详情、文档编辑、共享、历史等既有链路。
-
-### 已验证
-
-- `git diff --check` 通过。
-- `node --check client/src/pages/MediaManagement.js` 通过。
-
-### 环境限制
-
-- 当前执行环境没有可用 `npm`、`yarn`、`pnpm`，且仓库没有 `node_modules`；内置 Node 运行时
-  也不包含 React/AntD 构建依赖，因此本轮无法执行 `npm run build` 或前端组件测试。
-
-### 本轮任务文件
-
-- `client/src/pages/MediaManagement.js`
-- `handoff.md`
-
-## 媒体关联文档归档优化（2026-07-21）
-
-### 已完成
-
-- 媒体模块启动时确保 `产运 / 落地 / YYZ / 媒体对接` 文件夹路径存在并复用已有同名目录。
-- 已有媒体关联文档幂等迁移到目标目录，编号重算为
-  `D{序号}-DOMESTIC-OPS-IMP-{年份}`，同时更新为国内项目、产运、落地元数据。
-- 新建媒体直接使用目标目录和 `DOMESTIC-OPS-IMP` 文档属性，不再创建 `GEN-ALL-MEDIA` 文档。
-- 媒体关联文档的 `icon_key` 统一为空，因此收藏后在文档中心显示普通文档默认图标，不再显示
-  播放箭头。
-- 媒体身份和标题保护改为依据 `media_assets.document_id` 关系，兼容旧 `doc_type=MEDIA` 数据；
-  类型迁移为 `IMP` 后仍不能从文档中心绕过媒体管理改名。
-- 正文、附件、共享、收藏、历史记录及文档 ID 均原位保留。
 
 ## 文档中心在线表格文档（2026-07-22）
 
@@ -1444,6 +1511,55 @@
 - `client/src/utils/spreadsheetPresence.test.js`
 
 ## 上一轮：媒体管理列表体验优化
+
+状态：媒体管理列表字段体验优化已完成，准备随本次提交交付到 `gitee/main`。
+
+目标：媒体管理列表不再默认平铺所有长字段，改为核心列默认展示、扩展列可配置、预算标签
+折叠、表格密度可切换，并优化移动端卡片信息层级。
+
+## 媒体管理列表体验优化（2026-07-21）
+
+### 已完成
+
+- 默认列表仅展示核心字段：CID、媒体、重要程度、类目、YYZ版本、展示样式、预算、对接进度、
+  负责人、更新时间和上线时间。
+- 增加“列设置”，支持用户勾选域名、版本号、最新支持功能、任务配置要求、特殊入口信息等
+  扩展字段；配置保存到 `localStorage`。
+- 增加标准/紧凑两种表格密度，配置保存到 `localStorage`。
+- 预算字段在列表中最多展示 2 个标签，超出显示 `+N`，鼠标悬停可查看完整预算。
+- 表格横向宽度按当前可见列自动计算，不再固定为全字段超宽表格。
+- 移动端卡片改为媒体名 + 对接进度优先，补充 CID、类目、负责人、YYZ版本、展示样式、预算
+  摘要和更新时间。
+- 长字段仍在详情抽屉完整展示，不改变媒体详情、文档编辑、共享、历史等既有链路。
+
+### 已验证
+
+- `git diff --check` 通过。
+- `node --check client/src/pages/MediaManagement.js` 通过。
+
+### 环境限制
+
+- 当前执行环境没有可用 `npm`、`yarn`、`pnpm`，且仓库没有 `node_modules`；内置 Node 运行时
+  也不包含 React/AntD 构建依赖，因此本轮无法执行 `npm run build` 或前端组件测试。
+
+### 本轮任务文件
+
+- `client/src/pages/MediaManagement.js`
+- `handoff.md`
+
+## 媒体关联文档归档优化（2026-07-21）
+
+### 已完成
+
+- 媒体模块启动时确保 `产运 / 落地 / YYZ / 媒体对接` 文件夹路径存在并复用已有同名目录。
+- 已有媒体关联文档幂等迁移到目标目录，编号重算为
+  `D{序号}-DOMESTIC-OPS-IMP-{年份}`，同时更新为国内项目、产运、落地元数据。
+- 新建媒体直接使用目标目录和 `DOMESTIC-OPS-IMP` 文档属性，不再创建 `GEN-ALL-MEDIA` 文档。
+- 媒体关联文档的 `icon_key` 统一为空，因此收藏后在文档中心显示普通文档默认图标，不再显示
+  播放箭头。
+- 媒体身份和标题保护改为依据 `media_assets.document_id` 关系，兼容旧 `doc_type=MEDIA` 数据；
+  类型迁移为 `IMP` 后仍不能从文档中心绕过媒体管理改名。
+- 正文、附件、共享、收藏、历史记录及文档 ID 均原位保留。
 
 ### 已验证
 
