@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Avatar, Button, Card, Col, Descriptions, Drawer, Form, Grid, Input, InputNumber,
@@ -81,6 +81,8 @@ const releaseStatusMap = {
   failed: { label: '失败', color: 'red' },
   cancelled: { label: '已取消', color: 'default' },
 };
+
+const releaseTerminalStatuses = new Set(['success', 'failed', 'cancelled']);
 
 const releaseStepLabelMap = {
   queued: '任务排队',
@@ -320,6 +322,7 @@ export default function ProductAssets() {
   const [releaseTask, setReleaseTask] = useState(null);
   const [releaseHistory, setReleaseHistory] = useState([]);
   const [releaseForm] = Form.useForm();
+  const refreshedReleaseTasksRef = useRef(new Set());
 
   useEffect(() => {
     const subjectId = searchParams.get('company_subject_id') || '';
@@ -359,7 +362,7 @@ export default function ProductAssets() {
 
   useEffect(() => {
     const taskId = releaseTask?.task?.id;
-    if (!taskId || ['success', 'failed', 'cancelled'].includes(releaseTask.task.status)) return undefined;
+    if (!taskId || releaseTerminalStatuses.has(releaseTask.task.status)) return undefined;
     let stopped = false;
     const poll = async () => {
       try {
@@ -376,6 +379,15 @@ export default function ProductAssets() {
       clearInterval(timer);
     };
   }, [releaseTask?.task?.id, releaseTask?.task?.status]);
+
+  useEffect(() => {
+    const task = releaseTask?.task;
+    if (!task?.id || !releaseTerminalStatuses.has(task.status)) return;
+    const refreshKey = `${task.id}:${task.status}`;
+    if (refreshedReleaseTasksRef.current.has(refreshKey)) return;
+    refreshedReleaseTasksRef.current.add(refreshKey);
+    load();
+  }, [releaseTask?.task?.id, releaseTask?.task?.status, load]);
 
   const openCreateAsset = () => {
     if (!canEditAssets) {
@@ -509,7 +521,6 @@ export default function ProductAssets() {
             setReleaseModalOpen(false);
             message.success('提版任务已创建');
             load();
-            openDetail(releaseAsset.id);
           } catch (error) {
             message.error(error.response?.data?.error || '提版任务创建失败');
             throw error;
@@ -1239,24 +1250,22 @@ export default function ProductAssets() {
               showIcon
               message={`${releaseTask.task.status_label || releaseStatusMap[releaseTask.task.status]?.label || releaseTask.task.status} · ${getReleaseStepLabel(releaseTask.task.current_step)}`}
               description={releaseTask.task.status === 'failed'
-                ? (releaseTask.task.error_message || '脚本执行失败，请查看下方日志定位原因。')
+                ? (
+                  <div style={{ height: isMobile ? 110 : 140, overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.6, paddingRight: 4 }}>
+                    {releaseTask.task.error_message || '脚本执行失败，请根据失败信息修复后重试。'}
+                  </div>
+                )
                 : '弹窗会自动刷新任务状态和脚本日志，可直接观察当前执行进度。'}
             />
-            <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
-              <Descriptions.Item label="任务 ID">{releaseTask.task.id || '-'}</Descriptions.Item>
-              <Descriptions.Item label="AppID">{releaseTask.task.app_id || '-'}</Descriptions.Item>
-              <Descriptions.Item label="当前步骤">{getReleaseStepLabel(releaseTask.task.current_step)}</Descriptions.Item>
-              <Descriptions.Item label="执行次数">{releaseTask.task.attempt_count || 0}</Descriptions.Item>
-              <Descriptions.Item label="开始时间">{releaseTask.task.started_at?.replace('T', ' ').slice(0, 19) || '-'}</Descriptions.Item>
-              <Descriptions.Item label="结束时间">{releaseTask.task.finished_at?.replace('T', ' ').slice(0, 19) || '-'}</Descriptions.Item>
-            </Descriptions>
-            {releaseTask.task.status === 'failed' && (
-              <Alert
-                type="error"
-                showIcon
-                message="失败原因"
-                description={releaseTask.task.error_message || '未返回明确失败原因，请查看脚本日志。'}
-              />
+            {releaseTask.task.status !== 'failed' && (
+              <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
+                <Descriptions.Item label="任务 ID">{releaseTask.task.id || '-'}</Descriptions.Item>
+                <Descriptions.Item label="AppID">{releaseTask.task.app_id || '-'}</Descriptions.Item>
+                <Descriptions.Item label="当前步骤">{getReleaseStepLabel(releaseTask.task.current_step)}</Descriptions.Item>
+                <Descriptions.Item label="执行次数">{releaseTask.task.attempt_count || 0}</Descriptions.Item>
+                <Descriptions.Item label="开始时间">{releaseTask.task.started_at?.replace('T', ' ').slice(0, 19) || '-'}</Descriptions.Item>
+                <Descriptions.Item label="结束时间">{releaseTask.task.finished_at?.replace('T', ' ').slice(0, 19) || '-'}</Descriptions.Item>
+              </Descriptions>
             )}
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12 }}>

@@ -62,6 +62,11 @@ function printHelp() {
 环境变量:
   ALIPAY_APP_ID                         未传 --app-id 时使用
   MINIDEV_BIN                           指定 minidev 可执行文件路径
+  MINIDEV_MODULE                        指定 minidev Node 模块名或绝对路径
+  MINIDEV_AUTO_INSTALL                  设置为 0 时禁用 minidev 自动安装
+  MINIDEV_INSTALL_CWD                   minidev 自动安装目录，默认当前仓库根目录
+  MINIDEV_PACKAGE                       minidev npm 包安装名，默认 minidev
+  NPM_BIN                               指定 npm 可执行文件路径
   CODE_TEMPLATES_REPO                   代码模版仓库地址，默认 https://gitee.com/mdtec/zfb-mini-tools.git
   CODE_TEMPLATES_DIR                    代码模版目录，默认 /app/codeTemplates
 
@@ -253,6 +258,40 @@ function createTemporaryProject(sourceDir) {
   });
 }
 
+function installProjectDependencies(projectDir) {
+  const packageJsonPath = path.join(projectDir, 'package.json');
+  if (!fs.existsSync(packageJsonPath) || !fs.statSync(packageJsonPath).isFile()) {
+    console.log('临时项目无 package.json，跳过依赖安装');
+    return false;
+  }
+  if (process.env.UPLOAD_SKIP_NPM_INSTALL === '1') {
+    console.log('已设置 UPLOAD_SKIP_NPM_INSTALL=1，跳过临时项目依赖安装');
+    return false;
+  }
+
+  const npmCommand = process.env.NPM_BIN || (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  const args = ['install', '--no-audit', '--no-fund', '--legacy-peer-deps'];
+  console.log('开始安装临时项目依赖');
+  const result = spawnSync(npmCommand, args, {
+    cwd: projectDir,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      npm_config_audit: 'false',
+      npm_config_fund: 'false',
+    },
+  });
+  if (result.stdout) console.log(result.stdout.trim());
+  if (result.stderr) console.error(result.stderr.trim());
+  if (result.status !== 0) {
+    const detail = [result.error?.message, result.stderr, result.stdout].filter(Boolean).join('\n').trim().slice(-2000);
+    throw new Error(`安装项目依赖失败，请检查模版项目 package.json、package-lock.json 和服务器 npm 网络${detail ? `: ${detail}` : ''}`);
+  }
+  console.log('临时项目依赖安装完成');
+  return true;
+}
+
 function replaceDomainsInConfig(projectDir, domains) {
   const configPath = path.join(projectDir, 'config', 'index.js');
   const original = fs.readFileSync(configPath, 'utf8');
@@ -299,26 +338,94 @@ function writeReleaseMetadata(projectDir, { template, appId }) {
   }, null, 2), { mode: 0o600 });
 }
 
-function getMinidevClient() {
-  const candidates = [
+function getMinidevInstallCwd() {
+  return path.resolve(process.env.MINIDEV_INSTALL_CWD || path.join(ROOT_DIR, '..'));
+}
+
+function getMinidevPackageName() {
+  return process.env.MINIDEV_PACKAGE || 'minidev';
+}
+
+function getMinidevPackageDir() {
+  return path.join(getMinidevInstallCwd(), 'node_modules', ...getMinidevPackageName().split('/'));
+}
+
+function getMinidevCandidates() {
+  return [
     process.env.MINIDEV_MODULE,
+    getMinidevPackageDir(),
     'minidev',
     path.join(ROOT_DIR, 'node_modules', 'minidev'),
     path.join(ROOT_DIR, '..', 'node_modules', 'minidev'),
     path.join(ROOT_DIR, 'auditTool', 'node_modules', 'minidev'),
     path.join(ROOT_DIR, '..', 'auditTool', 'node_modules', 'minidev'),
   ].filter(Boolean);
-  for (const candidate of candidates) {
-    try {
-      // eslint-disable-next-line global-require, import/no-dynamic-require
-      const loaded = require(candidate);
-      const client = loaded?.minidev || loaded?.default || loaded;
-      if (client && typeof client.upload === 'function') return client;
-    } catch {
-      // Try the next supported installation location.
+}
+
+function loadMinidevClient(candidate, { fresh = false } = {}) {
+  try {
+    if (fresh) {
+      try {
+        delete require.cache[require.resolve(candidate)];
+      } catch {
+        // Module may not be resolvable before auto-install.
+      }
     }
+    // eslint-disable-next-line global-require, import/no-dynamic-require
+    const loaded = require(candidate);
+    const client = loaded?.minidev || loaded?.default || loaded;
+    return client && typeof client.upload === 'function' ? client : null;
+  } catch {
+    return null;
+  }
+}
+
+function getMinidevClient(options = {}) {
+  for (const candidate of getMinidevCandidates()) {
+    const client = loadMinidevClient(candidate, options);
+    if (client) return client;
   }
   return null;
+}
+
+function installMinidevDependency() {
+  if (process.env.MINIDEV_AUTO_INSTALL === '0') {
+    throw new Error('未检测到可用 minidev upload 接口，且已禁用自动安装。请安装 minidev 或移除 MINIDEV_AUTO_INSTALL=0 后重试');
+  }
+
+  const installCwd = getMinidevInstallCwd();
+  const packageName = getMinidevPackageName();
+  const npmCommand = process.env.NPM_BIN || (process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  fs.mkdirSync(installCwd, { recursive: true });
+  console.log(`未检测到可用 minidev upload 接口，开始自动安装 ${packageName}`);
+  const result = spawnSync(npmCommand, ['install', '--no-save', '--package-lock=false', '--no-audit', '--no-fund', packageName], {
+    cwd: installCwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      npm_config_audit: 'false',
+      npm_config_fund: 'false',
+      npm_config_package_lock: 'false',
+    },
+  });
+  if (result.status !== 0) {
+    const detail = [result.error?.message, result.stderr, result.stdout].filter(Boolean).join('\n').trim().slice(-2000);
+    throw new Error(`自动安装 minidev 失败，请检查服务器 npm 网络和目录写入权限${detail ? `: ${detail}` : ''}`);
+  }
+  console.log(`minidev 自动安装完成: ${installCwd}`);
+  return true;
+}
+
+function ensureMinidevClient() {
+  const existing = getMinidevClient({ fresh: true });
+  if (existing) return existing;
+  installMinidevDependency();
+  const installed = getMinidevClient({ fresh: true });
+  if (!installed) {
+    throw new Error('自动安装 minidev 后仍未提供 JavaScript upload 接口，无法安全传入身份密钥文件');
+  }
+  return installed;
 }
 
 function getMinidevInvocation() {
@@ -347,7 +454,15 @@ function getMinidevInvocation() {
 }
 
 function uploadProject({ appId, template, identityKeyPath, version, versionDescription }) {
-  const client = getMinidevClient();
+  let client = getMinidevClient();
+  if (!client) {
+    try {
+      client = ensureMinidevClient();
+    } catch (error) {
+      if (identityKeyPath) throw error;
+      console.warn(`minidev 自动安装不可用，尝试命令行上传: ${error.message}`);
+    }
+  }
   if (client) {
     console.log(`产品模版: ${template}`);
     console.log(`开始上传小程序，AppID: ${appId}`);
@@ -431,6 +546,7 @@ async function main() {
     createTemporaryProject(sourceDir);
     replaceDomainsInConfig(TEMP_PROJECT_DIR, options.domains);
     writeReleaseMetadata(TEMP_PROJECT_DIR, options);
+    installProjectDependencies(TEMP_PROJECT_DIR);
     const uploadResult = await uploadProject(options);
     const uploadedVersion = uploadResult?.version || uploadResult?.uploadedVersion || options.version || '-';
     console.log(`上传版本: ${uploadedVersion}`);
@@ -458,8 +574,13 @@ if (require.main === module) {
 module.exports = {
   normalizeDomain,
   cloneCodeTemplates,
+  ensureMinidevClient,
   getCodeTemplatesDir,
   getCodeTemplatesRepo,
+  getMinidevClient,
+  getMinidevInstallCwd,
+  installProjectDependencies,
+  installMinidevDependency,
   parseArgs,
   replaceDomainsInConfig,
   resolveProjectDir,

@@ -7,12 +7,15 @@ const path = require('node:path');
 const {
   appendLog,
   copyProjectDirectory,
+  extractCommandFailureReason,
   getUploadScriptPath,
   isShortDramaTemplate,
   normalizeDomain,
   prepareReleaseProject,
+  runCommand,
   runUploadScript,
   sanitizeLogText,
+  stripAnsiText,
   validateReleaseDomains,
   validateReleasePayload,
   validateRelativeProjectPath,
@@ -202,11 +205,99 @@ test('upload.js requires all release fields before execution', () => {
   }
 });
 
+test('upload.js auto-installs minidev when the upload interface is missing', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-minidev-install-test-'));
+  const installCwd = path.join(tempRoot, 'install');
+  const fakeNpm = path.join(tempRoot, process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  const previousEnv = {
+    MINIDEV_INSTALL_CWD: process.env.MINIDEV_INSTALL_CWD,
+    MINIDEV_PACKAGE: process.env.MINIDEV_PACKAGE,
+    NPM_BIN: process.env.NPM_BIN,
+    MINIDEV_MODULE: process.env.MINIDEV_MODULE,
+    MINIDEV_AUTO_INSTALL: process.env.MINIDEV_AUTO_INSTALL,
+  };
+  fs.writeFileSync(fakeNpm, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const moduleDir = path.join(process.cwd(), 'node_modules', 'minidev');
+fs.mkdirSync(moduleDir, { recursive: true });
+fs.writeFileSync(path.join(moduleDir, 'index.js'), "module.exports = { upload: async () => ({ version: 'auto-installed' }) };\\n");
+`, { mode: 0o700 });
+
+  try {
+    process.env.MINIDEV_INSTALL_CWD = installCwd;
+    process.env.MINIDEV_PACKAGE = 'minidev';
+    process.env.NPM_BIN = fakeNpm;
+    delete process.env.MINIDEV_MODULE;
+    delete process.env.MINIDEV_AUTO_INSTALL;
+    uploadScript.installMinidevDependency();
+    const client = uploadScript.getMinidevClient({ fresh: true });
+    assert.equal(typeof client.upload, 'function');
+    assert.equal(fs.existsSync(path.join(installCwd, 'node_modules', 'minidev', 'index.js')), true);
+  } finally {
+    Object.entries(previousEnv).forEach(([key, value]) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test('upload.js installs template project dependencies before minidev upload', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-template-npm-install-test-'));
+  const projectDir = path.join(tempRoot, 'project');
+  const fakeNpm = path.join(tempRoot, process.platform === 'win32' ? 'npm.cmd' : 'npm');
+  const previousEnv = {
+    NPM_BIN: process.env.NPM_BIN,
+    UPLOAD_SKIP_NPM_INSTALL: process.env.UPLOAD_SKIP_NPM_INSTALL,
+  };
+  fs.mkdirSync(projectDir, { recursive: true });
+  fs.writeFileSync(path.join(projectDir, 'package.json'), JSON.stringify({ dependencies: { 'crypto-js': '^4.2.0' } }));
+  fs.writeFileSync(fakeNpm, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+fs.mkdirSync(path.join(process.cwd(), 'node_modules'), { recursive: true });
+fs.writeFileSync(path.join(process.cwd(), 'node_modules', '.installed'), process.argv.slice(2).join(' '));
+`, { mode: 0o700 });
+
+  try {
+    process.env.NPM_BIN = fakeNpm;
+    delete process.env.UPLOAD_SKIP_NPM_INSTALL;
+    assert.equal(uploadScript.installProjectDependencies(projectDir), true);
+    const args = fs.readFileSync(path.join(projectDir, 'node_modules', '.installed'), 'utf8');
+    assert.match(args, /install/);
+    assert.match(args, /--legacy-peer-deps/);
+  } finally {
+    Object.entries(previousEnv).forEach(([key, value]) => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    });
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test('release logs redact credentials and local paths', () => {
   const raw = 'Authorization: Bearer token-value HOME=/Users/tester/project identity_key=secret-value';
   const sanitized = sanitizeLogText(raw);
   assert.doesNotMatch(sanitized, /token-value|secret-value|\/Users\/tester/);
   assert.match(appendLog('', raw), /REDACTED|PATH_REDACTED/);
+});
+
+test('command failures extract actionable reasons from noisy script output', async () => {
+  const noisyOutput = "\u001b[31mError: cannot resolve module 'crypto-js'\u001b[39m\nError: task was failed";
+  assert.equal(stripAnsiText(noisyOutput), "Error: cannot resolve module 'crypto-js'\nError: task was failed");
+  assert.equal(
+    extractCommandFailureReason(noisyOutput),
+    '缺少依赖 crypto-js，请检查代码模版项目依赖配置，安装该依赖后重试'
+  );
+
+  await assert.rejects(
+    () => runCommand(process.execPath, [
+      '-e',
+      "console.error(\"\\u001b[31mError: cannot resolve module 'crypto-js'\\u001b[39m\"); process.exit(1);",
+    ], { label: 'upload.js' }),
+    /upload\.js 执行失败（1）：缺少依赖 crypto-js/
+  );
 });
 
 test('project copy skips dependencies and writes release configuration', () => {
