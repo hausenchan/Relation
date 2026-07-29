@@ -8,6 +8,7 @@ server/data.db-shm
 server/data.db-wal
 server/database.db
 server/uploads/
+server/identity-keys/
 data.db-shm
 data.db-wal
 

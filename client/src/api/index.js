@@ -599,6 +599,10 @@ export const productAssetsApi = {
     return r.data;
   }),
   reductionsSimple: () => cachedApiGet('/product-asset-reductions/simple'),
+  createRelease: (id, data) => api.post(`/product-assets/${id}/releases`, data).then(r => r.data),
+  getReleaseTask: (id) => api.get(`/product-asset-release-tasks/${id}`).then(r => r.data),
+  cancelReleaseTask: (id) => api.post(`/product-asset-release-tasks/${id}/cancel`).then(r => r.data),
+  listReleases: (id) => api.get(`/product-assets/${id}/releases`).then(r => r.data),
 };
 
 export const mediaManagementApi = {
@@ -609,12 +613,32 @@ export const mediaManagementApi = {
   delete: (id) => api.delete(`/media-management/${id}`).then(r => r.data),
 };
 
+export const productTemplatesApi = {
+  list: (params) => api.get('/product-templates', { params }).then(r => r.data),
+  get: (id) => api.get(`/product-templates/${id}`).then(r => r.data),
+  create: (data) => api.post('/product-templates', data).then(r => r.data),
+  update: (id, data) => api.put(`/product-templates/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/product-templates/${id}`).then(r => r.data),
+  preview: (id) => api.post(`/product-templates/${id}/preview`).then(r => r.data),
+  runtimeCheck: () => api.post('/release-runtime/check').then(r => r.data),
+};
+
+function buildCompanySubjectFormData(data = {}, identityKeyFile) {
+  const formData = new FormData();
+  Object.entries(data).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    formData.append(key, typeof value === 'boolean' ? String(value) : value);
+  });
+  if (identityKeyFile) formData.append('identity_key_file', identityKeyFile);
+  return formData;
+}
+
 export const companySubjectsApi = {
   list: (params) => api.get('/company-subjects', { params }).then(r => r.data),
   simple: () => api.get('/company-subjects/simple').then(r => r.data),
   get: (id) => api.get(`/company-subjects/${id}`).then(r => r.data),
-  create: (data) => api.post('/company-subjects', data).then(r => r.data),
-  update: (id, data) => api.put(`/company-subjects/${id}`, data).then(r => r.data),
+  create: (data, identityKeyFile) => api.post('/company-subjects', buildCompanySubjectFormData(data, identityKeyFile)).then(r => r.data),
+  update: (id, data, identityKeyFile) => api.put(`/company-subjects/${id}`, buildCompanySubjectFormData(data, identityKeyFile)).then(r => r.data),
   delete: (id) => api.delete(`/company-subjects/${id}`).then(r => r.data),
   uploadAttachment: (id, formData) => api.post(`/company-subjects/${id}/attachments`, formData).then(r => r.data),
   deleteAttachment: (id) => api.delete(`/company-subject-attachments/${id}`).then(r => r.data),
