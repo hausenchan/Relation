@@ -12,6 +12,7 @@ import {
   DeleteRowOutlined,
   DownloadOutlined,
   FilterOutlined,
+  FormatPainterOutlined,
   FunctionOutlined,
   InsertRowAboveOutlined,
   InsertRowRightOutlined,
@@ -25,8 +26,10 @@ import { Alert, Button, Dropdown, Input, Modal, Select, Space, Tooltip, Typograp
 import MentionPicker, { preloadMentionCandidates, scheduleMentionNotification } from './MentionPicker';
 import './SpreadsheetDocumentEditor.css';
 import {
+  applySpreadsheetFormatPattern,
   buildSpreadsheetCellKey,
   createDefaultSpreadsheetSheet,
+  createSpreadsheetFormatPattern,
   createSpreadsheetFormulaEvaluator,
   findSpreadsheetMergedRange,
   getSpreadsheetCellObject,
@@ -218,6 +221,7 @@ export default function SpreadsheetDocumentEditor({
   const [scrollState, setScrollState] = useState({ top: 0, left: 0, width: 800, height: 500 });
   const [zoom, setZoom] = useState(1);
   const [resizeDrag, setResizeDrag] = useState(null);
+  const [formatPainter, setFormatPainter] = useState(null);
   const editorRef = useRef(null);
   const viewportRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -226,6 +230,10 @@ export default function SpreadsheetDocumentEditor({
   const redoStackRef = useRef([]);
   const inputTransactionRef = useRef(null);
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const formatPainterRef = useRef(null);
+  const currentSelectionRef = useRef(null);
+  const applyFormatPainterRef = useRef(null);
+  const suppressCellEditUntilRef = useRef(0);
   workbookRef.current = workbook;
   onSelectionChangeRef.current = onSelectionChange;
 
@@ -302,6 +310,24 @@ export default function SpreadsheetDocumentEditor({
     if (!canEdit || !mentionContext?.entity_type || !mentionContext?.entity_id) return;
     preloadMentionCandidates(mentionContext).catch(() => {});
   }, [canEdit, mentionContext?.entity_type, mentionContext?.entity_id, mentionContext?.scope]);
+
+  useEffect(() => {
+    if (canEdit) return;
+    formatPainterRef.current = null;
+    setFormatPainter(null);
+  }, [canEdit]);
+
+  useEffect(() => {
+    if (!formatPainter) return undefined;
+    const cancelFormatPainter = event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      formatPainterRef.current = null;
+      setFormatPainter(null);
+    };
+    window.addEventListener('keydown', cancelFormatPainter);
+    return () => window.removeEventListener('keydown', cancelFormatPainter);
+  }, [formatPainter]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -426,7 +452,12 @@ export default function SpreadsheetDocumentEditor({
 
   useEffect(() => {
     if (!isSelecting) return undefined;
-    const stopSelecting = () => setIsSelecting(false);
+    const stopSelecting = () => {
+      setIsSelecting(false);
+      if (formatPainterRef.current && currentSelectionRef.current) {
+        applyFormatPainterRef.current?.(currentSelectionRef.current);
+      }
+    };
     window.addEventListener('mouseup', stopSelecting, { once: true });
     return () => window.removeEventListener('mouseup', stopSelecting);
   }, [isSelecting]);
@@ -497,6 +528,7 @@ export default function SpreadsheetDocumentEditor({
     startColumn: activeColumnIndex,
     endColumn: activeColumnIndex,
   });
+  currentSelectionRef.current = currentSelection;
   const selectsWholeRows = currentSelection.startColumn === 0
     && currentSelection.endColumn === activeSheet.columnCount - 1;
   const selectsWholeColumns = currentSelection.startRow === 0
@@ -533,39 +565,78 @@ export default function SpreadsheetDocumentEditor({
     currentSelection.endColumn,
   ]);
 
+  const setActiveFormatPainter = next => {
+    formatPainterRef.current = next;
+    setFormatPainter(next);
+  };
+
+  const activateFormatPainter = continuous => {
+    if (!canEdit) return;
+    const sourceSheet = workbookRef.current.sheets.find(sheet => sheet.id === activeSheet.id)
+      || workbookRef.current.sheets[0];
+    const pattern = createSpreadsheetFormatPattern(sourceSheet, currentSelection);
+    if (!pattern) return;
+    setEditingCellKey('');
+    setActiveFormatPainter({ pattern, continuous: Boolean(continuous) });
+    window.requestAnimationFrame(() => editorRef.current?.focus());
+  };
+
+  const applyFormatPainterToRange = targetRange => {
+    const painter = formatPainterRef.current;
+    if (!painter || !targetRange || !canEdit) return;
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
+      applySpreadsheetFormatPattern(sheet, targetRange, painter.pattern);
+      draft.activeSheetId = sheet.id;
+      return draft;
+    });
+    suppressCellEditUntilRef.current = Date.now() + 400;
+    if (!painter.continuous) setActiveFormatPainter(null);
+  };
+  applyFormatPainterRef.current = applyFormatPainterToRange;
+
   const notifySelection = (rowIndex, columnIndex, nextRange = null) => {
     const merged = findSpreadsheetMergedRange(activeSheet, rowIndex, columnIndex);
     const targetRow = merged?.startRow ?? rowIndex;
     const targetColumn = merged?.startColumn ?? columnIndex;
+    const nextSelection = nextRange
+      || normalizeSpreadsheetRange(merged || { rowIndex: targetRow, columnIndex: targetColumn });
     onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: targetRow, columnIndex: targetColumn });
-    setSelection(nextRange || normalizeSpreadsheetRange(merged || { rowIndex: targetRow, columnIndex: targetColumn }));
+    currentSelectionRef.current = nextSelection;
+    setSelection(nextSelection);
   };
 
   const selectWholeRow = rowIndex => {
-    setEditingCellKey('');
-    setSelectionAnchor(null);
-    setIsSelecting(false);
-    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex, columnIndex: 0 });
-    setSelection(normalizeSpreadsheetRange({
+    const nextRange = normalizeSpreadsheetRange({
       startRow: rowIndex,
       endRow: rowIndex,
       startColumn: 0,
       endColumn: activeSheet.columnCount - 1,
-    }));
+    });
+    setEditingCellKey('');
+    setSelectionAnchor(null);
+    setIsSelecting(false);
+    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex, columnIndex: 0 });
+    setSelection(nextRange);
+    currentSelectionRef.current = nextRange;
+    if (formatPainterRef.current) applyFormatPainterToRange(nextRange);
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
   const selectWholeColumn = columnIndex => {
-    setEditingCellKey('');
-    setSelectionAnchor(null);
-    setIsSelecting(false);
-    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: 0, columnIndex });
-    setSelection(normalizeSpreadsheetRange({
+    const nextRange = normalizeSpreadsheetRange({
       startRow: 0,
       endRow: activeSheet.rowCount - 1,
       startColumn: columnIndex,
       endColumn: columnIndex,
-    }));
+    });
+    setEditingCellKey('');
+    setSelectionAnchor(null);
+    setIsSelecting(false);
+    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: 0, columnIndex });
+    setSelection(nextRange);
+    currentSelectionRef.current = nextRange;
+    if (formatPainterRef.current) applyFormatPainterToRange(nextRange);
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
@@ -1090,14 +1161,17 @@ export default function SpreadsheetDocumentEditor({
         }}
         onMouseEnter={() => {
           if (!isSelecting || !selectionAnchor) return;
-          setSelection(normalizeSpreadsheetRange({
+          const nextSelection = normalizeSpreadsheetRange({
             startRow: selectionAnchor.rowIndex,
             endRow: rowIndex,
             startColumn: selectionAnchor.columnIndex,
             endColumn: columnIndex,
-          }));
+          });
+          currentSelectionRef.current = nextSelection;
+          setSelection(nextSelection);
         }}
         onDoubleClick={() => {
+          if (formatPainterRef.current || Date.now() < suppressCellEditUntilRef.current) return;
           if (!canEdit) return;
           notifySelection(rowIndex, columnIndex);
           beginInputTransaction(`cell:${activeSheet.id}:${buildSpreadsheetCellKey(rowIndex, columnIndex)}`);
@@ -1197,9 +1271,10 @@ export default function SpreadsheetDocumentEditor({
   return (
     <section
       ref={editorRef}
-      className={`relation-spreadsheet-editor${fillAvailableHeight ? ' relation-spreadsheet-editor--fill' : ''}${frameless ? ' relation-spreadsheet-editor--frameless' : ''}${workspaceFocusMode ? ' relation-spreadsheet-editor--focus-mode' : ''}`}
+      className={`relation-spreadsheet-editor${fillAvailableHeight ? ' relation-spreadsheet-editor--fill' : ''}${frameless ? ' relation-spreadsheet-editor--frameless' : ''}${workspaceFocusMode ? ' relation-spreadsheet-editor--focus-mode' : ''}${formatPainter ? ' relation-spreadsheet-editor--format-painter-active' : ''}`}
       aria-label="在线表格编辑区"
       data-spreadsheet-editor-root="true"
+      data-spreadsheet-format-painter-mode={formatPainter ? (formatPainter.continuous ? 'continuous' : 'once') : 'off'}
       tabIndex={0}
       onPaste={handlePaste}
       onCopy={handleCopy}
@@ -1333,6 +1408,30 @@ export default function SpreadsheetDocumentEditor({
           <SpreadsheetToolbarButton title="在左侧插入列" disabled={!canEdit} icon={<InsertRowRightOutlined />} onClick={insertColumn} />
           <SpreadsheetToolbarButton title="删除当前列" disabled={!canEdit || activeSheet.columnCount <= 1} danger icon={<DeleteColumnOutlined />} onClick={deleteColumn} />
           <div style={{ width: 1, height: 20, background: '#d9d9d9', margin: '0 4px' }} />
+          <Tooltip title={<span>格式刷<br /><small>双击连续使用格式刷</small></span>}>
+            <Button
+              aria-label="格式刷"
+              aria-pressed={Boolean(formatPainter)}
+              data-spreadsheet-format-painter="true"
+              data-spreadsheet-format-painter-mode={formatPainter ? (formatPainter.continuous ? 'continuous' : 'once') : 'off'}
+              type="text"
+              size="small"
+              disabled={!canEdit}
+              className={`relation-spreadsheet-format-painter${formatPainter ? ' relation-spreadsheet-format-painter--active' : ''}`}
+              icon={<FormatPainterOutlined />}
+              onClick={event => {
+                event.stopPropagation();
+                if (event.detail > 1) return;
+                if (formatPainterRef.current) setActiveFormatPainter(null);
+                else activateFormatPainter(false);
+              }}
+              onDoubleClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                activateFormatPainter(true);
+              }}
+            />
+          </Tooltip>
           <Select
             aria-label="字体"
             size="small"

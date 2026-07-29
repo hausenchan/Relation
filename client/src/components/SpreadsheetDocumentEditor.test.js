@@ -307,6 +307,99 @@ test('applies native spreadsheet basic formatting to the selected cell', () => {
   container.remove();
 });
 
+test('uses format painter once without changing the target value and supports undo', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '来源', style: { bold: true, color: '#dc2626', backgroundColor: '#dbeafe' } },
+    B1: { v: '=1+1', style: { italic: true, wrap: true } },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const formatPainterButton = container.querySelector('[data-spreadsheet-format-painter="true"]');
+  act(() => formatPainterButton.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 })));
+  expect(formatPainterButton.getAttribute('aria-pressed')).toBe('true');
+  expect(formatPainterButton.getAttribute('data-spreadsheet-format-painter-mode')).toBe('once');
+
+  const target = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  act(() => target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })));
+  act(() => window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 })));
+
+  expect(latestWorkbook.sheets[0].cells.B1).toEqual({
+    v: '=1+1',
+    style: { bold: true, color: '#dc2626', backgroundColor: '#dbeafe' },
+  });
+  expect(container.querySelector('[data-spreadsheet-format-painter="true"]')
+    .getAttribute('data-spreadsheet-format-painter-mode')).toBe('off');
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.B1).toEqual({
+    v: '=1+1',
+    style: { italic: true, wrap: true },
+  });
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('keeps a double-clicked format painter active for repeated targets until Escape', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '来源', style: { underline: true, border: { color: '#cbd5e1' } } },
+    B1: { v: '目标一' },
+    C1: { v: '目标二' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  act(() => container.querySelector('[data-spreadsheet-format-painter="true"]')
+    .dispatchEvent(new MouseEvent('dblclick', { bubbles: true, detail: 2 })));
+  expect(container.querySelector('[data-spreadsheet-format-painter="true"]')
+    .getAttribute('data-spreadsheet-format-painter-mode')).toBe('continuous');
+
+  const paintCell = columnIndex => {
+    const target = container.querySelector(`[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="${columnIndex}"]`);
+    act(() => target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })));
+    act(() => window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 })));
+  };
+  paintCell(1);
+  paintCell(2);
+
+  expect(latestWorkbook.sheets[0].cells.B1.style).toEqual({
+    underline: true,
+    border: { color: '#cbd5e1' },
+  });
+  expect(latestWorkbook.sheets[0].cells.C1.style).toEqual(latestWorkbook.sheets[0].cells.B1.style);
+  expect(container.querySelector('[data-spreadsheet-format-painter="true"]')
+    .getAttribute('data-spreadsheet-format-painter-mode')).toBe('continuous');
+
+  act(() => window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Escape', bubbles: true, cancelable: true,
+  })));
+  expect(container.querySelector('[data-spreadsheet-format-painter="true"]')
+    .getAttribute('data-spreadsheet-format-painter-mode')).toBe('off');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('selects complete rows and columns from spreadsheet headers', () => {
   const onSelectionChange = jest.fn();
   const onWorkbookChange = jest.fn();
@@ -470,10 +563,12 @@ test('keeps Excel import and cell editing disabled for readonly users while allo
   const importButton = container.querySelector('[aria-label="导入 Excel"]');
   const exportButton = container.querySelector('[aria-label="导出 Excel"]');
   const freezeTrigger = container.querySelector('[data-spreadsheet-freeze-trigger="true"]');
+  const formatPainterButton = container.querySelector('[data-spreadsheet-format-painter="true"]');
   const fileInput = container.querySelector('input[type="file"]');
   const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
   expect(importButton.disabled).toBe(true);
   expect(freezeTrigger.disabled).toBe(true);
+  expect(formatPainterButton.disabled).toBe(true);
   expect(fileInput.disabled).toBe(true);
   expect(exportButton.disabled).toBe(false);
   expect(formulaInput.readOnly).toBe(true);

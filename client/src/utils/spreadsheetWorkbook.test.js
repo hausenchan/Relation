@@ -1,5 +1,7 @@
 import {
+  applySpreadsheetFormatPattern,
   buildSpreadsheetCellKey,
+  createSpreadsheetFormatPattern,
   createDefaultSpreadsheetWorkbook,
   createDefaultSpreadsheetSheet,
   createSpreadsheetFormulaEvaluator,
@@ -255,6 +257,57 @@ describe('spreadsheet workbook model', () => {
     expect(sheet.cells.D3.computed).toBeUndefined();
     setSpreadsheetCellValue(sheet, 2, 3, '');
     expect(sheet.cells.D3).toEqual({ style: { bold: true } });
+  });
+
+  test('captures and tiles cell formats without copying values', () => {
+    const workbook = workbookWithCells({
+      A1: '来源一',
+      B1: '来源二',
+      D2: '目标一',
+      E2: '目标二',
+      F2: '目标三',
+      G2: '目标四',
+    });
+    const sheet = workbook.sheets[0];
+    sheet.cells.A1.style = { bold: true, color: '#dc2626', border: { color: '#cbd5e1' } };
+    sheet.cells.B1.style = { italic: true, backgroundColor: '#dbeafe' };
+    sheet.cells.D2.style = { underline: true };
+    sheet.cells.E2.style = { wrap: true };
+
+    const pattern = createSpreadsheetFormatPattern(sheet, {
+      startRow: 0,
+      endRow: 0,
+      startColumn: 0,
+      endColumn: 1,
+    });
+    applySpreadsheetFormatPattern(sheet, {
+      startRow: 1,
+      endRow: 1,
+      startColumn: 3,
+      endColumn: 6,
+    }, pattern);
+
+    expect(sheet.cells.D2).toEqual({
+      v: '目标一',
+      style: { bold: true, color: '#dc2626', border: { color: '#cbd5e1' } },
+    });
+    expect(sheet.cells.E2).toEqual({
+      v: '目标二',
+      style: { italic: true, backgroundColor: '#dbeafe' },
+    });
+    expect(sheet.cells.F2.style).toEqual(sheet.cells.A1.style);
+    expect(sheet.cells.G2.style).toEqual(sheet.cells.B1.style);
+  });
+
+  test('uses an unformatted source cell to clear only the target format', () => {
+    const workbook = workbookWithCells({ A1: '默认格式', B1: '保留内容' });
+    const sheet = workbook.sheets[0];
+    sheet.cells.B1.style = { bold: true, color: '#dc2626' };
+
+    const pattern = createSpreadsheetFormatPattern(sheet, { rowIndex: 0, columnIndex: 0 });
+    applySpreadsheetFormatPattern(sheet, { rowIndex: 0, columnIndex: 1 }, pattern);
+
+    expect(sheet.cells.B1).toEqual({ v: '保留内容' });
   });
 
   test('merges a range into its anchor and can unmerge it', () => {

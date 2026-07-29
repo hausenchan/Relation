@@ -55,6 +55,25 @@
   font-size: 12px;
 }
 
+.relation-spreadsheet-format-painter.ant-btn {
+  width: 30px;
+  min-width: 30px;
+  height: 28px;
+  padding: 0;
+  border-radius: 2px;
+}
+
+.relation-spreadsheet-format-painter.ant-btn.relation-spreadsheet-format-painter--active {
+  background: #e5e7eb;
+  color: #1677d2;
+  box-shadow: inset 0 -2px 0 #1677d2;
+}
+
+.relation-spreadsheet-editor--format-painter-active [data-spreadsheet-grid="true"],
+.relation-spreadsheet-editor--format-painter-active [role="gridcell"] {
+  cursor: copy !important;
+}
+
 .relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input,
 .relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input-affix-wrapper {
   height: 28px;

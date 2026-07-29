@@ -484,6 +484,60 @@ export function getSpreadsheetCellRawValue(sheet, rowIndex, columnIndex) {
   return cell.v ?? cell.value ?? '';
 }
 
+function cloneSpreadsheetCellStyle(style) {
+  if (!style || typeof style !== 'object') return {};
+  const next = clone(style);
+  Object.keys(next).forEach(name => {
+    if (next[name] === null || next[name] === undefined || next[name] === '') delete next[name];
+  });
+  return next;
+}
+
+export function createSpreadsheetFormatPattern(sheet, range) {
+  const bounds = normalizeSpreadsheetRange(range);
+  if (!bounds) return null;
+  const rowCount = bounds.endRow - bounds.startRow + 1;
+  const columnCount = bounds.endColumn - bounds.startColumn + 1;
+  return {
+    rowCount,
+    columnCount,
+    styles: Array.from({ length: rowCount }, (_, rowOffset) => (
+      Array.from({ length: columnCount }, (_, columnOffset) => (
+        cloneSpreadsheetCellStyle(getSpreadsheetCellObject(
+          sheet,
+          bounds.startRow + rowOffset,
+          bounds.startColumn + columnOffset,
+        ).style)
+      ))
+    )),
+  };
+}
+
+export function applySpreadsheetFormatPattern(sheet, range, pattern) {
+  const bounds = normalizeSpreadsheetRange(range);
+  const rowCount = Math.max(0, Number(pattern?.rowCount) || 0);
+  const columnCount = Math.max(0, Number(pattern?.columnCount) || 0);
+  if (!bounds || !rowCount || !columnCount || !Array.isArray(pattern?.styles)) return sheet;
+  if (!sheet.cells || typeof sheet.cells !== 'object') sheet.cells = {};
+
+  for (let row = bounds.startRow; row <= bounds.endRow; row += 1) {
+    for (let column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
+      const sourceRow = (row - bounds.startRow) % rowCount;
+      const sourceColumn = (column - bounds.startColumn) % columnCount;
+      const sourceStyle = cloneSpreadsheetCellStyle(pattern.styles[sourceRow]?.[sourceColumn]);
+      const key = buildSpreadsheetCellKey(row, column);
+      const next = { ...getSpreadsheetCellObject(sheet, row, column) };
+      if (Object.keys(sourceStyle).length) next.style = sourceStyle;
+      else delete next.style;
+      if ((next.v ?? next.value ?? '') === '' && !next.style) delete sheet.cells[key];
+      else sheet.cells[key] = next;
+    }
+  }
+  sheet.rowCount = Math.max(Number(sheet.rowCount) || DEFAULT_ROW_COUNT, bounds.endRow + 1);
+  sheet.columnCount = Math.max(Number(sheet.columnCount) || DEFAULT_COLUMN_COUNT, bounds.endColumn + 1);
+  return sheet;
+}
+
 export function setSpreadsheetCellValue(sheet, rowIndex, columnIndex, value) {
   if (!sheet.cells || typeof sheet.cells !== 'object') sheet.cells = {};
   const key = buildSpreadsheetCellKey(rowIndex, columnIndex);
