@@ -1,3 +1,6 @@
+export const GLOBAL_SIDEBAR_WIDTH = 180;
+export const GLOBAL_SIDEBAR_COLLAPSED_WIDTH = 52;
+
 export const fixedGlobalSiderStyle = {
   position: 'fixed',
   top: 0,

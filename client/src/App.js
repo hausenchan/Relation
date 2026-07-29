@@ -15,7 +15,12 @@ import {
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
 import SidebarToggleButton from './components/SidebarToggleButton';
-import { fixedGlobalSiderStyle, getAppContentLayoutStyle } from './utils/appShellLayout';
+import {
+  fixedGlobalSiderStyle,
+  getAppContentLayoutStyle,
+  GLOBAL_SIDEBAR_COLLAPSED_WIDTH,
+  GLOBAL_SIDEBAR_WIDTH,
+} from './utils/appShellLayout';
 import './App.css';
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
@@ -28,7 +33,12 @@ const hasUserDepartment = (user, department) => getUserDepartments(user).include
 
 // ── Design system constants ──────────────────────────
 const DS = {
-  sidebar: { bg: '#0f0f23', width: 180, collapsedWidth: 64, accentColor: '#a5b4fc' },
+  sidebar: {
+    bg: '#0f0f23',
+    width: GLOBAL_SIDEBAR_WIDTH,
+    collapsedWidth: GLOBAL_SIDEBAR_COLLAPSED_WIDTH,
+    accentColor: '#a5b4fc',
+  },
   header: { height: 56, bg: '#ffffff', border: '#e8e8ed' },
   content: { bg: '#f0f2f5', padding: 24 },
 };

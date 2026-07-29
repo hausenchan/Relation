@@ -1,4 +1,9 @@
-import { fixedGlobalSiderStyle, getAppContentLayoutStyle } from './appShellLayout';
+import {
+  fixedGlobalSiderStyle,
+  getAppContentLayoutStyle,
+  GLOBAL_SIDEBAR_COLLAPSED_WIDTH,
+  GLOBAL_SIDEBAR_WIDTH,
+} from './appShellLayout';
 
 test('pins the desktop global sidebar to the viewport', () => {
   expect(fixedGlobalSiderStyle).toMatchObject({
@@ -13,8 +18,8 @@ test('pins the desktop global sidebar to the viewport', () => {
 });
 
 test.each([
-  [64, 'calc(100vw - 64px)'],
-  [180, 'calc(100vw - 180px)'],
+  [GLOBAL_SIDEBAR_COLLAPSED_WIDTH, 'calc(100vw - 52px)'],
+  [GLOBAL_SIDEBAR_WIDTH, 'calc(100vw - 180px)'],
 ])('offsets desktop content by a %ipx sidebar', (sidebarWidth, expectedWidth) => {
   expect(getAppContentLayoutStyle(false, sidebarWidth)).toMatchObject({
     width: expectedWidth,
@@ -24,7 +29,7 @@ test.each([
 });
 
 test('keeps the mobile content full width without a sidebar offset', () => {
-  expect(getAppContentLayoutStyle(true, 64)).toMatchObject({
+  expect(getAppContentLayoutStyle(true, GLOBAL_SIDEBAR_COLLAPSED_WIDTH)).toMatchObject({
     width: '100%',
     maxWidth: '100%',
     marginLeft: 0,
