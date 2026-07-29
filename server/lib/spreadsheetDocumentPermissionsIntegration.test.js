@@ -243,6 +243,19 @@ test('spreadsheet APIs enforce permissions and keep derived content text consist
     },
   });
   assert.equal(readonlyUser.status, 200, JSON.stringify(readonlyUser.payload));
+  const editorPassword = 'spreadsheet-editor-test-123';
+  const editorUsername = `sheet_editor_${Date.now()}`;
+  const editorUser = await requestJson(baseUrl, '/api/users', {
+    method: 'POST',
+    token: admin.token,
+    body: {
+      username: editorUsername,
+      password: editorPassword,
+      display_name: '在线表格锁定权限测试',
+      role: 'member',
+    },
+  });
+  assert.equal(editorUser.status, 200, JSON.stringify(editorUser.payload));
 
   const workbook = createWorkbook();
   const createdDocument = await requestJson(baseUrl, '/api/documents', {
@@ -921,10 +934,122 @@ test('spreadsheet APIs enforce permissions and keep derived content text consist
     method: 'PUT',
     token: admin.token,
     body: {
-      shares: [{ target_type: 'user', target_id: Number(readonlyUser.payload.id) }],
+      shares: [
+        { target_type: 'user', target_id: Number(readonlyUser.payload.id) },
+        { target_type: 'user', target_id: Number(editorUser.payload.id) },
+      ],
     },
   });
   assert.equal(savedOperationShares.status, 200, JSON.stringify(savedOperationShares.payload));
+
+  const protectionBaseline = await requestJson(baseUrl, `/api/documents/${operationDocumentId}`, {
+    token: admin.token,
+  });
+  assert.equal(protectionBaseline.status, 200, JSON.stringify(protectionBaseline.payload));
+  const protectionWorkbook = JSON.parse(protectionBaseline.payload.content);
+  const protectionSheet = protectionWorkbook.sheets.find(sheet => sheet.id === 'sheet-1');
+  const protectedRanges = [{
+    id: 'integration-lock-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    ownerUserId: Number(admin.user.id),
+    allowedUserIds: [],
+    description: '接口锁定测试',
+    enabled: true,
+  }];
+  const createProtection = await requestJson(
+    baseUrl,
+    `/api/documents/${operationDocumentId}/spreadsheet/operations`,
+    {
+      method: 'POST',
+      token: admin.token,
+      body: {
+        base_updated_at: protectionBaseline.payload.updated_at,
+        operations: [{
+          id: 'integration-create-lock',
+          type: 'set_sheet_property',
+          sheet_id: 'sheet-1',
+          property: 'protectedRanges',
+          before: protectionSheet.protectedRanges || [],
+          after: protectedRanges,
+        }],
+      },
+    },
+  );
+  assert.equal(createProtection.status, 200, JSON.stringify(createProtection.payload));
+  const editor = await login(baseUrl, editorUsername, editorPassword);
+  const protectedDocument = await requestJson(baseUrl, `/api/documents/${operationDocumentId}`, {
+    token: editor.token,
+  });
+  assert.equal(protectedDocument.status, 200, JSON.stringify(protectedDocument.payload));
+  const protectedWorkbook = JSON.parse(protectedDocument.payload.content);
+  const protectedSheet = protectedWorkbook.sheets.find(sheet => sheet.id === 'sheet-1');
+  const protectedHistoryCount = protectedDocument.payload.edit_records.length;
+  const deniedProtectedOperation = await requestJson(
+    baseUrl,
+    `/api/documents/${operationDocumentId}/spreadsheet/operations`,
+    {
+      method: 'POST',
+      token: editor.token,
+      body: {
+        base_updated_at: protectedDocument.payload.updated_at,
+        operations: [{
+          id: 'integration-denied-locked-cell',
+          type: 'set_cell',
+          sheet_id: 'sheet-1',
+          cell: 'A1',
+          before: protectedSheet.cells.A1,
+          after: { v: '不应写入锁定区域' },
+        }],
+      },
+    },
+  );
+  assert.equal(deniedProtectedOperation.status, 403, JSON.stringify(deniedProtectedOperation.payload));
+  assert.equal(deniedProtectedOperation.payload.code, 'SPREADSHEET_PROTECTED_RANGE');
+
+  const deniedFullWorkbook = structuredClone(protectedWorkbook);
+  deniedFullWorkbook.sheets.find(sheet => sheet.id === 'sheet-1').cells.A1 = { v: '整本保存也不应写入' };
+  const deniedFullSave = await requestJson(baseUrl, `/api/documents/${operationDocumentId}/content`, {
+    method: 'PUT',
+    token: editor.token,
+    body: {
+      content: deniedFullWorkbook,
+      base_updated_at: protectedDocument.payload.updated_at,
+    },
+  });
+  assert.equal(deniedFullSave.status, 403, JSON.stringify(deniedFullSave.payload));
+  assert.equal(deniedFullSave.payload.code, 'SPREADSHEET_PROTECTED_RANGE');
+  const afterDeniedProtectionWrites = await requestJson(baseUrl, `/api/documents/${operationDocumentId}`, {
+    token: editor.token,
+  });
+  assert.equal(afterDeniedProtectionWrites.payload.updated_at, protectedDocument.payload.updated_at);
+  assert.equal(afterDeniedProtectionWrites.payload.edit_records.length, protectedHistoryCount);
+  assert.deepEqual(
+    JSON.parse(afterDeniedProtectionWrites.payload.content).sheets.find(sheet => sheet.id === 'sheet-1').cells.A1,
+    protectedSheet.cells.A1,
+  );
+
+  const unlockedCellOperation = await requestJson(
+    baseUrl,
+    `/api/documents/${operationDocumentId}/spreadsheet/operations`,
+    {
+      method: 'POST',
+      token: editor.token,
+      body: {
+        base_updated_at: protectedDocument.payload.updated_at,
+        operations: [{
+          id: 'integration-write-unlocked-cell',
+          type: 'set_cell',
+          sheet_id: 'sheet-1',
+          cell: 'J20',
+          before: null,
+          after: { v: '可编辑' },
+        }],
+      },
+    },
+  );
+  assert.equal(unlockedCellOperation.status, 200, JSON.stringify(unlockedCellOperation.payload));
+  assert.equal(JSON.parse(unlockedCellOperation.payload.content).sheets
+    .find(sheet => sheet.id === 'sheet-1').cells.J20.v, '可编辑');
 
   const readonly = await login(baseUrl, readonlyUsername, readonlyPassword);
   const readonlyPresence = await requestJson(

@@ -16,14 +16,20 @@ import {
   FunctionOutlined,
   InsertRowAboveOutlined,
   InsertRowRightOutlined,
+  LockOutlined,
   MergeCellsOutlined,
   PlusOutlined,
   SortAscendingOutlined,
   SortDescendingOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Dropdown, Input, Modal, Select, Space, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Checkbox, Dropdown, Input, InputNumber, Modal, Select, Space, Tooltip, Typography, message } from 'antd';
 import MentionPicker, { preloadMentionCandidates, scheduleMentionNotification } from './MentionPicker';
+import {
+  SpreadsheetConditionalFormatDialog,
+  SpreadsheetDataValidationDialog,
+  SpreadsheetProtectionDialog,
+} from './SpreadsheetRuleDialogs';
 import './SpreadsheetDocumentEditor.css';
 import {
   applySpreadsheetFormatPattern,
@@ -31,7 +37,11 @@ import {
   createDefaultSpreadsheetSheet,
   createSpreadsheetFormatPattern,
   createSpreadsheetFormulaEvaluator,
+  extractSpreadsheetFormulaReferences,
   findSpreadsheetMergedRange,
+  formatSpreadsheetDisplayValue,
+  getSpreadsheetConditionalStyle,
+  getSpreadsheetProtectedRangeAccess,
   getSpreadsheetCellObject,
   getSpreadsheetCellRawValue,
   getSpreadsheetUsedRange,
@@ -39,19 +49,31 @@ import {
   mergeSpreadsheetCells,
   normalizeSpreadsheetRange,
   normalizeSpreadsheetWorkbook,
+  parseSpreadsheetCellKey,
   renameSpreadsheetSheet,
   setSpreadsheetCellValue,
   setSpreadsheetColumnFilter,
+  shiftSpreadsheetCells,
   shiftSpreadsheetColumns,
   shiftSpreadsheetRows,
   sortSpreadsheetRange,
-  spreadsheetClipboardMatrixHasMultipleCells,
   spreadsheetColumnLabel,
   spreadsheetRangeContainsCell,
+  spreadsheetRangesOverlap,
   unmergeSpreadsheetCells,
   updateSpreadsheetRangeStyle,
+  validateSpreadsheetCellInput,
   validateSpreadsheetSheetName,
 } from '../utils/spreadsheetWorkbook';
+import {
+  RELATION_SPREADSHEET_CLIPBOARD_MIME,
+  applySpreadsheetClipboardPayload,
+  buildSpreadsheetClipboardPayload,
+  parseSpreadsheetClipboardData,
+  parseSpreadsheetTextClipboard,
+  spreadsheetClipboardPayloadToHtml,
+  spreadsheetClipboardPayloadToText,
+} from '../utils/spreadsheetClipboard';
 
 const { Text } = Typography;
 const ROW_HEADER_WIDTH = 46;
@@ -69,6 +91,21 @@ const FONT_FAMILY_OPTIONS = ['Arial', 'PingFang SC', 'Microsoft YaHei', 'SimSun'
 const FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32];
 const TEXT_COLOR_OPTIONS = ['#111827', '#374151', '#dc2626', '#d97706', '#15803d', '#1677ff', '#4338ca', '#7e22ce'];
 const FILL_COLOR_OPTIONS = ['#ffffff', '#f8fafc', '#fef3c7', '#ffedd5', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
+const FORMULA_REFERENCE_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2'];
+const NUMBER_FORMAT_TYPES = [
+  ['general', '常规'],
+  ['text', '文本'],
+  ['number', '数值'],
+  ['percentage', '百分比'],
+  ['currency', '货币'],
+  ['accounting', '会计专用'],
+  ['date', '日期'],
+  ['time', '时间'],
+  ['fraction', '分数'],
+  ['scientific', '科学计数'],
+  ['special', '特殊'],
+  ['custom', '自定义'],
+];
 
 function serializeWorkbookSnapshot(value) {
   return JSON.stringify(value || {});
@@ -85,16 +122,6 @@ function trimWorkbookHistory(stack) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
-}
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, char => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[char]));
 }
 
 function findOffsetIndex(offsets, value) {
@@ -120,9 +147,48 @@ function rangeIsSingleCell(range) {
   return !normalized || (normalized.startRow === normalized.endRow && normalized.startColumn === normalized.endColumn);
 }
 
+function spreadsheetRangesEqual(left, right) {
+  const a = normalizeSpreadsheetRange(left);
+  const b = normalizeSpreadsheetRange(right);
+  return Boolean(a && b
+    && a.startRow === b.startRow
+    && a.endRow === b.endRow
+    && a.startColumn === b.startColumn
+    && a.endColumn === b.endColumn);
+}
+
+function spreadsheetRangeLabel(range) {
+  const normalized = normalizeSpreadsheetRange(range);
+  if (!normalized) return '';
+  const start = buildSpreadsheetCellKey(normalized.startRow, normalized.startColumn);
+  const end = buildSpreadsheetCellKey(normalized.endRow, normalized.endColumn);
+  return start === end ? start : `${start}:${end}`;
+}
+
+function spreadsheetCellShiftAffectedRange(range, direction, sheet) {
+  const normalized = normalizeSpreadsheetRange(range);
+  if (!normalized || !sheet) return normalized;
+  if (direction === 'insert-right' || direction === 'delete-left') {
+    return { ...normalized, endColumn: Math.max(normalized.endColumn, sheet.columnCount - 1) };
+  }
+  return { ...normalized, endRow: Math.max(normalized.endRow, sheet.rowCount - 1) };
+}
+
 function createUniqueSpreadsheetSheetId(sheets = []) {
   const usedIds = new Set((Array.isArray(sheets) ? sheets : []).map(sheet => String(sheet?.id || '')));
   const base = `sheet_${Date.now()}`;
+  let candidate = base;
+  let suffix = 2;
+  while (usedIds.has(candidate)) {
+    candidate = `${base}_${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
+}
+
+function createSpreadsheetRuleId(prefix, rules = []) {
+  const usedIds = new Set((rules || []).map(rule => String(rule?.id || '')));
+  const base = `${prefix}_${Date.now().toString(36)}`;
   let candidate = base;
   let suffix = 2;
   while (usedIds.has(candidate)) {
@@ -138,10 +204,11 @@ function SpreadsheetToolbarButton({ title, active = false, disabled = false, dan
       <Button
         aria-label={title}
         icon={icon}
-        type={active ? 'primary' : 'text'}
+        type="text"
         danger={danger}
         disabled={disabled}
         size="small"
+        className={`relation-spreadsheet-toolbar-button${active ? ' relation-spreadsheet-toolbar-button--active' : ''}`}
         onClick={onClick}
       />
     </Tooltip>
@@ -183,6 +250,162 @@ function SpreadsheetSheetRenameInput({ defaultValue, onChange, onErrorSetter }) 
   );
 }
 
+function SpreadsheetCellFormatModal({ open, initialFormat, sampleValue, onCancel, onConfirm }) {
+  const [config, setConfig] = useState({ type: 'general', decimals: 2, useGrouping: true, negativeStyle: 'minus' });
+
+  useEffect(() => {
+    if (!open) return;
+    setConfig({
+      type: initialFormat?.type || (typeof initialFormat === 'string' ? initialFormat : 'general'),
+      decimals: Number(initialFormat?.decimals ?? 2),
+      useGrouping: initialFormat?.useGrouping !== false,
+      negativeStyle: initialFormat?.negativeStyle || 'minus',
+      currency: initialFormat?.currency || 'CNY',
+      pattern: initialFormat?.pattern || '',
+    });
+  }, [open, initialFormat]);
+
+  const numericFormat = ['number', 'percentage', 'currency', 'accounting', 'scientific'].includes(config.type);
+  return (
+    <Modal
+      open={open}
+      title="设置单元格格式"
+      width={620}
+      okText="确定"
+      cancelText="取消"
+      onCancel={onCancel}
+      onOk={() => onConfirm(config.type === 'general' ? null : config)}
+      className="relation-spreadsheet-format-modal"
+    >
+      <div className="relation-spreadsheet-format-layout">
+        <div className="relation-spreadsheet-format-categories" role="tablist" aria-label="单元格格式分类">
+          {NUMBER_FORMAT_TYPES.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="tab"
+              aria-selected={config.type === value}
+              className={config.type === value ? 'is-active' : ''}
+              onClick={() => setConfig(current => ({ ...current, type: value }))}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="relation-spreadsheet-format-options">
+          <div className="relation-spreadsheet-format-preview">
+            <span>示例</span>
+            <strong>{String(formatSpreadsheetDisplayValue(sampleValue || 715.42, config) ?? '')}</strong>
+          </div>
+          {numericFormat ? (
+            <>
+              <label>
+                <span>小数位数</span>
+                <InputNumber
+                  min={0}
+                  max={10}
+                  value={config.decimals}
+                  onChange={value => setConfig(current => ({ ...current, decimals: Number(value) || 0 }))}
+                />
+              </label>
+              <Checkbox
+                checked={config.useGrouping}
+                onChange={event => setConfig(current => ({ ...current, useGrouping: event.target.checked }))}
+              >
+                使用千分位分隔符
+              </Checkbox>
+              <label>
+                <span>负数</span>
+                <Select
+                  value={config.negativeStyle}
+                  options={[
+                    { value: 'minus', label: '-1,234.10' },
+                    { value: 'parentheses', label: '(1,234.10)' },
+                  ]}
+                  onChange={value => setConfig(current => ({ ...current, negativeStyle: value }))}
+                />
+              </label>
+            </>
+          ) : null}
+          {['currency', 'accounting'].includes(config.type) ? (
+            <label>
+              <span>币种</span>
+              <Select
+                value={config.currency}
+                options={[
+                  { value: 'CNY', label: '人民币 CNY' },
+                  { value: 'USD', label: '美元 USD' },
+                  { value: 'HKD', label: '港币 HKD' },
+                ]}
+                onChange={value => setConfig(current => ({ ...current, currency: value }))}
+              />
+            </label>
+          ) : null}
+          {config.type === 'custom' ? (
+            <label>
+              <span>自定义格式</span>
+              <Input
+                maxLength={64}
+                value={config.pattern}
+                placeholder="#,##0.00"
+                onChange={event => setConfig(current => ({ ...current, pattern: event.target.value }))}
+              />
+            </label>
+          ) : null}
+          <p>格式只改变显示方式，不会修改单元格原始值或公式。</p>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SpreadsheetCustomSortModal({ open, columns, activeColumnIndex, onCancel, onConfirm }) {
+  const [columnIndex, setColumnIndex] = useState(activeColumnIndex);
+  const [direction, setDirection] = useState('asc');
+  const [hasHeader, setHasHeader] = useState(true);
+
+  useEffect(() => {
+    if (!open) return;
+    setColumnIndex(activeColumnIndex);
+    setDirection('asc');
+    setHasHeader(true);
+  }, [open, activeColumnIndex]);
+
+  return (
+    <Modal
+      open={open}
+      title="自定义排序"
+      okText="排序"
+      cancelText="取消"
+      width={420}
+      onCancel={onCancel}
+      onOk={() => onConfirm({ columnIndex, direction, hasHeader })}
+      className="relation-spreadsheet-sort-modal"
+    >
+      <div className="relation-spreadsheet-sort-options">
+        <label>
+          <span>关键列</span>
+          <Select value={columnIndex} options={columns} onChange={setColumnIndex} />
+        </label>
+        <label>
+          <span>排序方式</span>
+          <Select
+            value={direction}
+            options={[
+              { value: 'asc', label: '升序' },
+              { value: 'desc', label: '降序' },
+            ]}
+            onChange={setDirection}
+          />
+        </label>
+        <Checkbox checked={hasHeader} onChange={event => setHasHeader(event.target.checked)}>
+          数据包含标题行
+        </Checkbox>
+      </div>
+    </Modal>
+  );
+}
+
 export default function SpreadsheetDocumentEditor({
   workbook: workbookValue,
   canEdit = false,
@@ -197,6 +420,9 @@ export default function SpreadsheetDocumentEditor({
   collaborationNotice = '',
   collaborators = [],
   mentionContext,
+  currentUser = null,
+  protectionUsers = [],
+  canManageProtection = false,
   fillAvailableHeight = false,
   frameless = false,
   workspaceFocusMode = false,
@@ -222,13 +448,21 @@ export default function SpreadsheetDocumentEditor({
   const [zoom, setZoom] = useState(1);
   const [resizeDrag, setResizeDrag] = useState(null);
   const [formatPainter, setFormatPainter] = useState(null);
+  const [clipboardState, setClipboardState] = useState(null);
+  const [cellFormatOpen, setCellFormatOpen] = useState(false);
+  const [customSortOpen, setCustomSortOpen] = useState(false);
+  const [protectionOpen, setProtectionOpen] = useState(false);
+  const [conditionalFormatOpen, setConditionalFormatOpen] = useState(false);
+  const [dataValidationOpen, setDataValidationOpen] = useState(false);
   const editorRef = useRef(null);
   const viewportRef = useRef(null);
   const fileInputRef = useRef(null);
+  const editorActiveRef = useRef(false);
   const workbookRef = useRef(workbook);
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
   const inputTransactionRef = useRef(null);
+  const keyCommandRef = useRef(null);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const formatPainterRef = useRef(null);
   const currentSelectionRef = useRef(null);
@@ -362,9 +596,39 @@ export default function SpreadsheetDocumentEditor({
   const commitInputTransaction = () => {
     const transaction = inputTransactionRef.current;
     inputTransactionRef.current = null;
+    const sourceMatch = String(transaction?.source || '').match(/^(?:cell|formula):([^:]+):([A-Z]+\d+)$/i);
+    if (transaction && sourceMatch && transaction.before !== serializeWorkbookSnapshot(workbookRef.current)) {
+      const parsedCell = parseSpreadsheetCellKey(sourceMatch[2]);
+      const sheet = workbookRef.current.sheets.find(item => String(item.id) === sourceMatch[1]);
+      if (sheet && parsedCell) {
+        const validationEvaluator = createSpreadsheetFormulaEvaluator(workbookRef.current);
+        const rawValue = getSpreadsheetCellRawValue(sheet, parsedCell.rowIndex, parsedCell.columnIndex);
+        const validationValue = String(rawValue).startsWith('=')
+          ? validationEvaluator.getValue(sheet.id, parsedCell.rowIndex, parsedCell.columnIndex)
+          : rawValue;
+        const validation = validateSpreadsheetCellInput(
+          sheet,
+          parsedCell.rowIndex,
+          parsedCell.columnIndex,
+          validationValue,
+          {
+            evaluateCustomFormula: rule => validationEvaluator.evaluateFormula(sheet.id, rule.formula) === true,
+          },
+        );
+        if (!validation.valid && validation.action === 'reject') {
+          const previous = normalizeSpreadsheetWorkbook(JSON.parse(transaction.before));
+          workbookRef.current = previous;
+          onWorkbookChange?.(previous);
+          message.error(validation.message);
+          return false;
+        }
+        if (!validation.valid) message.warning(validation.message);
+      }
+    }
     if (transaction && transaction.before !== serializeWorkbookSnapshot(workbookRef.current)) {
       recordUndoSnapshot(transaction.before);
     }
+    return true;
   };
 
   const cancelInputTransaction = () => {
@@ -533,14 +797,45 @@ export default function SpreadsheetDocumentEditor({
     && currentSelection.endColumn === activeSheet.columnCount - 1;
   const selectsWholeColumns = currentSelection.startRow === 0
     && currentSelection.endRow === activeSheet.rowCount - 1;
+  const selectionProtectionAccess = getSpreadsheetProtectedRangeAccess(activeSheet, currentSelection, {
+    userId: currentUser?.id,
+    canManage: canManageProtection,
+  });
+  const selectionLocked = !selectionProtectionAccess.allowed;
+  const selectionMutationDisabled = !canEdit || selectionLocked;
+  const workbookHasProtection = workbook.sheets.some(sheet => (
+    (sheet.protectedRanges || []).some(rule => rule?.enabled !== false)
+  ));
+  const importDisabled = !canEdit || (!canManageProtection && workbookHasProtection);
+  const selectedProtectionRule = (activeSheet.protectedRanges || []).find(rule => (
+    rule.enabled !== false && spreadsheetRangesEqual(rule.range, currentSelection)
+  )) || (activeSheet.protectedRanges || []).find(rule => (
+    rule.enabled !== false && spreadsheetRangeContainsCell(rule.range, activeRowIndex, activeColumnIndex)
+  ));
+  const selectedConditionalRule = (activeSheet.conditionalFormats || []).find(rule => (
+    rule.enabled !== false && spreadsheetRangesEqual(rule.range, currentSelection)
+  ));
+  const selectedValidationRule = (activeSheet.dataValidations || []).find(rule => (
+    rule.enabled !== false && spreadsheetRangesEqual(rule.range, currentSelection)
+  ));
   const selectedCellObject = getSpreadsheetCellObject(activeSheet, activeRowIndex, activeColumnIndex);
   const selectedCellRawValue = getSpreadsheetCellRawValue(activeSheet, activeRowIndex, activeColumnIndex);
   const selectedCellStyle = selectedCellObject.style || {};
   const selectedFontFamily = selectedCellStyle.fontFamily || DEFAULT_FONT_FAMILY;
   const selectedFontSize = Number(selectedCellStyle.fontSize) || DEFAULT_FONT_SIZE;
-  const selectionLabel = rangeIsSingleCell(currentSelection)
-    ? activeCellKey
-    : `${buildSpreadsheetCellKey(currentSelection.startRow, currentSelection.startColumn)}:${buildSpreadsheetCellKey(currentSelection.endRow, currentSelection.endColumn)}`;
+  const selectionLabel = spreadsheetRangeLabel(currentSelection) || activeCellKey;
+  const protectionRangeLabel = spreadsheetRangeLabel(selectedProtectionRule?.range || currentSelection) || selectionLabel;
+  const formulaReferences = useMemo(() => (
+    extractSpreadsheetFormulaReferences(selectedCellRawValue, activeSheet.name)
+      .filter(reference => (
+        String(reference.sheetName || '').toLocaleLowerCase('zh-CN') === String(activeSheet.name || '').toLocaleLowerCase('zh-CN')
+        && String(reference.endSheetName || '').toLocaleLowerCase('zh-CN') === String(activeSheet.name || '').toLocaleLowerCase('zh-CN')
+      ))
+      .map((reference, index) => ({
+        ...reference,
+        color: FORMULA_REFERENCE_COLORS[index % FORMULA_REFERENCE_COLORS.length],
+      }))
+  ), [selectedCellRawValue, activeSheet.name]);
   const remoteCollaborators = useMemo(() => (
     (Array.isArray(collaborators) ? collaborators : []).filter(item => item?.session_id && item?.user_name)
   ), [collaborators]);
@@ -570,6 +865,22 @@ export default function SpreadsheetDocumentEditor({
     setFormatPainter(next);
   };
 
+  const focusSpreadsheetGrid = () => {
+    editorActiveRef.current = true;
+    window.requestAnimationFrame(() => editorRef.current?.focus({ preventScroll: true }));
+  };
+
+  const ensureSpreadsheetRangeEditable = (range = currentSelection) => {
+    if (!canEdit) return false;
+    const access = getSpreadsheetProtectedRangeAccess(activeSheet, range, {
+      userId: currentUser?.id,
+      canManage: canManageProtection,
+    });
+    if (access.allowed) return true;
+    message.warning(access.deniedRules[0]?.description || '所选单元格已锁定，你没有编辑权限');
+    return false;
+  };
+
   const activateFormatPainter = continuous => {
     if (!canEdit) return;
     const sourceSheet = workbookRef.current.sheets.find(sheet => sheet.id === activeSheet.id)
@@ -578,12 +889,12 @@ export default function SpreadsheetDocumentEditor({
     if (!pattern) return;
     setEditingCellKey('');
     setActiveFormatPainter({ pattern, continuous: Boolean(continuous) });
-    window.requestAnimationFrame(() => editorRef.current?.focus());
+    focusSpreadsheetGrid();
   };
 
   const applyFormatPainterToRange = targetRange => {
     const painter = formatPainterRef.current;
-    if (!painter || !targetRange || !canEdit) return;
+    if (!painter || !targetRange || !ensureSpreadsheetRangeEditable(targetRange)) return;
     applyWorkbookUpdate(draft => {
       const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
       applySpreadsheetFormatPattern(sheet, targetRange, painter.pattern);
@@ -673,6 +984,7 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const updateCellValue = (rowIndex, columnIndex, value, options) => {
+    if (!ensureSpreadsheetRangeEditable({ rowIndex, columnIndex })) return;
     applyWorkbookUpdate(draft => {
       const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
       setSpreadsheetCellValue(sheet, rowIndex, columnIndex, value);
@@ -682,80 +994,253 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const updateRangeStyle = stylePatch => {
+    if (!ensureSpreadsheetRangeEditable()) return;
     applyWorkbookUpdate(draft => {
       const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
       updateSpreadsheetRangeStyle(sheet, currentSelection, stylePatch);
       return draft;
     });
+    focusSpreadsheetGrid();
   };
 
-  const clearSelection = (clearStyle = false) => {
-    applyWorkbookUpdate(draft => {
-      const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
+  const clearSheetRange = (sheet, range, mode = 'content') => {
+    const bounds = normalizeSpreadsheetRange(range);
+    if (!sheet || !bounds) return;
+    for (let row = bounds.startRow; row <= bounds.endRow; row += 1) {
+      for (let column = bounds.startColumn; column <= bounds.endColumn; column += 1) {
+        const key = buildSpreadsheetCellKey(row, column);
+        if (mode === 'all') delete sheet.cells[key];
+        else if (mode === 'format') {
+          const cell = getSpreadsheetCellObject(sheet, row, column);
+          if (!Object.keys(cell).length) continue;
+          const next = { ...cell };
+          delete next.style;
+          if ((next.v ?? next.value ?? '') === '') delete sheet.cells[key];
+          else sheet.cells[key] = next;
+        } else setSpreadsheetCellValue(sheet, row, column, '');
+      }
+    }
+  };
+
+  const clearSelection = (mode = 'content') => {
+    if (!ensureSpreadsheetRangeEditable()) return;
+    if (mode !== 'format') {
+      const validationWorkbook = normalizeSpreadsheetWorkbook(JSON.parse(JSON.stringify(workbookRef.current)));
+      const validationSheet = validationWorkbook.sheets.find(item => item.id === activeSheet.id) || validationWorkbook.sheets[0];
+      clearSheetRange(validationSheet, currentSelection, mode);
+      const validationEvaluator = createSpreadsheetFormulaEvaluator(validationWorkbook);
       for (let row = currentSelection.startRow; row <= currentSelection.endRow; row += 1) {
         for (let column = currentSelection.startColumn; column <= currentSelection.endColumn; column += 1) {
-          if (clearStyle) updateSpreadsheetRangeStyle(sheet, { rowIndex: row, columnIndex: column }, {
-            bold: null,
-            backgroundColor: null,
+          const validation = validateSpreadsheetCellInput(validationSheet, row, column, '', {
+            evaluateCustomFormula: rule => validationEvaluator.evaluateFormula(validationSheet.id, rule.formula) === true,
           });
-          else setSpreadsheetCellValue(sheet, row, column, '');
+          if (!validation.valid && validation.action === 'reject') {
+            message.error(`${buildSpreadsheetCellKey(row, column)}：${validation.message}`);
+            return;
+          }
         }
       }
-      return draft;
-    });
-  };
-
-  const applyPastedMatrix = matrix => {
-    if (!canEdit || !Array.isArray(matrix) || !matrix.length) return;
+    }
     applyWorkbookUpdate(draft => {
       const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
-      matrix.forEach((line, rowOffset) => {
-        (Array.isArray(line) ? line : [line]).forEach((value, columnOffset) => {
-          setSpreadsheetCellValue(sheet, activeRowIndex + rowOffset, activeColumnIndex + columnOffset, value);
-        });
-      });
+      clearSheetRange(sheet, currentSelection, mode);
       return draft;
     });
-    const endRow = activeRowIndex + matrix.length - 1;
-    const endColumn = activeColumnIndex + Math.max(0, ...matrix.map(line => line.length - 1));
-    setSelection(normalizeSpreadsheetRange({
-      startRow: activeRowIndex,
-      endRow,
-      startColumn: activeColumnIndex,
-      endColumn,
-    }));
+    focusSpreadsheetGrid();
   };
 
-  const handlePaste = event => {
-    if (!canEdit || event.target?.closest?.('[data-spreadsheet-formula-input="true"]')) return;
-    const text = event.clipboardData?.getData('text/plain') || '';
-    if (!text) return;
-    const matrix = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
-      .filter((line, index, lines) => index < lines.length - 1 || line !== '')
-      .map(line => line.split('\t'));
-    const isMatrixPaste = spreadsheetClipboardMatrixHasMultipleCells(matrix);
-    if (!isMatrixPaste && event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
-    event.preventDefault();
-    applyPastedMatrix(matrix);
-    message.success(isMatrixPaste ? '已粘贴表格区域' : '已粘贴单元格');
-  };
-
-  const handleCopy = event => {
-    if (event.target?.closest?.('[data-spreadsheet-formula-input="true"]')) return;
-    const rows = [];
+  const selectionClipboardPayload = () => {
+    const sheet = workbookRef.current.sheets.find(item => item.id === activeSheet.id) || workbookRef.current.sheets[0];
+    const payload = buildSpreadsheetClipboardPayload(sheet, currentSelection);
+    if (!payload) return null;
+    const displayMatrix = [];
     for (let row = currentSelection.startRow; row <= currentSelection.endRow; row += 1) {
       const values = [];
       for (let column = currentSelection.startColumn; column <= currentSelection.endColumn; column += 1) {
         values.push(evaluator.getValue(activeSheet.id, row, column));
       }
-      rows.push(values);
+      displayMatrix.push(values);
     }
-    const plain = rows.map(line => line.map(value => String(value ?? '')).join('\t')).join('\n');
-    const html = `<table><tbody>${rows.map(line => `<tr>${line.map(value => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    return { payload, displayMatrix };
+  };
+
+  const setSelectionToPastedRange = (endRow, endColumn) => {
+    const nextRange = normalizeSpreadsheetRange({
+      startRow: activeRowIndex,
+      endRow,
+      startColumn: activeColumnIndex,
+      endColumn,
+    });
+    currentSelectionRef.current = nextRange;
+    setSelection(nextRange);
+  };
+
+  const validateClipboardTarget = payload => {
+    const validationWorkbook = normalizeSpreadsheetWorkbook(JSON.parse(JSON.stringify(workbookRef.current)));
+    const validationSheet = validationWorkbook.sheets.find(item => item.id === activeSheet.id) || validationWorkbook.sheets[0];
+    applySpreadsheetClipboardPayload(validationSheet, payload, activeRowIndex, activeColumnIndex);
+    const validationEvaluator = createSpreadsheetFormulaEvaluator(validationWorkbook);
+    let warning = '';
+    for (let rowOffset = 0; rowOffset < payload.cells.length; rowOffset += 1) {
+      const row = payload.cells[rowOffset] || [];
+      for (let columnOffset = 0; columnOffset < row.length; columnOffset += 1) {
+        const targetRow = activeRowIndex + rowOffset;
+        const targetColumn = activeColumnIndex + columnOffset;
+        const value = getSpreadsheetCellRawValue(validationSheet, targetRow, targetColumn);
+        const validationValue = String(value).startsWith('=')
+          ? validationEvaluator.getValue(validationSheet.id, targetRow, targetColumn)
+          : value;
+        const result = validateSpreadsheetCellInput(
+          validationSheet,
+          targetRow,
+          targetColumn,
+          validationValue,
+          {
+            evaluateCustomFormula: rule => validationEvaluator.evaluateFormula(validationSheet.id, rule.formula) === true,
+          },
+        );
+        if (!result.valid && result.action === 'reject') {
+          message.error(`${buildSpreadsheetCellKey(activeRowIndex + rowOffset, activeColumnIndex + columnOffset)}：${result.message}`);
+          return false;
+        }
+        if (!result.valid && !warning) warning = result.message;
+      }
+    }
+    if (warning) message.warning(warning);
+    return true;
+  };
+
+  const applyClipboardPayload = (payload, { insertDirection = '', cutState = clipboardState } = {}) => {
+    const targetRange = payload?.cells?.length ? {
+      startRow: activeRowIndex,
+      endRow: activeRowIndex + payload.cells.length - 1,
+      startColumn: activeColumnIndex,
+      endColumn: activeColumnIndex + Math.max(0, ...payload.cells.map(row => (row?.length || 1) - 1)),
+    } : currentSelection;
+    const affectedTargetRange = insertDirection
+      ? spreadsheetCellShiftAffectedRange(targetRange, insertDirection, activeSheet)
+      : targetRange;
+    if (!canEdit || !payload?.cells?.length || !ensureSpreadsheetRangeEditable(affectedTargetRange) || !validateClipboardTarget(payload)) return false;
+    if (cutState?.mode === 'cut' && cutState.payload?.sourceRange) {
+      const sourceSheet = workbookRef.current.sheets.find(item => item.id === cutState.payload.sourceSheetId);
+      const sourceAccess = getSpreadsheetProtectedRangeAccess(sourceSheet, cutState.payload.sourceRange, {
+        userId: currentUser?.id,
+        canManage: canManageProtection,
+      });
+      if (!sourceAccess.allowed) {
+        message.warning(sourceAccess.deniedRules[0]?.description || '剪切源区域已锁定');
+        return false;
+      }
+    }
+    let pastedRange = { endRow: activeRowIndex, endColumn: activeColumnIndex };
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
+      if (cutState?.mode === 'cut' && cutState.payload?.sourceRange) {
+        const sourceSheet = draft.sheets.find(item => item.id === cutState.payload.sourceSheetId);
+        if (sourceSheet) clearSheetRange(sourceSheet, cutState.payload.sourceRange, 'all');
+      }
+      if (insertDirection) {
+        const rowCount = Math.max(1, Number(payload.rowCount) || payload.cells.length);
+        const columnCount = Math.max(1, Number(payload.columnCount) || payload.cells[0]?.length || 1);
+        shiftSpreadsheetCells(sheet, {
+          startRow: activeRowIndex,
+          endRow: activeRowIndex + rowCount - 1,
+          startColumn: activeColumnIndex,
+          endColumn: activeColumnIndex + columnCount - 1,
+        }, insertDirection, draft);
+      }
+      pastedRange = applySpreadsheetClipboardPayload(sheet, payload, activeRowIndex, activeColumnIndex);
+      return draft;
+    });
+    setSelectionToPastedRange(pastedRange.endRow, pastedRange.endColumn);
+    if (cutState?.mode === 'cut') setClipboardState(null);
+    focusSpreadsheetGrid();
+    return true;
+  };
+
+  const handlePaste = event => {
+    if (!canEdit || event.target?.closest?.('[data-spreadsheet-formula-input="true"]')) return;
+    const parsed = parseSpreadsheetClipboardData(event.clipboardData);
+    if (!parsed?.payload) return;
+    const isMatrixPaste = Number(parsed.payload.rowCount) > 1 || Number(parsed.payload.columnCount) > 1;
+    if (!isMatrixPaste && event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+    event.preventDefault();
+    const pasted = applyClipboardPayload(parsed.payload, {
+      cutState: parsed.source === 'relation' ? clipboardState : null,
+    });
+    if (!pasted) return;
+    if (parsed.sourceLooksLikeShimo && !parsed.hasFormulaMetadata) {
+      message.warning('源内容未提供公式，仅粘贴结果值');
+    }
+    message.success(isMatrixPaste ? '已粘贴表格区域' : '已粘贴单元格');
+  };
+
+  const handleCopy = event => {
+    if (event.target?.closest?.('[data-spreadsheet-formula-input="true"]')) return;
+    const clipboard = selectionClipboardPayload();
+    if (!clipboard) return;
+    const plain = spreadsheetClipboardPayloadToText(clipboard.payload, clipboard.displayMatrix);
+    const html = spreadsheetClipboardPayloadToHtml(clipboard.payload, clipboard.displayMatrix);
+    event.clipboardData?.setData(RELATION_SPREADSHEET_CLIPBOARD_MIME, JSON.stringify(clipboard.payload));
     event.clipboardData?.setData('text/plain', plain);
     event.clipboardData?.setData('text/html', html);
     event.preventDefault();
+    setClipboardState({ mode: 'copy', payload: clipboard.payload });
     message.success(rangeIsSingleCell(currentSelection) ? '已复制单元格' : '已复制选区');
+  };
+
+  const handleCut = event => {
+    if (!canEdit || event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+    if (!ensureSpreadsheetRangeEditable()) return;
+    const clipboard = selectionClipboardPayload();
+    if (!clipboard) return;
+    event.clipboardData?.setData(RELATION_SPREADSHEET_CLIPBOARD_MIME, JSON.stringify(clipboard.payload));
+    event.clipboardData?.setData('text/plain', spreadsheetClipboardPayloadToText(clipboard.payload, clipboard.displayMatrix));
+    event.clipboardData?.setData('text/html', spreadsheetClipboardPayloadToHtml(clipboard.payload, clipboard.displayMatrix));
+    event.preventDefault();
+    setClipboardState({ mode: 'cut', payload: clipboard.payload });
+    message.success('已剪切选区，粘贴成功后将移动内容');
+  };
+
+  const writeSelectionToSystemClipboard = async mode => {
+    if (mode === 'cut' && !ensureSpreadsheetRangeEditable()) return;
+    const clipboard = selectionClipboardPayload();
+    if (!clipboard) return;
+    const plain = spreadsheetClipboardPayloadToText(clipboard.payload, clipboard.displayMatrix);
+    const html = spreadsheetClipboardPayloadToHtml(clipboard.payload, clipboard.displayMatrix);
+    try {
+      if (navigator.clipboard?.write && typeof window.ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([new window.ClipboardItem({
+          [RELATION_SPREADSHEET_CLIPBOARD_MIME]: new Blob([JSON.stringify(clipboard.payload)], { type: RELATION_SPREADSHEET_CLIPBOARD_MIME }),
+          'text/plain': new Blob([plain], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        })]);
+      } else if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(plain);
+    } catch {
+      // The internal clipboard still supports in-page paste when browser permission is unavailable.
+    }
+    setClipboardState({ mode, payload: clipboard.payload });
+    message.success(mode === 'cut' ? '已剪切选区，粘贴成功后将移动内容' : '已复制选区');
+    focusSpreadsheetGrid();
+  };
+
+  const pasteFromContextMenu = async insertDirection => {
+    if (clipboardState?.payload) {
+      const pasted = applyClipboardPayload(clipboardState.payload, { insertDirection });
+      if (!pasted) return;
+      message.success(insertDirection ? '已插入复制的单元格' : '已粘贴选区');
+      return;
+    }
+    try {
+      const text = await navigator.clipboard?.readText?.();
+      const payload = parseSpreadsheetTextClipboard(text);
+      if (!payload) throw new Error('剪贴板为空');
+      const pasted = applyClipboardPayload(payload, { insertDirection, cutState: null });
+      if (!pasted) return;
+      message.success(insertDirection ? '已插入复制的单元格' : '已粘贴选区');
+    } catch (error) {
+      message.warning(error?.message || '无法读取剪贴板，请使用 Ctrl/Cmd+V');
+    }
   };
 
   const handleGridKeyDown = event => {
@@ -774,7 +1259,7 @@ export default function SpreadsheetDocumentEditor({
       return;
     }
     if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
-    if ((event.metaKey || event.ctrlKey) && ['c', 'v'].includes(event.key.toLowerCase())) return;
+    if ((event.metaKey || event.ctrlKey) && ['c', 'v', 'x'].includes(event.key.toLowerCase())) return;
     if (
       canEdit
       && !event.altKey
@@ -784,6 +1269,7 @@ export default function SpreadsheetDocumentEditor({
       && event.key
       && event.key.length === 1
     ) {
+      if (!ensureSpreadsheetRangeEditable({ rowIndex: activeRowIndex, columnIndex: activeColumnIndex })) return;
       event.preventDefault();
       const transactionKey = `cell:${activeSheet.id}:${activeCellKey}`;
       beginInputTransaction(transactionKey);
@@ -793,7 +1279,7 @@ export default function SpreadsheetDocumentEditor({
     }
     if (event.key === 'Delete' || event.key === 'Backspace') {
       event.preventDefault();
-      clearSelection(false);
+      clearSelection('content');
       return;
     }
     const keyMoves = {
@@ -809,25 +1295,79 @@ export default function SpreadsheetDocumentEditor({
       moveSelection(keyMoves[event.key][0], keyMoves[event.key][1], event.shiftKey && event.key.startsWith('Arrow'));
     }
   };
+  keyCommandRef.current = handleGridKeyDown;
 
-  const insertRow = () => applyWorkbookUpdate(draft => {
-    shiftSpreadsheetRows(draft.sheets.find(item => item.id === activeSheet.id), activeRowIndex, 1, draft);
-    return draft;
-  });
+  useEffect(() => {
+    const handleDocumentPointerDown = event => {
+      if (editorRef.current?.contains(event.target)
+        || event.target?.closest?.('.relation-spreadsheet-freeze-menu, .relation-spreadsheet-menu-popup')) {
+        editorActiveRef.current = true;
+        return;
+      }
+      editorActiveRef.current = false;
+    };
+    const handleDocumentKeyDown = event => {
+      const key = String(event.key || '').toLowerCase();
+      const commandKey = event.metaKey || event.ctrlKey;
+      if (!editorActiveRef.current || !commandKey || !['z', 'y'].includes(key)) return;
+      if (editorRef.current?.contains(event.target)) return;
+      if (event.target?.closest?.('input, textarea, [contenteditable="true"], .ant-modal-root')) return;
+      keyCommandRef.current?.(event);
+    };
+    document.addEventListener('pointerdown', handleDocumentPointerDown, true);
+    document.addEventListener('keydown', handleDocumentKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handleDocumentPointerDown, true);
+      document.removeEventListener('keydown', handleDocumentKeyDown);
+    };
+  }, []);
+
+  const insertRow = () => {
+    if (!ensureSpreadsheetRangeEditable({
+      startRow: activeRowIndex,
+      endRow: activeRowIndex,
+      startColumn: 0,
+      endColumn: activeSheet.columnCount - 1,
+    })) return;
+    applyWorkbookUpdate(draft => {
+      shiftSpreadsheetRows(draft.sheets.find(item => item.id === activeSheet.id), activeRowIndex, 1, draft);
+      return draft;
+    });
+  };
   const deleteRow = () => {
     if (activeSheet.rowCount <= 1) return;
+    if (!ensureSpreadsheetRangeEditable({
+      startRow: activeRowIndex,
+      endRow: activeRowIndex,
+      startColumn: 0,
+      endColumn: activeSheet.columnCount - 1,
+    })) return;
     applyWorkbookUpdate(draft => {
       shiftSpreadsheetRows(draft.sheets.find(item => item.id === activeSheet.id), activeRowIndex, -1, draft);
       return draft;
     });
     moveSelection(activeRowIndex >= activeSheet.rowCount - 1 ? -1 : 0, 0);
   };
-  const insertColumn = () => applyWorkbookUpdate(draft => {
-    shiftSpreadsheetColumns(draft.sheets.find(item => item.id === activeSheet.id), activeColumnIndex, 1, draft);
-    return draft;
-  });
+  const insertColumn = () => {
+    if (!ensureSpreadsheetRangeEditable({
+      startRow: 0,
+      endRow: activeSheet.rowCount - 1,
+      startColumn: activeColumnIndex,
+      endColumn: activeColumnIndex,
+    })) return;
+    applyWorkbookUpdate(draft => {
+      shiftSpreadsheetColumns(draft.sheets.find(item => item.id === activeSheet.id), activeColumnIndex, 1, draft);
+      return draft;
+    });
+  };
   const deleteColumn = () => {
     if (activeSheet.columnCount <= 1) return;
+    if (!ensureSpreadsheetRangeEditable({
+      startRow: 0,
+      endRow: activeSheet.rowCount - 1,
+      startColumn: activeColumnIndex,
+      endColumn: activeColumnIndex,
+    })) return;
     applyWorkbookUpdate(draft => {
       shiftSpreadsheetColumns(draft.sheets.find(item => item.id === activeSheet.id), activeColumnIndex, -1, draft);
       return draft;
@@ -835,7 +1375,22 @@ export default function SpreadsheetDocumentEditor({
     moveSelection(0, activeColumnIndex >= activeSheet.columnCount - 1 ? -1 : 0);
   };
 
+  const shiftSelectedCells = direction => {
+    if (!ensureSpreadsheetRangeEditable(spreadsheetCellShiftAffectedRange(currentSelection, direction, activeSheet))) return;
+    if ((activeSheet.mergedCells || []).some(range => spreadsheetRangesOverlap(range, currentSelection))) {
+      message.warning('请先取消选区内的合并单元格');
+      return;
+    }
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
+      shiftSpreadsheetCells(sheet, currentSelection, direction, draft);
+      return draft;
+    });
+    focusSpreadsheetGrid();
+  };
+
   const toggleMerge = () => {
+    if (!ensureSpreadsheetRangeEditable()) return;
     const existing = findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex);
     if (existing) {
       applyWorkbookUpdate(draft => {
@@ -868,14 +1423,40 @@ export default function SpreadsheetDocumentEditor({
     });
   };
 
-  const sortSelection = direction => applyWorkbookUpdate(draft => {
-    const sheet = draft.sheets.find(item => item.id === activeSheet.id);
-    const bounds = rangeIsSingleCell(currentSelection) ? getSpreadsheetUsedRange(sheet) : currentSelection;
-    sortSpreadsheetRange(sheet, bounds, activeColumnIndex, direction, (row, column) => evaluator.getValue(activeSheet.id, row, column));
-    return draft;
-  });
+  const sortSelection = (direction, options = {}) => {
+    if (!ensureSpreadsheetRangeEditable()) return;
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id);
+      const usedRange = getSpreadsheetUsedRange(sheet);
+      let bounds = rangeIsSingleCell(currentSelection) ? usedRange : currentSelection;
+      if (selectsWholeColumns) {
+        bounds = {
+          ...currentSelection,
+          startRow: usedRange.startRow,
+          endRow: usedRange.endRow,
+        };
+      } else if (selectsWholeRows) {
+        bounds = {
+          ...currentSelection,
+          startColumn: usedRange.startColumn,
+          endColumn: usedRange.endColumn,
+        };
+      }
+      sortSpreadsheetRange(
+        sheet,
+        bounds,
+        Number.isInteger(options.columnIndex) ? options.columnIndex : activeColumnIndex,
+        direction,
+        (row, column) => evaluator.getValue(activeSheet.id, row, column),
+        { hasHeader: options.hasHeader },
+      );
+      return draft;
+    });
+    focusSpreadsheetGrid();
+  };
 
   const filterCurrentValue = () => {
+    if (!ensureSpreadsheetRangeEditable({ rowIndex: activeRowIndex, columnIndex: activeColumnIndex })) return;
     const value = evaluator.getValue(activeSheet.id, activeRowIndex, activeColumnIndex);
     applyWorkbookUpdate(draft => {
       setSpreadsheetColumnFilter(draft.sheets.find(item => item.id === activeSheet.id), activeColumnIndex, value, 'equals');
@@ -1005,6 +1586,10 @@ export default function SpreadsheetDocumentEditor({
   };
   const deleteSheet = sheet => {
     if (workbook.sheets.length <= 1) return;
+    if (!canManageProtection && (sheet.protectedRanges || []).some(rule => rule.enabled !== false)) {
+      message.warning('该工作表包含锁定单元格，只有文档管理者可以删除');
+      return;
+    }
     Modal.confirm({
       title: `删除 ${sheet.name}`,
       content: '工作表及其数据将被删除，并随文档自动保存。',
@@ -1032,6 +1617,74 @@ export default function SpreadsheetDocumentEditor({
       draft.sheets.splice(draftIndex + offset, 0, movedSheet);
       return draft;
     });
+  };
+
+  const saveSelectionRule = (property, values, existingRule, prefix, options = {}) => {
+    const targetRange = options.preserveExistingRange && existingRule?.range
+      ? { ...normalizeSpreadsheetRange(existingRule.range) }
+      : { ...currentSelectionRef.current };
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
+      const rules = Array.isArray(sheet[property]) ? sheet[property] : [];
+      const id = existingRule?.id || createSpreadsheetRuleId(prefix, rules);
+      const nextRule = {
+        ...(existingRule || {}),
+        ...values,
+        id,
+        range: targetRange,
+        enabled: true,
+      };
+      sheet[property] = existingRule
+        ? rules.map(rule => rule.id === existingRule.id ? nextRule : rule)
+        : [...rules, nextRule];
+      return draft;
+    });
+    focusSpreadsheetGrid();
+  };
+
+  const deleteSelectionRule = (property, rule) => {
+    if (!rule) return;
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id) || draft.sheets[0];
+      sheet[property] = (sheet[property] || []).filter(item => item.id !== rule.id);
+      return draft;
+    });
+    focusSpreadsheetGrid();
+  };
+
+  const saveProtectionRule = values => {
+    if (!canManageProtection) return;
+    saveSelectionRule('protectedRanges', {
+      ...values,
+      ownerUserId: Number(selectedProtectionRule?.ownerUserId || currentUser?.id) || null,
+      allowedUserIds: (values.allowedUserIds || []).map(Number),
+    }, selectedProtectionRule, 'lock', { preserveExistingRange: true });
+    setProtectionOpen(false);
+  };
+
+  const saveConditionalRule = values => {
+    if (!ensureSpreadsheetRangeEditable()) return;
+    saveSelectionRule('conditionalFormats', {
+      ...values,
+      priority: selectedConditionalRule?.priority ?? (activeSheet.conditionalFormats || []).length,
+    }, selectedConditionalRule, 'condition');
+    setConditionalFormatOpen(false);
+  };
+
+  const saveValidationRule = values => {
+    if (!ensureSpreadsheetRangeEditable()) return;
+    const overlappingRule = (activeSheet.dataValidations || []).find(rule => (
+      rule.id !== selectedValidationRule?.id && spreadsheetRangesOverlap(rule.range, currentSelection)
+    ));
+    if (overlappingRule) {
+      message.warning('所选范围已有其他数据验证规则，请先调整或删除原规则');
+      return;
+    }
+    saveSelectionRule('dataValidations', {
+      ...values,
+      priority: selectedValidationRule?.priority ?? (activeSheet.dataValidations || []).length,
+    }, selectedValidationRule, 'validation');
+    setDataValidationOpen(false);
   };
 
   const menuItems = [
@@ -1078,13 +1731,119 @@ export default function SpreadsheetDocumentEditor({
     <Dropdown
       key={menu.key}
       menu={{
-        items: menu.items.map(item => ({ key: item.key, label: item.label, disabled: !canEdit || item.disabled, danger: item.danger })),
+        items: menu.items.map(item => ({
+          key: item.key,
+          label: item.label,
+          disabled: !canEdit || (menu.key !== 'view' && selectionLocked) || item.disabled,
+          danger: item.danger,
+        })),
         onClick: ({ key }) => menu.items.find(item => item.key === key)?.onClick?.(),
       }}
     >
       <Button type="text" size="small">{menu.label}</Button>
     </Dropdown>
   );
+
+  const contextMenuItems = [
+    { key: 'cut', label: '剪切', disabled: !canEdit || selectionLocked },
+    { key: 'copy', label: '复制' },
+    { key: 'paste', label: '粘贴', disabled: !canEdit || selectionLocked },
+    {
+      key: 'insert-copied',
+      label: '插入复制的单元格',
+      disabled: !canEdit || selectionLocked || !clipboardState?.payload,
+      children: [
+        { key: 'insert-copy-right', label: '右移' },
+        { key: 'insert-copy-down', label: '下移' },
+      ],
+    },
+    { type: 'divider' },
+    {
+      key: 'clear',
+      label: '清除',
+      disabled: !canEdit || selectionLocked,
+      children: [
+        { key: 'clear-content', label: '清除内容' },
+        { key: 'clear-format', label: '清除格式' },
+        { key: 'clear-all', label: '清除全部' },
+      ],
+    },
+    {
+      key: 'insert-cells',
+      label: '插入',
+      disabled: !canEdit || selectionLocked,
+      children: [
+        { key: 'insert-cell-right', label: '插入单元格 - 右移' },
+        { key: 'insert-cell-down', label: '插入单元格 - 下移' },
+        { key: 'insert-row', label: '在上方插入行' },
+        { key: 'insert-column', label: '在左侧插入列' },
+      ],
+    },
+    {
+      key: 'delete-cells',
+      label: '删除',
+      disabled: !canEdit || selectionLocked,
+      children: [
+        { key: 'delete-row', label: '删除行', danger: true, disabled: activeSheet.rowCount <= 1 },
+        { key: 'delete-column', label: '删除列', danger: true, disabled: activeSheet.columnCount <= 1 },
+        { key: 'delete-cell-left', label: '删除单元格 - 左移', danger: true },
+        { key: 'delete-cell-up', label: '删除单元格 - 上移', danger: true },
+      ],
+    },
+    { type: 'divider' },
+    {
+      key: 'sort',
+      label: '排序',
+      disabled: !canEdit || selectionLocked,
+      children: [
+        { key: 'sort-asc', label: '升序' },
+        { key: 'sort-desc', label: '降序' },
+        { key: 'sort-custom', label: '自定义排序' },
+      ],
+    },
+    {
+      key: 'merge',
+      label: findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex) ? '取消合并单元格' : '合并单元格',
+      disabled: !canEdit || selectionLocked || (rangeIsSingleCell(currentSelection) && !findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex)),
+    },
+    { key: 'cell-format', label: '设置单元格格式', disabled: !canEdit || selectionLocked },
+    { type: 'divider' },
+    {
+      key: 'protection',
+      icon: <LockOutlined />,
+      label: selectedProtectionRule ? '管理锁定单元格' : '锁定单元格',
+      disabled: !canManageProtection,
+    },
+    { key: 'conditional-format', label: selectedConditionalRule ? '编辑条件格式' : '条件格式', disabled: !canEdit || selectionLocked },
+    { key: 'data-validation', label: selectedValidationRule ? '编辑数据验证' : '数据验证', disabled: !canEdit || selectionLocked },
+  ];
+
+  const handleContextMenuAction = ({ key }) => {
+    if (key === 'cut') writeSelectionToSystemClipboard('cut');
+    else if (key === 'copy') writeSelectionToSystemClipboard('copy');
+    else if (key === 'paste') pasteFromContextMenu('');
+    else if (key === 'insert-copy-right') pasteFromContextMenu('insert-right');
+    else if (key === 'insert-copy-down') pasteFromContextMenu('insert-down');
+    else if (key === 'clear-content') clearSelection('content');
+    else if (key === 'clear-format') clearSelection('format');
+    else if (key === 'clear-all') clearSelection('all');
+    else if (key === 'insert-cell-right') shiftSelectedCells('insert-right');
+    else if (key === 'insert-cell-down') shiftSelectedCells('insert-down');
+    else if (key === 'insert-row') insertRow();
+    else if (key === 'insert-column') insertColumn();
+    else if (key === 'delete-row') deleteRow();
+    else if (key === 'delete-column') deleteColumn();
+    else if (key === 'delete-cell-left') shiftSelectedCells('delete-left');
+    else if (key === 'delete-cell-up') shiftSelectedCells('delete-up');
+    else if (key === 'sort-asc') sortSelection('asc');
+    else if (key === 'sort-desc') sortSelection('desc');
+    else if (key === 'sort-custom') setCustomSortOpen(true);
+    else if (key === 'merge') toggleMerge();
+    else if (key === 'cell-format') setCellFormatOpen(true);
+    else if (key === 'protection') setProtectionOpen(true);
+    else if (key === 'conditional-format') setConditionalFormatOpen(true);
+    else if (key === 'data-validation') setDataValidationOpen(true);
+  };
 
   const renderCell = (rowPosition, columnIndex) => {
     const rowIndex = visibleRows[rowPosition];
@@ -1107,10 +1866,18 @@ export default function SpreadsheetDocumentEditor({
       : ROW_HEADER_WIDTH + columnOffsets[columnIndex];
     const cell = getSpreadsheetCellObject(activeSheet, rowIndex, columnIndex);
     const rawValue = getSpreadsheetCellRawValue(activeSheet, rowIndex, columnIndex);
-    const displayValue = evaluator.getValue(activeSheet.id, rowIndex, columnIndex);
-    const style = cell.style || {};
+    const calculatedValue = evaluator.getValue(activeSheet.id, rowIndex, columnIndex);
+    const conditionalStyle = getSpreadsheetConditionalStyle(
+      activeSheet,
+      rowIndex,
+      columnIndex,
+      calculatedValue,
+      (sheetId, targetRow, targetColumn) => evaluator.getValue(sheetId, targetRow, targetColumn),
+    );
+    const style = { ...(cell.style || {}), ...conditionalStyle };
+    const displayValue = formatSpreadsheetDisplayValue(calculatedValue, style.numberFormat);
     const cellFontSize = clamp(Number(style.fontSize) || DEFAULT_FONT_SIZE, 8, 48) * Math.min(1.15, zoom);
-    const cellTextColor = evaluator.isError(displayValue) ? '#dc2626' : (style.color || '#111827');
+    const cellTextColor = evaluator.isError(calculatedValue) ? '#dc2626' : (style.color || '#111827');
     const justifyContent = style.horizontalAlign === 'center'
       ? 'center'
       : style.horizontalAlign === 'right'
@@ -1130,10 +1897,24 @@ export default function SpreadsheetDocumentEditor({
       columnIndex === currentSelection.startColumn ? 'inset 2px 0 0 #1677ff' : '',
       columnIndex === currentSelection.endColumn ? 'inset -2px 0 0 #1677ff' : '',
     ].filter(Boolean).join(', ') : '';
+    const formulaReference = formulaReferences.find(reference => (
+      spreadsheetRangeContainsCell(reference, rowIndex, columnIndex)
+    ));
+    const formulaReferenceColor = formulaReference?.color;
     const remoteCollaborator = activeRemoteCollaborators.find(item => (
       spreadsheetRangeContainsCell(item.selection, rowIndex, columnIndex)
     ));
-    const editing = active && editingCellKey === buildSpreadsheetCellKey(rowIndex, columnIndex) && canEdit;
+    const cellProtectionAccess = getSpreadsheetProtectedRangeAccess(activeSheet, { rowIndex, columnIndex }, {
+      userId: currentUser?.id,
+      canManage: canManageProtection,
+    });
+    const cellValidationRules = (activeSheet.dataValidations || []).filter(rule => (
+      rule?.enabled !== false && spreadsheetRangeContainsCell(rule.range, rowIndex, columnIndex)
+    ));
+    const listValidationRule = cellValidationRules.find(rule => rule.type === 'list' && Array.isArray(rule.values));
+    const cellLocked = !cellProtectionAccess.allowed;
+    const cellHasProtection = cellProtectionAccess.rules.length > 0;
+    const editing = active && editingCellKey === buildSpreadsheetCellKey(rowIndex, columnIndex) && canEdit && !cellLocked;
     return (
       <div
         key={`cell-${rowIndex}-${columnIndex}`}
@@ -1141,8 +1922,17 @@ export default function SpreadsheetDocumentEditor({
         aria-selected={selected}
         data-spreadsheet-row-index={rowIndex}
         data-spreadsheet-column-index={columnIndex}
+        data-spreadsheet-formula-reference={formulaReference?.token || undefined}
+        data-spreadsheet-locked={cellLocked ? 'true' : undefined}
+        data-spreadsheet-protected={cellHasProtection ? 'true' : undefined}
+        data-spreadsheet-conditional={Object.keys(conditionalStyle).length ? 'true' : undefined}
+        data-spreadsheet-validation={cellValidationRules.length ? cellValidationRules.map(rule => rule.id).join(',') : undefined}
         data-spreadsheet-remote-selection={remoteCollaborator?.session_id || undefined}
-        title={remoteCollaborator ? `${remoteCollaborator.user_name} 的选区` : undefined}
+        title={remoteCollaborator
+          ? `${remoteCollaborator.user_name} 的选区`
+          : (cellHasProtection
+            ? (cellProtectionAccess.rules[0]?.description || '锁定单元格')
+            : (formulaReference ? `公式引用 ${formulaReference.token}` : undefined))}
         onMouseDown={event => {
           if (event.button !== 0) return;
           event.preventDefault();
@@ -1170,9 +1960,16 @@ export default function SpreadsheetDocumentEditor({
           currentSelectionRef.current = nextSelection;
           setSelection(nextSelection);
         }}
+        onContextMenu={() => {
+          setEditingCellKey('');
+          if (!spreadsheetRangeContainsCell(currentSelection, rowIndex, columnIndex)) {
+            notifySelection(rowIndex, columnIndex);
+          }
+          editorActiveRef.current = true;
+        }}
         onDoubleClick={() => {
           if (formatPainterRef.current || Date.now() < suppressCellEditUntilRef.current) return;
-          if (!canEdit) return;
+          if (!ensureSpreadsheetRangeEditable({ rowIndex, columnIndex })) return;
           notifySelection(rowIndex, columnIndex);
           beginInputTransaction(`cell:${activeSheet.id}:${buildSpreadsheetCellKey(rowIndex, columnIndex)}`);
           setEditingCellKey(buildSpreadsheetCellKey(rowIndex, columnIndex));
@@ -1184,10 +1981,18 @@ export default function SpreadsheetDocumentEditor({
           width: cellWidth,
           height: cellHeight,
           boxSizing: 'border-box',
-          borderRight: '1px solid #e5e7eb',
-          borderBottom: '1px solid #e5e7eb',
-          borderTop: style.border ? `1px solid ${style.border.color || '#cbd5e1'}` : undefined,
-          borderLeft: style.border ? `1px solid ${style.border.color || '#cbd5e1'}` : undefined,
+          borderRight: formulaReferenceColor && columnIndex === formulaReference.endColumn
+            ? `2px dashed ${formulaReferenceColor}`
+            : '1px solid #e5e7eb',
+          borderBottom: formulaReferenceColor && rowIndex === formulaReference.endRow
+            ? `2px dashed ${formulaReferenceColor}`
+            : '1px solid #e5e7eb',
+          borderTop: formulaReferenceColor && rowIndex === formulaReference.startRow
+            ? `2px dashed ${formulaReferenceColor}`
+            : (style.border ? `1px solid ${style.border.color || '#cbd5e1'}` : undefined),
+          borderLeft: formulaReferenceColor && columnIndex === formulaReference.startColumn
+            ? `2px dashed ${formulaReferenceColor}`
+            : (style.border ? `1px solid ${style.border.color || '#cbd5e1'}` : undefined),
           background: selected
             ? '#eaf3ff'
             : (remoteCollaborator ? `${remoteCollaborator.color || '#389e0d'}1f` : (style.backgroundColor || '#fff')),
@@ -1196,9 +2001,37 @@ export default function SpreadsheetDocumentEditor({
             : (remoteCollaborator ? `inset 0 0 0 2px ${remoteCollaborator.color || '#389e0d'}` : 'none')),
           zIndex: frozenRow && frozenColumn ? 12 : (frozenRow || frozenColumn ? 8 : (active ? 4 : 1)),
           overflow: 'hidden',
-          cursor: 'cell',
+          cursor: cellLocked ? 'not-allowed' : 'cell',
         }}
       >
+        {cellHasProtection ? <LockOutlined className="relation-spreadsheet-cell-lock" aria-hidden="true" /> : null}
+        {active && canEdit && !cellLocked && !editing && listValidationRule ? (
+          <Dropdown
+            trigger={['click']}
+            placement="bottomRight"
+            menu={{
+              items: listValidationRule.values.map((value, index) => ({
+                key: `${index}`,
+                label: String(value),
+              })),
+              onClick: ({ key }) => {
+                const value = listValidationRule.values[Number(key)];
+                updateCellValue(rowIndex, columnIndex, value);
+                focusSpreadsheetGrid();
+              },
+            }}
+          >
+            <button
+              type="button"
+              className="relation-spreadsheet-validation-trigger"
+              aria-label="选择数据验证选项"
+              onMouseDown={event => event.stopPropagation()}
+              onClick={event => event.stopPropagation()}
+            >
+              <CaretDownOutlined />
+            </button>
+          </Dropdown>
+        ) : null}
         {editing ? (
           <Input
             autoFocus
@@ -1246,7 +2079,7 @@ export default function SpreadsheetDocumentEditor({
         ) : (
           <div style={{
             height: '100%',
-            padding: '0 6px',
+            padding: listValidationRule && active ? '0 24px 0 6px' : '0 6px',
             overflow: 'hidden',
             display: 'flex',
             alignItems,
@@ -1276,8 +2109,11 @@ export default function SpreadsheetDocumentEditor({
       data-spreadsheet-editor-root="true"
       data-spreadsheet-format-painter-mode={formatPainter ? (formatPainter.continuous ? 'continuous' : 'once') : 'off'}
       tabIndex={0}
+      onFocusCapture={() => { editorActiveRef.current = true; }}
+      onPointerDownCapture={() => { editorActiveRef.current = true; }}
       onPaste={handlePaste}
       onCopy={handleCopy}
+      onCut={handleCut}
       onKeyDown={handleGridKeyDown}
       style={{
         height: fillAvailableHeight ? '100%' : (isMobile ? 'calc(100vh - 210px)' : 'calc(100vh - 230px)'),
@@ -1370,7 +2206,7 @@ export default function SpreadsheetDocumentEditor({
               size="small"
               icon={<UploadOutlined />}
               loading={importing}
-              disabled={!canEdit}
+              disabled={importDisabled}
               onClick={() => fileInputRef.current?.click()}
             />
           </Tooltip>
@@ -1381,12 +2217,12 @@ export default function SpreadsheetDocumentEditor({
             ref={fileInputRef}
             type="file"
             accept=".xlsx,.xlsm"
-            disabled={!canEdit}
+            disabled={importDisabled}
             hidden
             onChange={event => {
               const file = event.target.files?.[0];
               event.target.value = '';
-              if (canEdit && file) onImportXlsx?.(file);
+              if (!importDisabled && file) onImportXlsx?.(file);
             }}
           />
         </div>
@@ -1403,10 +2239,10 @@ export default function SpreadsheetDocumentEditor({
               padding: fillAvailableHeight ? '2px 8px 4px' : '4px 8px 7px',
             }}
           >
-          <SpreadsheetToolbarButton title="在上方插入行" disabled={!canEdit} icon={<InsertRowAboveOutlined />} onClick={insertRow} />
-          <SpreadsheetToolbarButton title="删除当前行" disabled={!canEdit || activeSheet.rowCount <= 1} danger icon={<DeleteRowOutlined />} onClick={deleteRow} />
-          <SpreadsheetToolbarButton title="在左侧插入列" disabled={!canEdit} icon={<InsertRowRightOutlined />} onClick={insertColumn} />
-          <SpreadsheetToolbarButton title="删除当前列" disabled={!canEdit || activeSheet.columnCount <= 1} danger icon={<DeleteColumnOutlined />} onClick={deleteColumn} />
+          <SpreadsheetToolbarButton title="在上方插入行" disabled={selectionMutationDisabled} icon={<InsertRowAboveOutlined />} onClick={insertRow} />
+          <SpreadsheetToolbarButton title="删除当前行" disabled={selectionMutationDisabled || activeSheet.rowCount <= 1} danger icon={<DeleteRowOutlined />} onClick={deleteRow} />
+          <SpreadsheetToolbarButton title="在左侧插入列" disabled={selectionMutationDisabled} icon={<InsertRowRightOutlined />} onClick={insertColumn} />
+          <SpreadsheetToolbarButton title="删除当前列" disabled={selectionMutationDisabled || activeSheet.columnCount <= 1} danger icon={<DeleteColumnOutlined />} onClick={deleteColumn} />
           <div style={{ width: 1, height: 20, background: '#d9d9d9', margin: '0 4px' }} />
           <Tooltip title={<span>格式刷<br /><small>双击连续使用格式刷</small></span>}>
             <Button
@@ -1435,7 +2271,7 @@ export default function SpreadsheetDocumentEditor({
           <Select
             aria-label="字体"
             size="small"
-            disabled={!canEdit}
+            disabled={selectionMutationDisabled}
             value={selectedFontFamily}
             style={{ width: 118 }}
             options={FONT_FAMILY_OPTIONS.map(value => ({ value, label: value }))}
@@ -1444,19 +2280,19 @@ export default function SpreadsheetDocumentEditor({
           <Select
             aria-label="字号"
             size="small"
-            disabled={!canEdit}
+            disabled={selectionMutationDisabled}
             value={selectedFontSize}
             style={{ width: 72 }}
             options={FONT_SIZE_OPTIONS.map(value => ({ value, label: `${value}` }))}
             onChange={value => updateRangeStyle({ fontSize: value === DEFAULT_FONT_SIZE ? null : value })}
           />
-          <SpreadsheetToolbarButton title="加粗" disabled={!canEdit} active={Boolean(selectedCellStyle.bold)} icon={<BoldOutlined />} onClick={() => updateRangeStyle({ bold: selectedCellStyle.bold ? null : true })} />
+          <SpreadsheetToolbarButton title="加粗" disabled={selectionMutationDisabled} active={Boolean(selectedCellStyle.bold)} icon={<BoldOutlined />} onClick={() => updateRangeStyle({ bold: selectedCellStyle.bold ? null : true })} />
           <Tooltip title="斜体">
             <Button
               aria-label="斜体"
               type={selectedCellStyle.italic ? 'primary' : 'text'}
               size="small"
-              disabled={!canEdit}
+              disabled={selectionMutationDisabled}
               onClick={() => updateRangeStyle({ italic: selectedCellStyle.italic ? null : true })}
               style={{ fontStyle: 'italic', fontFamily: 'Times New Roman, serif' }}
             >
@@ -1468,7 +2304,7 @@ export default function SpreadsheetDocumentEditor({
               aria-label="下划线"
               type={selectedCellStyle.underline ? 'primary' : 'text'}
               size="small"
-              disabled={!canEdit}
+              disabled={selectionMutationDisabled}
               onClick={() => updateRangeStyle({ underline: selectedCellStyle.underline ? null : true })}
               style={{ textDecoration: 'underline' }}
             >
@@ -1479,20 +2315,20 @@ export default function SpreadsheetDocumentEditor({
             key: value,
             label: <span><span style={{ display: 'inline-block', width: 12, height: 12, marginRight: 8, background: value, border: '1px solid #d9d9d9', verticalAlign: -1 }} />{value}</span>,
           })), onClick: ({ key }) => updateRangeStyle({ color: key === '#111827' ? null : key }) }}>
-            <Button aria-label="文字颜色" type="text" size="small" disabled={!canEdit} style={{ color: selectedCellStyle.color || '#111827' }}>A</Button>
+            <Button aria-label="文字颜色" type="text" size="small" disabled={selectionMutationDisabled} style={{ color: selectedCellStyle.color || '#111827' }}>A</Button>
           </Dropdown>
           <Dropdown menu={{ items: FILL_COLOR_OPTIONS.map(value => ({
             key: value,
             label: <span><span style={{ display: 'inline-block', width: 12, height: 12, marginRight: 8, background: value, border: '1px solid #d9d9d9', verticalAlign: -1 }} />{value}</span>,
           })), onClick: ({ key }) => updateRangeStyle({ backgroundColor: key === '#ffffff' ? null : key }) }}>
-            <Button aria-label="填充色" type="text" size="small" disabled={!canEdit} icon={<BgColorsOutlined />} />
+            <Button aria-label="填充色" type="text" size="small" disabled={selectionMutationDisabled} icon={<BgColorsOutlined />} />
           </Dropdown>
           <Dropdown menu={{ items: [
             { key: 'left', label: '左对齐' },
             { key: 'center', label: '居中' },
             { key: 'right', label: '右对齐' },
           ], onClick: ({ key }) => updateRangeStyle({ horizontalAlign: key === 'left' ? null : key }) }}>
-            <Button aria-label="水平对齐" type="text" size="small" disabled={!canEdit}>
+            <Button aria-label="水平对齐" type="text" size="small" disabled={selectionMutationDisabled}>
               {selectedCellStyle.horizontalAlign === 'center' ? '居中' : selectedCellStyle.horizontalAlign === 'right' ? '右' : '左'}
             </Button>
           </Dropdown>
@@ -1501,7 +2337,7 @@ export default function SpreadsheetDocumentEditor({
             { key: 'middle', label: '垂直居中' },
             { key: 'bottom', label: '底部对齐' },
           ], onClick: ({ key }) => updateRangeStyle({ verticalAlign: key === 'middle' ? null : key }) }}>
-            <Button aria-label="垂直对齐" type="text" size="small" disabled={!canEdit}>
+            <Button aria-label="垂直对齐" type="text" size="small" disabled={selectionMutationDisabled}>
               {selectedCellStyle.verticalAlign === 'top' ? '上' : selectedCellStyle.verticalAlign === 'bottom' ? '下' : '中'}
             </Button>
           </Dropdown>
@@ -1510,7 +2346,7 @@ export default function SpreadsheetDocumentEditor({
               aria-label="自动换行"
               type={selectedCellStyle.wrap ? 'primary' : 'text'}
               size="small"
-              disabled={!canEdit}
+              disabled={selectionMutationDisabled}
               onClick={() => updateRangeStyle({ wrap: selectedCellStyle.wrap ? null : true })}
             >
               换行
@@ -1521,14 +2357,14 @@ export default function SpreadsheetDocumentEditor({
               aria-label="边框"
               type={selectedCellStyle.border ? 'primary' : 'text'}
               size="small"
-              disabled={!canEdit}
+              disabled={selectionMutationDisabled}
               onClick={() => updateRangeStyle({ border: selectedCellStyle.border ? null : { color: '#cbd5e1' } })}
             >
               □
             </Button>
           </Tooltip>
-          <SpreadsheetToolbarButton title={findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex) ? '取消合并' : '合并选区'} disabled={!canEdit || (rangeIsSingleCell(currentSelection) && !findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex))} active={Boolean(findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex))} icon={<MergeCellsOutlined />} onClick={toggleMerge} />
-          <SpreadsheetToolbarButton title="清空内容" disabled={!canEdit} icon={<ClearOutlined />} onClick={() => clearSelection(false)} />
+          <SpreadsheetToolbarButton title={findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex) ? '取消合并' : '合并选区'} disabled={selectionMutationDisabled || (rangeIsSingleCell(currentSelection) && !findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex))} active={Boolean(findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex))} icon={<MergeCellsOutlined />} onClick={toggleMerge} />
+          <SpreadsheetToolbarButton title="清空内容" disabled={selectionMutationDisabled} icon={<ClearOutlined />} onClick={() => clearSelection('content')} />
           <div style={{ width: 1, height: 20, background: '#d9d9d9', margin: '0 4px' }} />
           <Dropdown menu={{ items: [
             { key: 'SUM', label: 'SUM 求和' },
@@ -1541,11 +2377,11 @@ export default function SpreadsheetDocumentEditor({
             { key: 'VLOOKUP', label: 'VLOOKUP 纵向查找' },
             { key: 'XLOOKUP', label: 'XLOOKUP 查找' },
           ], onClick: ({ key }) => insertFormula(key) }}>
-            <Button aria-label="常用公式" type="text" size="small" icon={<FunctionOutlined />} disabled={!canEdit} />
+            <Button aria-label="常用公式" type="text" size="small" icon={<FunctionOutlined />} disabled={selectionMutationDisabled} />
           </Dropdown>
-          <SpreadsheetToolbarButton title="升序" disabled={!canEdit} icon={<SortAscendingOutlined />} onClick={() => sortSelection('asc')} />
-          <SpreadsheetToolbarButton title="降序" disabled={!canEdit} icon={<SortDescendingOutlined />} onClick={() => sortSelection('desc')} />
-          <SpreadsheetToolbarButton title="筛选为当前值" disabled={!canEdit} active={Boolean(activeSheet.filters?.length)} icon={<FilterOutlined />} onClick={filterCurrentValue} />
+          <SpreadsheetToolbarButton title="升序" disabled={selectionMutationDisabled} icon={<SortAscendingOutlined />} onClick={() => sortSelection('asc')} />
+          <SpreadsheetToolbarButton title="降序" disabled={selectionMutationDisabled} icon={<SortDescendingOutlined />} onClick={() => sortSelection('desc')} />
+          <SpreadsheetToolbarButton title="筛选为当前值" disabled={selectionMutationDisabled} active={Boolean(activeSheet.filters?.length)} icon={<FilterOutlined />} onClick={filterCurrentValue} />
           <Tooltip title="冻结行列">
             <Dropdown
               trigger={['click']}
@@ -1625,10 +2461,11 @@ export default function SpreadsheetDocumentEditor({
         <Input
           className="relation-spreadsheet-formula-input"
           data-spreadsheet-formula-input="true"
+          data-spreadsheet-formula-reference-count={formulaReferences.length}
           size="small"
           prefix={<Text type="secondary">fx</Text>}
           value={selectedCellRawValue}
-          readOnly={!canEdit}
+          readOnly={!canEdit || selectionLocked}
           onFocus={() => beginInputTransaction(`formula:${activeSheet.id}:${activeCellKey}`)}
           onChange={event => {
             beginInputTransaction(`formula:${activeSheet.id}:${activeCellKey}`);
@@ -1653,13 +2490,19 @@ export default function SpreadsheetDocumentEditor({
         />
       </div>
 
-      <div
-        ref={viewportRef}
-        role="grid"
-        data-spreadsheet-grid="true"
-        aria-rowcount={activeSheet.rowCount}
-        aria-colcount={activeSheet.columnCount}
-        onScroll={event => {
+      <Dropdown
+        trigger={['contextMenu']}
+        overlayClassName="relation-spreadsheet-context-menu"
+        menu={{ items: contextMenuItems, onClick: handleContextMenuAction }}
+        onOpenChange={open => { if (!open) focusSpreadsheetGrid(); }}
+      >
+        <div
+          ref={viewportRef}
+          role="grid"
+          data-spreadsheet-grid="true"
+          aria-rowcount={activeSheet.rowCount}
+          aria-colcount={activeSheet.columnCount}
+          onScroll={event => {
           const {
             scrollTop,
             scrollLeft,
@@ -1673,15 +2516,24 @@ export default function SpreadsheetDocumentEditor({
           }));
           onViewportScroll?.({ scrollTop, scrollLeft, scrollHeight, clientHeight });
         }}
-        style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative', background: '#f8fafc' }}
-      >
-        <div style={{ position: 'relative', width: totalWidth, height: totalHeight, minWidth: '100%' }}>
+          style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative', background: '#f8fafc' }}
+        >
+          <div style={{ position: 'relative', width: totalWidth, height: totalHeight, minWidth: '100%' }}>
           {columns.map(columnIndex => {
             const frozen = columnIndex < frozenColumns;
             const selectedHeader = selectsWholeColumns
               && columnIndex >= currentSelection.startColumn
               && columnIndex <= currentSelection.endColumn;
             const highlightedHeader = selectedHeader || (!selectsWholeRows && activeColumnIndex === columnIndex);
+            const columnResizeAllowed = getSpreadsheetProtectedRangeAccess(activeSheet, {
+              startRow: 0,
+              endRow: activeSheet.rowCount - 1,
+              startColumn: columnIndex,
+              endColumn: columnIndex,
+            }, {
+              userId: currentUser?.id,
+              canManage: canManageProtection,
+            }).allowed;
             const left = frozen
               ? scrollState.left + ROW_HEADER_WIDTH + columnOffsets[columnIndex]
               : ROW_HEADER_WIDTH + columnOffsets[columnIndex];
@@ -1721,7 +2573,7 @@ export default function SpreadsheetDocumentEditor({
                 {activeSheet.filters?.some(filter => Number(filter.columnIndex) === columnIndex) && (
                   <FilterOutlined style={{ marginLeft: 5, color: '#1677ff', fontSize: 11 }} />
                 )}
-                {canEdit && (
+                {canEdit && columnResizeAllowed && (
                   <span
                     aria-label={`调整 ${spreadsheetColumnLabel(columnIndex)} 列宽`}
                     data-spreadsheet-resize-handle="column"
@@ -1744,6 +2596,15 @@ export default function SpreadsheetDocumentEditor({
               && rowIndex >= currentSelection.startRow
               && rowIndex <= currentSelection.endRow;
             const highlightedHeader = selectedHeader || (!selectsWholeColumns && activeRowIndex === rowIndex);
+            const rowResizeAllowed = getSpreadsheetProtectedRangeAccess(activeSheet, {
+              startRow: rowIndex,
+              endRow: rowIndex,
+              startColumn: 0,
+              endColumn: activeSheet.columnCount - 1,
+            }, {
+              userId: currentUser?.id,
+              canManage: canManageProtection,
+            }).allowed;
             const top = frozen
               ? scrollState.top + COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition]
               : COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition];
@@ -1780,7 +2641,7 @@ export default function SpreadsheetDocumentEditor({
                     cursor: 'pointer',
                   }}>
                   {rowIndex + 1}
-                  {canEdit && (
+                  {canEdit && rowResizeAllowed && (
                     <span
                       aria-label={`调整第 ${rowIndex + 1} 行高度`}
                       data-spreadsheet-resize-handle="row"
@@ -1809,8 +2670,9 @@ export default function SpreadsheetDocumentEditor({
             background: '#e5e7eb',
             zIndex: 30,
           }} />
+          </div>
         </div>
-      </div>
+      </Dropdown>
 
       <div
         className="relation-spreadsheet-sheet-bar"
@@ -1870,6 +2732,82 @@ export default function SpreadsheetDocumentEditor({
           onChange={setZoom}
         />
       </div>
+      <SpreadsheetCellFormatModal
+        open={cellFormatOpen}
+        initialFormat={selectedCellStyle.numberFormat}
+        sampleValue={evaluator.getValue(activeSheet.id, activeRowIndex, activeColumnIndex)}
+        onCancel={() => {
+          setCellFormatOpen(false);
+          focusSpreadsheetGrid();
+        }}
+        onConfirm={numberFormat => {
+          updateRangeStyle({ numberFormat });
+          setCellFormatOpen(false);
+        }}
+      />
+      <SpreadsheetCustomSortModal
+        open={customSortOpen}
+        columns={Array.from(
+          { length: currentSelection.endColumn - currentSelection.startColumn + 1 },
+          (_, offset) => {
+            const columnIndex = currentSelection.startColumn + offset;
+            return { value: columnIndex, label: `${spreadsheetColumnLabel(columnIndex)} 列` };
+          },
+        )}
+        activeColumnIndex={activeColumnIndex}
+        onCancel={() => {
+          setCustomSortOpen(false);
+          focusSpreadsheetGrid();
+        }}
+        onConfirm={options => {
+          sortSelection(options.direction, options);
+          setCustomSortOpen(false);
+        }}
+      />
+      <SpreadsheetProtectionDialog
+        open={protectionOpen}
+        rangeLabel={protectionRangeLabel}
+        initialRule={selectedProtectionRule}
+        users={protectionUsers}
+        onCancel={() => {
+          setProtectionOpen(false);
+          focusSpreadsheetGrid();
+        }}
+        onSave={saveProtectionRule}
+        onDelete={() => {
+          if (!canManageProtection) return;
+          deleteSelectionRule('protectedRanges', selectedProtectionRule);
+          setProtectionOpen(false);
+        }}
+      />
+      <SpreadsheetConditionalFormatDialog
+        open={conditionalFormatOpen}
+        rangeLabel={selectionLabel}
+        initialRule={selectedConditionalRule}
+        onCancel={() => {
+          setConditionalFormatOpen(false);
+          focusSpreadsheetGrid();
+        }}
+        onSave={saveConditionalRule}
+        onDelete={() => {
+          deleteSelectionRule('conditionalFormats', selectedConditionalRule);
+          setConditionalFormatOpen(false);
+        }}
+      />
+      <SpreadsheetDataValidationDialog
+        open={dataValidationOpen}
+        rangeLabel={selectionLabel}
+        initialRule={selectedValidationRule}
+        onCancel={() => {
+          setDataValidationOpen(false);
+          focusSpreadsheetGrid();
+        }}
+        onSave={saveValidationRule}
+        onDelete={() => {
+          deleteSelectionRule('dataValidations', selectedValidationRule);
+          setDataValidationOpen(false);
+        }}
+      />
       <MentionPicker
         open={Boolean(mentionState)}
         context={mentionContext}

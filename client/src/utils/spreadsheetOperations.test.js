@@ -243,3 +243,40 @@ test('produces an empty operation batch for unchanged content and rejects unknow
     .toEqual({ mode: 'operations', reason: '', operations: [] });
   expect(spreadsheetOperationsAreApplied(base, [{ type: 'unsupported', after: null }])).toBe(false);
 });
+
+test('persists protection, conditional-format and validation rules as sheet operations', () => {
+  const base = createWorkbook();
+  const local = JSON.parse(JSON.stringify(base));
+  local.sheets[0].protectedRanges = [{
+    id: 'lock-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    ownerUserId: 1,
+    allowedUserIds: [2],
+    enabled: true,
+  }];
+  local.sheets[0].conditionalFormats = [{
+    id: 'condition-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    type: 'greater_than',
+    values: ['10'],
+    style: { color: '#dc2626' },
+    enabled: true,
+  }];
+  local.sheets[0].dataValidations = [{
+    id: 'validation-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    type: 'number',
+    min: 0,
+    invalidAction: 'reject',
+    enabled: true,
+  }];
+
+  const plan = buildSpreadsheetOperationSavePlan({ baseWorkbook: base, localWorkbook: local });
+  expect(plan.mode).toBe('operations');
+  expect(plan.operations.map(operation => operation.property)).toEqual([
+    'protectedRanges',
+    'conditionalFormats',
+    'dataValidations',
+  ]);
+  expect(spreadsheetOperationsAreApplied(local, plan.operations)).toBe(true);
+});

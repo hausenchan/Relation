@@ -218,7 +218,82 @@ test('normalizes omitted optional fields in a compact added sheet snapshot', () 
     mergedCells: [],
     filters: [],
     frozen: null,
+    protectedRanges: [],
+    conditionalFormats: [],
+    dataValidations: [],
   });
+});
+
+test('enforces protected ranges and validation rules atomically for operation batches', () => {
+  const source = createWorkbook();
+  source.sheets[0].protectedRanges = [{
+    id: 'lock-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    ownerUserId: 1,
+    allowedUserIds: [2],
+    enabled: true,
+  }];
+  source.sheets[0].dataValidations = [{
+    id: 'validation-b1',
+    range: { startRow: 0, endRow: 0, startColumn: 1, endColumn: 1 },
+    type: 'number',
+    min: 1,
+    max: 10,
+    allowBlank: false,
+    invalidAction: 'reject',
+    enabled: true,
+  }];
+
+  assert.throws(() => applySpreadsheetOperations(source, [
+    { id: 'write-unlocked-first', type: 'set_cell', sheet_id: 'sheet_1', cell: 'C1', before: null, after: { v: '不应部分写入' } },
+    { id: 'write-locked', type: 'set_cell', sheet_id: 'sheet_1', cell: 'A1', before: { v: '10' }, after: { v: '11' } },
+  ], { actor: { userId: 3, canManage: false } }), error => (
+    error.statusCode === 403 && error.code === 'SPREADSHEET_PROTECTED_RANGE'
+  ));
+  assert.equal(source.sheets[0].cells.C1, undefined);
+
+  const allowed = applySpreadsheetOperations(source, [
+    { id: 'allowed-write', type: 'set_cell', sheet_id: 'sheet_1', cell: 'A1', before: { v: '10' }, after: { v: '11' } },
+  ], { actor: { userId: 2, canManage: false } });
+  assert.equal(allowed.workbook.sheets[0].cells.A1.v, '11');
+
+  assert.throws(() => applySpreadsheetOperations(source, [
+    { id: 'invalid-number', type: 'set_cell', sheet_id: 'sheet_1', cell: 'B1', before: null, after: { v: '99' } },
+  ], { actor: { userId: 2, canManage: false } }), error => (
+    error.statusCode === 400 && error.code === 'SPREADSHEET_DATA_VALIDATION_FAILED'
+  ));
+  assert.equal(source.sheets[0].cells.B1, undefined);
+});
+
+test('only document managers can change protected-range definitions', () => {
+  const source = createWorkbook();
+  const protectedRanges = [{
+    id: 'lock-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    ownerUserId: 1,
+    allowedUserIds: [],
+    enabled: true,
+  }];
+  assert.throws(() => applySpreadsheetOperations(source, [{
+    id: 'create-lock',
+    type: 'set_sheet_property',
+    sheet_id: 'sheet_1',
+    property: 'protectedRanges',
+    before: [],
+    after: protectedRanges,
+  }], { actor: { userId: 2, canManage: false } }), error => (
+    error.statusCode === 403 && error.code === 'SPREADSHEET_PROTECTION_MANAGE_REQUIRED'
+  ));
+
+  const managed = applySpreadsheetOperations(source, [{
+    id: 'manager-create-lock',
+    type: 'set_sheet_property',
+    sheet_id: 'sheet_1',
+    property: 'protectedRanges',
+    before: [],
+    after: protectedRanges,
+  }], { actor: { userId: 1, canManage: true } });
+  assert.deepEqual(managed.workbook.sheets[0].protectedRanges, protectedRanges);
 });
 
 test('rejects a mixed batch when deleting a sheet changed by another collaborator', () => {

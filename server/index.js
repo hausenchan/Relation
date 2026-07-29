@@ -40,6 +40,11 @@ const {
 } = require('./lib/spreadsheetWorkbookFile');
 const { applySpreadsheetOperations } = require('./lib/spreadsheetOperations');
 const {
+  assertSpreadsheetChangedCellsPassValidation,
+  assertSpreadsheetWorkbookMutationAllowed,
+  validateSpreadsheetRuleCollections,
+} = require('./lib/spreadsheetProtection');
+const {
   createDocumentCollaborationHub,
   normalizePresenceSessionId,
 } = require('./lib/documentCollaboration');
@@ -9444,9 +9449,21 @@ app.post('/api/documents/:id/spreadsheet/operations', canWrite, (req, res) => {
 
   let operationResult;
   try {
-    operationResult = applySpreadsheetOperations(doc.content, req.body?.operations);
+    operationResult = applySpreadsheetOperations(doc.content, req.body?.operations, {
+      actor: {
+        userId: req.user.id,
+        canManage: canManageDocument(req.user, doc),
+      },
+    });
   } catch (error) {
-    return res.status(error.statusCode || 400).json({ error: error.message || '表格操作格式不合法' });
+    return res.status(error.statusCode || 400).json({
+      error: error.message || '表格操作格式不合法',
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.sheetId ? { sheet_id: error.sheetId } : {}),
+      ...(error.protectedRange ? { protected_range: error.protectedRange } : {}),
+      ...(error.ruleId ? { rule_id: error.ruleId } : {}),
+      ...(error.cell ? { cell: error.cell } : {}),
+    });
   }
   if (operationResult.conflicts.length) {
     return res.status(409).json({
@@ -9659,8 +9676,21 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   )) {
     try {
       validateSpreadsheetWorkbookSheetNames(content);
+      validateSpreadsheetRuleCollections(content);
+      assertSpreadsheetWorkbookMutationAllowed(doc.content, content, {
+        userId: req.user.id,
+        canManage: canManageCurrentDocument,
+      });
+      assertSpreadsheetChangedCellsPassValidation(doc.content, content);
     } catch (error) {
-      return res.status(400).json({ error: error.message || '在线表格工作簿格式不合法' });
+      return res.status(error.statusCode || 400).json({
+        error: error.message || '在线表格工作簿格式不合法',
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.sheetId ? { sheet_id: error.sheetId } : {}),
+        ...(error.protectedRange ? { protected_range: error.protectedRange } : {}),
+        ...(error.ruleId ? { rule_id: error.ruleId } : {}),
+        ...(error.cell ? { cell: error.cell } : {}),
+      });
     }
   }
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
@@ -9747,8 +9777,21 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
   )) {
     try {
       validateSpreadsheetWorkbookSheetNames(content);
+      validateSpreadsheetRuleCollections(content);
+      assertSpreadsheetWorkbookMutationAllowed(doc.content, content, {
+        userId: req.user.id,
+        canManage: canManageDocument(req.user, doc),
+      });
+      assertSpreadsheetChangedCellsPassValidation(doc.content, content);
     } catch (error) {
-      return res.status(400).json({ error: error.message || '在线表格工作簿格式不合法' });
+      return res.status(error.statusCode || 400).json({
+        error: error.message || '在线表格工作簿格式不合法',
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.sheetId ? { sheet_id: error.sheetId } : {}),
+        ...(error.protectedRange ? { protected_range: error.protectedRange } : {}),
+        ...(error.ruleId ? { rule_id: error.ruleId } : {}),
+        ...(error.cell ? { cell: error.cell } : {}),
+      });
     }
   }
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);

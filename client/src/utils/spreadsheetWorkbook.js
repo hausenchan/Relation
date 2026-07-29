@@ -61,6 +61,145 @@ export function buildSpreadsheetCellKey(rowIndex, columnIndex) {
   return `${spreadsheetColumnLabel(columnIndex)}${Math.max(0, Number(rowIndex) || 0) + 1}`;
 }
 
+const FORMULA_REFERENCE_PATTERN = /^(?:(?:'((?:''|[^'])+)'|([A-Za-z_$\u3400-\u9fff][A-Za-z0-9_.$\u3400-\u9fff]*))!)?(\$?)([A-Z]+)(\$?)([1-9]\d*)(?:\s*:\s*(?:(?:'((?:''|[^'])+)'|([A-Za-z_$\u3400-\u9fff][A-Za-z0-9_.$\u3400-\u9fff]*))!)?(\$?)([A-Z]+)(\$?)([1-9]\d*))?/i;
+
+export function extractSpreadsheetFormulaReferences(formula, formulaSheetName = '') {
+  const source = String(formula || '');
+  if (!source.startsWith('=')) return [];
+  const expression = source.slice(1);
+  const references = [];
+  let index = 0;
+  while (index < expression.length) {
+    if (expression[index] === '"') {
+      index += 1;
+      while (index < expression.length) {
+        if (expression[index] === '"' && expression[index + 1] === '"') index += 2;
+        else if (expression[index] === '"') {
+          index += 1;
+          break;
+        } else index += 1;
+      }
+      continue;
+    }
+    const previous = index > 0 ? expression[index - 1] : '';
+    if (previous && /[A-Za-z0-9_.$\u3400-\u9fff]/.test(previous)) {
+      index += 1;
+      continue;
+    }
+    const match = expression.slice(index).match(FORMULA_REFERENCE_PATTERN);
+    if (!match) {
+      index += 1;
+      continue;
+    }
+    const nextCharacter = expression[index + match[0].length] || '';
+    if (nextCharacter && /[A-Za-z0-9_.$\u3400-\u9fff]/.test(nextCharacter)) {
+      index += 1;
+      continue;
+    }
+    const startSheetName = (match[1]?.replace(/''/g, "'") || match[2] || formulaSheetName);
+    const endSheetName = (match[7]?.replace(/''/g, "'") || match[8] || startSheetName);
+    const startColumn = spreadsheetColumnIndex(match[4]);
+    const startRow = Number(match[6]) - 1;
+    const endColumn = match[10] ? spreadsheetColumnIndex(match[10]) : startColumn;
+    const endRow = match[12] ? Number(match[12]) - 1 : startRow;
+    if (startColumn >= 0 && startRow >= 0 && endColumn >= 0 && endRow >= 0) {
+      references.push({
+        token: match[0],
+        startOffset: index + 1,
+        endOffset: index + match[0].length + 1,
+        sheetName: startSheetName,
+        endSheetName,
+        startRow: Math.min(startRow, endRow),
+        endRow: Math.max(startRow, endRow),
+        startColumn: Math.min(startColumn, endColumn),
+        endColumn: Math.max(startColumn, endColumn),
+        absoluteStartColumn: Boolean(match[3]),
+        absoluteStartRow: Boolean(match[5]),
+        absoluteEndColumn: Boolean(match[9]),
+        absoluteEndRow: Boolean(match[11]),
+      });
+    }
+    index += match[0].length;
+  }
+  return references;
+}
+
+function translateFormulaCoordinate(columnLabel, rowText, absoluteColumn, absoluteRow, rowDelta, columnDelta) {
+  const rowIndex = Number(rowText) - 1 + (absoluteRow ? 0 : rowDelta);
+  const columnIndex = spreadsheetColumnIndex(columnLabel) + (absoluteColumn ? 0 : columnDelta);
+  if (rowIndex < 0 || columnIndex < 0) return '#REF!';
+  return `${absoluteColumn}${spreadsheetColumnLabel(columnIndex)}${absoluteRow}${rowIndex + 1}`;
+}
+
+function translateFormulaReferenceToken(token, rowDelta, columnDelta) {
+  const match = String(token || '').match(FORMULA_REFERENCE_PATTERN);
+  if (!match) return token;
+  const startPrefix = token.match(/^(?:'(?:''|[^'])+'|[A-Za-z_$\u3400-\u9fff][A-Za-z0-9_.$\u3400-\u9fff]*)!/)?.[0] || '';
+  const startCoordinate = translateFormulaCoordinate(match[4], match[6], match[3], match[5], rowDelta, columnDelta);
+  if (!match[10]) return `${startPrefix}${startCoordinate}`;
+  const colonIndex = token.indexOf(':', startPrefix.length);
+  const endPart = colonIndex >= 0 ? token.slice(colonIndex + 1).trim() : '';
+  const endBangIndex = endPart.lastIndexOf('!');
+  const endPrefix = endBangIndex >= 0 ? endPart.slice(0, endBangIndex + 1) : '';
+  const endCoordinate = translateFormulaCoordinate(match[10], match[12], match[9], match[11], rowDelta, columnDelta);
+  return `${startPrefix}${startCoordinate}:${endPrefix}${endCoordinate}`;
+}
+
+export function translateSpreadsheetFormulaForPaste(formula, rowDelta = 0, columnDelta = 0) {
+  const references = extractSpreadsheetFormulaReferences(formula);
+  if (!references.length || (!rowDelta && !columnDelta)) return formula;
+  let result = String(formula);
+  references.slice().reverse().forEach(reference => {
+    const replacement = translateFormulaReferenceToken(reference.token, rowDelta, columnDelta);
+    result = `${result.slice(0, reference.startOffset)}${replacement}${result.slice(reference.endOffset)}`;
+  });
+  return result;
+}
+
+function remapSpreadsheetFormulaToken(token, reference, mapper) {
+  const match = String(token || '').match(FORMULA_REFERENCE_PATTERN);
+  if (!match) return token;
+  const mappedStart = mapper(reference.startRow, reference.startColumn);
+  const mappedEnd = mapper(reference.endRow, reference.endColumn);
+  if (!mappedStart || !mappedEnd) return '#REF!';
+  const startPrefix = token.match(/^(?:'(?:''|[^'])+'|[A-Za-z_$\u3400-\u9fff][A-Za-z0-9_.$\u3400-\u9fff]*)!/)?.[0] || '';
+  const startCoordinate = `${match[3]}${spreadsheetColumnLabel(mappedStart.columnIndex)}${match[5]}${mappedStart.rowIndex + 1}`;
+  if (!match[10]) return `${startPrefix}${startCoordinate}`;
+  const colonIndex = token.indexOf(':', startPrefix.length);
+  const endPart = colonIndex >= 0 ? token.slice(colonIndex + 1).trim() : '';
+  const endBangIndex = endPart.lastIndexOf('!');
+  const endPrefix = endBangIndex >= 0 ? endPart.slice(0, endBangIndex + 1) : '';
+  const endCoordinate = `${match[9]}${spreadsheetColumnLabel(mappedEnd.columnIndex)}${match[11]}${mappedEnd.rowIndex + 1}`;
+  return `${startPrefix}${startCoordinate}:${endPrefix}${endCoordinate}`;
+}
+
+function remapWorkbookFormulaReferences(workbook, targetSheetName, mapper) {
+  if (!workbook?.sheets?.length) return;
+  const targetKey = spreadsheetSheetNameKey(targetSheetName);
+  workbook.sheets.forEach(sheet => {
+    Object.entries(sheet.cells || {}).forEach(([cellKey, cell]) => {
+      const raw = cell && typeof cell === 'object' ? (cell.v ?? cell.value) : cell;
+      if (typeof raw !== 'string' || !raw.startsWith('=')) return;
+      const references = extractSpreadsheetFormulaReferences(raw, sheet.name)
+        .filter(reference => (
+          spreadsheetSheetNameKey(reference.sheetName) === targetKey
+          && spreadsheetSheetNameKey(reference.endSheetName) === targetKey
+        ));
+      if (!references.length) return;
+      let next = raw;
+      references.slice().reverse().forEach(reference => {
+        const replacement = remapSpreadsheetFormulaToken(reference.token, reference, mapper);
+        next = `${next.slice(0, reference.startOffset)}${replacement}${next.slice(reference.endOffset)}`;
+      });
+      if (cell && typeof cell === 'object') {
+        if (Object.prototype.hasOwnProperty.call(cell, 'v')) cell.v = next;
+        else cell.value = next;
+        delete cell.computed;
+      } else sheet.cells[cellKey] = next;
+    });
+  });
+}
+
 function spreadsheetSheetNameLength(value) {
   return Array.from(String(value || '')).length;
 }
@@ -223,6 +362,9 @@ export function createDefaultSpreadsheetSheet(index = 0, existingSheets = []) {
     mergedCells: [],
     filters: [],
     frozen: null,
+    protectedRanges: [],
+    conditionalFormats: [],
+    dataValidations: [],
   };
 }
 
@@ -277,6 +419,27 @@ function normalizeMergedCells(mergedCells, rowCount, columnCount) {
   return result;
 }
 
+function normalizeSpreadsheetRuleRanges(rules, rowCount, columnCount, prefix) {
+  const usedIds = new Set();
+  return (Array.isArray(rules) ? rules : []).flatMap((rule, index) => {
+    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) return [];
+    const range = normalizeSpreadsheetRange(rule.range || rule);
+    if (!range) return [];
+    range.endRow = Math.min(rowCount - 1, range.endRow);
+    range.endColumn = Math.min(columnCount - 1, range.endColumn);
+    if (range.startRow >= rowCount || range.startColumn >= columnCount) return [];
+    const baseId = String(rule.id || `${prefix}_${index + 1}`).trim().slice(0, 128) || `${prefix}_${index + 1}`;
+    let id = baseId;
+    let suffix = 2;
+    while (usedIds.has(id)) {
+      id = `${baseId}_${suffix}`.slice(0, 128);
+      suffix += 1;
+    }
+    usedIds.add(id);
+    return [{ ...rule, id, range, enabled: rule.enabled !== false }];
+  });
+}
+
 export function normalizeSpreadsheetWorkbook(content) {
   const parsed = parseJsonValue(content, null);
   const source = parsed?.format === SPREADSHEET_WORKBOOK_FORMAT ? parsed : createDefaultSpreadsheetWorkbook();
@@ -314,6 +477,9 @@ export function normalizeSpreadsheetWorkbook(content) {
       mergedCells: normalizeMergedCells(sourceSheet?.mergedCells, rowCount, columnCount),
       filters: Array.isArray(sourceSheet?.filters) ? sourceSheet.filters.filter(Boolean) : [],
       frozen: frozenRows || frozenColumns ? { rows: frozenRows, columns: frozenColumns } : null,
+      protectedRanges: normalizeSpreadsheetRuleRanges(sourceSheet?.protectedRanges, rowCount, columnCount, 'lock'),
+      conditionalFormats: normalizeSpreadsheetRuleRanges(sourceSheet?.conditionalFormats, rowCount, columnCount, 'condition'),
+      dataValidations: normalizeSpreadsheetRuleRanges(sourceSheet?.dataValidations, rowCount, columnCount, 'validation'),
     };
   });
   const activeSheetId = sheets.some(sheet => sheet.id === source.activeSheetId)
@@ -484,6 +650,95 @@ export function getSpreadsheetCellRawValue(sheet, rowIndex, columnIndex) {
   return cell.v ?? cell.value ?? '';
 }
 
+function spreadsheetDateFromValue(value) {
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value;
+  if (Number.isFinite(Number(value)) && String(value ?? '').trim() !== '') {
+    const serial = Number(value);
+    const milliseconds = Date.UTC(1899, 11, 30) + serial * 24 * 60 * 60 * 1000;
+    const date = new Date(milliseconds);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+  const date = new Date(String(value || ''));
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function fractionFromNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value ?? '');
+  const sign = number < 0 ? '-' : '';
+  const absolute = Math.abs(number);
+  const whole = Math.floor(absolute);
+  const decimal = absolute - whole;
+  if (!decimal) return `${sign}${whole}`;
+  let bestNumerator = 0;
+  let bestDenominator = 1;
+  let bestError = Infinity;
+  for (let denominator = 1; denominator <= 100; denominator += 1) {
+    const numerator = Math.round(decimal * denominator);
+    const error = Math.abs(decimal - numerator / denominator);
+    if (error < bestError) {
+      bestNumerator = numerator;
+      bestDenominator = denominator;
+      bestError = error;
+    }
+  }
+  return `${sign}${whole ? `${whole} ` : ''}${bestNumerator}/${bestDenominator}`;
+}
+
+export function formatSpreadsheetDisplayValue(value, numberFormat) {
+  if (!numberFormat || numberFormat === 'general' || typeof value === 'boolean') return value;
+  const config = typeof numberFormat === 'string' ? { type: numberFormat } : numberFormat;
+  const type = String(config?.type || 'general');
+  if (type === 'general' || type === 'text' || String(value ?? '').startsWith('#')) return value;
+  if (type === 'date' || type === 'time') {
+    const date = spreadsheetDateFromValue(value);
+    if (!date) return value;
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      ...(type === 'date'
+        ? { year: 'numeric', month: '2-digit', day: '2-digit' }
+        : {
+          hour: '2-digit',
+          minute: '2-digit',
+          ...(config.showSeconds === false ? {} : { second: '2-digit' }),
+          hourCycle: 'h23',
+        }),
+    }).format(date);
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number) || String(value ?? '').trim() === '') return value;
+  const decimals = Math.max(0, Math.min(10, Number(config.decimals) || 0));
+  if (type === 'fraction') return fractionFromNumber(number);
+  if (type === 'scientific') return number.toExponential(decimals || 2);
+  let formatted;
+  if (type === 'percentage') {
+    formatted = new Intl.NumberFormat('zh-CN', {
+      style: 'percent',
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    }).format(number);
+  } else if (type === 'currency' || type === 'accounting') {
+    formatted = new Intl.NumberFormat('zh-CN', {
+      style: 'currency',
+      currency: config.currency || 'CNY',
+      currencyDisplay: type === 'accounting' ? 'code' : 'symbol',
+      minimumFractionDigits: decimals || 2,
+      maximumFractionDigits: decimals || 2,
+      useGrouping: config.useGrouping !== false,
+    }).format(number);
+  } else {
+    formatted = new Intl.NumberFormat('zh-CN', {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+      useGrouping: config.useGrouping !== false,
+    }).format(number);
+  }
+  if (number < 0 && config.negativeStyle === 'parentheses') {
+    return `(${formatted.replace('-', '')})`;
+  }
+  return formatted;
+}
+
 function cloneSpreadsheetCellStyle(style) {
   if (!style || typeof style !== 'object') return {};
   const next = clone(style);
@@ -591,6 +846,131 @@ export function spreadsheetRangeContainsCell(range, rowIndex, columnIndex) {
     && rowIndex <= normalized.endRow
     && columnIndex >= normalized.startColumn
     && columnIndex <= normalized.endColumn);
+}
+
+export function getSpreadsheetProtectedRangeAccess(sheet, range, options = {}) {
+  const target = normalizeSpreadsheetRange(range);
+  if (!target) return { allowed: true, rules: [], deniedRules: [] };
+  const userId = Number(options.userId) || 0;
+  const rules = (sheet?.protectedRanges || []).filter(rule => (
+    rule?.enabled !== false && spreadsheetRangesOverlap(rule.range, target)
+  ));
+  if (options.canManage) return { allowed: true, rules, deniedRules: [] };
+  const deniedRules = rules.filter(rule => {
+    const ownerUserId = Number(rule.ownerUserId || rule.owner_user_id) || 0;
+    const allowedUserIds = (rule.allowedUserIds || rule.allowed_user_ids || []).map(Number);
+    return !userId || (ownerUserId !== userId && !allowedUserIds.includes(userId));
+  });
+  return { allowed: deniedRules.length === 0, rules, deniedRules };
+}
+
+function compareConditionalValues(actual, operator, expected, secondExpected) {
+  const actualNumber = Number(actual);
+  const expectedNumber = Number(expected);
+  const secondNumber = Number(secondExpected);
+  const numeric = Number.isFinite(actualNumber) && Number.isFinite(expectedNumber);
+  const left = numeric ? actualNumber : String(actual ?? '');
+  const right = numeric ? expectedNumber : String(expected ?? '');
+  if (operator === 'greater_than') return left > right;
+  if (operator === 'less_than') return left < right;
+  if (operator === 'between') {
+    if (numeric && Number.isFinite(secondNumber)) return left >= right && left <= secondNumber;
+    return left >= right && left <= String(secondExpected ?? '');
+  }
+  if (operator === 'not_equal') return left !== right;
+  return left === right;
+}
+
+function conditionalRuleMatches(sheet, rule, value, getValue) {
+  const type = String(rule.type || rule.operator || 'equal');
+  const values = Array.isArray(rule.values) ? rule.values : [rule.value, rule.secondValue];
+  const text = String(value ?? '');
+  if (type === 'blank') return text.trim() === '';
+  if (type === 'not_blank') return text.trim() !== '';
+  if (type === 'text_contains') return text.includes(String(values[0] ?? ''));
+  if (type === 'date_before' || type === 'date_after' || type === 'date_equal') {
+    const actualTime = new Date(text).getTime();
+    const expectedTime = new Date(String(values[0] ?? '')).getTime();
+    if (!Number.isFinite(actualTime) || !Number.isFinite(expectedTime)) return false;
+    if (type === 'date_before') return actualTime < expectedTime;
+    if (type === 'date_after') return actualTime > expectedTime;
+    return actualTime === expectedTime;
+  }
+  if (type === 'duplicate' || type === 'unique') {
+    const range = normalizeSpreadsheetRange(rule.range);
+    if (!range || typeof getValue !== 'function') return false;
+    let occurrences = 0;
+    let scanned = 0;
+    for (let row = range.startRow; row <= range.endRow && scanned < 10000; row += 1) {
+      for (let column = range.startColumn; column <= range.endColumn && scanned < 10000; column += 1) {
+        scanned += 1;
+        if (String(getValue(sheet.id, row, column) ?? '') === text) occurrences += 1;
+      }
+    }
+    return type === 'duplicate' ? occurrences > 1 : occurrences === 1;
+  }
+  return compareConditionalValues(value, type, values[0], values[1]);
+}
+
+export function getSpreadsheetConditionalStyle(sheet, rowIndex, columnIndex, value, getValue) {
+  const rules = (sheet?.conditionalFormats || [])
+    .filter(rule => rule?.enabled !== false && spreadsheetRangeContainsCell(rule.range, rowIndex, columnIndex))
+    .sort((left, right) => (Number(left.priority) || 0) - (Number(right.priority) || 0));
+  const style = {};
+  for (const rule of rules) {
+    if (!conditionalRuleMatches(sheet, rule, value, getValue)) continue;
+    Object.assign(style, cloneSpreadsheetCellStyle(rule.style));
+    if (rule.stopIfTrue) break;
+  }
+  return style;
+}
+
+function spreadsheetValidationMessage(rule) {
+  return String(rule.message || rule.prompt || '输入内容不符合当前单元格的数据验证规则');
+}
+
+export function validateSpreadsheetCellInput(sheet, rowIndex, columnIndex, value, options = {}) {
+  const rules = (sheet?.dataValidations || [])
+    .filter(rule => rule?.enabled !== false && spreadsheetRangeContainsCell(rule.range, rowIndex, columnIndex))
+    .sort((left, right) => (Number(left.priority) || 0) - (Number(right.priority) || 0));
+  const text = String(value ?? '').trim();
+  for (const rule of rules) {
+    if (!text && rule.allowBlank !== false) continue;
+    const type = String(rule.type || 'list');
+    const values = Array.isArray(rule.values) ? rule.values.map(item => String(item)) : [];
+    const number = Number(text);
+    let valid = true;
+    if (type === 'list') valid = values.includes(text);
+    else if (type === 'number') {
+      valid = Number.isFinite(number)
+        && (rule.min === undefined || number >= Number(rule.min))
+        && (rule.max === undefined || number <= Number(rule.max));
+    } else if (type === 'date_time') valid = Number.isFinite(new Date(text).getTime());
+    else if (type === 'text_length') {
+      const length = Array.from(text).length;
+      valid = (rule.min === undefined || length >= Number(rule.min))
+        && (rule.max === undefined || length <= Number(rule.max));
+    } else if (type === 'checkbox') valid = /^(true|false|1|0|是|否)$/i.test(text);
+    else if (type === 'rating') valid = Number.isInteger(number) && number >= 1 && number <= 5;
+    else if (type === 'progress') valid = Number.isFinite(number) && number >= 0 && number <= 100;
+    else if (type === 'id_card') valid = /^(?:\d{15}|\d{17}[\dXx])$/.test(text);
+    else if (type === 'mobile') valid = /^1[3-9]\d{9}$/.test(text);
+    else if (type === 'landline') valid = /^(?:0\d{2,3}-?)?\d{7,8}$/.test(text);
+    else if (type === 'email') valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text);
+    else if (type === 'temperature') valid = Number.isFinite(number) && number >= -273.15 && number <= 1000;
+    else if (type === 'custom_formula' && typeof options.evaluateCustomFormula === 'function') {
+      valid = Boolean(options.evaluateCustomFormula(rule, { rowIndex, columnIndex, value }));
+    }
+    if (!valid) {
+      return {
+        valid: false,
+        action: rule.invalidAction === 'warning' ? 'warning' : 'reject',
+        message: spreadsheetValidationMessage(rule),
+        rule,
+      };
+    }
+  }
+  return { valid: true, action: '', message: '', rule: null };
 }
 
 export function findSpreadsheetMergedRange(sheet, rowIndex, columnIndex) {
@@ -807,6 +1187,26 @@ function formulaLookupValuesEqual(left, right) {
   return compareFormulaValues(left, '=', right);
 }
 
+function formatSpreadsheetBusinessDate(date, includeTime = false) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    ...(includeTime ? {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    } : {}),
+  }).formatToParts(date).reduce((result, part) => {
+    if (part.type !== 'literal') result[part.type] = part.value;
+    return result;
+  }, {});
+  const day = `${parts.year}-${parts.month}-${parts.day}`;
+  return includeTime ? `${day} ${parts.hour}:${parts.minute}:${parts.second}` : day;
+}
+
 function runFormulaFunction(name, args) {
   const values = args.flatMap(flattenFormulaValues);
   propagateFormulaError(values);
@@ -825,12 +1225,8 @@ function runFormulaFunction(name, args) {
     case 'OR': return args.some(formulaValueIsTruthy);
     case 'ROUND': return Number(toFormulaNumber(args[0]).toFixed(Math.max(0, Number(args[1]) || 0)));
     case 'ABS': return Math.abs(toFormulaNumber(args[0]));
-    case 'TODAY': {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return today.toISOString().slice(0, 10);
-    }
-    case 'NOW': return new Date().toISOString();
+    case 'TODAY': return formatSpreadsheetBusinessDate(new Date());
+    case 'NOW': return formatSpreadsheetBusinessDate(new Date(), true);
     case 'LEN': return Array.from(toFormulaText(args[0])).length;
     case 'LEFT': {
       const text = toFormulaText(args[0]);
@@ -1001,11 +1397,11 @@ function evaluateFormulaExpression(expression, context) {
     return context.evaluateCell(reference.sheet, reference.rowIndex, reference.columnIndex);
   };
   const parseUnary = () => {
-    if (current().value === '+') {
+    if (current().type === 'operator' && current().value === '+') {
       consume('+');
       return toFormulaNumber(parseUnary());
     }
-    if (current().value === '-') {
+    if (current().type === 'operator' && current().value === '-') {
       consume('-');
       return -toFormulaNumber(parseUnary());
     }
@@ -1090,20 +1486,34 @@ export function createSpreadsheetFormulaEvaluator(workbookValue) {
     isError(value) {
       return FORMULA_ERROR_CODES.has(value);
     },
+    evaluateFormula(sheetId, formula) {
+      const sheet = workbook.sheets.find(item => item.id === sheetId) || workbook.sheets[0];
+      const source = String(formula || '').trim();
+      if (!source.startsWith('=')) return '#VALUE!';
+      try {
+        const result = evaluateFormulaExpression(source.slice(1), { workbook, sheet, evaluateCell });
+        if (Array.isArray(result)) return result.flat(Infinity)[0] ?? '';
+        if (typeof result === 'number' && !Number.isFinite(result)) return '#VALUE!';
+        return result;
+      } catch (error) {
+        return error instanceof FormulaError ? error.code : '#VALUE!';
+      }
+    },
   };
 }
 
 function compareSpreadsheetSortValues(left, right) {
-  const leftEmpty = left === '' || left === null || left === undefined;
-  const rightEmpty = right === '' || right === null || right === undefined;
-  if (leftEmpty || rightEmpty) return leftEmpty === rightEmpty ? 0 : (leftEmpty ? 1 : -1);
   const leftNumber = Number(left);
   const rightNumber = Number(right);
   if (Number.isFinite(leftNumber) && Number.isFinite(rightNumber)) return leftNumber - rightNumber;
   return String(left).localeCompare(String(right), 'zh-CN', { numeric: true, sensitivity: 'base' });
 }
 
-export function sortSpreadsheetRange(sheet, range, columnIndex, direction = 'asc', getValue = null) {
+function spreadsheetSortValueIsEmpty(value) {
+  return value === '' || value === null || value === undefined;
+}
+
+export function sortSpreadsheetRange(sheet, range, columnIndex, direction = 'asc', getValue = null, options = {}) {
   const bounds = normalizeSpreadsheetRange(range) || getSpreadsheetUsedRange(sheet);
   const sortColumn = Math.max(bounds.startColumn, Math.min(bounds.endColumn, Number(columnIndex) || 0));
   if (bounds.endRow <= bounds.startRow) return sheet;
@@ -1111,14 +1521,18 @@ export function sortSpreadsheetRange(sheet, range, columnIndex, direction = 'asc
     const value = getSpreadsheetCellRawValue(sheet, bounds.startRow, bounds.startColumn + offset);
     return String(value || '').trim() && !Number.isFinite(Number(value));
   });
-  const dataStartRow = firstRowHasText ? bounds.startRow + 1 : bounds.startRow;
+  const hasHeader = options.hasHeader === undefined ? firstRowHasText : Boolean(options.hasHeader);
+  const dataStartRow = hasHeader ? bounds.startRow + 1 : bounds.startRow;
   const rows = [];
   for (let row = dataStartRow; row <= bounds.endRow; row += 1) rows.push(row);
   rows.sort((leftRow, rightRow) => {
     const left = getValue ? getValue(leftRow, sortColumn) : getSpreadsheetCellRawValue(sheet, leftRow, sortColumn);
     const right = getValue ? getValue(rightRow, sortColumn) : getSpreadsheetCellRawValue(sheet, rightRow, sortColumn);
+    const leftEmpty = spreadsheetSortValueIsEmpty(left);
+    const rightEmpty = spreadsheetSortValueIsEmpty(right);
+    if (leftEmpty || rightEmpty) return leftEmpty === rightEmpty ? leftRow - rightRow : (leftEmpty ? 1 : -1);
     const result = compareSpreadsheetSortValues(left, right);
-    return direction === 'desc' ? -result : result;
+    return (direction === 'desc' ? -result : result) || leftRow - rightRow;
   });
   const original = clone(sheet.cells || {});
   rows.forEach((sourceRow, offset) => {
@@ -1281,6 +1695,85 @@ function shiftMergedRange(range, axis, startIndex, delta) {
   return next;
 }
 
+function shiftSpreadsheetRuleRanges(rules, axis, startIndex, delta) {
+  return (rules || []).flatMap(rule => {
+    const range = shiftMergedRange(rule.range, axis, startIndex, delta);
+    return range ? [{ ...rule, range }] : [];
+  });
+}
+
+function mapSpreadsheetRuleRanges(rules, mapper) {
+  return (rules || []).flatMap(rule => {
+    const range = normalizeSpreadsheetRange(rule.range);
+    if (!range) return [];
+    const start = mapper(range.startRow, range.startColumn);
+    const end = mapper(range.endRow, range.endColumn);
+    if (!start || !end) return [];
+    return [{
+      ...rule,
+      range: normalizeSpreadsheetRange({
+        startRow: start.rowIndex,
+        endRow: end.rowIndex,
+        startColumn: start.columnIndex,
+        endColumn: end.columnIndex,
+      }),
+    }];
+  });
+}
+
+export function shiftSpreadsheetCells(sheet, range, direction, workbook = null) {
+  const bounds = normalizeSpreadsheetRange(range);
+  if (!sheet || !bounds || !['insert-right', 'insert-down', 'delete-left', 'delete-up'].includes(direction)) {
+    return sheet;
+  }
+  const rowSpan = bounds.endRow - bounds.startRow + 1;
+  const columnSpan = bounds.endColumn - bounds.startColumn + 1;
+  const mapPosition = (rowIndex, columnIndex) => {
+    if (direction === 'insert-right') {
+      return rowIndex >= bounds.startRow && rowIndex <= bounds.endRow && columnIndex >= bounds.startColumn
+        ? { rowIndex, columnIndex: columnIndex + columnSpan }
+        : { rowIndex, columnIndex };
+    }
+    if (direction === 'insert-down') {
+      return columnIndex >= bounds.startColumn && columnIndex <= bounds.endColumn && rowIndex >= bounds.startRow
+        ? { rowIndex: rowIndex + rowSpan, columnIndex }
+        : { rowIndex, columnIndex };
+    }
+    if (direction === 'delete-left' && rowIndex >= bounds.startRow && rowIndex <= bounds.endRow) {
+      if (columnIndex >= bounds.startColumn && columnIndex <= bounds.endColumn) return null;
+      return columnIndex > bounds.endColumn
+        ? { rowIndex, columnIndex: columnIndex - columnSpan }
+        : { rowIndex, columnIndex };
+    }
+    if (direction === 'delete-up' && columnIndex >= bounds.startColumn && columnIndex <= bounds.endColumn) {
+      if (rowIndex >= bounds.startRow && rowIndex <= bounds.endRow) return null;
+      return rowIndex > bounds.endRow
+        ? { rowIndex: rowIndex - rowSpan, columnIndex }
+        : { rowIndex, columnIndex };
+    }
+    return { rowIndex, columnIndex };
+  };
+  const nextCells = {};
+  Object.entries(sheet.cells || {}).forEach(([key, cell]) => {
+    const parsed = parseSpreadsheetCellKey(key);
+    if (!parsed) return;
+    const mapped = mapPosition(parsed.rowIndex, parsed.columnIndex);
+    if (!mapped) return;
+    nextCells[buildSpreadsheetCellKey(mapped.rowIndex, mapped.columnIndex)] = clone(cell);
+  });
+  sheet.cells = nextCells;
+  sheet.protectedRanges = mapSpreadsheetRuleRanges(sheet.protectedRanges, mapPosition);
+  sheet.conditionalFormats = mapSpreadsheetRuleRanges(sheet.conditionalFormats, mapPosition);
+  sheet.dataValidations = mapSpreadsheetRuleRanges(sheet.dataValidations, mapPosition);
+  if (direction === 'insert-right') {
+    sheet.columnCount = Math.max(1, (Number(sheet.columnCount) || DEFAULT_COLUMN_COUNT) + columnSpan);
+  } else if (direction === 'insert-down') {
+    sheet.rowCount = Math.max(1, (Number(sheet.rowCount) || DEFAULT_ROW_COUNT) + rowSpan);
+  }
+  remapWorkbookFormulaReferences(workbook || { sheets: [sheet] }, sheet.name, mapPosition);
+  return sheet;
+}
+
 export function shiftSpreadsheetRows(sheet, startRowIndex, delta, workbook = null) {
   const cells = {};
   Object.entries(sheet.cells || {}).forEach(([key, cell]) => {
@@ -1299,6 +1792,9 @@ export function shiftSpreadsheetRows(sheet, startRowIndex, delta, workbook = nul
   sheet.cells = cells;
   sheet.rowHeights = shiftIndexedObject(sheet.rowHeights, startRowIndex, delta);
   sheet.mergedCells = (sheet.mergedCells || []).map(range => shiftMergedRange(range, 'row', startRowIndex, delta)).filter(Boolean);
+  sheet.protectedRanges = shiftSpreadsheetRuleRanges(sheet.protectedRanges, 'row', startRowIndex, delta);
+  sheet.conditionalFormats = shiftSpreadsheetRuleRanges(sheet.conditionalFormats, 'row', startRowIndex, delta);
+  sheet.dataValidations = shiftSpreadsheetRuleRanges(sheet.dataValidations, 'row', startRowIndex, delta);
   sheet.rowCount = Math.max(1, (Number(sheet.rowCount) || DEFAULT_ROW_COUNT) + delta);
   (workbook?.sheets || []).filter(item => item !== sheet).forEach(item => {
     adjustSheetFormulaCells(item, 'row', startRowIndex, delta, sheet.name);
@@ -1324,6 +1820,9 @@ export function shiftSpreadsheetColumns(sheet, startColumnIndex, delta, workbook
   sheet.cells = cells;
   sheet.columnWidths = shiftIndexedObject(sheet.columnWidths, startColumnIndex, delta);
   sheet.mergedCells = (sheet.mergedCells || []).map(range => shiftMergedRange(range, 'column', startColumnIndex, delta)).filter(Boolean);
+  sheet.protectedRanges = shiftSpreadsheetRuleRanges(sheet.protectedRanges, 'column', startColumnIndex, delta);
+  sheet.conditionalFormats = shiftSpreadsheetRuleRanges(sheet.conditionalFormats, 'column', startColumnIndex, delta);
+  sheet.dataValidations = shiftSpreadsheetRuleRanges(sheet.dataValidations, 'column', startColumnIndex, delta);
   sheet.filters = (sheet.filters || []).flatMap(filter => {
     const index = Number(filter.columnIndex) || 0;
     if (delta < 0 && index === startColumnIndex) return [];

@@ -19,6 +19,9 @@ const SHEET_OPERATION_PROPERTIES = [
   'filters',
   'filterRange',
   'frozen',
+  'protectedRanges',
+  'conditionalFormats',
+  'dataValidations',
 ];
 const WORKBOOK_OPERATION_PROPERTIES = ['activeSheetId', 'styles', 'definedNames'];
 const KNOWN_SHEET_KEYS = new Set(['id', 'cells', ...SHEET_OPERATION_PROPERTIES]);

@@ -28,6 +28,64 @@
   scrollbar-width: thin;
 }
 
+.relation-spreadsheet-editor .ant-btn:focus:not(:focus-visible),
+.relation-spreadsheet-editor .ant-btn:active:not(:focus-visible) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.relation-spreadsheet-editor .ant-btn:focus-visible {
+  outline: 2px solid #1677d2;
+  outline-offset: 1px;
+  box-shadow: none !important;
+}
+
+.relation-spreadsheet-toolbar-button.ant-btn {
+  border-radius: 2px;
+}
+
+.relation-spreadsheet-toolbar-button.ant-btn.relation-spreadsheet-toolbar-button--active {
+  background: #e8f3ff;
+  color: #1677d2;
+}
+
+.relation-spreadsheet-toolbar-button.ant-btn:hover {
+  background: #f1f3f5;
+  color: #1677d2;
+}
+
+.relation-spreadsheet-cell-lock {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  z-index: 3;
+  color: #64748b;
+  font-size: 9px;
+  pointer-events: none;
+}
+
+.relation-spreadsheet-validation-trigger {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  z-index: 5;
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: #e8f3ff;
+  color: #1677d2;
+  cursor: pointer;
+}
+
+.relation-spreadsheet-validation-trigger:hover {
+  background: #dbeafe;
+}
+
 .relation-spreadsheet-focus-toggle-slot {
   display: flex;
   flex: 0 0 38px;
@@ -167,4 +225,176 @@
   min-height: 34px;
   border-radius: 0;
   font-size: 13px;
+}
+
+.relation-spreadsheet-context-menu .ant-dropdown-menu,
+.relation-spreadsheet-context-menu .ant-dropdown-menu-submenu-popup .ant-dropdown-menu {
+  min-width: 224px;
+  max-height: min(560px, calc(100vh - 24px));
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #e5e7eb;
+  border-radius: 3px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 14%);
+}
+
+.relation-spreadsheet-context-menu .ant-dropdown-menu-item,
+.relation-spreadsheet-context-menu .ant-dropdown-menu-submenu-title {
+  min-height: 32px;
+  border-radius: 2px;
+  font-size: 13px;
+}
+
+.relation-spreadsheet-context-menu .ant-dropdown-menu-item-active,
+.relation-spreadsheet-context-menu .ant-dropdown-menu-submenu-title:hover {
+  background: #f1f5f9 !important;
+  color: #111827;
+}
+
+.relation-spreadsheet-context-menu .ant-dropdown-menu-item:focus:not(:focus-visible),
+.relation-spreadsheet-context-menu .ant-dropdown-menu-submenu-title:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.relation-spreadsheet-format-modal .ant-modal-content {
+  border-radius: 4px;
+}
+
+.relation-spreadsheet-format-layout {
+  display: grid;
+  min-height: 360px;
+  grid-template-columns: 136px minmax(0, 1fr);
+  border: 1px solid #e5e7eb;
+}
+
+.relation-spreadsheet-format-categories {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+  border-right: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+
+.relation-spreadsheet-format-categories button {
+  min-height: 30px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: #374151;
+  text-align: left;
+  cursor: pointer;
+}
+
+.relation-spreadsheet-format-categories button:hover,
+.relation-spreadsheet-format-categories button.is-active {
+  background: #e8f3ff;
+  color: #1677d2;
+}
+
+.relation-spreadsheet-format-options {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+}
+
+.relation-spreadsheet-format-preview {
+  display: grid;
+  gap: 6px;
+}
+
+.relation-spreadsheet-format-preview span,
+.relation-spreadsheet-format-options label > span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.relation-spreadsheet-format-preview strong {
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #e5e7eb;
+  background: #fafafa;
+  font-weight: 500;
+}
+
+.relation-spreadsheet-format-options label {
+  display: grid;
+  gap: 6px;
+}
+
+.relation-spreadsheet-format-options p {
+  margin-top: auto;
+  margin-bottom: 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.relation-spreadsheet-sort-options {
+  display: grid;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.relation-spreadsheet-sort-options label {
+  display: grid;
+  gap: 6px;
+}
+
+.relation-spreadsheet-sort-options label > span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.relation-spreadsheet-rule-dialog {
+  display: grid;
+  gap: 16px;
+  padding-block: 4px;
+}
+
+.relation-spreadsheet-rule-dialog > label,
+.relation-spreadsheet-rule-row > label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.relation-spreadsheet-rule-dialog label > span:first-child,
+.relation-spreadsheet-rule-dialog .relation-spreadsheet-rule-range {
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.relation-spreadsheet-rule-dialog .ant-select,
+.relation-spreadsheet-rule-dialog .ant-input-number {
+  width: 100%;
+}
+
+.relation-spreadsheet-rule-range {
+  padding: 7px 9px;
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+
+.relation-spreadsheet-rule-error {
+  color: #dc2626;
+  font-size: 12px;
+}
+
+.relation-spreadsheet-rule-row {
+  display: grid;
+  min-width: 0;
+  align-items: end;
+  gap: 12px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 640px) {
+  .relation-spreadsheet-format-layout {
+    min-height: 0;
+    grid-template-columns: 108px minmax(0, 1fr);
+  }
+
+  .relation-spreadsheet-rule-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

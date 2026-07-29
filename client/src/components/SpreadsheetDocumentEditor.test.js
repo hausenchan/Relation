@@ -16,6 +16,7 @@ function ControlledSpreadsheetEditor({
   initialSelectedCell = { sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 },
   onWorkbookChange = () => {},
   onSelectionChange = () => {},
+  editorProps = {},
 }) {
   const [workbook, setWorkbook] = React.useState(initialWorkbook);
   const [selectedCell, setSelectedCell] = React.useState(initialSelectedCell);
@@ -23,6 +24,7 @@ function ControlledSpreadsheetEditor({
     <SpreadsheetDocumentEditor
       workbook={workbook}
       canEdit
+      {...editorProps}
       selectedCell={selectedCell}
       onSelectedCellChange={setSelectedCell}
       onSelectionChange={onSelectionChange}
@@ -42,6 +44,8 @@ beforeAll(() => {
   };
   jest.spyOn(message, 'success').mockImplementation(() => {});
   jest.spyOn(message, 'info').mockImplementation(() => {});
+  jest.spyOn(message, 'warning').mockImplementation(() => {});
+  jest.spyOn(message, 'error').mockImplementation(() => {});
 });
 
 afterAll(() => jest.restoreAllMocks());
@@ -302,6 +306,343 @@ test('applies native spreadsheet basic formatting to the selected cell', () => {
     wrap: true,
     border: { color: '#cbd5e1' },
   });
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('keeps toolbar formatting in the shared undo stack after toolbar focus', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = { A1: { v: '6780' } };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const italicButton = container.querySelector('[aria-label="斜体"]');
+  act(() => italicButton.focus());
+  act(() => italicButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(latestWorkbook.sheets[0].cells.A1.style.italic).toBe(true);
+
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A1.style).toBeUndefined();
+
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, shiftKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A1.style.italic).toBe(true);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('shows formula raw text and highlights referenced cells', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  workbook.sheets[0].cells = {
+    A1: { v: '10' },
+    B1: { v: '2' },
+    C1: { v: '=A1/B1' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={workbook}
+      initialSelectedCell={{ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 2 }}
+    />
+  ));
+
+  expect(container.querySelector('[data-spreadsheet-formula-input="true"]').value).toBe('=A1/B1');
+  expect(container.querySelector('[data-spreadsheet-formula-input="true"]')
+    .getAttribute('data-spreadsheet-formula-reference-count')).toBe('2');
+  expect(container.querySelector('[data-spreadsheet-formula-reference="A1"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-formula-reference="B1"]')).not.toBeNull();
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('sorts a selected whole column descending without moving blanks before values', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    B1: { v: '汇总申请uv' },
+    B2: { v: '5575' },
+    B3: { v: '6445' },
+    B5: { v: '6888' },
+    B6: { v: '314' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  act(() => container.querySelector('[data-spreadsheet-column-header="1"]')
+    .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  act(() => container.querySelector('[aria-label="降序"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect([
+    latestWorkbook.sheets[0].cells.B2?.v,
+    latestWorkbook.sheets[0].cells.B3?.v,
+    latestWorkbook.sheets[0].cells.B4?.v,
+    latestWorkbook.sheets[0].cells.B5?.v,
+  ]).toEqual(['6888', '6445', '5575', '314']);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('copies and pastes formulas from the cell context menu as one undoable operation', async () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '10' },
+    B1: { v: '=A1+1', style: { bold: true } },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const source = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  act(() => source.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  await act(async () => {
+    source.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+  const contextMenu = document.body.querySelector('.relation-spreadsheet-context-menu');
+  expect(contextMenu).not.toBeNull();
+  expect(contextMenu.textContent).toContain('插入复制的单元格');
+  const copyItem = [...contextMenu.querySelectorAll('.ant-dropdown-menu-item')]
+    .find(item => item.textContent === '复制');
+  await act(async () => {
+    copyItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+
+  const target = container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="2"]');
+  act(() => target.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  await act(async () => {
+    target.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+  const pasteItem = [...document.body.querySelectorAll('.relation-spreadsheet-context-menu .ant-dropdown-menu-item')]
+    .find(item => item.textContent === '粘贴');
+  await act(async () => {
+    pasteItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(latestWorkbook.sheets[0].cells.C2).toEqual({ v: '=B2+1', style: { bold: true } });
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.C2).toBeUndefined();
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('creates a protected range from the context menu and keeps it undoable', async () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells.A1 = { v: '核心数据' };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+      editorProps={{
+        currentUser: { id: 1, display_name: '文档所有者' },
+        protectionUsers: [{ id: 2, name: '协作者' }],
+        canManageProtection: true,
+      }}
+    />
+  ));
+
+  const cell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  await act(async () => {
+    cell.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+  const contextMenu = document.body.querySelector('.relation-spreadsheet-context-menu');
+  expect(contextMenu.textContent).toContain('锁定单元格');
+  expect(contextMenu.textContent).toContain('条件格式');
+  expect(contextMenu.textContent).toContain('数据验证');
+  const lockItem = [...contextMenu.querySelectorAll('.ant-dropdown-menu-item')]
+    .find(item => item.textContent.includes('锁定单元格'));
+  await act(async () => {
+    lockItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  const lockButton = document.body.querySelector('[aria-label="创建锁定规则"]');
+  expect(lockButton).not.toBeNull();
+  await act(async () => {
+    lockButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(latestWorkbook.sheets[0].protectedRanges).toEqual([
+    expect.objectContaining({
+      range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+      ownerUserId: 1,
+      allowedUserIds: [],
+      enabled: true,
+    }),
+  ]);
+
+  act(() => container.querySelector('[aria-label="在线表格编辑区"]')
+    .dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true })));
+  expect(latestWorkbook.sheets[0].protectedRanges).toEqual([]);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('keeps protected cells selectable and copyable but blocks unauthorized editing', async () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  workbook.sheets[0].cells.A1 = { v: '锁定值' };
+  workbook.sheets[0].protectedRanges = [{
+    id: 'lock-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    ownerUserId: 1,
+    allowedUserIds: [],
+    description: '仅所有者可编辑',
+    enabled: true,
+  }];
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={workbook}
+      editorProps={{ currentUser: { id: 3 }, canManageProtection: false }}
+    />
+  ));
+
+  const cell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  expect(cell.getAttribute('data-spreadsheet-locked')).toBe('true');
+  expect(cell.getAttribute('aria-selected')).toBe('true');
+  expect(container.querySelector('[data-spreadsheet-formula-input="true"]').readOnly).toBe(true);
+  expect(container.querySelector('[aria-label="加粗"]').disabled).toBe(true);
+  expect(container.querySelector('[aria-label="调整 A 列宽"]')).toBeNull();
+  expect(container.querySelector('[aria-label="调整第 1 行高度"]')).toBeNull();
+  act(() => cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  expect(cell.querySelector('input')).toBeNull();
+
+  await act(async () => {
+    cell.dispatchEvent(new MouseEvent('contextmenu', { button: 2, bubbles: true, cancelable: true }));
+    await Promise.resolve();
+  });
+  const items = [...document.body.querySelectorAll('.relation-spreadsheet-context-menu .ant-dropdown-menu-item')];
+  const copyItem = items.find(item => item.textContent === '复制');
+  const cutItem = items.find(item => item.textContent === '剪切');
+  expect(copyItem.classList.contains('ant-dropdown-menu-item-disabled')).toBe(false);
+  expect(cutItem.classList.contains('ant-dropdown-menu-item-disabled')).toBe(true);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('renders conditional formatting and edits list validations from the cell dropdown', async () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = { A1: { v: '120' }, B1: { v: '研发' } };
+  latestWorkbook.sheets[0].conditionalFormats = [{
+    id: 'condition-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    type: 'greater_than',
+    values: ['100'],
+    style: { color: '#dc2626', backgroundColor: '#fee2e2' },
+    enabled: true,
+  }];
+  latestWorkbook.sheets[0].dataValidations = [{
+    id: 'validation-b1',
+    range: { startRow: 0, endRow: 0, startColumn: 1, endColumn: 1 },
+    type: 'list',
+    values: ['研发', '产品'],
+    invalidAction: 'reject',
+    enabled: true,
+  }];
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      initialSelectedCell={{ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 1 }}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  expect(container.querySelector('[data-spreadsheet-conditional="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-validation="validation-b1"]')).not.toBeNull();
+  const trigger = container.querySelector('[aria-label="选择数据验证选项"]');
+  await act(async () => {
+    trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  const productOption = [...document.body.querySelectorAll('.ant-dropdown-menu-item')]
+    .find(item => item.textContent === '产品');
+  await act(async () => {
+    productOption.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(latestWorkbook.sheets[0].cells.B1.v).toBe('产品');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('rejects invalid direct input and restores the previous validated value', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells.A1 = { v: '5' };
+  latestWorkbook.sheets[0].dataValidations = [{
+    id: 'validation-a1',
+    range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 },
+    type: 'number',
+    min: 1,
+    max: 10,
+    allowBlank: false,
+    invalidAction: 'reject',
+    message: '请输入 1 到 10',
+    enabled: true,
+  }];
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const cell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  act(() => cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
+  const input = container.querySelector('[role="gridcell"] input');
+  act(() => setInputValue(input, '99'));
+  act(() => input.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('5');
+  expect(message.error).toHaveBeenCalledWith('请输入 1 到 10');
 
   act(() => root.unmount());
   container.remove();

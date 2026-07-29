@@ -1,6 +1,11 @@
 const { isDeepStrictEqual } = require('node:util');
 
 const { validateSpreadsheetWorkbookSheetNames } = require('./spreadsheetWorkbookFile');
+const {
+  assertSpreadsheetChangedCellsPassValidation,
+  assertSpreadsheetWorkbookMutationAllowed,
+  validateSpreadsheetRuleCollections,
+} = require('./spreadsheetProtection');
 
 const MAX_OPERATIONS_PER_REQUEST = 500;
 const MAX_CELL_SNAPSHOT_BYTES = 16 * 1024;
@@ -21,6 +26,9 @@ const SHEET_OPERATION_PROPERTIES = new Set([
   'filters',
   'filterRange',
   'frozen',
+  'protectedRanges',
+  'conditionalFormats',
+  'dataValidations',
 ]);
 const WORKBOOK_OPERATION_PROPERTIES = new Set(['activeSheetId', 'styles', 'definedNames']);
 const ADD_SHEET_SNAPSHOT_KEYS = new Set(['id', 'cells', ...SHEET_OPERATION_PROPERTIES]);
@@ -132,6 +140,9 @@ function validateAddedSheetSnapshot(value, sheetId, label) {
   if (!Object.prototype.hasOwnProperty.call(value, 'mergedCells')) value.mergedCells = [];
   if (!Object.prototype.hasOwnProperty.call(value, 'filters')) value.filters = [];
   if (!Object.prototype.hasOwnProperty.call(value, 'frozen')) value.frozen = null;
+  if (!Object.prototype.hasOwnProperty.call(value, 'protectedRanges')) value.protectedRanges = [];
+  if (!Object.prototype.hasOwnProperty.call(value, 'conditionalFormats')) value.conditionalFormats = [];
+  if (!Object.prototype.hasOwnProperty.call(value, 'dataValidations')) value.dataValidations = [];
   for (const property of SHEET_OPERATION_PROPERTIES) {
     if (property === 'filterRange' && !Object.prototype.hasOwnProperty.call(value, property)) continue;
     validateSheetPropertySnapshot(property, value[property], label.trim());
@@ -171,7 +182,7 @@ function validateSheetPropertySnapshot(property, value, label) {
   )) {
     throw spreadsheetOperationValidationError(`${label} 工作表尺寸属性格式不合法`);
   }
-  if (['mergedCells', 'filters'].includes(property) && !Array.isArray(value)) {
+  if (['mergedCells', 'filters', 'protectedRanges', 'conditionalFormats', 'dataValidations'].includes(property) && !Array.isArray(value)) {
     throw spreadsheetOperationValidationError(`${label} 工作表数组属性格式不合法`);
   }
   if (['filterRange', 'frozen'].includes(property) && value !== null && (
@@ -324,6 +335,7 @@ function parseWorkbook(workbookValue) {
     throw spreadsheetOperationValidationError('在线表格工作簿格式不合法');
   }
   validateSpreadsheetWorkbookSheetNames(workbook);
+  validateSpreadsheetRuleCollections(workbook);
   return workbook;
 }
 
@@ -334,7 +346,7 @@ function getMissingOperationTargetValue(operation, sheet) {
     return null;
   }
   if (['rowHeights', 'columnWidths'].includes(operation.property)) return {};
-  if (['mergedCells', 'filters'].includes(operation.property)) return [];
+  if (['mergedCells', 'filters', 'protectedRanges', 'conditionalFormats', 'dataValidations'].includes(operation.property)) return [];
   if (['filterRange', 'frozen'].includes(operation.property)) return null;
   if (['rowCount', 'columnCount'].includes(operation.property)) {
     let maxRowIndex = 0;
@@ -467,7 +479,7 @@ function applySheetOrder(workbook, order) {
   ));
 }
 
-function applySpreadsheetOperations(workbookValue, operations) {
+function applySpreadsheetOperations(workbookValue, operations, options = {}) {
   const original = parseWorkbook(workbookValue);
   const normalizedOperations = normalizeSpreadsheetOperations(operations);
   const workbook = cloneJsonValue(original);
@@ -581,7 +593,14 @@ function applySpreadsheetOperations(workbookValue, operations) {
     }
   }
 
-  if (!conflicts.length) validateSpreadsheetWorkbookSheetNames(workbook);
+  if (!conflicts.length) {
+    validateSpreadsheetWorkbookSheetNames(workbook);
+    validateSpreadsheetRuleCollections(workbook);
+    if (changed) {
+      assertSpreadsheetWorkbookMutationAllowed(original, workbook, options.actor || {});
+      assertSpreadsheetChangedCellsPassValidation(original, workbook);
+    }
+  }
 
   return {
     workbook: conflicts.length ? cloneJsonValue(original) : workbook,

@@ -5,7 +5,11 @@ import {
   createDefaultSpreadsheetWorkbook,
   createDefaultSpreadsheetSheet,
   createSpreadsheetFormulaEvaluator,
+  extractSpreadsheetFormulaReferences,
+  formatSpreadsheetDisplayValue,
   getDocumentContentSignature,
+  getSpreadsheetConditionalStyle,
+  getSpreadsheetProtectedRangeAccess,
   getSpreadsheetVisibleRows,
   getNextSpreadsheetSheetName,
   mergeSpreadsheetWorkbookSnapshots,
@@ -15,13 +19,16 @@ import {
   renameSpreadsheetSheet,
   setSpreadsheetCellValue,
   setSpreadsheetColumnFilter,
+  shiftSpreadsheetCells,
   shiftSpreadsheetColumns,
   shiftSpreadsheetRows,
   sortSpreadsheetRange,
   spreadsheetClipboardMatrixHasMultipleCells,
   spreadsheetColumnIndex,
   spreadsheetColumnLabel,
+  translateSpreadsheetFormulaForPaste,
   unmergeSpreadsheetCells,
+  validateSpreadsheetCellInput,
   validateSpreadsheetSheetName,
 } from './spreadsheetWorkbook';
 
@@ -53,10 +60,62 @@ describe('spreadsheet workbook model', () => {
     expect(buildSpreadsheetCellKey(4, 27)).toBe('AB5');
   });
 
+  test('formats display values without changing workbook raw values', () => {
+    expect(formatSpreadsheetDisplayValue('1234.5', {
+      type: 'number', decimals: 2, useGrouping: true,
+    })).toBe('1,234.50');
+    expect(formatSpreadsheetDisplayValue('-1234.5', {
+      type: 'number', decimals: 1, useGrouping: true, negativeStyle: 'parentheses',
+    })).toBe('(1,234.5)');
+    expect(formatSpreadsheetDisplayValue('0.125', { type: 'percentage', decimals: 1 })).toBe('12.5%');
+    expect(formatSpreadsheetDisplayValue('0.5', { type: 'fraction' })).toBe('1/2');
+  });
+
   test('normalizes legacy or invalid content into a workbook', () => {
     const workbook = normalizeSpreadsheetWorkbook('{"blocks":[]}');
     expect(workbook.format).toBe('relation_spreadsheet_workbook_v1');
     expect(workbook.sheets[0].name).toBe('工作表1');
+    expect(workbook.sheets[0]).toMatchObject({
+      protectedRanges: [],
+      conditionalFormats: [],
+      dataValidations: [],
+    });
+  });
+
+  test('enforces protected ranges and evaluates conditional formats and validation rules', () => {
+    const workbook = workbookWithCells({ A1: '120', A2: '80', B1: '研发' });
+    const sheet = workbook.sheets[0];
+    sheet.protectedRanges = [{
+      id: 'lock-1',
+      range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 },
+      ownerUserId: 1,
+      allowedUserIds: [2],
+      enabled: true,
+    }];
+    sheet.conditionalFormats = [{
+      id: 'condition-1',
+      range: { startRow: 0, endRow: 2, startColumn: 0, endColumn: 0 },
+      type: 'greater_than',
+      values: [100],
+      style: { color: '#dc2626', backgroundColor: '#fee2e2' },
+      enabled: true,
+    }];
+    sheet.dataValidations = [{
+      id: 'validation-1',
+      range: { rowIndex: 0, columnIndex: 1 },
+      type: 'list',
+      values: ['研发', '产品'],
+      invalidAction: 'reject',
+      enabled: true,
+    }];
+
+    expect(getSpreadsheetProtectedRangeAccess(sheet, { rowIndex: 0, columnIndex: 0 }, { userId: 3 }).allowed).toBe(false);
+    expect(getSpreadsheetProtectedRangeAccess(sheet, { rowIndex: 0, columnIndex: 0 }, { userId: 2 }).allowed).toBe(true);
+    expect(getSpreadsheetProtectedRangeAccess(sheet, { rowIndex: 0, columnIndex: 0 }, { userId: 3, canManage: true }).allowed).toBe(true);
+    expect(getSpreadsheetConditionalStyle(sheet, 0, 0, 120)).toEqual({ color: '#dc2626', backgroundColor: '#fee2e2' });
+    expect(getSpreadsheetConditionalStyle(sheet, 1, 0, 80)).toEqual({});
+    expect(validateSpreadsheetCellInput(sheet, 0, 1, '产品').valid).toBe(true);
+    expect(validateSpreadsheetCellInput(sheet, 0, 1, '财务')).toMatchObject({ valid: false, action: 'reject' });
   });
 
   test('keeps sheet names valid and unique across add, rename and legacy normalization', () => {
@@ -160,6 +219,57 @@ describe('spreadsheet workbook model', () => {
     expect(evaluator.getValue('sheet_1', 1, 4)).toBe('CD');
   });
 
+  test('covers operators, absolute references, dates, errors and direct formula evaluation', () => {
+    const workbook = workbookWithCells({
+      A1: '3',
+      A2: '4',
+      B1: '=$A$1^2+A2',
+      B2: '=-A1+ABS(-5)',
+      C1: '=ROUND(10/3,2)',
+      C2: '=COUNTA(A1:B2)',
+      D1: '=A1&"-"&A2',
+      D2: '=A1<>A2',
+      E1: '=UNKNOWN(A1)',
+      E2: '=TODAY()',
+      F1: '=NOW()',
+    });
+    const evaluator = createSpreadsheetFormulaEvaluator(workbook);
+    expect(evaluator.getValue('sheet_1', 0, 1)).toBe(13);
+    expect(evaluator.getValue('sheet_1', 1, 1)).toBe(2);
+    expect(evaluator.getValue('sheet_1', 0, 2)).toBe(3.33);
+    expect(evaluator.getValue('sheet_1', 1, 2)).toBe(4);
+    expect(evaluator.getValue('sheet_1', 0, 3)).toBe('3-4');
+    expect(evaluator.getValue('sheet_1', 1, 3)).toBe(true);
+    expect(evaluator.getValue('sheet_1', 0, 4)).toBe('#NAME?');
+    expect(evaluator.getValue('sheet_1', 1, 4)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(evaluator.getValue('sheet_1', 0, 5)).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(evaluator.evaluateFormula('sheet_1', '=A1+A2=7')).toBe(true);
+    expect(evaluator.evaluateFormula('sheet_1', 'A1+A2')).toBe('#VALUE!');
+  });
+
+  test('evaluates custom data-validation formulas through the workbook engine', () => {
+    const workbook = workbookWithCells({ A1: '8' });
+    const sheet = workbook.sheets[0];
+    sheet.dataValidations = [{
+      id: 'positive-value',
+      range: { rowIndex: 0, columnIndex: 0 },
+      type: 'custom_formula',
+      formula: '=A1>0',
+      allowBlank: false,
+      invalidAction: 'reject',
+      enabled: true,
+    }];
+    const evaluator = createSpreadsheetFormulaEvaluator(workbook);
+    expect(validateSpreadsheetCellInput(sheet, 0, 0, '8', {
+      evaluateCustomFormula: rule => evaluator.evaluateFormula(sheet.id, rule.formula) === true,
+    }).valid).toBe(true);
+    sheet.cells.A1 = { v: '-1' };
+    const invalidEvaluator = createSpreadsheetFormulaEvaluator(workbook);
+    expect(validateSpreadsheetCellInput(sheet, 0, 0, '-1', {
+      evaluateCustomFormula: rule => invalidEvaluator.evaluateFormula(sheet.id, rule.formula) === true,
+    })).toMatchObject({ valid: false, action: 'reject' });
+  });
+
   test('calculates lookup and conditional aggregate functions', () => {
     const workbook = workbookWithCells({
       A1: '产品',
@@ -206,6 +316,26 @@ describe('spreadsheet workbook model', () => {
     expect(evaluator.getValue('sheet_1', 3, 0)).toBe('#VALUE!');
     expect(evaluator.getValue('sheet_1', 4, 0)).toBe('#CYCLE!');
     expect(evaluator.getValue('sheet_1', 5, 0)).toBe('#CYCLE!');
+  });
+
+  test('extracts visible formula references without matching quoted text', () => {
+    expect(extractSpreadsheetFormulaReferences(
+      '=P4/T4+"A1"+SUM(\'源 数据\'!$B$2:C3)+Sheet10!A1',
+      '公式表',
+    )).toEqual([
+      expect.objectContaining({ token: 'P4', sheetName: '公式表', startRow: 3, endRow: 3, startColumn: 15, endColumn: 15 }),
+      expect.objectContaining({ token: 'T4', sheetName: '公式表', startRow: 3, endRow: 3, startColumn: 19, endColumn: 19 }),
+      expect.objectContaining({ token: "'源 数据'!$B$2:C3", sheetName: '源 数据', startRow: 1, endRow: 2, startColumn: 1, endColumn: 2 }),
+      expect.objectContaining({ token: 'Sheet10!A1', sheetName: 'Sheet10', startRow: 0, endRow: 0, startColumn: 0, endColumn: 0 }),
+    ]);
+  });
+
+  test('translates relative formula references when pasting without changing absolute references or strings', () => {
+    expect(translateSpreadsheetFormulaForPaste(
+      '=A1+$B$2+Sheet10!C3+"A1"',
+      1,
+      2,
+    )).toBe('=C2+$B$2+Sheet10!E4+"A1"');
   });
 
   test('renames cross-sheet formula references without changing strings or similar sheet names', () => {
@@ -330,6 +460,22 @@ describe('spreadsheet workbook model', () => {
     expect(sheet.cells.B3.v).toBe('20');
   });
 
+  test('keeps blank cells after populated values in descending sorts', () => {
+    const workbook = workbookWithCells({
+      B1: '汇总申请uv',
+      B2: '5575',
+      B3: '6445',
+      B5: '6888',
+      B6: '314',
+    });
+    workbook.sheets[0].cells.B2.style = { bold: true };
+    const sheet = workbook.sheets[0];
+    sortSpreadsheetRange(sheet, { startRow: 0, endRow: 5, startColumn: 1, endColumn: 1 }, 1, 'desc');
+    expect([sheet.cells.B2?.v, sheet.cells.B3?.v, sheet.cells.B4?.v, sheet.cells.B5?.v, sheet.cells.B6?.v])
+      .toEqual(['6888', '6445', '5575', '314', undefined]);
+    expect(sheet.cells.B4.style).toEqual({ bold: true });
+  });
+
   test('filters rows by the selected column value and keeps the header visible', () => {
     const workbook = workbookWithCells({ A1: '状态', A2: '进行中', A3: '完成', A4: '进行中' });
     setSpreadsheetColumnFilter(workbook.sheets[0], 0, '进行中');
@@ -346,6 +492,18 @@ describe('spreadsheet workbook model', () => {
     shiftSpreadsheetColumns(sheet, 0, 1);
     expect(sheet.cells.B2.v).toBe('1');
     expect(sheet.cells.B3.v).toBe('=B2');
+  });
+
+  test('shifts local cells and remaps formula references for insert and delete cell operations', () => {
+    const workbook = workbookWithCells({ A1: '1', B1: '2', C1: '=A1+B1' });
+    const sheet = workbook.sheets[0];
+    shiftSpreadsheetCells(sheet, { rowIndex: 0, columnIndex: 1 }, 'insert-right', workbook);
+    expect(sheet.cells.C1.v).toBe('2');
+    expect(sheet.cells.D1.v).toBe('=A1+C1');
+
+    shiftSpreadsheetCells(sheet, { rowIndex: 0, columnIndex: 1 }, 'delete-left', workbook);
+    expect(sheet.cells.B1.v).toBe('2');
+    expect(sheet.cells.C1.v).toBe('=A1+B1');
   });
 
   test('shifts structural references without rewriting strings or numbered sheet names', () => {

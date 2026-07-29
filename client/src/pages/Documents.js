@@ -15180,6 +15180,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
       collaborators={spreadsheetCollaborators}
       mentionContext={documentMentionContext}
+      currentUser={currentUser}
+      protectionUsers={selectedDoc?.access_summary?.users || []}
+      canManageProtection={canManageSelectedDoc}
       fillAvailableHeight={compactSpreadsheetWorkspace}
       frameless={compactSpreadsheetWorkspace}
       workspaceFocusMode={compactSpreadsheetWorkspace && spreadsheetWorkspaceChrome.menuCollapsed}
