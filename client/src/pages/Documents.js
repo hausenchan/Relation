@@ -170,6 +170,7 @@ import {
   spreadsheetWorkbookToText,
 } from '../utils/spreadsheetWorkbook';
 import DOMPurify from 'dompurify';
+import './DocumentsSpreadsheetLayout.css';
 
 const loadUniverSpreadsheetDocumentEditor = () => {
   if (typeof window !== 'undefined' && typeof window.__RELATION_LOAD_UNIVER_SPREADSHEET__ === 'function') {
@@ -3893,6 +3894,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const selectedDocFolderPathTag = selectedDocFolder
     ? getFolderInnerPathLabel(selectedDocFolder, folderPathMap)
     : (selectedDoc?.folder_name || '');
+  const compactSpreadsheetWorkspace = !embedded && !isMobile && isSpreadsheetDocument(selectedDoc);
   const deepLinkedDocId = useMemo(() => {
     const embeddedId = Number(embeddedDocumentId);
     if (embedded && Number.isInteger(embeddedId) && embeddedId > 0) return embeddedId;
@@ -9315,6 +9317,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     if (!openDocTabs.length) return null;
     return (
       <div
+        className="documents-open-tabs"
         role="tablist"
         style={{
           display: 'flex',
@@ -9324,7 +9327,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           alignItems: 'center',
           overflowX: 'auto',
           overflowY: 'hidden',
-          padding: '0 2px 8px',
+          padding: compactSpreadsheetWorkspace ? '0 2px 2px' : '0 2px 8px',
         }}
       >
         {openDocTabs.map((tab, index) => {
@@ -15158,6 +15161,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
       collaborators={spreadsheetCollaborators}
       mentionContext={documentMentionContext}
+      fillAvailableHeight={compactSpreadsheetWorkspace}
+      frameless={compactSpreadsheetWorkspace}
     />
   );
   const univerSpreadsheetEditor = (
@@ -15172,12 +15177,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           canEdit={canEditSelectedSpreadsheet}
           onWorkbookChange={nextWorkbook => updateSelectedSpreadsheetWorkbook(() => nextWorkbook)}
           collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
+          fillAvailableHeight={compactSpreadsheetWorkspace}
         />
       </React.Suspense>
     </SpreadsheetEditorFallbackBoundary>
   );
   const renderSpreadsheetEditor = () => (
-    <>
+    <div className={`documents-spreadsheet-editor-stack${compactSpreadsheetWorkspace ? ' documents-spreadsheet-editor-stack--fill' : ''}`}>
       {activeSpreadsheetConflictHint ? (
         <Alert
           data-spreadsheet-conflict-notice="true"
@@ -15188,7 +15194,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         />
       ) : null}
       {enableUniverSpreadsheetPreview ? univerSpreadsheetEditor : legacySpreadsheetEditor}
-    </>
+    </div>
   );
   const renderBlockInput = (block, index, heading) => {
     const active = selectedBlockId === block.id;
@@ -15763,11 +15769,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   };
 
   return (
-    <div style={{
+    <div className={`documents-layout${compactSpreadsheetWorkspace ? ' documents-layout--spreadsheet' : ''}`} style={{
       display: 'flex',
       gap: embedded || isMobile || isFolderSidebarCollapsed ? 0 : 16,
-      height: embedded ? 'min(780px, calc(100vh - 180px))' : (isMobile ? 'auto' : 'calc(100vh - 120px)'),
-      minHeight: embedded ? 620 : (isMobile ? 'calc(100vh - 80px)' : 640),
+      height: compactSpreadsheetWorkspace
+        ? 'calc(100dvh - 80px)'
+        : (embedded ? 'min(780px, calc(100vh - 180px))' : (isMobile ? 'auto' : 'calc(100vh - 120px)')),
+      minHeight: compactSpreadsheetWorkspace ? 0 : (embedded ? 620 : (isMobile ? 'calc(100vh - 80px)' : 640)),
       flexDirection: 'row',
       overflow: embedded || !isMobile ? 'hidden' : 'visible',
     }}>
@@ -16088,9 +16096,30 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       )}
 
       {showDocumentEditor && (
-      <main style={{ flex: 1, minWidth: 0, width: '100%', overflow: isMobile ? 'visible' : 'auto' }}>
+      <main
+        className="documents-editor-main"
+        style={{
+          flex: 1,
+          minWidth: 0,
+          width: '100%',
+          overflow: compactSpreadsheetWorkspace ? 'hidden' : (isMobile ? 'visible' : 'auto'),
+          display: compactSpreadsheetWorkspace ? 'flex' : undefined,
+          flexDirection: compactSpreadsheetWorkspace ? 'column' : undefined,
+        }}
+      >
         {!isMobile && !embedded && (
-          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4, minHeight: 42, marginBottom: 10, borderBottom: '1px solid #edf0f5' }}>
+          <div
+            className="documents-editor-tabs"
+            style={{
+              display: 'flex',
+              alignItems: compactSpreadsheetWorkspace ? 'center' : 'flex-start',
+              gap: 4,
+              minHeight: compactSpreadsheetWorkspace ? 38 : 42,
+              marginBottom: compactSpreadsheetWorkspace ? 0 : 10,
+              padding: compactSpreadsheetWorkspace ? '1px 8px 0' : 0,
+              borderBottom: '1px solid #edf0f5',
+            }}
+          >
             <SidebarToggleButton
               collapsed={isFolderSidebarCollapsed}
               onToggle={() => setFolderSidebarCollapsed(prev => !prev)}
@@ -16136,11 +16165,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
             )}
           </div>
         ) : (
-          <Spin spinning={detailLoading}>
-            <div style={{
-              maxWidth: isMobile ? '100%' : getEditorShellMaxWidth(selectedDoc, tocOpen),
-              margin: isMobile || isFolderSidebarCollapsed ? '0' : '0 auto',
-              padding: isMobile ? '0 0 24px' : '4px 12px',
+          <Spin wrapperClassName="documents-detail-spin" spinning={detailLoading}>
+            <div className="documents-editor-shell" style={{
+              maxWidth: compactSpreadsheetWorkspace ? 'none' : (isMobile ? '100%' : getEditorShellMaxWidth(selectedDoc, tocOpen)),
+              margin: compactSpreadsheetWorkspace || isMobile || isFolderSidebarCollapsed ? '0' : '0 auto',
+              padding: compactSpreadsheetWorkspace ? 0 : (isMobile ? '0 0 24px' : '4px 12px'),
+              height: compactSpreadsheetWorkspace ? '100%' : undefined,
+              minHeight: compactSpreadsheetWorkspace ? 0 : undefined,
+              display: compactSpreadsheetWorkspace ? 'flex' : undefined,
+              flexDirection: compactSpreadsheetWorkspace ? 'column' : undefined,
             }}>
               {isMobile && (
                 <div style={{
@@ -16190,7 +16223,67 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 </div>
               )}
 
-              {!isMobile && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
+              {compactSpreadsheetWorkspace && (
+                <header className="documents-spreadsheet-header" data-spreadsheet-document-header="true">
+                  <div className="documents-spreadsheet-header-main">
+                    <TableOutlined className="documents-spreadsheet-header-icon" aria-hidden="true" />
+                    <Tooltip title={editorTitle || selectedDoc.title || '未命名表格'}>
+                      <Input
+                        className="documents-spreadsheet-title-input"
+                        aria-label="表格标题"
+                        value={editorTitle}
+                        onChange={event => {
+                          pushEditorUndoSnapshot();
+                          setEditorTitle(event.target.value);
+                        }}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter') event.currentTarget.blur();
+                        }}
+                        placeholder="未命名表格"
+                      />
+                    </Tooltip>
+                    <Text className="documents-spreadsheet-save-state" type="secondary">
+                      {autoSaving || saving ? '自动保存中' : (canEditDoc(selectedDoc) ? '表格将自动保存' : '只读')}
+                    </Text>
+                    {selectedDocFolderPathTag && (
+                      <Tooltip title={selectedDocFolderPathTag}>
+                        <span className="documents-spreadsheet-folder-path">
+                          <FolderOutlined aria-hidden="true" />
+                          <span>{selectedDocFolderPathTag}</span>
+                        </span>
+                      </Tooltip>
+                    )}
+                  </div>
+                  <Space className="documents-spreadsheet-header-actions" size={2}>
+                    <Tooltip title="页面">
+                      <Dropdown
+                        trigger={['click']}
+                        open={pageMenuOpen}
+                        onOpenChange={setPageMenuOpen}
+                        dropdownRender={renderPageMenu}
+                      >
+                        <Button type="text" icon={<MoreOutlined />} aria-label="页面" />
+                      </Dropdown>
+                    </Tooltip>
+                    <Tooltip title={`添加分享人 · ${selectedDoc.access_summary?.label || '仅自己'}`}>
+                      <Button type="text" icon={<UserAddOutlined />} onClick={openShare} aria-label={`添加分享人 · ${selectedDoc.access_summary?.label || '仅自己'}`} />
+                    </Tooltip>
+                    <Tooltip title="改动历史">
+                      <Button type="text" icon={<HistoryOutlined />} loading={changeLogRefreshing} onClick={openChangeLogs} aria-label="改动历史" />
+                    </Tooltip>
+                    <Tooltip title={selectedDoc.is_favorite ? '取消收藏' : '收藏'}>
+                      <Button
+                        type="text"
+                        icon={selectedDoc.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
+                        onClick={() => toggleFavorite(selectedDoc)}
+                        aria-label={selectedDoc.is_favorite ? '取消收藏' : '收藏'}
+                      />
+                    </Tooltip>
+                  </Space>
+                </header>
+              )}
+
+              {!isMobile && !compactSpreadsheetWorkspace && <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
                 <Space direction="vertical" size={4} style={{ minWidth: 0, flex: 1 }}>
                   <Space size={[8, 8]} wrap>
                     {isSpreadsheetDocument(selectedDoc) && <Tag icon={<TableOutlined />} color="green">在线表格</Tag>}
@@ -16256,7 +16349,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 </Space>
               </div>}
 
-              {embedded || String(selectedDoc.doc_type || '').toUpperCase() === 'MEDIA' ? (
+              {!compactSpreadsheetWorkspace && (embedded || String(selectedDoc.doc_type || '').toUpperCase() === 'MEDIA' ? (
                 <Title level={2} style={{ margin: isMobile ? '4px 0 12px' : '8px 0 16px' }}>
                   {editorTitle || selectedDoc.title || '未命名文档'}
                 </Title>
@@ -16277,7 +16370,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                     marginBottom: isMobile ? 6 : 8,
                   }}
                 />
-              )}
+              ))}
 
               {isSpreadsheetDocument(selectedDoc) ? (
                 renderSpreadsheetEditor()

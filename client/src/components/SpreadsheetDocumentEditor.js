@@ -21,6 +21,7 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Dropdown, Input, Modal, Select, Space, Tooltip, Typography, message } from 'antd';
 import MentionPicker, { preloadMentionCandidates, scheduleMentionNotification } from './MentionPicker';
+import './SpreadsheetDocumentEditor.css';
 import {
   buildSpreadsheetCellKey,
   createDefaultSpreadsheetSheet,
@@ -191,6 +192,8 @@ export default function SpreadsheetDocumentEditor({
   collaborationNotice = '',
   collaborators = [],
   mentionContext,
+  fillAvailableHeight = false,
+  frameless = false,
 }) {
   const workbook = useMemo(() => normalizeSpreadsheetWorkbook(workbookValue), [workbookValue]);
   const activeSheet = workbook.sheets.find(sheet => sheet.id === selectedCell?.sheetId)
@@ -1131,24 +1134,40 @@ export default function SpreadsheetDocumentEditor({
   return (
     <section
       ref={editorRef}
+      className={`relation-spreadsheet-editor${fillAvailableHeight ? ' relation-spreadsheet-editor--fill' : ''}${frameless ? ' relation-spreadsheet-editor--frameless' : ''}`}
       aria-label="在线表格编辑区"
+      data-spreadsheet-editor-root="true"
       tabIndex={0}
       onPaste={handlePaste}
       onCopy={handleCopy}
       onKeyDown={handleGridKeyDown}
       style={{
-        height: isMobile ? 'calc(100vh - 210px)' : 'calc(100vh - 230px)',
-        minHeight: isMobile ? 520 : 620,
-        border: '1px solid #d9d9d9',
-        borderRadius: 6,
+        height: fillAvailableHeight ? '100%' : (isMobile ? 'calc(100vh - 210px)' : 'calc(100vh - 230px)'),
+        minHeight: fillAvailableHeight ? 0 : (isMobile ? 520 : 620),
+        border: frameless ? 'none' : '1px solid #d9d9d9',
+        borderRadius: frameless ? 0 : 6,
         overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
         background: '#fff',
+        outline: 'none',
       }}
     >
-      <div style={{ borderBottom: '1px solid #e5e7eb', background: '#fafafa' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', padding: '5px 8px 3px' }}>
+      <div
+        className="relation-spreadsheet-command-area"
+        style={{ borderBottom: '1px solid #e5e7eb', background: fillAvailableHeight ? '#fff' : '#fafafa' }}
+      >
+        <div
+          data-spreadsheet-menu-bar="true"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            minHeight: fillAvailableHeight ? 30 : undefined,
+            overflowX: 'auto',
+            padding: fillAvailableHeight ? '3px 8px 2px' : '5px 8px 3px',
+          }}
+        >
           {menuItems.map(renderMenu)}
           <div style={{ flex: 1 }} />
           {remoteCollaborators.length > 0 && (
@@ -1231,7 +1250,17 @@ export default function SpreadsheetDocumentEditor({
             }}
           />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 2, overflowX: 'auto', padding: '4px 8px 7px' }}>
+        <div
+          data-spreadsheet-toolbar="true"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            minHeight: fillAvailableHeight ? 34 : undefined,
+            overflowX: 'auto',
+            padding: fillAvailableHeight ? '2px 8px 4px' : '4px 8px 7px',
+          }}
+        >
           <SpreadsheetToolbarButton title="在上方插入行" disabled={!canEdit} icon={<InsertRowAboveOutlined />} onClick={insertRow} />
           <SpreadsheetToolbarButton title="删除当前行" disabled={!canEdit || activeSheet.rowCount <= 1} danger icon={<DeleteRowOutlined />} onClick={deleteRow} />
           <SpreadsheetToolbarButton title="在左侧插入列" disabled={!canEdit} icon={<InsertRowRightOutlined />} onClick={insertColumn} />
@@ -1365,16 +1394,18 @@ export default function SpreadsheetDocumentEditor({
         />
       ) : null}
 
-      <div style={{
+      <div className="relation-spreadsheet-formula-bar" data-spreadsheet-formula-bar="true" style={{
         display: 'grid',
-        gridTemplateColumns: '112px minmax(0, 1fr)',
+        gridTemplateColumns: fillAvailableHeight ? '74px minmax(0, 1fr)' : '112px minmax(0, 1fr)',
         alignItems: 'center',
-        gap: 8,
-        padding: '7px 10px',
+        gap: fillAvailableHeight ? 0 : 8,
+        minHeight: fillAvailableHeight ? 29 : undefined,
+        padding: fillAvailableHeight ? 0 : '7px 10px',
         borderBottom: '1px solid #e5e7eb',
       }}>
-        <Input size="small" value={selectionLabel} readOnly />
+        <Input className="relation-spreadsheet-name-box" size="small" value={selectionLabel} readOnly />
         <Input
+          className="relation-spreadsheet-formula-input"
           data-spreadsheet-formula-input="true"
           size="small"
           prefix={<Text type="secondary">fx</Text>}
@@ -1407,6 +1438,7 @@ export default function SpreadsheetDocumentEditor({
       <div
         ref={viewportRef}
         role="grid"
+        data-spreadsheet-grid="true"
         aria-rowcount={activeSheet.rowCount}
         aria-colcount={activeSheet.columnCount}
         onScroll={event => {
@@ -1520,7 +1552,19 @@ export default function SpreadsheetDocumentEditor({
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 9px', borderTop: '1px solid #e5e7eb', background: '#fff' }}>
+      <div
+        className="relation-spreadsheet-sheet-bar"
+        data-spreadsheet-sheet-bar="true"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: fillAvailableHeight ? 4 : 8,
+          minHeight: fillAvailableHeight ? 34 : undefined,
+          padding: fillAvailableHeight ? '0 8px' : '7px 9px',
+          borderTop: '1px solid #e5e7eb',
+          background: '#fff',
+        }}
+      >
         <Tooltip title="新增工作表">
           <Button aria-label="新增工作表" size="small" type="text" icon={<PlusOutlined />} disabled={!canEdit} onClick={addSheet} />
         </Tooltip>
@@ -1540,7 +1584,14 @@ export default function SpreadsheetDocumentEditor({
                 else if (key === 'delete') deleteSheet(sheet);
               },
             }}>
-              <Button size="small" type={sheet.id === activeSheet.id ? 'primary' : 'text'} onClick={() => switchSheet(sheet.id)} onDoubleClick={() => canEdit && renameSheet(sheet)}>
+              <Button
+                className={`relation-spreadsheet-sheet-tab${sheet.id === activeSheet.id ? ' relation-spreadsheet-sheet-tab--active' : ''}`}
+                size="small"
+                type={fillAvailableHeight ? 'text' : (sheet.id === activeSheet.id ? 'primary' : 'text')}
+                aria-pressed={sheet.id === activeSheet.id}
+                onClick={() => switchSheet(sheet.id)}
+                onDoubleClick={() => canEdit && renameSheet(sheet)}
+              >
                 {sheet.name}
               </Button>
             </Dropdown>
@@ -1550,9 +1601,11 @@ export default function SpreadsheetDocumentEditor({
           <Button type="link" size="small" onClick={clearFilters}>清除筛选</Button>
         )}
         <Select
+          className="relation-spreadsheet-zoom-select"
           size="small"
           value={zoom}
-          style={{ width: 82 }}
+          variant={fillAvailableHeight ? 'borderless' : 'outlined'}
+          style={{ width: fillAvailableHeight ? 76 : 82 }}
           options={[0.75, 1, 1.25, 1.5].map(value => ({ value, label: `${Math.round(value * 100)}%` }))}
           onChange={setZoom}
         />

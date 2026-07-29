@@ -40,6 +40,41 @@ beforeAll(() => {
 
 afterAll(() => jest.restoreAllMocks());
 
+test('fills a frameless document workspace while keeping every spreadsheet region visible', () => {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => {
+    root.render(
+      <SpreadsheetDocumentEditor
+        workbook={createDefaultSpreadsheetWorkbook()}
+        canEdit
+        fillAvailableHeight
+        frameless
+        selectedCell={{ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 }}
+        onSelectedCellChange={() => {}}
+        onWorkbookChange={() => {}}
+      />
+    );
+  });
+
+  const editor = container.querySelector('[data-spreadsheet-editor-root="true"]');
+  expect(editor.style.height).toBe('100%');
+  expect(editor.style.minHeight).toBe('0');
+  expect(editor.classList.contains('relation-spreadsheet-editor--frameless')).toBe(true);
+  expect(editor.style.borderRadius).toBe('0');
+  expect(container.querySelector('[data-spreadsheet-menu-bar="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-toolbar="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-formula-bar="true"]').style.gridTemplateColumns)
+    .toBe('74px minmax(0, 1fr)');
+  expect(container.querySelector('[data-spreadsheet-grid="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-sheet-bar="true"]')).not.toBeNull();
+  expect(container.querySelector('.relation-spreadsheet-sheet-tab--active')).not.toBeNull();
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('virtualizes a large worksheet and renders calculated formula values', () => {
   const workbook = createDefaultSpreadsheetWorkbook();
   workbook.sheets[0] = {

@@ -48,6 +48,7 @@ export default function UniverSpreadsheetDocumentEditor({
   canEdit = false,
   onWorkbookChange,
   collaborationNotice = '',
+  fillAvailableHeight = false,
 }) {
   const containerId = useMemo(() => `relation-univer-${Math.random().toString(36).slice(2)}`, []);
   const hostRef = useRef(null);
@@ -170,7 +171,7 @@ export default function UniverSpreadsheetDocumentEditor({
   return (
     <div
       ref={hostRef}
-      className="relation-univer-sheet relation-univer-shimo-skin"
+      className={`relation-univer-sheet relation-univer-shimo-skin${fillAvailableHeight ? ' relation-univer-sheet--fill' : ''}`}
       data-spreadsheet-univer-editor="true"
       data-can-edit={canEdit ? 'true' : 'false'}
     >

@@ -1,0 +1,81 @@
+.relation-spreadsheet-editor {
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.relation-spreadsheet-editor--fill {
+  flex: 1 1 auto;
+}
+
+.relation-spreadsheet-editor--frameless {
+  border: 0 !important;
+  border-radius: 0 !important;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-command-area {
+  flex: 0 0 auto;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input,
+.relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input-affix-wrapper {
+  height: 28px;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input:focus,
+.relation-spreadsheet-editor--fill .relation-spreadsheet-formula-bar .ant-input-affix-wrapper-focused {
+  box-shadow: inset 0 0 0 1px #1677d2;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-name-box {
+  border-right: 1px solid #e5e7eb;
+  text-align: center;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-formula-input {
+  padding-inline: 10px;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-bar {
+  flex: 0 0 34px;
+  overflow: hidden;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab {
+  position: relative;
+  height: 33px;
+  padding: 0 12px;
+  border-radius: 0;
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab:hover {
+  background: #f3f5f7;
+  color: #1f2937;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab--active {
+  background: #f6f8fa;
+  color: #1677d2;
+  font-weight: 600;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab--active::after {
+  position: absolute;
+  right: 10px;
+  bottom: 0;
+  left: 10px;
+  height: 2px;
+  background: #1677d2;
+  content: '';
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-zoom-select .ant-select-selector {
+  padding-inline: 6px;
+  border-radius: 2px;
+  font-size: 12px;
+}

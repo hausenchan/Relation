@@ -1,0 +1,137 @@
+.documents-layout--spreadsheet {
+  box-sizing: border-box;
+  width: calc(100% + 40px);
+  margin: -20px;
+  background: #fff;
+}
+
+.documents-layout--spreadsheet .documents-editor-main,
+.documents-layout--spreadsheet .documents-detail-spin,
+.documents-layout--spreadsheet .documents-detail-spin > .ant-spin-container,
+.documents-layout--spreadsheet .documents-editor-shell {
+  min-height: 0;
+}
+
+.documents-layout--spreadsheet .documents-detail-spin,
+.documents-layout--spreadsheet .documents-detail-spin > .ant-spin-container {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.documents-layout--spreadsheet .documents-editor-tabs {
+  flex: 0 0 38px;
+  background: #fff;
+}
+
+.documents-layout--spreadsheet .documents-open-tabs {
+  scrollbar-width: thin;
+}
+
+.documents-spreadsheet-header {
+  display: flex;
+  flex: 0 0 44px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 12px;
+  padding: 5px 10px 5px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.documents-spreadsheet-header-main {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.documents-spreadsheet-header-icon {
+  flex: 0 0 auto;
+  color: #16865a;
+  font-size: 16px;
+}
+
+.documents-spreadsheet-title-input.ant-input {
+  width: clamp(150px, 22vw, 340px);
+  height: 30px;
+  padding: 2px 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #1f2937;
+  font-size: 15px;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.documents-spreadsheet-title-input.ant-input:hover,
+.documents-spreadsheet-title-input.ant-input:focus {
+  border-color: #d5dae1;
+  box-shadow: none;
+}
+
+.documents-spreadsheet-save-state {
+  flex: 0 0 auto;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.documents-spreadsheet-folder-path {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: min(28vw, 360px);
+  gap: 5px;
+  color: #6b7280;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.documents-spreadsheet-folder-path > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.documents-spreadsheet-header-actions {
+  flex: 0 0 auto;
+}
+
+.documents-spreadsheet-header-actions .ant-btn {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 3px;
+  color: #4b5563;
+}
+
+.documents-spreadsheet-header-actions .ant-btn:hover {
+  background: #f1f3f5;
+  color: #111827;
+}
+
+.documents-spreadsheet-editor-stack {
+  min-width: 0;
+}
+
+.documents-spreadsheet-editor-stack--fill {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.documents-spreadsheet-editor-stack--fill > .ant-alert {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1180px) {
+  .documents-spreadsheet-folder-path {
+    display: none;
+  }
+
+  .documents-spreadsheet-title-input.ant-input {
+    width: clamp(140px, 25vw, 260px);
+  }
+}
