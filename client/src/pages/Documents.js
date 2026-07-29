@@ -75,7 +75,7 @@ import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import SidebarToggleButton from '../components/SidebarToggleButton';
-import SpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
+import LegacySpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
@@ -170,6 +170,8 @@ import {
   spreadsheetWorkbookToText,
 } from '../utils/spreadsheetWorkbook';
 import DOMPurify from 'dompurify';
+
+const UniverSpreadsheetDocumentEditor = React.lazy(() => import('../components/UniverSpreadsheetDocumentEditor'));
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -467,6 +469,7 @@ const documentFolderSidebarWidthStorageKey = 'documents.folderSidebarWidth';
 const documentFolderSidebarDefaultWidth = 340;
 const documentFolderSidebarMinWidth = 300;
 const documentFolderSidebarMaxWidth = 560;
+const univerSpreadsheetPreviewStorageKey = 'relation_univer_spreadsheet_preview';
 const tableFillColorOptions = ['#ffffff', '#f8fafc', '#fee2e2', '#ffedd5', '#fef3c7', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
 const tableTextColorOptions = ['#111827', '#475569', '#b91c1c', '#c2410c', '#a16207', '#15803d', '#1d4ed8', '#4338ca', '#7e22ce'];
 const databaseFieldTypeOptions = [
@@ -489,6 +492,63 @@ const pasteHtmlBlockSelector = [
   'p', 'li', 'table', 'div',
   'img',
 ].join(',');
+
+function readStoredUniverSpreadsheetPreviewFlag() {
+  if (typeof window === 'undefined') return false;
+  try {
+    return window.localStorage.getItem(univerSpreadsheetPreviewStorageKey) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function getUniverSpreadsheetPreviewSearchFlag(searchParams) {
+  const rawValue = searchParams.get('univer_spreadsheet') || searchParams.get('univerSpreadsheet');
+  if (rawValue === null) return null;
+  const normalized = String(rawValue).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
+  return null;
+}
+
+function persistUniverSpreadsheetPreviewFlag(enabled) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (enabled) {
+      window.localStorage.setItem(univerSpreadsheetPreviewStorageKey, '1');
+    } else {
+      window.localStorage.removeItem(univerSpreadsheetPreviewStorageKey);
+    }
+  } catch {
+    // localStorage may be blocked; the URL parameter still controls this render.
+  }
+}
+
+class SpreadsheetEditorFallbackBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidUpdate(prevProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+
+  componentDidCatch(error) {
+    console.error('[documents:univer-spreadsheet-preview]', error);
+  }
+
+  render() {
+    if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
 
 function getDocumentIdFromSearch(searchParams) {
   for (const key of documentLinkParamKeys) {
@@ -3343,6 +3403,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [enableUniverSpreadsheetPreview, setEnableUniverSpreadsheetPreview] = useState(readStoredUniverSpreadsheetPreviewFlag);
   const isMobile = !screens.md;
   const [folders, setFolders] = useState([]);
   const [projectGroups, setProjectGroups] = useState([]);
@@ -3739,6 +3800,13 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       folderSidebarCollapsed ? '1' : '0'
     );
   }, [folderSidebarCollapsed]);
+
+  useEffect(() => {
+    const nextPreviewFlag = getUniverSpreadsheetPreviewSearchFlag(searchParams);
+    if (nextPreviewFlag === null) return;
+    persistUniverSpreadsheetPreviewFlag(nextPreviewFlag);
+    setEnableUniverSpreadsheetPreview(nextPreviewFlag);
+  }, [searchParams]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -15066,6 +15134,41 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     spreadsheetConflictNotice,
     selectedDoc?.id,
   );
+  const canEditSelectedSpreadsheet = canEditDoc(selectedDoc);
+  const legacySpreadsheetEditor = (
+    <LegacySpreadsheetDocumentEditor
+      key={`legacy-${selectedDoc?.id || 'spreadsheet'}`}
+      workbook={selectedDoc?.content}
+      canEdit={canEditSelectedSpreadsheet}
+      isMobile={isMobile}
+      selectedCell={selectedSpreadsheetCell}
+      onSelectedCellChange={setSelectedSpreadsheetCell}
+      onSelectionChange={handleSpreadsheetSelectionChange}
+      onWorkbookChange={nextWorkbook => updateSelectedSpreadsheetWorkbook(() => nextWorkbook)}
+      onImportXlsx={handleSpreadsheetXlsxImport}
+      onExportXlsx={handleSpreadsheetXlsxExport}
+      importing={spreadsheetImporting}
+      collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
+      collaborators={spreadsheetCollaborators}
+      mentionContext={documentMentionContext}
+    />
+  );
+  const univerSpreadsheetEditor = (
+    <SpreadsheetEditorFallbackBoundary
+      resetKey={`${selectedDoc?.id || 'spreadsheet'}:${enableUniverSpreadsheetPreview ? 'univer' : 'legacy'}`}
+      fallback={legacySpreadsheetEditor}
+    >
+      <React.Suspense fallback={legacySpreadsheetEditor}>
+        <UniverSpreadsheetDocumentEditor
+          key={`univer-${selectedDoc?.id || 'spreadsheet'}`}
+          workbook={selectedDoc?.content}
+          canEdit={canEditSelectedSpreadsheet}
+          onWorkbookChange={nextWorkbook => updateSelectedSpreadsheetWorkbook(() => nextWorkbook)}
+          collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
+        />
+      </React.Suspense>
+    </SpreadsheetEditorFallbackBoundary>
+  );
   const renderSpreadsheetEditor = () => (
     <>
       {activeSpreadsheetConflictHint ? (
@@ -15077,22 +15180,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           style={{ borderRadius: 0, borderWidth: '1px 1px 0' }}
         />
       ) : null}
-      <SpreadsheetDocumentEditor
-        key={selectedDoc?.id || 'spreadsheet'}
-        workbook={selectedDoc?.content}
-        canEdit={canEditDoc(selectedDoc)}
-        isMobile={isMobile}
-        selectedCell={selectedSpreadsheetCell}
-        onSelectedCellChange={setSelectedSpreadsheetCell}
-        onSelectionChange={handleSpreadsheetSelectionChange}
-        onWorkbookChange={nextWorkbook => updateSelectedSpreadsheetWorkbook(() => nextWorkbook)}
-        onImportXlsx={handleSpreadsheetXlsxImport}
-        onExportXlsx={handleSpreadsheetXlsxExport}
-        importing={spreadsheetImporting}
-        collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
-        collaborators={spreadsheetCollaborators}
-        mentionContext={documentMentionContext}
-      />
+      {enableUniverSpreadsheetPreview ? univerSpreadsheetEditor : legacySpreadsheetEditor}
     </>
   );
   const renderBlockInput = (block, index, heading) => {

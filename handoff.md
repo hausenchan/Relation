@@ -22,6 +22,24 @@
   恢复为 `180px`，页面无横向溢出。
 - `390x844` 移动视口继续不渲染桌面侧栏，内容区 `left=0 / width=390`，Header 菜单入口保留。
 
+## 在线表格 Univer 线上预览开关（2026-07-29）
+
+### 已完成
+
+- 文档中心在线表格入口新增显式预览开关：访问 `/documents?doc=<文档ID>&univer_spreadsheet=1`
+  后，当前浏览器写入 `localStorage.relation_univer_spreadsheet_preview=1`，后续在线表格走 Univer
+  预览编辑器；访问 `univer_spreadsheet=0` 会移除本地开关并恢复旧编辑器。
+- 默认不开启，未设置本地开关的线上用户继续使用旧 `SpreadsheetDocumentEditor`。
+- Univer 预览组件使用动态加载，并由错误边界和 Suspense fallback 包裹；加载失败或运行时报错时
+  回落旧编辑器，避免单个预览故障阻断文档页。
+
+### 注意
+
+- 该开关用于线上小范围手动验证，不是正式放量。因为 `Documents.js` 存在 Univer 动态 import，
+  生产构建会包含 Univer 异步 chunk，性能门禁可能继续报最大异步 chunk 超预算。
+- 真实验证仍需覆盖输入、自动保存、刷新回读、排序、筛选、冻结、Excel 导入导出和只读写入拒绝；
+  验证前建议先复制一个非关键在线表格文档。
+
 ## 全局侧栏长页面滚动固定（2026-07-29）
 
 ### 根因与修复
