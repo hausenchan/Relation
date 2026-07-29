@@ -9,6 +9,21 @@ const bcrypt = require('bcryptjs');
 const multer = require('multer');
 const { encryptRow, decryptRow, decryptRows } = require('./lib/cryptoDao');
 const { decrypt } = require('./lib/crypto');
+const {
+  appendLog: appendProductReleaseLog,
+  checkRuntime: checkProductReleaseRuntime,
+  copyProjectDirectory,
+  getWorkRoot: getProductTemplateWorkRoot,
+  getUploadScriptPath,
+  isShortDramaTemplate,
+  runCommand: runProductReleaseCommand,
+  runUploadScript,
+  sanitizeLogText: sanitizeProductReleaseLog,
+  validateReleaseDomains,
+  validateReleasePayload,
+  validateRelativeProjectPath,
+  validateTemplatePayload,
+} = require('./lib/productTemplateRelease');
 const NetworkCaptureManager = require('./lib/networkCapture');
 const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
@@ -64,6 +79,9 @@ const {
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+const IDENTITY_KEYS_DIR = path.resolve(process.env.RELATION_IDENTITY_KEY_DIR || path.join(__dirname, 'identity-keys'));
+if (!fs.existsSync(IDENTITY_KEYS_DIR)) fs.mkdirSync(IDENTITY_KEYS_DIR, { recursive: true, mode: 0o700 });
+try { fs.chmodSync(IDENTITY_KEYS_DIR, 0o700); } catch {}
 const JSON_BODY_LIMIT = process.env.RELATION_JSON_BODY_LIMIT || process.env.RELATION_BODY_LIMIT || '50mb';
 
 function normalizeUploadedFilename(filename) {
@@ -144,6 +162,10 @@ const storage = multer.diskStorage({
     cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
   },
 });
+const identityKeyStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, IDENTITY_KEYS_DIR),
+  filename: (req, file, cb) => cb(null, `${Date.now()}-${crypto.randomBytes(16).toString('hex')}.json`),
+});
 const allowedUploadExtensions = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp',
   'pdf', 'ofd', 'caj', 'ceb',
@@ -183,6 +205,48 @@ const upload = multer({
     cb(null, true);
   },
 });
+const identityKeyUpload = multer({
+  storage: identityKeyStorage,
+  limits: { fileSize: 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(normalizeUploadedFilename(file.originalname)).slice(1).toLowerCase();
+    if (ext !== 'json') {
+      cb(new Error('身份密钥必须是 JSON 文件'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+function cleanupIdentityKeyUpload(file) {
+  if (!file?.path) return;
+  try { fs.unlinkSync(file.path); } catch {}
+}
+
+function handleIdentityKeyUpload(req, res, next) {
+  identityKeyUpload.single('identity_key_file')(req, res, (error) => {
+    if (error) {
+      cleanupIdentityKeyUpload(req.file);
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: '身份密钥 JSON 文件不能超过 1MB' });
+      }
+      return res.status(400).json({ error: error.message || '身份密钥文件上传失败' });
+    }
+    if (!req.file) return next();
+    try {
+      const content = fs.readFileSync(req.file.path, 'utf8');
+      const parsed = JSON.parse(content);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('身份密钥 JSON 必须是对象');
+      }
+      fs.chmodSync(req.file.path, 0o600);
+      return next();
+    } catch (validationError) {
+      cleanupIdentityKeyUpload(req.file);
+      return res.status(400).json({ error: validationError.message || '身份密钥 JSON 文件无效' });
+    }
+  });
+}
 
 const PERSON_NAME_MAX_LENGTH = 30;
 const PERSON_COUNTERPARTY_BUDGET_CATEGORY_OPTIONS = ['h5', 'api', 'assist', 'acquisition', 'reactivation', 'sdk', 'other'];
@@ -2221,6 +2285,11 @@ db.exec(`
     email TEXT,
     remark TEXT,
     status TEXT DEFAULT 'active',
+    identity_key TEXT DEFAULT NULL,
+    api_domain TEXT DEFAULT NULL,
+    analytics_domain TEXT DEFAULT NULL,
+    cdn_domain TEXT DEFAULT NULL,
+    short_drama_domain TEXT DEFAULT NULL,
     created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -2297,6 +2366,11 @@ if (companySubjectCols.length > 0) {
   if (!companySubjectCols.includes('created_by')) db.exec("ALTER TABLE company_subjects ADD COLUMN created_by INTEGER");
   if (!companySubjectCols.includes('created_at')) db.exec("ALTER TABLE company_subjects ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP");
   if (!companySubjectCols.includes('updated_at')) db.exec("ALTER TABLE company_subjects ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP");
+  if (!companySubjectCols.includes('identity_key')) db.exec("ALTER TABLE company_subjects ADD COLUMN identity_key TEXT DEFAULT NULL");
+  if (!companySubjectCols.includes('api_domain')) db.exec("ALTER TABLE company_subjects ADD COLUMN api_domain TEXT DEFAULT NULL");
+  if (!companySubjectCols.includes('analytics_domain')) db.exec("ALTER TABLE company_subjects ADD COLUMN analytics_domain TEXT DEFAULT NULL");
+  if (!companySubjectCols.includes('cdn_domain')) db.exec("ALTER TABLE company_subjects ADD COLUMN cdn_domain TEXT DEFAULT NULL");
+  if (!companySubjectCols.includes('short_drama_domain')) db.exec("ALTER TABLE company_subjects ADD COLUMN short_drama_domain TEXT DEFAULT NULL");
 }
 
 const productAssetCols = db.prepare("PRAGMA table_info(product_assets)").all().map(c => c.name);
@@ -2304,12 +2378,144 @@ if (productAssetCols.length > 0) {
   if (!productAssetCols.includes('group_name')) db.exec("ALTER TABLE product_assets ADD COLUMN group_name TEXT");
   if (!productAssetCols.includes('company_subject_id')) db.exec("ALTER TABLE product_assets ADD COLUMN company_subject_id INTEGER");
   if (!productAssetCols.includes('appid')) db.exec("ALTER TABLE product_assets ADD COLUMN appid TEXT");
+  if (!productAssetCols.includes('last_release_task_id')) db.exec("ALTER TABLE product_assets ADD COLUMN last_release_task_id INTEGER DEFAULT NULL");
+  if (!productAssetCols.includes('last_release_template_id')) db.exec("ALTER TABLE product_assets ADD COLUMN last_release_template_id INTEGER DEFAULT NULL");
+  if (!productAssetCols.includes('last_release_template_version_id')) db.exec("ALTER TABLE product_assets ADD COLUMN last_release_template_version_id INTEGER DEFAULT NULL");
+  if (!productAssetCols.includes('last_release_status')) db.exec("ALTER TABLE product_assets ADD COLUMN last_release_status TEXT DEFAULT NULL");
+  if (!productAssetCols.includes('last_release_version')) db.exec("ALTER TABLE product_assets ADD COLUMN last_release_version TEXT DEFAULT NULL");
+  if (!productAssetCols.includes('last_release_at')) db.exec("ALTER TABLE product_assets ADD COLUMN last_release_at DATETIME DEFAULT NULL");
 }
 
 const productAssetReductionCols = db.prepare("PRAGMA table_info(product_asset_reductions)").all().map(c => c.name);
 if (productAssetReductionCols.length > 0 && !productAssetReductionCols.includes('punishment_object')) {
   db.exec("ALTER TABLE product_asset_reductions ADD COLUMN punishment_object TEXT");
 }
+
+// =========== 产品模版与提版表 ==========
+db.exec(`
+  CREATE TABLE IF NOT EXISTS product_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    code TEXT,
+    template_type TEXT NOT NULL,
+    budget_type TEXT,
+    platform TEXT,
+    version TEXT,
+    status TEXT NOT NULL DEFAULT 'enabled',
+    project_path TEXT NOT NULL DEFAULT 'zfb-mini-tools/playlet/player-A',
+    template_url TEXT,
+    attachment_note TEXT,
+    description TEXT,
+    remark TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_product_templates_code
+    ON product_templates(code);
+  CREATE INDEX IF NOT EXISTS idx_product_templates_status
+    ON product_templates(status);
+  CREATE INDEX IF NOT EXISTS idx_product_templates_budget_type
+    ON product_templates(budget_type);
+
+  CREATE TABLE IF NOT EXISTS product_template_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id INTEGER NOT NULL,
+    version_label TEXT,
+    project_path TEXT NOT NULL,
+    template_type TEXT NOT NULL,
+    budget_type TEXT,
+    platform TEXT,
+    template_url TEXT,
+    snapshot_json TEXT,
+    is_current INTEGER NOT NULL DEFAULT 1,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_product_template_versions_template
+    ON product_template_versions(template_id, is_current, id);
+
+  CREATE TABLE IF NOT EXISTS product_asset_release_tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    asset_id INTEGER NOT NULL,
+    template_id INTEGER NOT NULL,
+    template_version_id INTEGER NOT NULL,
+    subject_id INTEGER,
+    app_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    current_step TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    log_text TEXT,
+    started_at DATETIME,
+    finished_at DATETIME,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_product_release_tasks_asset
+    ON product_asset_release_tasks(asset_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_product_release_tasks_app_status
+    ON product_asset_release_tasks(app_id, status);
+  CREATE INDEX IF NOT EXISTS idx_product_release_tasks_status
+    ON product_asset_release_tasks(status, created_at);
+
+  CREATE TABLE IF NOT EXISTS product_asset_release_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    asset_id INTEGER NOT NULL,
+    template_id INTEGER NOT NULL,
+    template_version_id INTEGER NOT NULL,
+    subject_id INTEGER,
+    app_id TEXT NOT NULL,
+    api_domain TEXT,
+    analytics_domain TEXT,
+    cdn_domain TEXT,
+    short_drama_domain TEXT,
+    release_status TEXT NOT NULL DEFAULT 'pending',
+    release_version TEXT,
+    release_link TEXT,
+    release_note TEXT,
+    uploaded_version TEXT,
+    upload_summary TEXT,
+    submitted_by INTEGER,
+    submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_product_release_records_asset
+    ON product_asset_release_records(asset_id, submitted_at, id);
+  CREATE INDEX IF NOT EXISTS idx_product_release_records_task
+    ON product_asset_release_records(task_id);
+`);
+
+ensureMysqlLongTextColumn('company_subjects', 'identity_key', 'NULL');
+['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain']
+  .forEach(column => ensureMysqlLongTextColumn('company_subjects', column, 'NULL'));
+ensureMysqlLongTextColumn('product_template_versions', 'snapshot_json', 'NULL');
+['error_message', 'log_text'].forEach(column => ensureMysqlLongTextColumn('product_asset_release_tasks', column, 'NULL'));
+['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain', 'release_link', 'release_note', 'upload_summary']
+  .forEach(column => ensureMysqlLongTextColumn('product_asset_release_records', column, 'NULL'));
+
+const interruptedReleaseError = encryptRow('product_asset_release_tasks', { error_message: '服务重启导致任务中断' }).error_message;
+db.prepare(`
+  UPDATE product_asset_release_tasks
+  SET status = 'failed', current_step = 'interrupted', error_message = ?, finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+  WHERE status IN ('pending', 'running')
+`).run(interruptedReleaseError);
+db.prepare(`
+  UPDATE product_asset_release_records
+  SET release_status = 'failed', completed_at = CURRENT_TIMESTAMP
+  WHERE task_id IN (SELECT id FROM product_asset_release_tasks WHERE status = 'failed' AND current_step = 'interrupted')
+`).run();
+db.prepare(`
+  UPDATE product_assets
+  SET last_release_status = 'failed', last_release_at = CURRENT_TIMESTAMP
+  WHERE last_release_task_id IN (SELECT id FROM product_asset_release_tasks WHERE status = 'failed' AND current_step = 'interrupted')
+`).run();
 
 // =========== 文档中心表 ===========
 db.exec(`
@@ -19547,6 +19753,58 @@ function getCompanySubject(subjectId) {
   return subject ? decryptRow('company_subjects', subject) : null;
 }
 
+function isCachedIdentityKeyPath(value) {
+  if (!value || typeof value !== 'string') return false;
+  const candidate = path.resolve(value);
+  const relative = path.relative(IDENTITY_KEYS_DIR, candidate);
+  return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative) && path.extname(candidate).toLowerCase() === '.json';
+}
+
+function deleteCachedIdentityKeyBestEffort(value) {
+  if (!isCachedIdentityKeyPath(value)) return;
+  try { fs.unlinkSync(path.resolve(value)); } catch {}
+}
+
+function sanitizeCompanySubjectRow(row) {
+  if (!row) return row;
+  const decrypted = decryptRow('company_subjects', row);
+  const hasIdentityKeyFile = Boolean(decrypted.identity_key)
+    && isCachedIdentityKeyPath(decrypted.identity_key)
+    && fs.existsSync(decrypted.identity_key);
+  const hasIdentityKey = Boolean(decrypted.identity_key)
+    && (!isCachedIdentityKeyPath(decrypted.identity_key) || fs.existsSync(decrypted.identity_key));
+  const { identity_key: _identityKey, ...publicRow } = decrypted;
+  return {
+    ...publicRow,
+    has_identity_key: hasIdentityKey,
+    has_identity_key_file: hasIdentityKeyFile,
+    identity_key_mask: hasIdentityKey ? '已配置' : '未配置',
+  };
+}
+
+function parseIdentityKeyPayload(body = {}, file = null) {
+  const identityKey = typeof body.identity_key === 'string' ? body.identity_key.trim() : '';
+  if (identityKey) return { error: '身份密钥必须以 JSON 文件上传' };
+  const identityKeyPath = file?.path || '';
+  const clear = body.clear_identity_key === true || body.clear_identity_key === 1 || body.clear_identity_key === '1';
+  if (identityKeyPath && clear) return { error: '不能同时上传新身份密钥并清除已有密钥' };
+  return { identityKeyPath, clear };
+}
+
+const COMPANY_SUBJECT_DOMAIN_FIELDS = ['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain'];
+
+function parseCompanySubjectDomainPayload(body = {}, { partial = false } = {}) {
+  const provided = COMPANY_SUBJECT_DOMAIN_FIELDS.some(field => Object.prototype.hasOwnProperty.call(body, field));
+  if (partial && !provided) return { provided: false, values: {} };
+  const parsed = validateReleaseDomains(body, { required: false });
+  return { ...parsed, provided: true };
+}
+
+function requireProductAssetMenu(req, res, next) {
+  if (!hasMenuAccess(req.user, '/product-assets')) return res.status(403).json({ error: '无产品资产菜单权限' });
+  next();
+}
+
 function resolveCompanySubject(companySubjectId) {
   const subject = getCompanySubject(companySubjectId);
   if (!subject) return null;
@@ -19632,7 +19890,7 @@ app.get('/api/company-subjects', (req, res) => {
     LEFT JOIN users c ON cs.created_by = c.id
     ORDER BY cs.updated_at DESC, cs.id DESC
   `).all();
-  let data = decryptRows('company_subjects', rows);
+  let data = rows.map(sanitizeCompanySubjectRow);
   if (group_name) data = data.filter(r => (r.group_name || '').includes(String(group_name).trim()));
   if (company_entity) data = data.filter(r => (r.company_entity || '').includes(String(company_entity).trim()));
   if (legal_person) data = data.filter(r => (r.legal_person || '').includes(String(legal_person).trim()));
@@ -19642,12 +19900,12 @@ app.get('/api/company-subjects', (req, res) => {
 
 app.get('/api/company-subjects/simple', (req, res) => {
   const rows = db.prepare(`
-    SELECT id, group_name, company_entity, mini_program_count, status
+    SELECT id, group_name, company_entity, mini_program_count, status, identity_key
     FROM company_subjects
     WHERE COALESCE(status, 'active') = 'active'
     ORDER BY updated_at DESC, id DESC
   `).all();
-  res.json(decryptRows('company_subjects', rows));
+  res.json(rows.map(sanitizeCompanySubjectRow));
 });
 
 app.get('/api/company-subjects/:id', (req, res) => {
@@ -19666,70 +19924,142 @@ app.get('/api/company-subjects/:id', (req, res) => {
     WHERE a.subject_id = ?
     ORDER BY a.created_at DESC, a.id DESC
   `).all(req.params.id);
-  res.json({ ...decryptRow('company_subjects', row), attachments: attachments.map(normalizeSubjectAttachmentRow) });
+  res.json({ ...sanitizeCompanySubjectRow(row), attachments: attachments.map(normalizeSubjectAttachmentRow) });
 });
 
-app.post('/api/company-subjects', (req, res) => {
+app.post('/api/company-subjects', requireProductAssetMenu, canWrite, handleIdentityKeyUpload, (req, res) => {
   const { group_name, company_entity, mini_program_count, legal_person, legal_person_phone, email, remark, status } = req.body;
-  if (!company_entity) return res.status(400).json({ error: '公司主体必填' });
-  const enc = encryptRow('company_subjects', { group_name: group_name || '', company_entity, legal_person, legal_person_phone, email, remark });
-  const result = db.prepare(`
-    INSERT INTO company_subjects (
-      group_name, company_entity, mini_program_count, legal_person, legal_person_phone,
-      email, remark, status, created_by
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    enc.group_name,
-    enc.company_entity,
-    mini_program_count ?? 0,
-    enc.legal_person || null,
-    enc.legal_person_phone || null,
-    enc.email || null,
-    enc.remark || null,
-    status || 'active',
-    req.user.id
-  );
-  res.json({ id: result.lastInsertRowid });
+  if (!company_entity) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(400).json({ error: '公司主体必填' });
+  }
+  const identityPayload = parseIdentityKeyPayload(req.body, req.file);
+  if (identityPayload.error) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(400).json({ error: identityPayload.error });
+  }
+  const domainPayload = parseCompanySubjectDomainPayload(req.body);
+  if (domainPayload.errors?.length) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(400).json({ error: domainPayload.errors.join('；') });
+  }
+  const enc = encryptRow('company_subjects', {
+    group_name: group_name || '', company_entity, legal_person, legal_person_phone, email, remark,
+    identity_key: identityPayload.identityKeyPath || null,
+    ...domainPayload.values,
+  });
+  try {
+    const result = db.prepare(`
+      INSERT INTO company_subjects (
+        group_name, company_entity, mini_program_count, legal_person, legal_person_phone,
+        email, remark, status, identity_key, api_domain, analytics_domain, cdn_domain, short_drama_domain, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      enc.group_name,
+      enc.company_entity,
+      mini_program_count ?? 0,
+      enc.legal_person || null,
+      enc.legal_person_phone || null,
+      enc.email || null,
+      enc.remark || null,
+      status || 'active',
+      enc.identity_key || null,
+      enc.api_domain || null,
+      enc.analytics_domain || null,
+      enc.cdn_domain || null,
+      enc.short_drama_domain || null,
+      req.user.id
+    );
+    res.json({ id: result.lastInsertRowid });
+  } catch (error) {
+    cleanupIdentityKeyUpload(req.file);
+    res.status(500).json({ error: error.message || '主体保存失败' });
+  }
 });
 
-app.put('/api/company-subjects/:id', (req, res) => {
+app.put('/api/company-subjects/:id', requireProductAssetMenu, canWrite, handleIdentityKeyUpload, (req, res) => {
   const { id } = req.params;
-  const existing = db.prepare('SELECT id FROM company_subjects WHERE id = ?').get(id);
-  if (!existing) return res.status(404).json({ error: '主体不存在' });
+  const existing = db.prepare('SELECT id, identity_key FROM company_subjects WHERE id = ?').get(id);
+  if (!existing) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(404).json({ error: '主体不存在' });
+  }
   const { group_name, company_entity, mini_program_count, legal_person, legal_person_phone, email, remark, status } = req.body;
-  if (!company_entity) return res.status(400).json({ error: '公司主体必填' });
-  const enc = encryptRow('company_subjects', { group_name: group_name || '', company_entity, legal_person, legal_person_phone, email, remark });
-  db.prepare(`
-    UPDATE company_subjects SET
-      group_name = ?, company_entity = ?, mini_program_count = ?, legal_person = ?,
-      legal_person_phone = ?, email = ?, remark = ?, status = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
-  `).run(
-    enc.group_name,
-    enc.company_entity,
-    mini_program_count ?? 0,
-    enc.legal_person || null,
-    enc.legal_person_phone || null,
-    enc.email || null,
-    enc.remark || null,
-    status || 'active',
-    id
-  );
-  const encAsset = encryptRow('product_assets', { group_name: group_name || '', company_entity });
-  db.prepare(`
-    UPDATE product_assets SET group_name = ?, company_entity = ?, updated_at = CURRENT_TIMESTAMP
-    WHERE company_subject_id = ?
-  `).run(encAsset.group_name, encAsset.company_entity, id);
+  if (!company_entity) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(400).json({ error: '公司主体必填' });
+  }
+  const identityPayload = parseIdentityKeyPayload(req.body, req.file);
+  if (identityPayload.error) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(400).json({ error: identityPayload.error });
+  }
+  const domainPayload = parseCompanySubjectDomainPayload(req.body, { partial: true });
+  if (domainPayload.errors?.length) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(400).json({ error: domainPayload.errors.join('；') });
+  }
+  const enc = encryptRow('company_subjects', {
+    group_name: group_name || '', company_entity, legal_person, legal_person_phone, email, remark,
+    ...domainPayload.values,
+  });
+  const identitySql = identityPayload.clear
+    ? 'identity_key = NULL,'
+    : identityPayload.identityKeyPath
+      ? 'identity_key = ?,'
+      : '';
+  const identityParams = identityPayload.identityKeyPath
+    ? [encryptRow('company_subjects', { identity_key: identityPayload.identityKeyPath }).identity_key]
+    : [];
+  const domainSql = domainPayload.provided
+    ? 'api_domain = ?, analytics_domain = ?, cdn_domain = ?, short_drama_domain = ?,'
+    : '';
+  const domainParams = domainPayload.provided
+    ? [enc.api_domain || null, enc.analytics_domain || null, enc.cdn_domain || null, enc.short_drama_domain || null]
+    : [];
+  try {
+    db.prepare(`
+      UPDATE company_subjects SET
+        group_name = ?, company_entity = ?, mini_program_count = ?, legal_person = ?,
+        legal_person_phone = ?, email = ?, remark = ?, status = ?, ${domainSql} ${identitySql} updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      enc.group_name,
+      enc.company_entity,
+      mini_program_count ?? 0,
+      enc.legal_person || null,
+      enc.legal_person_phone || null,
+      enc.email || null,
+      enc.remark || null,
+      status || 'active',
+      ...domainParams,
+      ...identityParams,
+      id
+    );
+    const encAsset = encryptRow('product_assets', { group_name: group_name || '', company_entity });
+    db.prepare(`
+      UPDATE product_assets SET group_name = ?, company_entity = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE company_subject_id = ?
+    `).run(encAsset.group_name, encAsset.company_entity, id);
+  } catch (error) {
+    cleanupIdentityKeyUpload(req.file);
+    return res.status(500).json({ error: error.message || '主体保存失败' });
+  }
+  if (identityPayload.clear || identityPayload.identityKeyPath) {
+    deleteCachedIdentityKeyBestEffort(safeDecrypt(existing.identity_key));
+  }
   res.json({ success: true });
 });
 
-app.delete('/api/company-subjects/:id', (req, res) => {
+app.delete('/api/company-subjects/:id', requireProductAssetMenu, canWrite, (req, res) => {
   const linked = db.prepare('SELECT COUNT(*) as count FROM product_assets WHERE company_subject_id = ?').get(req.params.id).count;
   if (linked > 0) return res.status(400).json({ error: '该主体已关联产品资产，不能删除' });
+  const subject = db.prepare('SELECT identity_key FROM company_subjects WHERE id = ?').get(req.params.id);
   const attachments = db.prepare('SELECT file_path FROM company_subject_attachments WHERE subject_id = ?').all(req.params.id);
   attachments.forEach(att => deleteStoredFileBestEffort(att.file_path));
   db.prepare('DELETE FROM company_subject_attachments WHERE subject_id = ?').run(req.params.id);
   db.prepare('DELETE FROM company_subjects WHERE id = ?').run(req.params.id);
+  if (subject) deleteCachedIdentityKeyBestEffort(safeDecrypt(subject.identity_key));
   res.json({ success: true });
 });
 
@@ -19794,16 +20124,609 @@ app.delete('/api/company-subject-attachments/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// =========== 产品模版与提版 API ===========
+const PRODUCT_TEMPLATE_REPO_URL_ENV = 'PRODUCT_TEMPLATE_REPO_URL';
+const PRODUCT_TEMPLATE_BRANCH_ENV = 'PRODUCT_TEMPLATE_GIT_BRANCH';
+const PRODUCT_TEMPLATE_ALLOWED_FIELDS = [
+  'name', 'code', 'template_type', 'budget_type', 'platform', 'version', 'status',
+  'project_path', 'description', 'remark',
+];
+const PRODUCT_RELEASE_TASK_FIELDS = [
+  'status', 'current_step', 'attempt_count', 'error_message', 'log_text', 'started_at', 'finished_at',
+];
+const PRODUCT_RELEASE_STATUS_LABELS = {
+  pending: '排队中',
+  running: '执行中',
+  success: '已完成',
+  failed: '失败',
+  cancelled: '已取消',
+};
+
+function serializeProductTemplate(row) {
+  if (!row) return null;
+  let snapshot = null;
+  try { snapshot = row.snapshot_json ? JSON.parse(row.snapshot_json) : null; } catch { snapshot = null; }
+  if (snapshot && typeof snapshot === 'object') {
+    delete snapshot.template_url;
+    delete snapshot.attachment_note;
+  }
+  const {
+    snapshot_json: _snapshotJson,
+    template_url: _templateUrl,
+    attachment_note: _attachmentNote,
+    ...rest
+  } = row;
+  return { ...rest, current_version_snapshot: snapshot };
+}
+
+function getProductTemplate(templateId) {
+  return db.prepare(`
+    SELECT pt.*,
+      (SELECT COUNT(*) FROM product_template_versions v WHERE v.template_id = pt.id) AS version_count,
+      v.id AS current_version_id,
+      v.version_label AS current_version_label,
+      v.project_path AS current_project_path,
+      v.snapshot_json
+    FROM product_templates pt
+    LEFT JOIN product_template_versions v
+      ON v.template_id = pt.id AND v.is_current = 1
+    WHERE pt.id = ?
+  `).get(templateId);
+}
+
+function getProductTemplateVersion(templateId, versionId = null) {
+  if (versionId) {
+    return db.prepare('SELECT * FROM product_template_versions WHERE id = ? AND template_id = ?').get(versionId, templateId);
+  }
+  return db.prepare(`
+    SELECT * FROM product_template_versions
+    WHERE template_id = ? AND is_current = 1
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(templateId);
+}
+
+function createProductTemplateVersion(template, userId) {
+  db.prepare('UPDATE product_template_versions SET is_current = 0 WHERE template_id = ?').run(template.id);
+  const snapshot = {
+    name: template.name,
+    code: template.code || '',
+    template_type: template.template_type,
+    budget_type: template.budget_type || '',
+    platform: template.platform || '',
+    version: template.version || '',
+    project_path: template.project_path,
+  };
+  const result = db.prepare(`
+    INSERT INTO product_template_versions (
+      template_id, version_label, project_path, template_type, budget_type, platform,
+      template_url, snapshot_json, is_current, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+  `).run(
+    template.id,
+    template.version || null,
+    template.project_path,
+    template.template_type,
+    template.budget_type || null,
+    template.platform || null,
+    null,
+    JSON.stringify(snapshot),
+    userId,
+  );
+  return result.lastInsertRowid;
+}
+
+function getProductTemplateRepoConfig() {
+  const repo = String(process.env[PRODUCT_TEMPLATE_REPO_URL_ENV] || '').trim();
+  const branch = String(process.env[PRODUCT_TEMPLATE_BRANCH_ENV] || 'master').trim();
+  if (!repo) {
+    const error = new Error('未配置固定 Git 仓库');
+    error.code = 'TEMPLATE_REPO_NOT_CONFIGURED';
+    throw error;
+  }
+  if (!/^(https:\/\/|ssh:\/\/|git@)/i.test(repo)) {
+    const allowFileRepo = process.env.NODE_ENV === 'test' || process.env.PRODUCT_TEMPLATE_ALLOW_FILE_REPO === '1';
+    if (!allowFileRepo || !repo.startsWith('file://')) {
+      const error = new Error('Git 仓库地址不在允许范围');
+      error.code = 'TEMPLATE_REPO_INVALID';
+      throw error;
+    }
+  }
+  if (!/^[A-Za-z0-9_.\/-]+$/.test(branch)) {
+    const error = new Error('Git 分支名不合法');
+    error.code = 'TEMPLATE_BRANCH_INVALID';
+    throw error;
+  }
+  const allowlist = String(process.env.PRODUCT_TEMPLATE_REPO_ALLOWLIST || '')
+    .split(',').map(item => item.trim()).filter(Boolean);
+  if (allowlist.length > 0 && !allowlist.includes(repo)) {
+    const error = new Error('Git 仓库不在白名单');
+    error.code = 'TEMPLATE_REPO_NOT_ALLOWED';
+    throw error;
+  }
+  return { repo, branch };
+}
+
+async function cloneProductTemplateRepository(operationId, log) {
+  const root = getProductTemplateWorkRoot();
+  const repoDir = path.join(root, 'repositories', String(operationId));
+  fs.rmSync(repoDir, { recursive: true, force: true });
+  fs.mkdirSync(path.dirname(repoDir), { recursive: true });
+  const { repo, branch } = getProductTemplateRepoConfig();
+  log(`拉取固定仓库，分支 ${branch}`);
+  await runProductReleaseCommand('git', ['clone', '--depth', '1', '--branch', branch, repo, repoDir], {
+    cwd: root,
+    timeoutMs: Number(process.env.PRODUCT_TEMPLATE_GIT_TIMEOUT_MS || 10 * 60 * 1000),
+  });
+  return repoDir;
+}
+
+function getVisibleProductAsset(assetId, user) {
+  const params = [];
+  let query = `SELECT pa.* FROM product_assets pa WHERE pa.id = ?`;
+  params.push(assetId);
+  query = applyProductAssetVisibility(query, params, user.id, user.role);
+  return db.prepare(query).get(...params);
+}
+
+function serializeReleaseTask(row) {
+  if (!row) return null;
+  const decrypted = decryptRow('product_asset_release_tasks', row);
+  return {
+    ...decrypted,
+    status_label: PRODUCT_RELEASE_STATUS_LABELS[decrypted.status] || decrypted.status,
+  };
+}
+
+function serializeReleaseRecord(row) {
+  if (!row) return null;
+  return decryptRow('product_asset_release_records', row);
+}
+
+function updateProductReleaseTask(taskId, patch) {
+  const values = {};
+  PRODUCT_RELEASE_TASK_FIELDS.forEach(field => {
+    if (Object.prototype.hasOwnProperty.call(patch, field)) values[field] = patch[field];
+  });
+  if (Object.keys(values).length === 0) return;
+  const encoded = encryptRow('product_asset_release_tasks', values);
+  const assignments = Object.keys(values).map(field => `${field} = ?`);
+  db.prepare(`UPDATE product_asset_release_tasks SET ${assignments.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    .run(...Object.keys(values).map(field => encoded[field]), taskId);
+}
+
+function updateProductReleaseLog(taskId, message, patch = {}) {
+  const raw = db.prepare('SELECT log_text FROM product_asset_release_tasks WHERE id = ?').get(taskId);
+  const current = decryptRow('product_asset_release_tasks', raw || {}) || {};
+  updateProductReleaseTask(taskId, {
+    ...patch,
+    log_text: appendProductReleaseLog(current.log_text, sanitizeProductReleaseLog(message)),
+  });
+}
+
+function setProductAssetReleaseSummary(task, status, version = null) {
+  db.prepare(`
+    UPDATE product_assets
+    SET last_release_task_id = ?, last_release_template_id = ?, last_release_template_version_id = ?,
+      last_release_status = ?, last_release_version = ?, last_release_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(task.id, task.template_id, task.template_version_id, status, version, task.asset_id);
+}
+
+function getReleaseIdentityKey(subjectId) {
+  const subject = subjectId ? getCompanySubject(subjectId) : null;
+  if (subject?.identity_key) {
+    if (isCachedIdentityKeyPath(subject.identity_key)) {
+      if (!fs.existsSync(subject.identity_key)) {
+        const error = new Error('主体身份密钥文件不存在');
+        error.code = 'IDENTITY_KEY_MISSING';
+        throw error;
+      }
+      return { identityKeyPath: subject.identity_key };
+    }
+    return { identityKey: subject.identity_key };
+  }
+  if (process.env.PRODUCT_ASSET_RELEASE_IDENTITY_KEY) {
+    return { identityKey: process.env.PRODUCT_ASSET_RELEASE_IDENTITY_KEY };
+  }
+  const configuredPath = String(process.env.PRODUCT_ASSET_RELEASE_IDENTITY_KEY_PATH || '').trim();
+  if (configuredPath && fs.existsSync(configuredPath)) return { identityKeyPath: path.resolve(configuredPath) };
+  const error = new Error('未配置主体身份密钥');
+  error.code = 'IDENTITY_KEY_MISSING';
+  throw error;
+}
+
+function requireReleaseIdentityKeyPath(subjectId) {
+  const subject = subjectId ? getCompanySubject(subjectId) : null;
+  const identityKeyPath = subject?.identity_key;
+  if (!identityKeyPath || !isCachedIdentityKeyPath(identityKeyPath)) {
+    const error = new Error('提版信息不完整：主体身份密钥文件路径未配置。请前往「主体管理」编辑关联主体，在身份密钥 JSON 文件处上传后重试。');
+    error.code = 'IDENTITY_KEY_PATH_MISSING';
+    throw error;
+  }
+  if (!fs.existsSync(identityKeyPath) || !fs.statSync(identityKeyPath).isFile()) {
+    const error = new Error('提版信息不完整：主体身份密钥文件不存在。请前往「主体管理」编辑关联主体，重新上传身份密钥 JSON 文件后重试。');
+    error.code = 'IDENTITY_KEY_PATH_MISSING';
+    throw error;
+  }
+  return identityKeyPath;
+}
+
+function isReleaseRetryable(error) {
+  return !new Set([
+    'IDENTITY_KEY_MISSING',
+    'MINIDEV_UNAVAILABLE',
+    'TEMPLATE_REPO_NOT_CONFIGURED',
+    'TEMPLATE_REPO_INVALID',
+    'TEMPLATE_REPO_NOT_ALLOWED',
+    'TEMPLATE_BRANCH_INVALID',
+    'UPLOAD_SCRIPT_INVALID',
+    'UPLOAD_SCRIPT_NOT_FOUND',
+  ]).has(error?.code);
+}
+
+async function executeProductAssetReleaseTask(taskId) {
+  const task = db.prepare('SELECT * FROM product_asset_release_tasks WHERE id = ?').get(taskId);
+  if (!task || !['pending', 'running'].includes(task.status)) return;
+  const record = db.prepare('SELECT * FROM product_asset_release_records WHERE task_id = ?').get(taskId);
+  const assetRaw = db.prepare('SELECT * FROM product_assets WHERE id = ?').get(task.asset_id);
+  const template = getProductTemplate(task.template_id);
+  const version = getProductTemplateVersion(task.template_id, task.template_version_id);
+  if (!record || !assetRaw || !template || !version) {
+    updateProductReleaseTask(taskId, { status: 'failed', error_message: '提版任务关联数据不存在', finished_at: new Date().toISOString() });
+    return;
+  }
+  const release = serializeReleaseRecord(record);
+  const root = getProductTemplateWorkRoot();
+  const taskRoot = path.join(root, 'release', String(taskId));
+  let lastError = null;
+  updateProductReleaseTask(taskId, { status: 'running', started_at: new Date().toISOString(), current_step: 'prepare' });
+  setProductAssetReleaseSummary(task, 'running');
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    updateProductReleaseTask(taskId, { attempt_count: attempt });
+    try {
+      fs.rmSync(taskRoot, { recursive: true, force: true });
+      fs.mkdirSync(taskRoot, { recursive: true });
+      updateProductReleaseLog(taskId, `开始第 ${attempt} 次提版`, { current_step: 'prepare' });
+      const projectPathResult = validateRelativeProjectPath(version.project_path || template.project_path);
+      if (projectPathResult.error) {
+        const error = new Error(projectPathResult.error);
+        error.code = 'TEMPLATE_CONFIG_INVALID';
+        throw error;
+      }
+      const projectPath = projectPathResult.value;
+
+      const identitySource = getReleaseIdentityKey(task.subject_id);
+      let identityTempRoot = null;
+      let identityKeyPath = identitySource.identityKeyPath;
+      try {
+        if (!identityKeyPath) {
+          identityTempRoot = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'relation-minidev-'));
+          identityKeyPath = path.join(identityTempRoot, 'config.json');
+          fs.writeFileSync(identityKeyPath, identitySource.identityKey, { mode: 0o600 });
+        }
+        updateProductReleaseLog(taskId, '校验通过，开始调用 upload.js 提版脚本', { current_step: 'upload' });
+        const uploaded = await runUploadScript({
+          appId: task.app_id,
+          projectPath,
+          tempProjectPath: path.join(taskRoot, 'upload-project'),
+          identityKeyPath,
+          template: template.code || template.name || `template-${template.id}`,
+          shortDramaTemplate: isShortDramaTemplate(template),
+          domains: {
+            api_domain: release.api_domain,
+            analytics_domain: release.analytics_domain,
+            cdn_domain: release.cdn_domain,
+            short_drama_domain: release.short_drama_domain,
+          },
+          version: release.release_version,
+          versionDescription: release.release_note,
+          onLog: message => updateProductReleaseLog(taskId, message),
+        });
+        const encodedSummary = encryptRow('product_asset_release_records', { upload_summary: uploaded.summary }).upload_summary;
+        db.prepare(`
+          UPDATE product_asset_release_records
+          SET release_status = 'launched', uploaded_version = ?, upload_summary = ?, completed_at = CURRENT_TIMESTAMP
+          WHERE task_id = ?
+        `).run(uploaded.uploadedVersion, encodedSummary, taskId);
+        updateProductReleaseTask(taskId, {
+          status: 'success',
+          current_step: 'completed',
+          error_message: null,
+          finished_at: new Date().toISOString(),
+        });
+        updateProductReleaseLog(taskId, `提版完成，上传版本 ${uploaded.uploadedVersion || '-'}`);
+        setProductAssetReleaseSummary(task, 'launched', uploaded.uploadedVersion);
+        return;
+      } finally {
+        if (identityTempRoot) fs.rmSync(identityTempRoot, { recursive: true, force: true });
+      }
+    } catch (error) {
+      lastError = error;
+      updateProductReleaseLog(taskId, `第 ${attempt} 次提版失败：${sanitizeProductReleaseLog(error.message)}`, {
+        current_step: 'failed',
+        error_message: sanitizeProductReleaseLog(error.message),
+      });
+      if (attempt < 2 && isReleaseRetryable(error)) {
+        updateProductReleaseLog(taskId, '任务将在短暂等待后重试');
+        await new Promise(resolve => setTimeout(resolve, 300));
+        continue;
+      }
+    }
+  }
+
+  const errorMessage = sanitizeProductReleaseLog(lastError?.message || '提版失败');
+  db.prepare(`
+    UPDATE product_asset_release_records
+    SET release_status = 'failed', completed_at = CURRENT_TIMESTAMP
+    WHERE task_id = ?
+  `).run(taskId);
+  updateProductReleaseTask(taskId, {
+    status: 'failed',
+    current_step: 'failed',
+    error_message: errorMessage,
+    finished_at: new Date().toISOString(),
+  });
+  setProductAssetReleaseSummary(task, 'failed');
+}
+
+function requireProductTemplateMenu(req, res, next) {
+  if (!hasMenuAccess(req.user, '/product-templates') && !hasMenuAccess(req.user, '/product-assets')) {
+    return res.status(403).json({ error: '无产品模版菜单权限' });
+  }
+  next();
+}
+
+app.get('/api/product-templates', requireProductTemplateMenu, (req, res) => {
+  const { name, template_type, budget_type, platform, status } = req.query;
+  const where = ['1=1'];
+  const params = [];
+  if (name) { where.push('pt.name LIKE ?'); params.push(`%${String(name).trim()}%`); }
+  if (template_type) { where.push('pt.template_type = ?'); params.push(template_type); }
+  if (budget_type) { where.push('pt.budget_type = ?'); params.push(budget_type); }
+  if (platform) { where.push('pt.platform = ?'); params.push(platform); }
+  if (status) { where.push('pt.status = ?'); params.push(status); }
+  const rows = db.prepare(`
+    SELECT pt.*, u.display_name AS created_by_name,
+      (SELECT COUNT(*) FROM product_template_versions v WHERE v.template_id = pt.id) AS version_count,
+      v.id AS current_version_id, v.version_label AS current_version_label,
+      v.project_path AS current_project_path, v.snapshot_json
+    FROM product_templates pt
+    LEFT JOIN users u ON pt.created_by = u.id
+    LEFT JOIN product_template_versions v ON v.template_id = pt.id AND v.is_current = 1
+    WHERE ${where.join(' AND ')}
+    ORDER BY pt.updated_at DESC, pt.id DESC
+  `).all(...params);
+  res.json(rows.map(serializeProductTemplate));
+});
+
+app.get('/api/product-templates/:id', requireProductTemplateMenu, (req, res) => {
+  const row = getProductTemplate(req.params.id);
+  if (!row) return res.status(404).json({ error: '产品模版不存在' });
+  const versions = db.prepare(`
+    SELECT id, template_id, version_label, project_path, template_type, budget_type, platform, is_current, created_by, created_at
+    FROM product_template_versions WHERE template_id = ? ORDER BY id DESC
+  `).all(req.params.id);
+  res.json({ ...serializeProductTemplate(row), versions });
+});
+
+app.post('/api/product-templates', requireProductTemplateMenu, canWrite, (req, res) => {
+  const parsed = validateTemplatePayload(req.body || {});
+  if (parsed.errors?.length) return res.status(400).json({ error: parsed.errors.join('；') });
+  const values = parsed.values;
+  const duplicate = values.code ? db.prepare('SELECT id FROM product_templates WHERE code = ?').get(values.code) : null;
+  if (duplicate) return res.status(400).json({ error: '模版编码已存在' });
+  try {
+    const result = db.transaction(() => {
+      const inserted = db.prepare(`
+        INSERT INTO product_templates (
+          name, code, template_type, budget_type, platform, version, status, project_path,
+          description, remark, created_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        values.name, values.code || null, values.template_type, values.budget_type || null,
+        values.platform || null, values.version || null, values.status || 'enabled', values.project_path,
+        values.description || null, values.remark || null, req.user.id,
+      );
+      const template = getProductTemplate(inserted.lastInsertRowid) || { id: inserted.lastInsertRowid, ...values };
+      createProductTemplateVersion(template, req.user.id);
+      return inserted.lastInsertRowid;
+    })();
+    res.json({ id: result });
+  } catch (error) {
+    if (/UNIQUE/i.test(error.message)) return res.status(400).json({ error: '模版编码已存在' });
+    throw error;
+  }
+});
+
+app.put('/api/product-templates/:id', requireProductTemplateMenu, canWrite, (req, res) => {
+  const existing = getProductTemplate(req.params.id);
+  if (!existing) return res.status(404).json({ error: '产品模版不存在' });
+  const parsed = validateTemplatePayload(req.body || {}, { partial: true });
+  if (parsed.errors?.length) return res.status(400).json({ error: parsed.errors.join('；') });
+  const values = { ...existing, ...parsed.values };
+  const duplicate = values.code
+    ? db.prepare('SELECT id FROM product_templates WHERE code = ? AND id <> ?').get(values.code, req.params.id)
+    : null;
+  if (duplicate) return res.status(400).json({ error: '模版编码已存在' });
+  const assignments = PRODUCT_TEMPLATE_ALLOWED_FIELDS.map(field => `${field} = ?`).join(', ');
+  try {
+    db.transaction(() => {
+      db.prepare(`UPDATE product_templates SET ${assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(...PRODUCT_TEMPLATE_ALLOWED_FIELDS.map(field => values[field] || null), req.params.id);
+      const releaseFieldsChanged = ['template_type', 'budget_type', 'platform', 'version', 'project_path']
+        .some(field => String(existing[field] || '') !== String(values[field] || ''));
+      if (releaseFieldsChanged) createProductTemplateVersion({ ...existing, ...values, id: Number(req.params.id) }, req.user.id);
+    })();
+    res.json({ success: true });
+  } catch (error) {
+    if (/UNIQUE/i.test(error.message)) return res.status(400).json({ error: '模版编码已存在' });
+    throw error;
+  }
+});
+
+app.delete('/api/product-templates/:id', requireProductTemplateMenu, canWrite, (req, res) => {
+  const existing = getProductTemplate(req.params.id);
+  if (!existing) return res.status(404).json({ error: '产品模版不存在' });
+  const referenced = db.prepare(`
+    SELECT COUNT(*) AS count FROM product_asset_release_tasks WHERE template_id = ?
+    UNION ALL
+    SELECT COUNT(*) AS count FROM product_asset_release_records WHERE template_id = ?
+  `).all(req.params.id, req.params.id).some(row => Number(row.count) > 0);
+  if (referenced) return res.status(400).json({ error: '该模版已被提版任务或历史记录引用，只能停用' });
+  db.transaction(() => {
+    db.prepare('DELETE FROM product_template_versions WHERE template_id = ?').run(req.params.id);
+    db.prepare('DELETE FROM product_templates WHERE id = ?').run(req.params.id);
+  })();
+  res.json({ success: true });
+});
+
+app.post('/api/product-templates/:id/preview', requireProductTemplateMenu, canWrite, async (req, res) => {
+  const template = getProductTemplate(req.params.id);
+  if (!template) return res.status(404).json({ error: '产品模版不存在' });
+  const version = getProductTemplateVersion(template.id);
+  if (!version) return res.status(400).json({ error: '产品模版没有可用版本' });
+  const operationId = crypto.randomUUID();
+  const root = getProductTemplateWorkRoot();
+  const previewPath = path.join(root, 'preview', operationId);
+  let repoRoot = null;
+  try {
+    repoRoot = await cloneProductTemplateRepository(`preview-${operationId}`, () => {});
+    const sourceProject = path.resolve(repoRoot, version.project_path);
+    if (!fs.existsSync(sourceProject)) return res.status(400).json({ error: '模版项目目录不存在' });
+    const copied = copyProjectDirectory(sourceProject, previewPath, { root: path.join(root, 'preview') });
+    res.json({ operation_id: operationId, path: previewPath, files: copied.files, bytes: copied.bytes, created_at: new Date().toISOString() });
+  } catch (error) {
+    res.status(400).json({ error: sanitizeProductReleaseLog(error.message || '模版预览失败') });
+  } finally {
+    if (repoRoot) fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+app.post('/api/product-assets/:id/releases', requireProductAssetMenu, canWrite, (req, res) => {
+  const asset = getVisibleProductAsset(req.params.id, req.user);
+  if (!asset) return res.status(404).json({ error: '产品资产不存在或无权访问' });
+  const parsed = validateReleasePayload(req.body || {});
+  if (parsed.errors?.length) return res.status(400).json({ error: parsed.errors.join('；') });
+  const values = parsed.values;
+  const subject = asset.company_subject_id ? getCompanySubject(asset.company_subject_id) : null;
+  if (!subject) return res.status(400).json({ error: '产品资产未关联有效主体，无法提版' });
+  const template = getProductTemplate(values.template_id);
+  if (!template || template.status !== 'enabled') return res.status(400).json({ error: '提版信息不完整：产品模版不存在或已停用。请前往「产品模版管理」启用可用模版后重试。' });
+  if (template.budget_type && template.budget_type !== asset.budget_type) return res.status(400).json({ error: '提版信息不完整：产品模版预算类型与产品资产不匹配。请在产品模版管理选择与产品资产预算类型一致的模版。' });
+  const version = getProductTemplateVersion(template.id);
+  if (!version) return res.status(400).json({ error: '提版信息不完整：产品模版没有可用版本。请前往「产品模版管理」配置并保存模版版本后重试。' });
+  const templateIdentifier = String(template.code || template.name || '').trim();
+  if (!templateIdentifier) return res.status(400).json({ error: '提版信息不完整：产品模版标识缺失。请前往「产品模版管理」补充模版编码或名称后重试。' });
+  const shortDramaTemplate = isShortDramaTemplate(template);
+  const subjectDomains = validateReleaseDomains(subject, { required: true, requireShortDrama: shortDramaTemplate });
+  if (subjectDomains.errors?.length) {
+    const requiredFields = shortDramaTemplate ? 'API、埋点、CDN、短剧四类' : 'API、埋点、CDN 三类';
+    return res.status(400).json({ error: `提版信息不完整：主体域名配置不完整或格式不正确（${subjectDomains.errors.join('；')}）。请前往「主体管理」编辑关联主体，补充${requiredFields} HTTPS 域名后重试；非短剧模版无需配置短剧域名。` });
+  }
+  try {
+    requireReleaseIdentityKeyPath(subject.id);
+    getUploadScriptPath();
+  } catch (error) {
+    const status = ['UPLOAD_SCRIPT_INVALID', 'UPLOAD_SCRIPT_NOT_FOUND'].includes(error.code) ? 503 : 400;
+    return res.status(status).json({ error: error.message || '提版前置校验失败' });
+  }
+  const running = db.prepare(`
+    SELECT id FROM product_asset_release_tasks
+    WHERE app_id = ? AND status IN ('pending', 'running') LIMIT 1
+  `).get(values.app_id);
+  if (running) return res.status(409).json({ error: '同一 appId 已有提版任务正在执行', task_id: running.id });
+  const subjectId = asset.company_subject_id || null;
+  try {
+    const taskId = db.transaction(() => {
+      const task = db.prepare(`
+        INSERT INTO product_asset_release_tasks (
+          asset_id, template_id, template_version_id, subject_id, app_id, status, current_step, created_by
+        ) VALUES (?, ?, ?, ?, ?, 'pending', 'queued', ?)
+      `).run(asset.id, template.id, version.id, subjectId, values.app_id, req.user.id);
+      const encoded = encryptRow('product_asset_release_records', {
+        ...subjectDomains.values,
+        release_link: values.release_link,
+        release_note: values.release_note,
+      });
+      db.prepare(`
+        INSERT INTO product_asset_release_records (
+          task_id, asset_id, template_id, template_version_id, subject_id, app_id,
+          api_domain, analytics_domain, cdn_domain, short_drama_domain, release_status,
+          release_version, release_link, release_note, submitted_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+      `).run(
+        task.lastInsertRowid, asset.id, template.id, version.id, subjectId, values.app_id,
+        encoded.api_domain, encoded.analytics_domain, encoded.cdn_domain, encoded.short_drama_domain,
+        values.release_version || null, encoded.release_link, encoded.release_note, req.user.id,
+      );
+      setProductAssetReleaseSummary({ id: task.lastInsertRowid, asset_id: asset.id, template_id: template.id, template_version_id: version.id }, 'pending');
+      return task.lastInsertRowid;
+    })();
+    setImmediate(() => executeProductAssetReleaseTask(taskId).catch(error => {
+      console.error(`[product-release] task ${taskId} runner failed: ${sanitizeProductReleaseLog(error.message)}`);
+    }));
+    res.status(202).json({ id: taskId, status: 'pending', validated: true });
+  } catch (error) {
+    if (/UNIQUE/i.test(error.message)) return res.status(409).json({ error: '同一 appId 已有提版任务正在执行' });
+    throw error;
+  }
+});
+
+app.get('/api/product-asset-release-tasks/:id', requireProductAssetMenu, (req, res) => {
+  const task = db.prepare('SELECT * FROM product_asset_release_tasks WHERE id = ?').get(req.params.id);
+  if (!task) return res.status(404).json({ error: '提版任务不存在' });
+  if (!getVisibleProductAsset(task.asset_id, req.user)) return res.status(404).json({ error: '提版任务不存在' });
+  const record = db.prepare('SELECT * FROM product_asset_release_records WHERE task_id = ?').get(task.id);
+  res.json({ task: serializeReleaseTask(task), record: serializeReleaseRecord(record) });
+});
+
+app.post('/api/product-asset-release-tasks/:id/cancel', requireProductAssetMenu, canWrite, (req, res) => {
+  const task = db.prepare('SELECT * FROM product_asset_release_tasks WHERE id = ?').get(req.params.id);
+  if (!task) return res.status(404).json({ error: '提版任务不存在' });
+  if (!getVisibleProductAsset(task.asset_id, req.user)) return res.status(404).json({ error: '提版任务不存在' });
+  if (task.status !== 'pending') return res.status(400).json({ error: '只有排队中的任务可以取消' });
+  updateProductReleaseTask(task.id, { status: 'cancelled', current_step: 'cancelled', finished_at: new Date().toISOString() });
+  db.prepare("UPDATE product_asset_release_records SET release_status = 'cancelled', completed_at = CURRENT_TIMESTAMP WHERE task_id = ?").run(task.id);
+  setProductAssetReleaseSummary(task, 'failed');
+  res.json({ success: true });
+});
+
+app.get('/api/product-assets/:id/releases', requireProductAssetMenu, (req, res) => {
+  if (!getVisibleProductAsset(req.params.id, req.user)) return res.status(404).json({ error: '产品资产不存在或无权访问' });
+  const rows = db.prepare(`
+    SELECT r.*, pt.name AS template_name, v.version_label AS template_version_label
+    FROM product_asset_release_records r
+    LEFT JOIN product_templates pt ON pt.id = r.template_id
+    LEFT JOIN product_template_versions v ON v.id = r.template_version_id
+    WHERE r.asset_id = ?
+    ORDER BY r.submitted_at DESC, r.id DESC
+  `).all(req.params.id);
+  res.json(rows.map(serializeReleaseRecord));
+});
+
+app.post('/api/product-assets/:id/template-release', requireProductAssetMenu, canWrite, (req, res) => {
+  res.redirect(307, `/api/product-assets/${encodeURIComponent(req.params.id)}/releases`);
+});
+
+app.post('/api/release-runtime/check', requireProductTemplateMenu, (req, res) => {
+  if (!isPrivilegedIdentity(req.user)) return res.status(403).json({ error: '仅管理员或高管身份可检测运行环境' });
+  res.json(checkProductReleaseRuntime());
+});
+
 app.get('/api/product-assets', (req, res) => {
-  const { budget_type, platform, launch_status, owner_id, has_reduction, reduction_status, company_entity, company_subject_id, group_name, appid } = req.query;
+  const { budget_type, platform, launch_status, owner_id, has_reduction, reduction_status, company_entity, company_subject_id, group_name, appid, product_template_id, release_status } = req.query;
   const { id: userId, role } = req.user;
 
   let q = `
-    SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name,
+    SELECT pa.*, lpt.name AS last_release_template_name, u.display_name as owner_name, c.display_name as created_by_name,
       (SELECT COUNT(*) FROM product_asset_reductions r WHERE r.asset_id = pa.id) as reduction_count,
       (SELECT r.reduction_date FROM product_asset_reductions r WHERE r.asset_id = pa.id ORDER BY r.reduction_date DESC, r.id DESC LIMIT 1) as latest_reduction_date,
       (SELECT r.status FROM product_asset_reductions r WHERE r.asset_id = pa.id ORDER BY r.reduction_date DESC, r.id DESC LIMIT 1) as latest_reduction_status
     FROM product_assets pa
+    LEFT JOIN product_templates lpt ON lpt.id = pa.last_release_template_id
     LEFT JOIN users u ON pa.owner_id = u.id
     LEFT JOIN users c ON pa.created_by = c.id
     WHERE 1=1
@@ -19825,6 +20748,8 @@ app.get('/api/product-assets', (req, res) => {
     ) = ?`;
     params.push(reduction_status);
   }
+  if (product_template_id) { q += ' AND pa.last_release_template_id = ?'; params.push(product_template_id); }
+  if (release_status) { q += ' AND pa.last_release_status = ?'; params.push(release_status); }
 
   q += ' ORDER BY pa.updated_at DESC, pa.id DESC';
   let rows = decryptRows('product_assets', db.prepare(q).all(...params));
@@ -19856,8 +20781,9 @@ app.get('/api/product-assets', (req, res) => {
 app.get('/api/product-assets/:id', (req, res) => {
   const { id } = req.params;
   const asset = db.prepare(`
-    SELECT pa.*, u.display_name as owner_name, c.display_name as created_by_name
+    SELECT pa.*, lpt.name AS last_release_template_name, u.display_name as owner_name, c.display_name as created_by_name
     FROM product_assets pa
+    LEFT JOIN product_templates lpt ON lpt.id = pa.last_release_template_id
     LEFT JOIN users u ON pa.owner_id = u.id
     LEFT JOIN users c ON pa.created_by = c.id
     WHERE pa.id = ?

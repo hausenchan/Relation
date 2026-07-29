@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Avatar, Button, Card, Col, Descriptions, Drawer, Form, Grid, Input, InputNumber,
+  Avatar, Button, Card, Checkbox, Col, Descriptions, Drawer, Form, Grid, Input, InputNumber,
   List, message, Modal, Row, Select, Space, Table, Tag, Typography, Upload
 } from 'antd';
 import {
@@ -44,6 +44,7 @@ export default function CompanySubjects() {
   const [detailRecord, setDetailRecord] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [attachmentType, setAttachmentType] = useState('business_license');
+  const [identityKeyFile, setIdentityKeyFile] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,14 +63,17 @@ export default function CompanySubjects() {
 
   const openCreate = () => {
     setEditing(null);
+    setIdentityKeyFile(null);
     form.resetFields();
-    form.setFieldsValue({ mini_program_count: 0, status: 'active' });
+    form.setFieldsValue({ mini_program_count: 0, status: 'active', clear_identity_key: false });
     setModalOpen(true);
   };
 
   const openEdit = (record) => {
     setEditing(record);
-    form.setFieldsValue(record);
+    setIdentityKeyFile(null);
+    form.resetFields();
+    form.setFieldsValue({ ...record, identity_key: undefined, clear_identity_key: false });
     setModalOpen(true);
   };
 
@@ -77,10 +81,10 @@ export default function CompanySubjects() {
     try {
       const values = await form.validateFields();
       if (editing) {
-        await companySubjectsApi.update(editing.id, values);
+        await companySubjectsApi.update(editing.id, values, identityKeyFile);
         message.success('主体已更新');
       } else {
-        await companySubjectsApi.create(values);
+        await companySubjectsApi.create(values, identityKeyFile);
         message.success('主体已新增');
       }
       setModalOpen(false);
@@ -134,6 +138,20 @@ export default function CompanySubjects() {
       message.error(err.response?.data?.error || '附件上传失败');
     }
     return Upload.LIST_IGNORE;
+  };
+
+  const selectIdentityKeyFile = (file) => {
+    if (!/\.json$/i.test(file.name || '')) {
+      message.error('身份密钥必须是 JSON 文件');
+      return Upload.LIST_IGNORE;
+    }
+    if (file.size > 1024 * 1024) {
+      message.error('身份密钥 JSON 文件不能超过 1MB');
+      return Upload.LIST_IGNORE;
+    }
+    setIdentityKeyFile(file);
+    form.setFieldValue('clear_identity_key', false);
+    return false;
   };
 
   const deleteAttachment = (attachment) => {
@@ -337,6 +355,52 @@ export default function CompanySubjects() {
           <Form.Item name="email" label="邮箱">
             <Input placeholder="主体常用联系邮箱" />
           </Form.Item>
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="api_domain" label="API 域名">
+                <Input placeholder="https://api.example.com" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="analytics_domain" label="埋点域名">
+                <Input placeholder="https://analytics.example.com" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="cdn_domain" label="CDN 域名">
+                <Input placeholder="https://cdn.example.com" />
+              </Form.Item>
+            </Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="short_drama_domain" label="短剧域名">
+                <Input placeholder="可选，https://drama.example.com" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <div style={{ margin: '-4px 0 16px', color: '#6b7280', fontSize: 12 }}>
+            产品资产提版时会自动读取所关联主体的域名配置，API、埋点和 CDN 域名需在提版前配置。
+          </div>
+          <Form.Item
+            label="身份密钥 JSON 文件"
+            extra={editing?.has_identity_key ? '当前主体已配置身份密钥；编辑时不选择新文件会保留原文件。' : '用于支付宝小程序提版，可选上传。文件仅保存于服务端私有目录。'}
+          >
+            <Upload
+              accept=".json,application/json"
+              maxCount={1}
+              beforeUpload={selectIdentityKeyFile}
+              onRemove={() => { setIdentityKeyFile(null); return true; }}
+              fileList={identityKeyFile ? [identityKeyFile] : []}
+            >
+              <Button icon={<UploadOutlined />}>选择 JSON 密钥文件</Button>
+            </Upload>
+          </Form.Item>
+          {editing?.has_identity_key && (
+            <Form.Item name="clear_identity_key" valuePropName="checked">
+              <Checkbox>清除已保存的身份密钥</Checkbox>
+            </Form.Item>
+          )}
           <Form.Item name="remark" label="备注">
             <TextArea rows={3} placeholder="其他说明" />
           </Form.Item>
@@ -357,6 +421,11 @@ export default function CompanySubjects() {
               <Descriptions.Item label="法人">{detailRecord.legal_person || '-'}</Descriptions.Item>
               <Descriptions.Item label="法人电话">{detailRecord.legal_person_phone || '-'}</Descriptions.Item>
               <Descriptions.Item label="邮箱">{detailRecord.email || '-'}</Descriptions.Item>
+              <Descriptions.Item label="API 域名">{detailRecord.api_domain || '-'}</Descriptions.Item>
+              <Descriptions.Item label="埋点域名">{detailRecord.analytics_domain || '-'}</Descriptions.Item>
+              <Descriptions.Item label="CDN 域名">{detailRecord.cdn_domain || '-'}</Descriptions.Item>
+              <Descriptions.Item label="短剧域名">{detailRecord.short_drama_domain || '-'}</Descriptions.Item>
+              <Descriptions.Item label="身份密钥">{detailRecord.identity_key_mask || (detailRecord.has_identity_key ? '已配置' : '未配置')}</Descriptions.Item>
               <Descriptions.Item label="关联产品">{detailRecord.product_count || 0}</Descriptions.Item>
               <Descriptions.Item label="备注"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.remark || '-'}</div></Descriptions.Item>
             </Descriptions>

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Avatar, Button, Card, Col, Descriptions, Drawer, Form, Grid, Input, InputNumber,
-  List, message, Modal, Radio, Row, Select, Space, Table, Tag, Typography, DatePicker, Upload
+  List, message, Modal, Radio, Row, Select, Space, Steps, Table, Tag, Typography, DatePicker, Upload
 } from 'antd';
 import {
   AppstoreOutlined, BankOutlined, EditOutlined, PlusOutlined, DeleteOutlined,
@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import dayjs from 'dayjs';
-import { companySubjectsApi, productAssetsApi, usersApi } from '../api';
+import { companySubjectsApi, productAssetsApi, productTemplatesApi, usersApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
 
 const { Text } = Typography;
@@ -46,6 +46,22 @@ const launchStatusMap = {
   offline: { label: '已下线', color: 'red' },
 };
 
+const releaseDomainLabels = {
+  api_domain: 'API 域名',
+  analytics_domain: '埋点域名',
+  cdn_domain: 'CDN 域名',
+  short_drama_domain: '短剧域名',
+};
+
+function isShortDramaTemplate(template = {}) {
+  if (Object.prototype.hasOwnProperty.call(template, 'template_type')) {
+    return template.template_type === 'short_drama';
+  }
+  return [template.name, template.code]
+    .filter(Boolean)
+    .some(value => /(短剧|short[\s_-]*drama)/i.test(String(value)));
+}
+
 const launchStatusOptions = [
   ['not_launched', launchStatusMap.not_launched],
   ['launched_available', launchStatusMap.launched_available],
@@ -54,6 +70,56 @@ const launchStatusOptions = [
   ['paused', launchStatusMap.paused],
   ['offline', launchStatusMap.offline],
 ];
+
+const releaseStatusMap = {
+  pending: { label: '排队中', color: 'default' },
+  running: { label: '提版中', color: 'processing' },
+  success: { label: '已完成', color: 'green' },
+  launched: { label: '已上线', color: 'green' },
+  failed: { label: '失败', color: 'red' },
+  cancelled: { label: '已取消', color: 'default' },
+};
+
+const releaseStepLabelMap = {
+  queued: '任务排队',
+  prepare: '前置准备',
+  clone: '拉取模版仓库',
+  copy: '复制模版项目',
+  configure: '写入域名配置',
+  install_dependencies: '安装依赖',
+  upload: '运行 upload.js',
+  completed: '提版完成',
+  failed: '执行失败',
+  cancelled: '已取消',
+};
+
+const releaseRunningSteps = [
+  { title: '创建任务', description: '写入提版任务' },
+  { title: '前置校验', description: '校验主体、模版、AppID 和密钥' },
+  { title: '运行脚本', description: '调用 utils/upload.js 执行上传' },
+  { title: '完成', description: '写入提版结果' },
+];
+
+function getReleaseStepLabel(step) {
+  return releaseStepLabelMap[step] || step || '-';
+}
+
+function getReleaseStepCurrent(task = {}) {
+  if (task.status === 'success') return 3;
+  if (task.status === 'failed') return task.current_step === 'prepare' ? 1 : 2;
+  if (task.status === 'cancelled') return 0;
+  if (['completed'].includes(task.current_step)) return 3;
+  if (['upload', 'clone', 'copy', 'configure', 'install_dependencies'].includes(task.current_step)) return 2;
+  if (task.current_step === 'prepare') return 1;
+  return 0;
+}
+
+function getReleaseStepStatus(task = {}) {
+  if (task.status === 'failed') return 'error';
+  if (task.status === 'success') return 'finish';
+  if (task.status === 'cancelled') return 'wait';
+  return 'process';
+}
 
 const reductionReasonMap = {
   data_quality: '数据质量问题',
@@ -230,6 +296,8 @@ export default function ProductAssets() {
     company_entity: '',
     company_subject_id: searchParams.get('company_subject_id') || '',
     appid: '',
+    product_template_id: '',
+    release_status: '',
   });
   const [assetModalOpen, setAssetModalOpen] = useState(false);
   const [editingAsset, setEditingAsset] = useState(null);
@@ -240,6 +308,14 @@ export default function ProductAssets() {
   const [reductionModalOpen, setReductionModalOpen] = useState(false);
   const [editingReduction, setEditingReduction] = useState(null);
   const [reductionForm] = Form.useForm();
+  const [templates, setTemplates] = useState([]);
+  const [releaseModalOpen, setReleaseModalOpen] = useState(false);
+  const [releaseConfirmLoading, setReleaseConfirmLoading] = useState(false);
+  const [releaseAsset, setReleaseAsset] = useState(null);
+  const [releaseSubject, setReleaseSubject] = useState(null);
+  const [releaseTask, setReleaseTask] = useState(null);
+  const [releaseHistory, setReleaseHistory] = useState([]);
+  const [releaseForm] = Form.useForm();
 
   useEffect(() => {
     const subjectId = searchParams.get('company_subject_id') || '';
@@ -266,7 +342,36 @@ export default function ProductAssets() {
   useEffect(() => {
     usersApi.listSimple().then(setUsers).catch(() => {});
     companySubjectsApi.simple().then(setSubjects).catch(() => {});
+    productTemplatesApi.list({ status: 'enabled' }).then(data => setTemplates(Array.isArray(data) ? data : [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!releaseModalOpen) return;
+    const budgetType = releaseAsset?.budget_type || '';
+    productTemplatesApi.list({ status: 'enabled', ...(budgetType ? { budget_type: budgetType } : {}) })
+      .then(data => setTemplates(Array.isArray(data) ? data : []))
+      .catch(() => setTemplates([]));
+  }, [releaseAsset, releaseModalOpen]);
+
+  useEffect(() => {
+    const taskId = releaseTask?.task?.id;
+    if (!taskId || ['success', 'failed', 'cancelled'].includes(releaseTask.task.status)) return undefined;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const data = await productAssetsApi.getReleaseTask(taskId);
+        if (!stopped) setReleaseTask(data);
+      } catch (error) {
+        if (!stopped) message.error(error.response?.data?.error || '提版任务状态加载失败');
+      }
+    };
+    const timer = setInterval(poll, 1500);
+    poll();
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }, [releaseTask?.task?.id, releaseTask?.task?.status]);
 
   const openCreateAsset = () => {
     setEditingAsset(null);
@@ -307,10 +412,122 @@ export default function ProductAssets() {
     try {
       const data = await productAssetsApi.get(id);
       setDetailRecord(data);
+      productAssetsApi.listReleases(id).then(setReleaseHistory).catch(() => setReleaseHistory([]));
     } catch (err) {
       message.error(err.response?.data?.error || '详情加载失败');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const openRelease = async record => {
+    if (!record?.company_subject_id) {
+      message.error('产品资产未关联主体，无法提版');
+      return;
+    }
+    setReleaseAsset(record);
+    setReleaseSubject(null);
+    setReleaseTask(null);
+    releaseForm.resetFields();
+    releaseForm.setFieldsValue({ app_id: record.appid || undefined });
+    try {
+      const subject = await companySubjectsApi.get(record.company_subject_id);
+      setReleaseSubject(subject);
+      setReleaseModalOpen(true);
+    } catch (error) {
+      message.error(error.response?.data?.error || '主体域名配置加载失败');
+    }
+  };
+
+  const submitRelease = async () => {
+    try {
+      const values = await releaseForm.validateFields();
+      const selectedTemplate = templates.find(item => Number(item.id) === Number(values.template_id));
+      if (!selectedTemplate) {
+        message.error('请选择有效的产品模版');
+        return;
+      }
+      if (!releaseSubject) {
+        message.error('主体域名配置尚未加载');
+        return;
+      }
+      const shortDramaTemplate = isShortDramaTemplate(selectedTemplate);
+      const requiredDomains = shortDramaTemplate
+        ? ['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain']
+        : ['api_domain', 'analytics_domain', 'cdn_domain'];
+      const missingDomains = requiredDomains
+        .filter(field => !String(releaseSubject[field] || '').trim());
+      if (missingDomains.length > 0) {
+        const requiredLabel = shortDramaTemplate ? '四类 HTTPS 域名' : 'API、埋点、CDN 三类 HTTPS 域名';
+        const optionalHint = shortDramaTemplate ? '' : '短剧域名仅在选择短剧模版时需要。';
+        message.error(`提版信息不完整：缺少${missingDomains.map(field => releaseDomainLabels[field]).join('、')}。请进入「主体管理」编辑关联主体，补充${requiredLabel}后重试。${optionalHint}`);
+        return;
+      }
+      if (!releaseSubject.has_identity_key_file) {
+        message.error('提版信息不完整：身份密钥文件未配置。请进入「主体管理」编辑关联主体，在“身份密钥 JSON 文件”处上传有效文件后重试。');
+        return;
+      }
+      Modal.confirm({
+        title: '确认提版快照',
+        okText: '确认提版',
+        cancelText: '返回修改',
+        width: isMobile ? '100%' : 560,
+        content: (
+          <Descriptions column={1} size="small" bordered>
+            <Descriptions.Item label="appId">{values.app_id}</Descriptions.Item>
+            <Descriptions.Item label="产品模版">{selectedTemplate.name}</Descriptions.Item>
+            <Descriptions.Item label="项目目录">{selectedTemplate.project_path}</Descriptions.Item>
+            <Descriptions.Item label="主体">{releaseSubject.company_entity || '-'}</Descriptions.Item>
+            <Descriptions.Item label="API 域名">{releaseSubject.api_domain || '未配置'}</Descriptions.Item>
+            <Descriptions.Item label="埋点域名">{releaseSubject.analytics_domain || '未配置'}</Descriptions.Item>
+            <Descriptions.Item label="CDN 域名">{releaseSubject.cdn_domain || '未配置'}</Descriptions.Item>
+            <Descriptions.Item label="短剧域名">{releaseSubject.short_drama_domain || (shortDramaTemplate ? '未配置' : '非短剧模版可不配置')}</Descriptions.Item>
+            <Descriptions.Item label="身份密钥文件">{releaseSubject.has_identity_key_file ? '已配置' : '未配置'}</Descriptions.Item>
+          </Descriptions>
+        ),
+        onOk: async () => {
+          setReleaseConfirmLoading(true);
+          try {
+            const result = await productAssetsApi.createRelease(releaseAsset.id, values);
+            setReleaseTask({ task: { id: result.id, status: result.status } });
+            setReleaseModalOpen(false);
+            message.success('提版任务已创建');
+            load();
+            openDetail(releaseAsset.id);
+          } catch (error) {
+            message.error(error.response?.data?.error || '提版任务创建失败');
+            throw error;
+          } finally {
+            setReleaseConfirmLoading(false);
+          }
+        },
+      });
+    } catch (error) {
+      if (!error?.errorFields) message.error(error.response?.data?.error || '提版参数校验失败');
+    }
+  };
+
+  const cancelRelease = async () => {
+    const taskId = releaseTask?.task?.id;
+    if (!taskId) return;
+    try {
+      await productAssetsApi.cancelReleaseTask(taskId);
+      const data = await productAssetsApi.getReleaseTask(taskId);
+      setReleaseTask(data);
+      message.success('提版任务已取消');
+    } catch (error) {
+      message.error(error.response?.data?.error || '取消提版失败');
+    }
+  };
+
+  const refreshReleaseTask = async () => {
+    const taskId = releaseTask?.task?.id;
+    if (!taskId) return;
+    try {
+      const data = await productAssetsApi.getReleaseTask(taskId);
+      setReleaseTask(data);
+    } catch (error) {
+      message.error(error.response?.data?.error || '提版任务状态加载失败');
     }
   };
 
@@ -622,6 +839,18 @@ export default function ProductAssets() {
       render: v => statusTag(launchStatusMap, v),
     },
     {
+      title: '产品模版',
+      dataIndex: 'last_release_template_name',
+      width: 150,
+      render: v => v || <Text type="secondary">未提版</Text>,
+    },
+    {
+      title: '提版状态',
+      dataIndex: 'last_release_status',
+      width: 110,
+      render: v => v ? statusTag(releaseStatusMap, v) : <Text type="secondary">未提版</Text>,
+    },
+    {
       title: '负责人',
       dataIndex: 'owner_name',
       width: 110,
@@ -649,11 +878,12 @@ export default function ProductAssets() {
     {
       title: '操作',
       key: 'actions',
-      width: 180,
+      width: 250,
       fixed: 'right',
       render: (_, record) => (
         <Space size="small">
           <Button type="link" size="small" onClick={() => openDetail(record)}>详情</Button>
+          <Button type="link" size="small" icon={<UploadOutlined />} onClick={() => openRelease(record)}>提版</Button>
           <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEditAsset(record)}>编辑</Button>
           <Button type="link" size="small" danger icon={<DeleteOutlined />} onClick={() => deleteAsset(record)}>删除</Button>
         </Space>
@@ -686,8 +916,10 @@ export default function ProductAssets() {
             <Tag icon={<WarningOutlined />}>{Number(record.reduction_count) > 0 ? `${record.reduction_count} 次核减` : '未核减'}</Tag>
           </Space>
           <Text type="secondary">负责人：{record.owner_name || '-'}</Text>
+          <Text type="secondary">提版：{record.last_release_template_name || '未提版'} {record.last_release_status ? `· ${releaseStatusMap[record.last_release_status]?.label || record.last_release_status}` : ''}</Text>
           <Space size="small" wrap>
             <Button type="link" size="small" onClick={(event) => { event.stopPropagation(); openDetail(record); }}>详情</Button>
+            <Button type="link" size="small" icon={<UploadOutlined />} onClick={(event) => { event.stopPropagation(); openRelease(record); }}>提版</Button>
             <Button type="link" size="small" icon={<EditOutlined />} onClick={(event) => { event.stopPropagation(); openEditAsset(record); }}>编辑</Button>
           </Space>
         </Space>
@@ -755,6 +987,10 @@ export default function ProductAssets() {
             <Select placeholder="核减状态" allowClear style={{ width: isMobile ? '100%' : 130 }} value={filters.reduction_status || undefined} onChange={v => setFilters({ ...filters, reduction_status: v || '' })}>
               {Object.entries(reductionStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
             </Select>
+            <Select placeholder="产品模版" allowClear showSearch optionFilterProp="label" style={{ width: isMobile ? '100%' : 180 }} value={filters.product_template_id || undefined} onChange={v => setFilters({ ...filters, product_template_id: v || '' })} options={templates.map(item => ({ value: item.id, label: item.name }))} />
+            <Select placeholder="提版状态" allowClear style={{ width: isMobile ? '100%' : 120 }} value={filters.release_status || undefined} onChange={v => setFilters({ ...filters, release_status: v || '' })}>
+              {Object.entries(releaseStatusMap).map(([k, v]) => <Option key={k} value={k}>{v.label}</Option>)}
+            </Select>
             <Select
               placeholder="负责人"
               allowClear
@@ -785,7 +1021,7 @@ export default function ProductAssets() {
             <Upload accept=".csv" showUploadList={false} beforeUpload={importCsv}>
               <Button icon={<UploadOutlined />} style={{ width: isMobile ? '100%' : undefined }}>CSV 导入</Button>
             </Upload>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateAsset} style={{ width: isMobile ? '100%' : undefined }}>新增产品资产</Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreateAsset} style={{ width: isMobile ? '100%' : undefined }}>新增产品资产</Button>
           </Space>
         </div>
 
@@ -805,7 +1041,7 @@ export default function ProductAssets() {
             dataSource={rows}
             rowKey="id"
             loading={loading}
-            scroll={{ x: 1200 }}
+            scroll={{ x: 1450 }}
             onRow={(record) => ({
               onDoubleClick: (event) => openDetailFromRowDoubleClick(record, event),
               style: { cursor: 'pointer' },
@@ -883,6 +1119,100 @@ export default function ProductAssets() {
         </Form>
       </Modal>
 
+      <Modal
+        title="产品资产提版"
+        open={releaseModalOpen}
+        onOk={submitRelease}
+        onCancel={() => setReleaseModalOpen(false)}
+        confirmLoading={releaseConfirmLoading}
+        okText="确认参数"
+        cancelText="取消"
+        width={isMobile ? '100%' : 680}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+      >
+        {releaseAsset && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message={`${releaseAsset.app_name} · ${releaseAsset.company_entity || '未关联主体'}`}
+            description={`预算类型：${budgetTypeMap[releaseAsset.budget_type]?.label || releaseAsset.budget_type || '-'}；域名和身份密钥将从关联主体自动读取。`}
+          />
+        )}
+        <Form form={releaseForm} layout="vertical">
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 12}><Form.Item name="app_id" label="appId" rules={[{ required: true, message: '请填写产品资产的 16 位 APPID；如资产未配置，请先编辑产品资产补充。' }, { pattern: /^\d{16}$/, message: 'APPID 必须是 16 位数字，请填写产品资产对应的 APPID。' }]}><Input placeholder="默认回填资产 APPID" /></Form.Item></Col>
+            <Col span={isMobile ? 24 : 12}>
+              <Form.Item name="template_id" label="产品模版" rules={[{ required: true, message: '请选择启用产品模版；如无可选模版，请先到产品模版管理启用模版。' }]}>
+                <Select showSearch optionFilterProp="label" placeholder="请选择启用模版；如无选项请先到产品模版管理启用模版" options={templates.map(item => ({ value: item.id, label: `${item.name}${item.version ? ` · ${item.version}` : ''}` }))} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={isMobile ? 24 : 12}><Form.Item name="release_version" label="提版版本"><Input placeholder="可选，不填由上传工具处理" /></Form.Item></Col>
+            <Col span={isMobile ? 24 : 12}><Form.Item name="release_link" label="提版链接"><Input placeholder="可选" /></Form.Item></Col>
+          </Row>
+          <Form.Item name="release_note" label="提版说明"><Input.TextArea rows={3} placeholder="可选，作为上传版本说明" /></Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="提版执行进度"
+        open={Boolean(releaseTask)}
+        onCancel={() => setReleaseTask(null)}
+        footer={[
+          releaseTask?.task?.status === 'pending' && <Button key="cancel" danger onClick={cancelRelease}>取消任务</Button>,
+          <Button key="refresh" onClick={refreshReleaseTask}>刷新日志</Button>,
+          <Button key="close" type={['success', 'failed', 'cancelled'].includes(releaseTask?.task?.status) ? 'primary' : 'default'} onClick={() => setReleaseTask(null)}>关闭</Button>,
+        ].filter(Boolean)}
+        width={isMobile ? '100%' : 820}
+        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
+      >
+        {releaseTask?.task && (
+          <Space direction="vertical" style={{ width: '100%' }} size={14}>
+            <Steps
+              size="small"
+              current={getReleaseStepCurrent(releaseTask.task)}
+              status={getReleaseStepStatus(releaseTask.task)}
+              items={releaseRunningSteps}
+            />
+            <Alert
+              type={releaseTask.task.status === 'failed' ? 'error' : releaseTask.task.status === 'success' ? 'success' : 'info'}
+              showIcon
+              message={`${releaseTask.task.status_label || releaseStatusMap[releaseTask.task.status]?.label || releaseTask.task.status} · ${getReleaseStepLabel(releaseTask.task.current_step)}`}
+              description={releaseTask.task.status === 'failed'
+                ? (releaseTask.task.error_message || '脚本执行失败，请查看下方日志定位原因。')
+                : '弹窗会自动刷新任务状态和脚本日志，可直接观察当前执行进度。'}
+            />
+            <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
+              <Descriptions.Item label="任务 ID">{releaseTask.task.id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="AppID">{releaseTask.task.app_id || '-'}</Descriptions.Item>
+              <Descriptions.Item label="当前步骤">{getReleaseStepLabel(releaseTask.task.current_step)}</Descriptions.Item>
+              <Descriptions.Item label="执行次数">{releaseTask.task.attempt_count || 0}</Descriptions.Item>
+              <Descriptions.Item label="开始时间">{releaseTask.task.started_at?.replace('T', ' ').slice(0, 19) || '-'}</Descriptions.Item>
+              <Descriptions.Item label="结束时间">{releaseTask.task.finished_at?.replace('T', ' ').slice(0, 19) || '-'}</Descriptions.Item>
+            </Descriptions>
+            {releaseTask.task.status === 'failed' && (
+              <Alert
+                type="error"
+                showIcon
+                message="失败原因"
+                description={releaseTask.task.error_message || '未返回明确失败原因，请查看脚本日志。'}
+              />
+            )}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 12 }}>
+                <Text strong>脚本运行日志</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>每 1.5 秒自动刷新</Text>
+              </div>
+              <div style={{ maxHeight: 360, overflow: 'auto', padding: 12, background: '#111827', color: '#d1d5db', borderRadius: 6, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6 }}>
+                {releaseTask.task.log_text || '等待任务开始...'}
+              </div>
+            </div>
+          </Space>
+        )}
+      </Modal>
+
       <Drawer
         title="产品资产详情"
         open={detailOpen}
@@ -899,10 +1229,38 @@ export default function ProductAssets() {
               <Descriptions.Item label="平台">{platformMap[detailRecord.platform] || '-'}</Descriptions.Item>
               <Descriptions.Item label="上线状态">{statusTag(launchStatusMap, detailRecord.launch_status)}</Descriptions.Item>
               <Descriptions.Item label="APPID">{detailRecord.appid || '-'}</Descriptions.Item>
+              <Descriptions.Item label="最近提版模版">{detailRecord.last_release_template_name || '-'}</Descriptions.Item>
+              <Descriptions.Item label="最近提版状态">{detailRecord.last_release_status ? statusTag(releaseStatusMap, detailRecord.last_release_status) : '未提版'}</Descriptions.Item>
+              <Descriptions.Item label="上传版本">{detailRecord.last_release_version || '-'}</Descriptions.Item>
               <Descriptions.Item label="应用标识">{detailRecord.app_identifier || '-'}</Descriptions.Item>
               <Descriptions.Item label="运营负责人">{detailRecord.owner_name || '-'}</Descriptions.Item>
               <Descriptions.Item label="备注"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.remark || '-'}</div></Descriptions.Item>
             </Descriptions>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <Text strong><UploadOutlined /> 提版历史</Text>
+                <Button type="primary" size="small" icon={<UploadOutlined />} onClick={() => openRelease(detailRecord)}>发起提版</Button>
+              </div>
+              <List
+                size="small"
+                bordered
+                dataSource={releaseHistory}
+                locale={{ emptyText: '暂无提版记录' }}
+                renderItem={item => (
+                  <List.Item>
+                    <Space direction="vertical" size={2}>
+                      <Space wrap>
+                        <Text strong>{item.template_name || '产品模版'}</Text>
+                        {statusTag(releaseStatusMap, item.release_status)}
+                        <Text type="secondary">{item.uploaded_version || item.release_version || '-'}</Text>
+                      </Space>
+                      <Text type="secondary">提交时间：{item.submitted_at?.replace('T', ' ').slice(0, 19) || '-'}</Text>
+                    </Space>
+                  </List.Item>
+                )}
+              />
+            </div>
 
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>

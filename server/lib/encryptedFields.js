@@ -71,7 +71,20 @@ module.exports = {
   },
 
   company_subjects: {
-    fields: ['group_name', 'company_entity', 'legal_person', 'legal_person_phone', 'email', 'remark'],
+    fields: [
+      'group_name', 'company_entity', 'legal_person', 'legal_person_phone', 'email', 'remark', 'identity_key',
+      'api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain',
+    ],
+    indexed: [],
+  },
+
+  product_asset_release_tasks: {
+    fields: ['error_message', 'log_text'],
+    indexed: [],
+  },
+
+  product_asset_release_records: {
+    fields: ['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain', 'release_link', 'release_note', 'upload_summary'],
     indexed: [],
   },
 
