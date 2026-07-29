@@ -27,6 +27,35 @@
 - `390x844` 继续走移动布局，紧凑桌面模式未串入，表格宽度限制在视口内且 Sheet 栏可见；页面无新增
   runtime error 或控制台警告。
 
+## 产品模版与提版功能合并 main（2026-07-29）
+
+### 已完成
+
+- 产品模版、模版版本、提版任务、提版记录表及主体域名/身份密钥文件能力已合并到最新 `main`。
+- 产品资产页面支持模版筛选、提版参数确认、按关联主体读取 API/埋点/CDN/短剧域名和身份密钥文件。
+- 普通模版仅要求 API、埋点、CDN 三类域名；`template_type=short_drama` 的短剧模版额外要求短剧域名。
+- 提版校验通过后调用仓库 `utils/upload.js`；脚本负责拉取 `zfb-mini-tools` 到 `CODE_TEMPLATES_DIR`
+  默认 `/app/codeTemplates`，并接收主体域名、模版标识、AppID 和身份密钥文件路径。
+- 点击提版创建任务后展示执行进度弹窗，包含步骤条、当前步骤、任务 ID、AppID、执行次数、失败原因
+  和脚本运行日志；后端将 `upload.js` stdout/stderr 流式追加到任务日志并继续脱敏。
+- 合并时保留最新 `main` 的产品资产写权限控制：新增、导入、编辑、删除和提版入口仅对
+  `product_assets` 可写用户展示；服务端接口继续有独立写权限校验。
+
+### 验证
+
+- 合并 `main` 时补回产品资产数据范围函数 `applyProductAssetVisibility`，避免提版任务创建时
+  `getVisibleProductAsset` 抛出 500。
+- `node --check server/index.js` 通过。
+- `node --check server/lib/productTemplateRelease.js`、`node --check utils/upload.js`、
+  `node --check client/src/utils/upload.js` 通过。
+- `node --test server/lib/productTemplateRelease.test.js` 通过，9/9。
+- `node --test server/lib/productReleaseDomainIntegration.test.js` 通过，1/1。
+- 带临时 AES/HMAC key 执行 `node --test server/lib/*.test.js` 通过，128 条中 124 passed、4 skipped。
+- `CI=true npx react-scripts test --watchAll=false --runInBand` 通过，40 个套件、227 条测试全部成功；
+  仅有既有 Ant Design 弃用和 React `act(...)` 警告。
+- `BUILD_PATH=/tmp/relation-build npm run build` 隔离生产构建成功。
+- `git diff --check` 通过。
+
 ## 在线表格原生基础版一期实现（2026-07-29）
 
 ### 已完成
