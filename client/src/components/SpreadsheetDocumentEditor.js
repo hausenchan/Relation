@@ -106,7 +106,8 @@ const SELECTION_SUMMARY_METRICS = [
   { key: 'numericCount', label: '数值计数', numeric: false },
 ];
 const SELECTION_SUMMARY_FORMATTER = new Intl.NumberFormat('zh-CN', {
-  maximumFractionDigits: 10,
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
 });
 const EMPTY_SELECTION_SUMMARY = {
   sum: 0,

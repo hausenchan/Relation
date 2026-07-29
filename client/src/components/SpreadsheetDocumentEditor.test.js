@@ -576,7 +576,7 @@ test('renders a Shimo-style range outline and selection statistics', async () =>
   workbook.sheets[0].cells = {
     B2: { v: '10' },
     B3: { v: '20' },
-    B4: { v: '30' },
+    B4: { v: '31' },
   };
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -600,8 +600,8 @@ test('renders a Shimo-style range outline and selection statistics', async () =>
 
   const summary = container.querySelector('[data-spreadsheet-selection-summary="true"]');
   expect(summary).not.toBeNull();
-  expect(summary.textContent).toContain('总和:60');
-  expect(summary.querySelector('[data-spreadsheet-selection-summary-value="true"]').textContent).toBe('60');
+  expect(summary.textContent).toContain('总和:61');
+  expect(summary.querySelector('[data-spreadsheet-selection-summary-value="true"]').textContent).toBe('61');
   await act(async () => {
     summary.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await Promise.resolve();
@@ -620,7 +620,8 @@ test('renders a Shimo-style range outline and selection statistics', async () =>
     averageItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await Promise.resolve();
   });
-  expect(summary.textContent).toContain('平均:20');
+  expect(summary.textContent).toContain('平均:20.33');
+  expect(summary.querySelector('[data-spreadsheet-selection-summary-value="true"]').textContent).toBe('20.33');
   expect(onWorkbookChange).not.toHaveBeenCalled();
 
   act(() => root.unmount());
