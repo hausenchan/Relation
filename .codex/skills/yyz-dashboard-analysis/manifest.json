@@ -1,0 +1,17 @@
+{
+  "schema": "yyz.skill-manifest.v1",
+  "skill_code": "yyz-dashboard-analysis",
+  "version": "0.1.0",
+  "owner_agent": "yyz-data-intelligence",
+  "source_path": "YYZ/intelligence/data-intelligence/skills/yyz-dashboard-analysis",
+  "runtime_mirror_path": ".codex/skills/yyz-dashboard-analysis",
+  "entrypoint": "SKILL.md",
+  "status": "candidate",
+  "evaluation": {
+    "status": "pending",
+    "suite": "YYZ/intelligence/data-intelligence/evals/yyz-dashboard-analysis"
+  },
+  "publication": {
+    "relation_agent_center": "not_published"
+  }
+}

@@ -13,6 +13,8 @@
     "wolai:chrome": "node scripts/wolai-collector/start-chrome-debug.js",
     "mobile-task:collect": "node scripts/mobile-task-center-collector.js",
     "mobile-task:validate": "node scripts/mobile-task-center-collector.js --validate-config",
+    "skill:sync:yyz-dashboard-analysis": "node scripts/sync-yyz-dashboard-analysis.js",
+    "skill:check:yyz-dashboard-analysis": "node scripts/sync-yyz-dashboard-analysis.js --check",
     "performance:api": "node scripts/performance-audit.js",
     "performance:frontend": "node scripts/check-frontend-performance-budget.js",
     "db:migrate:mysql": "node scripts/migrate-sqlite-to-mysql.js",
