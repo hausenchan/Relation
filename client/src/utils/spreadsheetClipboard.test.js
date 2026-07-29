@@ -4,10 +4,11 @@ import {
   buildSpreadsheetClipboardPayload,
   parseSpreadsheetClipboardData,
   parseSpreadsheetHtmlClipboard,
+  resolveExternalSpreadsheetClipboardFormulas,
   spreadsheetClipboardPayloadToHtml,
   spreadsheetClipboardPayloadToText,
 } from './spreadsheetClipboard';
-import { createDefaultSpreadsheetWorkbook } from './spreadsheetWorkbook';
+import { createDefaultSpreadsheetWorkbook, createSpreadsheetFormulaEvaluator } from './spreadsheetWorkbook';
 
 function clipboardData(values) {
   return { getData: type => values[type] || '' };
@@ -85,6 +86,58 @@ test('reads formulas and basic styles from Shimo-like HTML when metadata is expo
   expect(result.sourceLooksLikeShimo).toBe(true);
   expect(result.payload.cells[0][0]).toMatchObject({ v: '1658.46', style: { bold: true } });
   expect(result.payload.cells[0][1]).toMatchObject({ v: '=P4/T4' });
+  expect(result.payload.externalFormulaDisplayValues).toEqual([[null, '2.09']]);
+});
+
+test('falls back to displayed values when external formulas cannot reproduce their source results', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  const sheet = workbook.sheets[0];
+  const parsed = parseSpreadsheetHtmlClipboard(`
+    <html><body data-source="shimo"><table><tbody>
+      <tr><td style="font-weight:700">汇总申请uv</td></tr>
+      <tr><td data-formula="=SHIMO_ONLY(A1)" style="background-color:#dbeafe">5575</td></tr>
+      <tr><td data-formula="='源数据'!C2">6445</td></tr>
+      <tr><td data-formula="=1+1">6468</td></tr>
+    </tbody></table></body></html>
+  `);
+  applySpreadsheetClipboardPayload(sheet, parsed.payload, 0, 1);
+  const evaluator = createSpreadsheetFormulaEvaluator(workbook);
+  const resolved = resolveExternalSpreadsheetClipboardFormulas(parsed.payload, {
+    startRow: 0,
+    startColumn: 1,
+    evaluateCell: (rowIndex, columnIndex) => evaluator.getValue(sheet.id, rowIndex, columnIndex),
+    isFormulaError: value => evaluator.isError(value),
+  });
+  expect(resolved.fallbackCount).toBe(3);
+  expect(resolved.payload.externalFormulaDisplayValues).toBeUndefined();
+  expect(resolved.payload.cells).toEqual([
+    [{ v: '汇总申请uv', style: { bold: true } }],
+    [{ v: '5575', style: { backgroundColor: 'rgb(219, 234, 254)' } }],
+    [{ v: '6445' }],
+    [{ v: '6468' }],
+  ]);
+  applySpreadsheetClipboardPayload(sheet, resolved.payload, 0, 1);
+  expect([sheet.cells.B1.v, sheet.cells.B2.v, sheet.cells.B3.v, sheet.cells.B4.v])
+    .toEqual(['汇总申请uv', '5575', '6445', '6468']);
+});
+
+test('keeps portable external formulas whose calculated values match the source display', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  const sheet = workbook.sheets[0];
+  sheet.cells.A1 = { v: '5' };
+  const parsed = parseSpreadsheetHtmlClipboard(`
+    <table><tbody><tr><td data-formula="=A1*2">10</td></tr></tbody></table>
+  `);
+  applySpreadsheetClipboardPayload(sheet, parsed.payload, 0, 1);
+  const evaluator = createSpreadsheetFormulaEvaluator(workbook);
+  const resolved = resolveExternalSpreadsheetClipboardFormulas(parsed.payload, {
+    startRow: 0,
+    startColumn: 1,
+    evaluateCell: (rowIndex, columnIndex) => evaluator.getValue(sheet.id, rowIndex, columnIndex),
+    isFormulaError: value => evaluator.isError(value),
+  });
+  expect(resolved.fallbackCount).toBe(0);
+  expect(resolved.payload.cells[0][0]).toEqual({ v: '=A1*2' });
 });
 
 test('falls back to a text matrix when HTML and Relation data are absent', () => {

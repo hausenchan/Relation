@@ -74,6 +74,7 @@ import {
   buildSpreadsheetClipboardPayload,
   parseSpreadsheetClipboardData,
   parseSpreadsheetTextClipboard,
+  resolveExternalSpreadsheetClipboardFormulas,
   spreadsheetClipboardPayloadToHtml,
   spreadsheetClipboardPayloadToText,
 } from '../utils/spreadsheetClipboard';
@@ -1214,14 +1215,32 @@ export default function SpreadsheetDocumentEditor({
     setSelection(nextRange);
   };
 
-  const validateClipboardTarget = payload => {
+  const prepareClipboardTarget = (payload, { reconcileExternalFormulas = false } = {}) => {
     const validationWorkbook = normalizeSpreadsheetWorkbook(JSON.parse(JSON.stringify(workbookRef.current)));
     const validationSheet = validationWorkbook.sheets.find(item => item.id === activeSheet.id) || validationWorkbook.sheets[0];
     applySpreadsheetClipboardPayload(validationSheet, payload, activeRowIndex, activeColumnIndex);
-    const validationEvaluator = createSpreadsheetFormulaEvaluator(validationWorkbook);
+    let validationEvaluator = createSpreadsheetFormulaEvaluator(validationWorkbook);
+    let preparedPayload = payload;
+    let fallbackCount = 0;
+    if (reconcileExternalFormulas) {
+      const resolved = resolveExternalSpreadsheetClipboardFormulas(payload, {
+        startRow: activeRowIndex,
+        startColumn: activeColumnIndex,
+        evaluateCell: (rowIndex, columnIndex) => (
+          validationEvaluator.getValue(validationSheet.id, rowIndex, columnIndex)
+        ),
+        isFormulaError: value => validationEvaluator.isError(value),
+      });
+      preparedPayload = resolved.payload;
+      fallbackCount = resolved.fallbackCount;
+      if (fallbackCount) {
+        applySpreadsheetClipboardPayload(validationSheet, preparedPayload, activeRowIndex, activeColumnIndex);
+        validationEvaluator = createSpreadsheetFormulaEvaluator(validationWorkbook);
+      }
+    }
     let warning = '';
-    for (let rowOffset = 0; rowOffset < payload.cells.length; rowOffset += 1) {
-      const row = payload.cells[rowOffset] || [];
+    for (let rowOffset = 0; rowOffset < preparedPayload.cells.length; rowOffset += 1) {
+      const row = preparedPayload.cells[rowOffset] || [];
       for (let columnOffset = 0; columnOffset < row.length; columnOffset += 1) {
         const targetRow = activeRowIndex + rowOffset;
         const targetColumn = activeColumnIndex + columnOffset;
@@ -1240,16 +1259,20 @@ export default function SpreadsheetDocumentEditor({
         );
         if (!result.valid && result.action === 'reject') {
           message.error(`${buildSpreadsheetCellKey(activeRowIndex + rowOffset, activeColumnIndex + columnOffset)}：${result.message}`);
-          return false;
+          return null;
         }
         if (!result.valid && !warning) warning = result.message;
       }
     }
     if (warning) message.warning(warning);
-    return true;
+    return { payload: preparedPayload, fallbackCount };
   };
 
-  const applyClipboardPayload = (payload, { insertDirection = '', cutState = clipboardState } = {}) => {
+  const applyClipboardPayload = (payload, {
+    insertDirection = '',
+    cutState = clipboardState,
+    reconcileExternalFormulas = false,
+  } = {}) => {
     const targetRange = payload?.cells?.length ? {
       startRow: activeRowIndex,
       endRow: activeRowIndex + payload.cells.length - 1,
@@ -1259,7 +1282,10 @@ export default function SpreadsheetDocumentEditor({
     const affectedTargetRange = insertDirection
       ? spreadsheetCellShiftAffectedRange(targetRange, insertDirection, activeSheet)
       : targetRange;
-    if (!canEdit || !payload?.cells?.length || !ensureSpreadsheetRangeEditable(affectedTargetRange) || !validateClipboardTarget(payload)) return false;
+    if (!canEdit || !payload?.cells?.length || !ensureSpreadsheetRangeEditable(affectedTargetRange)) return false;
+    const prepared = prepareClipboardTarget(payload, { reconcileExternalFormulas });
+    if (!prepared) return false;
+    const preparedPayload = prepared.payload;
     if (cutState?.mode === 'cut' && cutState.payload?.sourceRange) {
       const sourceSheet = workbookRef.current.sheets.find(item => item.id === cutState.payload.sourceSheetId);
       const sourceAccess = getSpreadsheetProtectedRangeAccess(sourceSheet, cutState.payload.sourceRange, {
@@ -1279,8 +1305,8 @@ export default function SpreadsheetDocumentEditor({
         if (sourceSheet) clearSheetRange(sourceSheet, cutState.payload.sourceRange, 'all');
       }
       if (insertDirection) {
-        const rowCount = Math.max(1, Number(payload.rowCount) || payload.cells.length);
-        const columnCount = Math.max(1, Number(payload.columnCount) || payload.cells[0]?.length || 1);
+        const rowCount = Math.max(1, Number(preparedPayload.rowCount) || preparedPayload.cells.length);
+        const columnCount = Math.max(1, Number(preparedPayload.columnCount) || preparedPayload.cells[0]?.length || 1);
         shiftSpreadsheetCells(sheet, {
           startRow: activeRowIndex,
           endRow: activeRowIndex + rowCount - 1,
@@ -1288,13 +1314,13 @@ export default function SpreadsheetDocumentEditor({
           endColumn: activeColumnIndex + columnCount - 1,
         }, insertDirection, draft);
       }
-      pastedRange = applySpreadsheetClipboardPayload(sheet, payload, activeRowIndex, activeColumnIndex);
+      pastedRange = applySpreadsheetClipboardPayload(sheet, preparedPayload, activeRowIndex, activeColumnIndex);
       return draft;
     });
     setSelectionToPastedRange(pastedRange.endRow, pastedRange.endColumn);
     if (cutState?.mode === 'cut') setClipboardState(null);
     focusSpreadsheetGrid();
-    return true;
+    return { fallbackCount: prepared.fallbackCount };
   };
 
   const handlePaste = event => {
@@ -1305,9 +1331,12 @@ export default function SpreadsheetDocumentEditor({
     event.preventDefault();
     const pasted = applyClipboardPayload(parsed.payload, {
       cutState: parsed.source === 'relation' ? clipboardState : null,
+      reconcileExternalFormulas: parsed.source === 'html',
     });
     if (!pasted) return;
-    if (parsed.sourceLooksLikeShimo && !parsed.hasFormulaMetadata) {
+    if (pasted.fallbackCount) {
+      message.warning(`有 ${pasted.fallbackCount} 个源公式在当前表格不可用，已粘贴对应结果值`);
+    } else if (parsed.sourceLooksLikeShimo && !parsed.hasFormulaMetadata) {
       message.warning('源内容未提供公式，仅粘贴结果值');
     }
     message.success(isMatrixPaste ? '已粘贴表格区域' : '已粘贴单元格');

@@ -176,22 +176,52 @@ function cellFormulaFromHtml(element) {
   return String(value).startsWith('=') ? String(value) : `=${value}`;
 }
 
+function externalDisplayNumber(value) {
+  let source = String(value ?? '').trim().replace(/[\s,，]/g, '');
+  let negative = false;
+  if (/^\(.*\)$/.test(source)) {
+    negative = true;
+    source = source.slice(1, -1);
+  }
+  const percentage = source.endsWith('%');
+  if (percentage) source = source.slice(0, -1);
+  source = source.replace(/^[¥￥$€£]/, '');
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(source)) return null;
+  const number = Number(source);
+  if (!Number.isFinite(number)) return null;
+  return (negative ? -number : number) / (percentage ? 100 : 1);
+}
+
+function externalDisplayMatchesCalculatedValue(displayValue, calculatedValue) {
+  const displayText = String(displayValue ?? '').replace(/\u00a0/g, ' ').trim();
+  const calculatedText = String(calculatedValue ?? '').replace(/\u00a0/g, ' ').trim();
+  if (displayText === calculatedText) return true;
+  if (displayText.toLocaleLowerCase('zh-CN') === calculatedText.toLocaleLowerCase('zh-CN')) return true;
+  if (typeof calculatedValue !== 'number' || !Number.isFinite(calculatedValue)) return false;
+  const displayNumber = externalDisplayNumber(displayText);
+  if (displayNumber === null) return false;
+  return Math.abs(displayNumber - calculatedValue) <= Math.max(1e-9, Math.abs(calculatedValue) * 1e-12);
+}
+
 export function parseSpreadsheetHtmlClipboard(html) {
   if (!html || typeof DOMParser === 'undefined') return null;
   const documentValue = new DOMParser().parseFromString(String(html), 'text/html');
   const table = documentValue.querySelector('table');
   if (!table) return null;
   const matrix = [];
+  const formulaDisplayValues = [];
   let hasFormulaMetadata = false;
   [...table.querySelectorAll('tr')].forEach((rowElement, rowIndex) => {
     if (!matrix[rowIndex]) matrix[rowIndex] = [];
+    if (!formulaDisplayValues[rowIndex]) formulaDisplayValues[rowIndex] = [];
     let columnIndex = 0;
     [...rowElement.querySelectorAll(':scope > th, :scope > td')].forEach(cellElement => {
       while (matrix[rowIndex][columnIndex] !== undefined) columnIndex += 1;
       const formula = cellFormulaFromHtml(cellElement);
+      const displayValue = String(cellElement.textContent || '').replace(/\u00a0/g, ' ');
       const style = parseCellStyle(cellElement);
       const cell = {
-        v: formula || String(cellElement.textContent || '').replace(/\u00a0/g, ' '),
+        v: formula || displayValue,
         ...(Object.keys(style).length ? { style } : {}),
       };
       if (formula) hasFormulaMetadata = true;
@@ -199,8 +229,12 @@ export function parseSpreadsheetHtmlClipboard(html) {
       const columnSpan = Math.max(1, Number(cellElement.getAttribute('colspan')) || 1);
       for (let rowOffset = 0; rowOffset < rowSpan; rowOffset += 1) {
         if (!matrix[rowIndex + rowOffset]) matrix[rowIndex + rowOffset] = [];
+        if (!formulaDisplayValues[rowIndex + rowOffset]) formulaDisplayValues[rowIndex + rowOffset] = [];
         for (let columnOffset = 0; columnOffset < columnSpan; columnOffset += 1) {
           matrix[rowIndex + rowOffset][columnIndex + columnOffset] = rowOffset || columnOffset ? null : cell;
+          formulaDisplayValues[rowIndex + rowOffset][columnIndex + columnOffset] = rowOffset || columnOffset || !formula
+            ? null
+            : displayValue;
         }
       }
       columnIndex += columnSpan;
@@ -217,10 +251,43 @@ export function parseSpreadsheetHtmlClipboard(html) {
       rowCount: cells.length,
       columnCount: cells[0]?.length || 0,
       cells,
+      ...(hasFormulaMetadata ? {
+        externalFormulaDisplayValues: cells.map((row, rowIndex) => (
+          row.map((cell, columnIndex) => formulaDisplayValues[rowIndex]?.[columnIndex] ?? null)
+        )),
+      } : {}),
     },
     hasFormulaMetadata,
     sourceLooksLikeShimo: /shimo|shimowendang/i.test(String(html)),
   };
+}
+
+export function resolveExternalSpreadsheetClipboardFormulas(payload, {
+  startRow = 0,
+  startColumn = 0,
+  evaluateCell,
+  isFormulaError = value => String(value || '').startsWith('#'),
+} = {}) {
+  const cells = normalizedCellMatrix(payload?.cells);
+  const displayValues = Array.isArray(payload?.externalFormulaDisplayValues)
+    ? payload.externalFormulaDisplayValues
+    : [];
+  const nextPayload = { ...clone(payload), cells };
+  delete nextPayload.externalFormulaDisplayValues;
+  let fallbackCount = 0;
+  if (typeof evaluateCell !== 'function' || !displayValues.length) return { payload: nextPayload, fallbackCount };
+  cells.forEach((row, rowOffset) => row.forEach((cell, columnOffset) => {
+    const raw = getCellRawValue(cell);
+    const displayValue = displayValues[rowOffset]?.[columnOffset];
+    if (!cell || typeof raw !== 'string' || !raw.startsWith('=') || displayValue === null || displayValue === undefined) return;
+    const calculatedValue = evaluateCell(startRow + rowOffset, startColumn + columnOffset);
+    if (!isFormulaError(calculatedValue) && externalDisplayMatchesCalculatedValue(displayValue, calculatedValue)) return;
+    cell.v = String(displayValue).replace(/\u00a0/g, ' ').trim();
+    delete cell.value;
+    delete cell.computed;
+    fallbackCount += 1;
+  }));
+  return { payload: nextPayload, fallbackCount };
 }
 
 export function parseSpreadsheetTextClipboard(text) {

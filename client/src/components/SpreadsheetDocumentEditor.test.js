@@ -265,6 +265,48 @@ test('selects the used sheet range and copies it into another sheet as one undoa
   container.remove();
 });
 
+test('pastes Shimo columns as displayed values when source formulas are unavailable', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  let latestWorkbook = workbook;
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={workbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const targetCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  act(() => targetCell.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  act(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true })));
+
+  const clipboardData = {
+    getData: type => ({
+      'text/html': `<html><body data-source="shimo"><table><tbody>
+        <tr><td style="font-weight:700">汇总申请uv</td></tr>
+        <tr><td data-formula="=SHIMO_ONLY(A1)">5575</td></tr>
+        <tr><td data-formula="='源数据'!C2">6445</td></tr>
+      </tbody></table></body></html>`,
+      'text/plain': '汇总申请uv\n5575\n6445',
+    }[type] || ''),
+  };
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: clipboardData });
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(pasteEvent));
+
+  expect(pasteEvent.defaultPrevented).toBe(true);
+  expect([latestWorkbook.sheets[0].cells.B1?.v, latestWorkbook.sheets[0].cells.B2?.v, latestWorkbook.sheets[0].cells.B3?.v])
+    .toEqual(['汇总申请uv', '5575', '6445']);
+  expect(container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="1"]').textContent)
+    .toContain('5575');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('virtualizes a large worksheet and renders calculated formula values', () => {
   const workbook = createDefaultSpreadsheetWorkbook();
   workbook.sheets[0] = {
