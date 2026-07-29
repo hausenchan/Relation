@@ -1,0 +1,179 @@
+.dashboard-task-mobile-list-item.ant-list-item {
+  margin-bottom: 10px;
+  padding: 0;
+  border: 0;
+}
+
+.dashboard-task-mobile-card {
+  width: 100%;
+  padding: 14px;
+  border: 1px solid #e8eaed;
+  border-radius: 8px;
+  outline: none;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(31, 41, 55, 0.05);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.dashboard-task-mobile-card:active {
+  background: #f7f8fa;
+}
+
+.dashboard-task-mobile-card:focus-visible {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.12);
+}
+
+.dashboard-task-mobile-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+}
+
+.dashboard-task-mobile-card-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-task-mobile-card-title,
+.dashboard-task-mobile-card-description,
+.dashboard-task-mobile-card-result-value {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.dashboard-task-mobile-card-title {
+  color: #1f2329;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 23px;
+}
+
+.dashboard-task-mobile-card-description {
+  margin-top: 3px;
+  color: #667085;
+  font-size: 13px;
+  line-height: 19px;
+}
+
+.dashboard-task-mobile-card-more.ant-btn {
+  flex: 0 0 28px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #697386;
+}
+
+.dashboard-task-mobile-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.dashboard-task-mobile-card-tags .ant-tag {
+  margin-inline-end: 0;
+  border-radius: 4px;
+  line-height: 20px;
+}
+
+.dashboard-task-mobile-card-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 3px;
+  white-space: nowrap;
+}
+
+.dashboard-task-mobile-card-status .ant-badge-status-text {
+  color: #3d424a;
+  font-size: 13px;
+}
+
+.dashboard-task-mobile-card-dates,
+.dashboard-task-mobile-card-people {
+  margin-top: 9px;
+  color: #667085;
+  font-size: 12px;
+  line-height: 19px;
+  overflow-wrap: anywhere;
+}
+
+.dashboard-task-mobile-card-people {
+  color: #8a9099;
+}
+
+.dashboard-task-mobile-card-result {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: start;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid #f0f1f3;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.dashboard-task-mobile-card-result-label {
+  color: #8a9099;
+}
+
+.dashboard-task-mobile-card-result-value {
+  color: #3d424a;
+}
+
+.dashboard-task-mobile-card-quick-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid #f0f1f3;
+  gap: 8px;
+}
+
+.dashboard-task-mobile-card-quick-actions .ant-btn {
+  min-width: 76px;
+}
+
+.dashboard-task-mobile-action-sheet .ant-drawer-content {
+  border-radius: 8px 8px 0 0;
+}
+
+.dashboard-task-mobile-action-list {
+  display: grid;
+  gap: 2px;
+}
+
+.dashboard-task-mobile-action-list .ant-btn {
+  justify-content: flex-start;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  font-size: 15px;
+  text-align: left;
+}
+
+.dashboard-task-mobile-action-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: #f0f1f3;
+}
+
+.dashboard-task-mobile-action-list .ant-btn:last-child {
+  justify-content: center;
+  color: #475467;
+}
