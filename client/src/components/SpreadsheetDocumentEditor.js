@@ -89,6 +89,8 @@ const MAX_FROZEN_ROWS = 100;
 const MAX_FROZEN_COLUMNS = 50;
 const MAX_HISTORY_ENTRIES = 30;
 const MAX_HISTORY_BYTES = 24 * 1024 * 1024;
+const SELECTION_AUTO_SCROLL_EDGE = 36;
+const SELECTION_AUTO_SCROLL_MAX_STEP = 28;
 const DEFAULT_FONT_FAMILY = 'Arial';
 const DEFAULT_FONT_SIZE = 13;
 const FONT_FAMILY_OPTIONS = ['Arial', 'PingFang SC', 'Microsoft YaHei', 'SimSun', 'Times New Roman'];
@@ -555,6 +557,8 @@ export default function SpreadsheetDocumentEditor({
   const currentSelectionRef = useRef(null);
   const applyFormatPainterRef = useRef(null);
   const suppressCellEditUntilRef = useRef(0);
+  const selectionDragPointRef = useRef(null);
+  const selectionAutoScrollFrameRef = useRef(null);
   workbookRef.current = workbook;
   onSelectionChangeRef.current = onSelectionChange;
 
@@ -801,18 +805,6 @@ export default function SpreadsheetDocumentEditor({
     };
   });
 
-  useEffect(() => {
-    if (!isSelecting) return undefined;
-    const stopSelecting = () => {
-      setIsSelecting(false);
-      if (formatPainterRef.current && currentSelectionRef.current) {
-        applyFormatPainterRef.current?.(currentSelectionRef.current);
-      }
-    };
-    window.addEventListener('mouseup', stopSelecting, { once: true });
-    return () => window.removeEventListener('mouseup', stopSelecting);
-  }, [isSelecting]);
-
   const evaluator = useMemo(() => createSpreadsheetFormulaEvaluator(workbook), [workbook]);
   const visibleRows = useMemo(() => (
     activeSheet.filters?.length
@@ -872,6 +864,130 @@ export default function SpreadsheetDocumentEditor({
   });
   const rowPositions = [...renderedRowPositions].filter(position => position >= 0 && position < visibleRows.length).sort((a, b) => a - b);
   const columns = [...renderedColumns].filter(column => column >= 0 && column < activeSheet.columnCount).sort((a, b) => a - b);
+
+  useEffect(() => {
+    if (!isSelecting || !selectionAnchor) return undefined;
+    const viewport = viewportRef.current;
+    if (!viewport) return undefined;
+    let stopped = false;
+
+    const updateSelectionAtPoint = (clientX, clientY) => {
+      const rect = viewport.getBoundingClientRect();
+      const width = viewport.clientWidth || rect.width || scrollState.width;
+      const height = viewport.clientHeight || rect.height || scrollState.height;
+      const localX = clamp(clientX - rect.left, ROW_HEADER_WIDTH, Math.max(ROW_HEADER_WIDTH, width - 1));
+      const localY = clamp(clientY - rect.top, COLUMN_HEADER_HEIGHT, Math.max(COLUMN_HEADER_HEIGHT, height - 1));
+      const frozenWidth = columnOffsets[frozenColumns] || 0;
+      const frozenHeight = rowOffsets[frozenRows] || 0;
+      const contentX = localX < ROW_HEADER_WIDTH + frozenWidth
+        ? localX - ROW_HEADER_WIDTH
+        : viewport.scrollLeft + localX - ROW_HEADER_WIDTH;
+      const contentY = localY < COLUMN_HEADER_HEIGHT + frozenHeight
+        ? localY - COLUMN_HEADER_HEIGHT
+        : viewport.scrollTop + localY - COLUMN_HEADER_HEIGHT;
+      const rowPosition = findOffsetIndex(rowOffsets, Math.max(0, contentY));
+      const rowIndex = visibleRows[rowPosition];
+      const columnIndex = findOffsetIndex(columnOffsets, Math.max(0, contentX));
+      if (rowIndex === undefined || columnIndex < 0 || columnIndex >= activeSheet.columnCount) return;
+      const nextSelection = normalizeSpreadsheetRange({
+        startRow: selectionAnchor.rowIndex,
+        endRow: rowIndex,
+        startColumn: selectionAnchor.columnIndex,
+        endColumn: columnIndex,
+      });
+      currentSelectionRef.current = nextSelection;
+      setSelection(current => spreadsheetRangesEqual(current, nextSelection) ? current : nextSelection);
+    };
+
+    const edgeStep = (position, start, end) => {
+      if (position < start + SELECTION_AUTO_SCROLL_EDGE) {
+        const ratio = clamp((start + SELECTION_AUTO_SCROLL_EDGE - position) / SELECTION_AUTO_SCROLL_EDGE, 0, 1);
+        return -Math.max(1, Math.ceil(SELECTION_AUTO_SCROLL_MAX_STEP * ratio));
+      }
+      if (position > end - SELECTION_AUTO_SCROLL_EDGE) {
+        const ratio = clamp((position - (end - SELECTION_AUTO_SCROLL_EDGE)) / SELECTION_AUTO_SCROLL_EDGE, 0, 1);
+        return Math.max(1, Math.ceil(SELECTION_AUTO_SCROLL_MAX_STEP * ratio));
+      }
+      return 0;
+    };
+
+    const runAutoScroll = () => {
+      selectionAutoScrollFrameRef.current = null;
+      const point = selectionDragPointRef.current;
+      if (stopped || !point) return;
+      const rect = viewport.getBoundingClientRect();
+      const width = viewport.clientWidth || rect.width || scrollState.width;
+      const height = viewport.clientHeight || rect.height || scrollState.height;
+      const frozenWidth = columnOffsets[frozenColumns] || 0;
+      const frozenHeight = rowOffsets[frozenRows] || 0;
+      const deltaX = edgeStep(point.clientX, rect.left + ROW_HEADER_WIDTH + frozenWidth, rect.left + width);
+      const deltaY = edgeStep(point.clientY, rect.top + COLUMN_HEADER_HEIGHT + frozenHeight, rect.top + height);
+      const maxScrollLeft = Math.max(0, (viewport.scrollWidth || totalWidth) - width);
+      const maxScrollTop = Math.max(0, (viewport.scrollHeight || totalHeight) - height);
+      const nextLeft = clamp(viewport.scrollLeft + deltaX, 0, maxScrollLeft);
+      const nextTop = clamp(viewport.scrollTop + deltaY, 0, maxScrollTop);
+      const scrolled = nextLeft !== viewport.scrollLeft || nextTop !== viewport.scrollTop;
+      if (scrolled) {
+        viewport.scrollLeft = nextLeft;
+        viewport.scrollTop = nextTop;
+        setScrollState(current => ({ ...current, left: nextLeft, top: nextTop }));
+      }
+      updateSelectionAtPoint(point.clientX, point.clientY);
+      if (scrolled && !stopped) {
+        selectionAutoScrollFrameRef.current = window.requestAnimationFrame(runAutoScroll);
+      }
+    };
+
+    const stopSelecting = () => {
+      if (stopped) return;
+      stopped = true;
+      selectionDragPointRef.current = null;
+      if (selectionAutoScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectionAutoScrollFrameRef.current);
+        selectionAutoScrollFrameRef.current = null;
+      }
+      setIsSelecting(false);
+      if (formatPainterRef.current && currentSelectionRef.current) {
+        applyFormatPainterRef.current?.(currentSelectionRef.current);
+      }
+    };
+    const handleMouseMove = event => {
+      if (event.buttons === 0) {
+        stopSelecting();
+        return;
+      }
+      selectionDragPointRef.current = { clientX: event.clientX, clientY: event.clientY };
+      updateSelectionAtPoint(event.clientX, event.clientY);
+      if (selectionAutoScrollFrameRef.current === null) {
+        selectionAutoScrollFrameRef.current = window.requestAnimationFrame(runAutoScroll);
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', stopSelecting, { once: true });
+    return () => {
+      stopped = true;
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', stopSelecting);
+      if (selectionAutoScrollFrameRef.current !== null) {
+        window.cancelAnimationFrame(selectionAutoScrollFrameRef.current);
+        selectionAutoScrollFrameRef.current = null;
+      }
+    };
+  }, [
+    isSelecting,
+    selectionAnchor,
+    activeSheet.columnCount,
+    visibleRows,
+    rowOffsets,
+    columnOffsets,
+    frozenRows,
+    frozenColumns,
+    totalWidth,
+    totalHeight,
+    scrollState.width,
+    scrollState.height,
+  ]);
 
   const currentSelection = normalizeSpreadsheetRange(selection, {
     startRow: activeRowIndex,
@@ -2112,6 +2228,7 @@ export default function SpreadsheetDocumentEditor({
         onMouseDown={event => {
           if (event.button !== 0) return;
           event.preventDefault();
+          selectionDragPointRef.current = { clientX: event.clientX, clientY: event.clientY };
           setEditingCellKey('');
           const anchor = event.shiftKey
             ? (selectionAnchor || { rowIndex: currentSelection.startRow, columnIndex: currentSelection.startColumn })

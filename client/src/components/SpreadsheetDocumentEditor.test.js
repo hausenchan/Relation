@@ -303,6 +303,12 @@ test('pastes Shimo columns as displayed values when source formulas are unavaila
   expect(container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="1"]').textContent)
     .toContain('5575');
 
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+  })));
+  expect([latestWorkbook.sheets[0].cells.B1, latestWorkbook.sheets[0].cells.B2, latestWorkbook.sheets[0].cells.B3])
+    .toEqual([undefined, undefined, undefined]);
+
   act(() => root.unmount());
   container.remove();
 });
@@ -668,6 +674,73 @@ test('renders a Shimo-style range outline and selection statistics', async () =>
 
   act(() => root.unmount());
   container.remove();
+});
+
+test('auto-scrolls the virtual grid while extending a selection beyond the viewport', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  workbook.sheets[0].rowCount = 80;
+  workbook.sheets[0].cells = Object.fromEntries(Array.from({ length: 22 }, (_, index) => [
+    `B${index + 1}`,
+    { v: index === 0 ? '下载类申请uv' : String(5500 + index) },
+  ]));
+  const animationFrames = [];
+  const requestAnimationFrameSpy = jest.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+    animationFrames.push(callback);
+    return animationFrames.length;
+  });
+  const cancelAnimationFrameSpy = jest.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(<ControlledSpreadsheetEditor initialWorkbook={workbook} />));
+
+  const grid = container.querySelector('[data-spreadsheet-grid="true"]');
+  Object.defineProperties(grid, {
+    clientWidth: { configurable: true, value: 320 },
+    clientHeight: { configurable: true, value: 120 },
+    scrollWidth: { configurable: true, value: 620 },
+    scrollHeight: { configurable: true, value: 1944 },
+  });
+  grid.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    right: 320,
+    bottom: 120,
+    width: 320,
+    height: 120,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  const firstCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  act(() => firstCell.dispatchEvent(new MouseEvent('mousedown', {
+    button: 0, clientX: 150, clientY: 36, bubbles: true,
+  })));
+  act(() => window.dispatchEvent(new MouseEvent('mousemove', {
+    buttons: 1, clientX: 150, clientY: 118, bubbles: true,
+  })));
+
+  for (let index = 0; index < 30; index += 1) {
+    const callback = animationFrames.shift();
+    if (!callback) break;
+    act(() => callback(index * 16));
+    const endRow = Number(container.querySelector('.relation-spreadsheet-name-box').value.match(/B(\d+)$/)?.[1] || 0);
+    if (endRow >= 22) break;
+  }
+  act(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true })));
+
+  expect(grid.scrollTop).toBeGreaterThan(0);
+  expect(Number(container.querySelector('.relation-spreadsheet-name-box').value.match(/B(\d+)$/)?.[1] || 0))
+    .toBeGreaterThanOrEqual(22);
+  const stoppedScrollTop = grid.scrollTop;
+  const pendingFrame = animationFrames.shift();
+  if (pendingFrame) act(() => pendingFrame(512));
+  expect(grid.scrollTop).toBe(stoppedScrollTop);
+
+  act(() => root.unmount());
+  container.remove();
+  requestAnimationFrameSpy.mockRestore();
+  cancelAnimationFrameSpy.mockRestore();
 });
 
 test('copies and pastes formulas from the cell context menu as one undoable operation', async () => {

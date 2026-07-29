@@ -5,3 +5,7 @@ export function getDocumentKind(value) {
 export function isSpreadsheetDocument(document) {
   return getDocumentKind(document?.document_kind) === 'spreadsheet';
 }
+
+export function shouldHandleDocumentUndoShortcut(document) {
+  return Boolean(document?.id) && !isSpreadsheetDocument(document);
+}
