@@ -83,13 +83,13 @@ function employeeLabel(user) {
 }
 
 function buildAmapWebUrl(address) {
-  const query = encodeURIComponent(address || '');
+  const query = encodeURIComponent(String(address || '').trim());
   return `https://ditu.amap.com/search?query=${query}&src=team-board&callnative=0&innersrc=uriapi`;
 }
 
-function buildAmapAppUrl(address) {
-  const query = encodeURIComponent(address || '');
-  return `amapuri://poi/search?query=${query}&sourceApplication=Relation`;
+export function buildAmapMobileSearchUrl(address) {
+  const query = encodeURIComponent(String(address || '').trim());
+  return `https://m.amap.com/search/view/keywords=${query}`;
 }
 
 export default function TripCollaboration() {
@@ -344,16 +344,12 @@ export default function TripCollaboration() {
       message.warning('该日程未填写地图地址');
       return;
     }
-    const webUrl = buildAmapWebUrl(mapAddress);
     const isPhone = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-    if (!isPhone) {
-      window.open(webUrl, '_blank', 'noopener,noreferrer');
+    if (isPhone) {
+      window.location.href = buildAmapMobileSearchUrl(mapAddress);
       return;
     }
-    window.location.href = buildAmapAppUrl(mapAddress);
-    window.setTimeout(() => {
-      window.open(webUrl, '_blank', 'noopener,noreferrer');
-    }, 900);
+    window.open(buildAmapWebUrl(mapAddress), '_blank', 'noopener,noreferrer');
   };
 
   const resetFilters = () => {

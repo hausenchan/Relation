@@ -31,7 +31,7 @@ jest.mock('../AuthContext', () => ({
   useAuth: () => ({ user: { id: 1, role: 'admin', display_name: '管理员' } }),
 }));
 
-import TripCollaboration from './TripCollaboration';
+import TripCollaboration, { buildAmapMobileSearchUrl } from './TripCollaboration';
 
 beforeAll(() => {
   global.IS_REACT_ACT_ENVIRONMENT = true;
@@ -53,6 +53,13 @@ beforeAll(() => {
 afterAll(() => {
   delete global.IS_REACT_ACT_ENVIRONMENT;
   delete global.ResizeObserver;
+});
+
+test('builds a direct mobile AMap search result URL from the map address', () => {
+  const address = ' 杭州市阿里巴巴西溪园区A区（A5） ';
+  expect(buildAmapMobileSearchUrl(address)).toBe(
+    `https://m.amap.com/search/view/keywords=${encodeURIComponent(address.trim())}`,
+  );
 });
 
 beforeEach(() => {
