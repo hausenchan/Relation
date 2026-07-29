@@ -160,6 +160,19 @@
   overflow: hidden;
 }
 
+.relation-spreadsheet-selection-fill-handle {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  z-index: 6;
+  width: 7px;
+  height: 7px;
+  border: 1px solid #fff;
+  background: #5b9fe5;
+  box-shadow: 0 0 0 1px #5b9fe5;
+  pointer-events: none;
+}
+
 .relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab {
   position: relative;
   height: 33px;
@@ -188,6 +201,83 @@
   height: 2px;
   background: #1677d2;
   content: '';
+}
+
+.relation-spreadsheet-selection-summary {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 190px;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 0;
+  background: transparent;
+  color: #4b5563;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.relation-spreadsheet-selection-summary:hover,
+.relation-spreadsheet-selection-summary:focus-visible {
+  background: #f1f5f9;
+  color: #111827;
+  outline: none;
+}
+
+.relation-spreadsheet-selection-summary strong {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-weight: 500;
+  text-overflow: ellipsis;
+}
+
+.relation-spreadsheet-selection-summary .anticon {
+  flex: none;
+  font-size: 9px;
+}
+
+.relation-spreadsheet-selection-summary-menu .ant-dropdown-menu {
+  min-width: 224px;
+  padding: 4px 0;
+  border: 1px solid #e5e7eb;
+  border-radius: 3px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 14%);
+}
+
+.relation-spreadsheet-selection-summary-menu .ant-dropdown-menu-item {
+  min-height: 36px;
+  border-radius: 0;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.relation-spreadsheet-selection-summary-menu__icon {
+  display: inline-block;
+  width: 12px;
+}
+
+.relation-spreadsheet-selection-summary-menu__item {
+  display: flex;
+  min-width: 156px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.relation-spreadsheet-selection-summary-menu__item strong {
+  color: #374151;
+  font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .relation-spreadsheet-selection-summary {
+    max-width: 116px;
+    padding-inline: 4px;
+  }
 }
 
 .relation-spreadsheet-editor--fill .relation-spreadsheet-zoom-select .ant-select-selector {

@@ -17,12 +17,14 @@ import {
   normalizeSpreadsheetWorkbook,
   parseSpreadsheetCellKey,
   renameSpreadsheetSheet,
+  resolveSpreadsheetSortRange,
   setSpreadsheetCellValue,
   setSpreadsheetColumnFilter,
   shiftSpreadsheetCells,
   shiftSpreadsheetColumns,
   shiftSpreadsheetRows,
   sortSpreadsheetRange,
+  summarizeSpreadsheetRange,
   spreadsheetClipboardMatrixHasMultipleCells,
   spreadsheetColumnIndex,
   spreadsheetColumnLabel,
@@ -458,6 +460,48 @@ describe('spreadsheet workbook model', () => {
     expect(sheet.cells.A1.v).toBe('名称');
     expect(sheet.cells.A2.v).toBe('甲');
     expect(sheet.cells.B3.v).toBe('20');
+  });
+
+  test('expands a selected data column to the complete used row records before sorting', () => {
+    const workbook = workbookWithCells({
+      A1: '日期', B1: '汇总申请uv', C1: '备注',
+      A2: '2026/7/28', B2: '5575', C2: '甲',
+      A3: '2026/7/27', B3: '314', C3: '乙',
+    });
+    const sheet = workbook.sheets[0];
+    expect(resolveSpreadsheetSortRange(sheet, {
+      startRow: 0,
+      endRow: sheet.rowCount - 1,
+      startColumn: 1,
+      endColumn: 1,
+    })).toEqual({ startRow: 0, endRow: 2, startColumn: 0, endColumn: 2 });
+
+    sortSpreadsheetRange(sheet, resolveSpreadsheetSortRange(sheet, {
+      startRow: 0,
+      endRow: sheet.rowCount - 1,
+      startColumn: 1,
+      endColumn: 1,
+    }), 1, 'asc');
+    expect([sheet.cells.A2.v, sheet.cells.B2.v, sheet.cells.C2.v]).toEqual(['2026/7/27', '314', '乙']);
+    expect([sheet.cells.A3.v, sheet.cells.B3.v, sheet.cells.C3.v]).toEqual(['2026/7/28', '5575', '甲']);
+  });
+
+  test('summarizes numeric results in a sparse selected range', () => {
+    const workbook = workbookWithCells({
+      A1: '名称', B1: '10', B2: '20', B3: '=SUM(B1:B2)', B4: '', C2: '说明',
+    });
+    const evaluator = createSpreadsheetFormulaEvaluator(workbook);
+    expect(summarizeSpreadsheetRange(
+      workbook.sheets[0],
+      { startRow: 0, endRow: 2, startColumn: 1, endColumn: 1 },
+      (row, column) => evaluator.getValue('sheet_1', row, column),
+    )).toEqual({ sum: 60, average: 20, max: 30, min: 10, count: 3, numericCount: 3 });
+    expect(summarizeSpreadsheetRange(workbook.sheets[0], {
+      startRow: 0,
+      endRow: 3,
+      startColumn: 0,
+      endColumn: 2,
+    }, (row, column) => evaluator.getValue('sheet_1', row, column)).count).toBe(5);
   });
 
   test('keeps blank cells after populated values in descending sorts', () => {

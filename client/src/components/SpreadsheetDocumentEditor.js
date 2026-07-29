@@ -7,6 +7,7 @@ import {
   BorderInnerOutlined,
   CaretDownOutlined,
   CaretUpOutlined,
+  CheckOutlined,
   ClearOutlined,
   DeleteColumnOutlined,
   DeleteRowOutlined,
@@ -51,12 +52,14 @@ import {
   normalizeSpreadsheetWorkbook,
   parseSpreadsheetCellKey,
   renameSpreadsheetSheet,
+  resolveSpreadsheetSortRange,
   setSpreadsheetCellValue,
   setSpreadsheetColumnFilter,
   shiftSpreadsheetCells,
   shiftSpreadsheetColumns,
   shiftSpreadsheetRows,
   sortSpreadsheetRange,
+  summarizeSpreadsheetRange,
   spreadsheetColumnLabel,
   spreadsheetRangeContainsCell,
   spreadsheetRangesOverlap,
@@ -92,6 +95,27 @@ const FONT_SIZE_OPTIONS = [10, 11, 12, 13, 14, 16, 18, 20, 24, 28, 32];
 const TEXT_COLOR_OPTIONS = ['#111827', '#374151', '#dc2626', '#d97706', '#15803d', '#1677ff', '#4338ca', '#7e22ce'];
 const FILL_COLOR_OPTIONS = ['#ffffff', '#f8fafc', '#fef3c7', '#ffedd5', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
 const FORMULA_REFERENCE_COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#7c3aed', '#0891b2'];
+const SELECTION_BORDER_COLOR = '#5b9fe5';
+const SELECTION_FILL_COLOR = '#e2edf9';
+const SELECTION_SUMMARY_METRICS = [
+  { key: 'sum', label: '总和', numeric: true },
+  { key: 'average', label: '平均', numeric: true },
+  { key: 'max', label: '最大', numeric: true },
+  { key: 'min', label: '最小', numeric: true },
+  { key: 'count', label: '计数', numeric: false },
+  { key: 'numericCount', label: '数值计数', numeric: false },
+];
+const SELECTION_SUMMARY_FORMATTER = new Intl.NumberFormat('zh-CN', {
+  maximumFractionDigits: 10,
+});
+const EMPTY_SELECTION_SUMMARY = {
+  sum: 0,
+  average: null,
+  max: null,
+  min: null,
+  count: 0,
+  numericCount: 0,
+};
 const NUMBER_FORMAT_TYPES = [
   ['general', '常规'],
   ['text', '文本'],
@@ -106,6 +130,11 @@ const NUMBER_FORMAT_TYPES = [
   ['special', '特殊'],
   ['custom', '自定义'],
 ];
+
+function formatSelectionSummaryValue(value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '--';
+  return SELECTION_SUMMARY_FORMATTER.format(Object.is(Number(value), -0) ? 0 : Number(value));
+}
 
 function serializeWorkbookSnapshot(value) {
   return JSON.stringify(value || {});
@@ -454,6 +483,7 @@ export default function SpreadsheetDocumentEditor({
   const [protectionOpen, setProtectionOpen] = useState(false);
   const [conditionalFormatOpen, setConditionalFormatOpen] = useState(false);
   const [dataValidationOpen, setDataValidationOpen] = useState(false);
+  const [selectionSummaryMetric, setSelectionSummaryMetric] = useState('sum');
   const editorRef = useRef(null);
   const viewportRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -797,6 +827,43 @@ export default function SpreadsheetDocumentEditor({
     && currentSelection.endColumn === activeSheet.columnCount - 1;
   const selectsWholeColumns = currentSelection.startRow === 0
     && currentSelection.endRow === activeSheet.rowCount - 1;
+  const selectedCellCount = (currentSelection.endRow - currentSelection.startRow + 1)
+    * (currentSelection.endColumn - currentSelection.startColumn + 1);
+  const selectionSummary = useMemo(() => selectedCellCount > 1
+    ? summarizeSpreadsheetRange(
+      activeSheet,
+      currentSelection,
+      (row, column) => evaluator.getValue(activeSheet.id, row, column),
+    )
+    : EMPTY_SELECTION_SUMMARY, [
+    activeSheet,
+    selectedCellCount,
+    currentSelection.startRow,
+    currentSelection.endRow,
+    currentSelection.startColumn,
+    currentSelection.endColumn,
+    evaluator,
+  ]);
+  const effectiveSelectionSummaryMetric = selectionSummary.numericCount
+    ? selectionSummaryMetric
+    : 'count';
+  const selectedSummaryDefinition = SELECTION_SUMMARY_METRICS.find(
+    item => item.key === effectiveSelectionSummaryMetric,
+  ) || SELECTION_SUMMARY_METRICS[0];
+  const showSelectionSummary = selectedCellCount > 1 && selectionSummary.count > 0;
+  const selectionSummaryMenuItems = SELECTION_SUMMARY_METRICS.map(item => ({
+    key: item.key,
+    disabled: item.numeric && !selectionSummary.numericCount,
+    icon: item.key === effectiveSelectionSummaryMetric
+      ? <CheckOutlined />
+      : <span className="relation-spreadsheet-selection-summary-menu__icon" />,
+    label: (
+      <span className="relation-spreadsheet-selection-summary-menu__item">
+        <span>{item.label}:</span>
+        <strong>{formatSelectionSummaryValue(selectionSummary[item.key])}</strong>
+      </span>
+    ),
+  }));
   const selectionProtectionAccess = getSpreadsheetProtectedRangeAccess(activeSheet, currentSelection, {
     userId: currentUser?.id,
     canManage: canManageProtection,
@@ -1424,31 +1491,21 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const sortSelection = (direction, options = {}) => {
-    if (!ensureSpreadsheetRangeEditable()) return;
+    const sortRange = resolveSpreadsheetSortRange(activeSheet, currentSelection);
+    if (!ensureSpreadsheetRangeEditable(sortRange)) return;
+    const usedRange = getSpreadsheetUsedRange(activeSheet);
+    const hasHeader = options.hasHeader === undefined && sortRange.startRow > usedRange.startRow
+      ? false
+      : options.hasHeader;
     applyWorkbookUpdate(draft => {
       const sheet = draft.sheets.find(item => item.id === activeSheet.id);
-      const usedRange = getSpreadsheetUsedRange(sheet);
-      let bounds = rangeIsSingleCell(currentSelection) ? usedRange : currentSelection;
-      if (selectsWholeColumns) {
-        bounds = {
-          ...currentSelection,
-          startRow: usedRange.startRow,
-          endRow: usedRange.endRow,
-        };
-      } else if (selectsWholeRows) {
-        bounds = {
-          ...currentSelection,
-          startColumn: usedRange.startColumn,
-          endColumn: usedRange.endColumn,
-        };
-      }
       sortSpreadsheetRange(
         sheet,
-        bounds,
+        resolveSpreadsheetSortRange(sheet, currentSelection),
         Number.isInteger(options.columnIndex) ? options.columnIndex : activeColumnIndex,
         direction,
         (row, column) => evaluator.getValue(activeSheet.id, row, column),
-        { hasHeader: options.hasHeader },
+        { hasHeader },
       );
       return draft;
     });
@@ -1890,13 +1947,15 @@ export default function SpreadsheetDocumentEditor({
         : 'center';
     const selected = spreadsheetRangeContainsCell(currentSelection, rowIndex, columnIndex);
     const active = rowIndex === activeRowIndex && columnIndex === activeColumnIndex;
-    const wholeAxisSelection = selectsWholeRows || selectsWholeColumns;
-    const selectionEdgeShadows = wholeAxisSelection && selected ? [
-      rowIndex === currentSelection.startRow ? 'inset 0 2px 0 #1677ff' : '',
-      rowIndex === currentSelection.endRow ? 'inset 0 -2px 0 #1677ff' : '',
-      columnIndex === currentSelection.startColumn ? 'inset 2px 0 0 #1677ff' : '',
-      columnIndex === currentSelection.endColumn ? 'inset -2px 0 0 #1677ff' : '',
+    const selectionEdgeShadows = selected ? [
+      rowIndex === currentSelection.startRow ? `inset 0 2px 0 ${SELECTION_BORDER_COLOR}` : '',
+      rowIndex === currentSelection.endRow ? `inset 0 -2px 0 ${SELECTION_BORDER_COLOR}` : '',
+      columnIndex === currentSelection.startColumn ? `inset 2px 0 0 ${SELECTION_BORDER_COLOR}` : '',
+      columnIndex === currentSelection.endColumn ? `inset -2px 0 0 ${SELECTION_BORDER_COLOR}` : '',
     ].filter(Boolean).join(', ') : '';
+    const selectionHandle = selected
+      && rowIndex === currentSelection.endRow
+      && columnIndex === currentSelection.endColumn;
     const formulaReference = formulaReferences.find(reference => (
       spreadsheetRangeContainsCell(reference, rowIndex, columnIndex)
     ));
@@ -1928,6 +1987,7 @@ export default function SpreadsheetDocumentEditor({
         data-spreadsheet-conditional={Object.keys(conditionalStyle).length ? 'true' : undefined}
         data-spreadsheet-validation={cellValidationRules.length ? cellValidationRules.map(rule => rule.id).join(',') : undefined}
         data-spreadsheet-remote-selection={remoteCollaborator?.session_id || undefined}
+        data-spreadsheet-selection-anchor={selected && active ? 'true' : undefined}
         title={remoteCollaborator
           ? `${remoteCollaborator.user_name} 的选区`
           : (cellHasProtection
@@ -1993,14 +2053,14 @@ export default function SpreadsheetDocumentEditor({
           borderLeft: formulaReferenceColor && columnIndex === formulaReference.startColumn
             ? `2px dashed ${formulaReferenceColor}`
             : (style.border ? `1px solid ${style.border.color || '#cbd5e1'}` : undefined),
-          background: selected
-            ? '#eaf3ff'
+          background: selected && !active
+            ? SELECTION_FILL_COLOR
             : (remoteCollaborator ? `${remoteCollaborator.color || '#389e0d'}1f` : (style.backgroundColor || '#fff')),
-          boxShadow: selectionEdgeShadows || (active
-            ? 'inset 0 0 0 2px #1677ff'
-            : (remoteCollaborator ? `inset 0 0 0 2px ${remoteCollaborator.color || '#389e0d'}` : 'none')),
-          zIndex: frozenRow && frozenColumn ? 12 : (frozenRow || frozenColumn ? 8 : (active ? 4 : 1)),
-          overflow: 'hidden',
+          boxShadow: selected
+            ? (selectionEdgeShadows || 'none')
+            : (remoteCollaborator ? `inset 0 0 0 2px ${remoteCollaborator.color || '#389e0d'}` : 'none'),
+          zIndex: frozenRow && frozenColumn ? 12 : (frozenRow || frozenColumn ? 8 : (selected ? 4 : 1)),
+          overflow: selectionHandle ? 'visible' : 'hidden',
           cursor: cellLocked ? 'not-allowed' : 'cell',
         }}
       >
@@ -2097,6 +2157,13 @@ export default function SpreadsheetDocumentEditor({
             {String(displayValue ?? '')}
           </div>
         )}
+        {selectionHandle ? (
+          <span
+            aria-hidden="true"
+            className="relation-spreadsheet-selection-fill-handle"
+            data-spreadsheet-selection-fill-handle="true"
+          />
+        ) : null}
       </div>
     );
   };
@@ -2722,6 +2789,30 @@ export default function SpreadsheetDocumentEditor({
         {activeSheet.filters?.length > 0 && (
           <Button type="link" size="small" onClick={clearFilters}>清除筛选</Button>
         )}
+        {showSelectionSummary ? (
+          <Dropdown
+            trigger={['click']}
+            placement="topRight"
+            overlayClassName="relation-spreadsheet-selection-summary-menu"
+            menu={{
+              items: selectionSummaryMenuItems,
+              onClick: ({ key }) => setSelectionSummaryMetric(key),
+            }}
+          >
+            <button
+              type="button"
+              className="relation-spreadsheet-selection-summary"
+              data-spreadsheet-selection-summary="true"
+              aria-label={`选区统计，当前${selectedSummaryDefinition.label} ${formatSelectionSummaryValue(selectionSummary[effectiveSelectionSummaryMetric])}`}
+            >
+              <span>{selectedSummaryDefinition.label}:</span>
+              <strong data-spreadsheet-selection-summary-value="true">
+                {formatSelectionSummaryValue(selectionSummary[effectiveSelectionSummaryMetric])}
+              </strong>
+              <CaretDownOutlined aria-hidden="true" />
+            </button>
+          </Dropdown>
+        ) : null}
         <Select
           className="relation-spreadsheet-zoom-select"
           size="small"

@@ -373,10 +373,15 @@ test('shows formula raw text and highlights referenced cells', () => {
 test('sorts a selected whole column descending without moving blanks before values', () => {
   let latestWorkbook = createDefaultSpreadsheetWorkbook();
   latestWorkbook.sheets[0].cells = {
+    A1: { v: '日期' },
     B1: { v: '汇总申请uv' },
+    A2: { v: '2026/7/15' },
     B2: { v: '5575' },
+    A3: { v: '2026/7/14' },
     B3: { v: '6445' },
+    A5: { v: '2026/7/12' },
     B5: { v: '6888' },
+    A6: { v: '2026/7/11' },
     B6: { v: '314' },
   };
   const container = document.createElement('div');
@@ -399,6 +404,74 @@ test('sorts a selected whole column descending without moving blanks before valu
     latestWorkbook.sheets[0].cells.B4?.v,
     latestWorkbook.sheets[0].cells.B5?.v,
   ]).toEqual(['6888', '6445', '5575', '314']);
+  expect([
+    latestWorkbook.sheets[0].cells.A2?.v,
+    latestWorkbook.sheets[0].cells.A3?.v,
+    latestWorkbook.sheets[0].cells.A4?.v,
+    latestWorkbook.sheets[0].cells.A5?.v,
+  ]).toEqual(['2026/7/12', '2026/7/14', '2026/7/15', '2026/7/11']);
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect([latestWorkbook.sheets[0].cells.A2?.v, latestWorkbook.sheets[0].cells.B2?.v])
+    .toEqual(['2026/7/15', '5575']);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('renders a Shimo-style range outline and selection statistics', async () => {
+  const onWorkbookChange = jest.fn();
+  const workbook = createDefaultSpreadsheetWorkbook();
+  workbook.sheets[0].cells = {
+    B2: { v: '10' },
+    B3: { v: '20' },
+    B4: { v: '30' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor initialWorkbook={workbook} onWorkbookChange={onWorkbookChange} />,
+  ));
+
+  const firstCell = container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="1"]');
+  const middleCell = container.querySelector('[data-spreadsheet-row-index="2"][data-spreadsheet-column-index="1"]');
+  const lastCell = container.querySelector('[data-spreadsheet-row-index="3"][data-spreadsheet-column-index="1"]');
+  act(() => firstCell.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  act(() => lastCell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+  act(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true })));
+
+  expect(firstCell.style.background).toBe('rgb(255, 255, 255)');
+  expect(firstCell.style.boxShadow).toContain('inset 0 2px 0');
+  expect(firstCell.style.boxShadow).not.toContain('inset 0 0 0 2px');
+  expect(middleCell.style.background).toBe('rgb(226, 237, 249)');
+  expect(lastCell.querySelector('[data-spreadsheet-selection-fill-handle="true"]')).not.toBeNull();
+
+  const summary = container.querySelector('[data-spreadsheet-selection-summary="true"]');
+  expect(summary).not.toBeNull();
+  expect(summary.textContent).toContain('总和:60');
+  expect(summary.querySelector('[data-spreadsheet-selection-summary-value="true"]').textContent).toBe('60');
+  await act(async () => {
+    summary.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  const summaryMenu = document.body.querySelector('.relation-spreadsheet-selection-summary-menu');
+  expect(summaryMenu.textContent).toContain('总和');
+  expect(summaryMenu.textContent).toContain('平均');
+  expect(summaryMenu.textContent).toContain('最大');
+  expect(summaryMenu.textContent).toContain('最小');
+  expect(summaryMenu.textContent).toContain('计数');
+  expect(summaryMenu.textContent).toContain('数值计数');
+
+  const averageItem = [...summaryMenu.querySelectorAll('.ant-dropdown-menu-item')]
+    .find(item => item.textContent.includes('平均'));
+  await act(async () => {
+    averageItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(summary.textContent).toContain('平均:20');
+  expect(onWorkbookChange).not.toHaveBeenCalled();
 
   act(() => root.unmount());
   container.remove();

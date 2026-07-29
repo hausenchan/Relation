@@ -1513,6 +1513,35 @@ function spreadsheetSortValueIsEmpty(value) {
   return value === '' || value === null || value === undefined;
 }
 
+export function resolveSpreadsheetSortRange(sheet, range) {
+  const selection = normalizeSpreadsheetRange(range) || getSpreadsheetUsedRange(sheet);
+  const usedRange = getSpreadsheetUsedRange(sheet);
+  const rowCount = Math.max(1, Number(sheet?.rowCount) || 1);
+  const columnCount = Math.max(1, Number(sheet?.columnCount) || 1);
+  const singleCell = selection.startRow === selection.endRow
+    && selection.startColumn === selection.endColumn;
+  if (singleCell) return usedRange;
+
+  const wholeColumns = selection.startRow === 0 && selection.endRow >= rowCount - 1;
+  const wholeRows = selection.startColumn === 0 && selection.endColumn >= columnCount - 1;
+  if (wholeColumns) return usedRange;
+  if (wholeRows) {
+    return normalizeSpreadsheetRange({
+      ...selection,
+      startColumn: usedRange.startColumn,
+      endColumn: usedRange.endColumn,
+    });
+  }
+  if (selection.startColumn === selection.endColumn) {
+    return normalizeSpreadsheetRange({
+      ...selection,
+      startColumn: usedRange.startColumn,
+      endColumn: usedRange.endColumn,
+    });
+  }
+  return selection;
+}
+
 export function sortSpreadsheetRange(sheet, range, columnIndex, direction = 'asc', getValue = null, options = {}) {
   const bounds = normalizeSpreadsheetRange(range) || getSpreadsheetUsedRange(sheet);
   const sortColumn = Math.max(bounds.startColumn, Math.min(bounds.endColumn, Number(columnIndex) || 0));
@@ -1545,6 +1574,50 @@ export function sortSpreadsheetRange(sheet, range, columnIndex, direction = 'asc
     }
   });
   return sheet;
+}
+
+function spreadsheetSummaryNumber(value) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/,/g, '');
+  if (!normalized || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(normalized)) return null;
+  const number = Number(normalized);
+  return Number.isFinite(number) ? number : null;
+}
+
+export function summarizeSpreadsheetRange(sheet, range, getValue = null) {
+  const bounds = normalizeSpreadsheetRange(range);
+  let count = 0;
+  let numericCount = 0;
+  let sum = 0;
+  let max = null;
+  let min = null;
+  if (!sheet || !bounds) {
+    return { sum, average: null, max, min, count, numericCount };
+  }
+  Object.keys(sheet.cells || {}).forEach(key => {
+    const cell = parseSpreadsheetCellKey(key);
+    if (!cell || !spreadsheetRangeContainsCell(bounds, cell.rowIndex, cell.columnIndex)) return;
+    const value = getValue
+      ? getValue(cell.rowIndex, cell.columnIndex)
+      : getSpreadsheetCellRawValue(sheet, cell.rowIndex, cell.columnIndex);
+    if (value === null || value === undefined || String(value).trim() === '') return;
+    count += 1;
+    const number = spreadsheetSummaryNumber(value);
+    if (number === null) return;
+    numericCount += 1;
+    sum += number;
+    max = max === null ? number : Math.max(max, number);
+    min = min === null ? number : Math.min(min, number);
+  });
+  return {
+    sum,
+    average: numericCount ? sum / numericCount : null,
+    max,
+    min,
+    count,
+    numericCount,
+  };
 }
 
 export function setSpreadsheetColumnFilter(sheet, columnIndex, value, operator = 'equals') {
