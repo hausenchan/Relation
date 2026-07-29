@@ -60,7 +60,7 @@ function normalizedCellMatrix(matrix) {
   });
 }
 
-export function buildSpreadsheetClipboardPayload(sheet, range) {
+export function buildSpreadsheetClipboardPayload(sheet, range, { includeDimensions = false } = {}) {
   const bounds = normalizeSpreadsheetRange(range);
   if (!sheet || !bounds) return null;
   const cells = [];
@@ -91,6 +91,13 @@ export function buildSpreadsheetClipboardPayload(sheet, range) {
     }),
     conditionalFormats: clipboardRulesForRange(sheet.conditionalFormats, bounds),
     dataValidations: clipboardRulesForRange(sheet.dataValidations, bounds),
+    copyDimensions: Boolean(includeDimensions),
+    rowHeights: includeDimensions
+      ? Array.from({ length: cells.length }, (_, offset) => Number(sheet.rowHeights?.[bounds.startRow + offset]) || null)
+      : [],
+    columnWidths: includeDimensions
+      ? Array.from({ length: cells[0]?.length || 0 }, (_, offset) => Number(sheet.columnWidths?.[bounds.startColumn + offset]) || null)
+      : [],
   };
 }
 
@@ -321,6 +328,20 @@ export function applySpreadsheetClipboardPayload(sheet, payload, startRow, start
       }];
     });
     sheet[property] = [...rules, ...copiedRules];
+  }
+  if (payload.copyDimensions) {
+    if (!sheet.rowHeights || typeof sheet.rowHeights !== 'object') sheet.rowHeights = {};
+    if (!sheet.columnWidths || typeof sheet.columnWidths !== 'object') sheet.columnWidths = {};
+    cells.forEach((_, offset) => {
+      const value = Number(payload.rowHeights?.[offset]);
+      if (Number.isFinite(value) && value > 0) sheet.rowHeights[startRow + offset] = value;
+      else delete sheet.rowHeights[startRow + offset];
+    });
+    Array.from({ length: cells[0]?.length || 0 }, (_, offset) => offset).forEach(offset => {
+      const value = Number(payload.columnWidths?.[offset]);
+      if (Number.isFinite(value) && value > 0) sheet.columnWidths[startColumn + offset] = value;
+      else delete sheet.columnWidths[startColumn + offset];
+    });
   }
   sheet.rowCount = Math.max(Number(sheet.rowCount) || 1, endRow + 1);
   sheet.columnCount = Math.max(Number(sheet.columnCount) || 1, endColumn + 1);

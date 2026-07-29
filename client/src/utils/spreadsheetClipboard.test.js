@@ -21,6 +21,8 @@ test('round-trips Relation cells, formulas, styles, HTML, and TSV clipboard form
     B1: { v: '=A1*2', style: { backgroundColor: '#dbeafe' } },
   };
   sheet.mergedCells = [{ startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 }];
+  sheet.rowHeights = { 0: 32 };
+  sheet.columnWidths = { 0: 140, 1: 112 };
   sheet.conditionalFormats = [{
     id: 'condition-source',
     range: { startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 },
@@ -42,7 +44,10 @@ test('round-trips Relation cells, formulas, styles, HTML, and TSV clipboard form
     endRow: 0,
     startColumn: 0,
     endColumn: 1,
-  });
+  }, { includeDimensions: true });
+  expect(payload.copyDimensions).toBe(true);
+  expect(payload.rowHeights).toEqual([32]);
+  expect(payload.columnWidths).toEqual([140, 112]);
   expect(spreadsheetClipboardPayloadToText(payload, [['10', 20]])).toBe('10\t20');
   expect(spreadsheetClipboardPayloadToHtml(payload, [['10', 20]])).toContain('data-formula="=A1*2"');
 
@@ -65,6 +70,8 @@ test('round-trips Relation cells, formulas, styles, HTML, and TSV clipboard form
     id: 'validation-source_copy',
     range: { startRow: 2, endRow: 2, startColumn: 2, endColumn: 2 },
   }));
+  expect(sheet.rowHeights[2]).toBe(32);
+  expect(sheet.columnWidths).toMatchObject({ 2: 140, 3: 112 });
 });
 
 test('reads formulas and basic styles from Shimo-like HTML when metadata is exposed', () => {

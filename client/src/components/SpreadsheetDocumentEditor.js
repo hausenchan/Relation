@@ -186,6 +186,61 @@ function spreadsheetRangesEqual(left, right) {
     && a.endColumn === b.endColumn);
 }
 
+function SpreadsheetPinnedGridElement({
+  children,
+  pinHorizontal = false,
+  pinVertical = false,
+  top,
+  left,
+  width,
+  height,
+  totalWidth,
+  totalHeight,
+  zIndex,
+}) {
+  if (!pinHorizontal && !pinVertical) {
+    return React.cloneElement(children, {
+      style: {
+        ...children.props.style,
+        position: 'absolute',
+        top,
+        left,
+        width,
+        height,
+        zIndex,
+      },
+    });
+  }
+
+  return (
+    <div
+      data-spreadsheet-pinned-wrapper={`${pinHorizontal ? 'x' : ''}${pinVertical ? 'y' : ''}`}
+      style={{
+        position: 'absolute',
+        top: pinVertical ? 0 : top,
+        left: pinHorizontal ? 0 : left,
+        width: pinHorizontal ? totalWidth : width,
+        height: pinVertical ? totalHeight : height,
+        pointerEvents: 'none',
+        zIndex,
+      }}
+    >
+      {React.cloneElement(children, {
+        style: {
+          ...children.props.style,
+          position: 'sticky',
+          top: pinVertical ? top : undefined,
+          left: pinHorizontal ? left : undefined,
+          width,
+          height,
+          pointerEvents: 'auto',
+          zIndex,
+        },
+      })}
+    </div>
+  );
+}
+
 function spreadsheetRangeLabel(range) {
   const normalized = normalizeSpreadsheetRange(range);
   if (!normalized) return '';
@@ -1116,9 +1171,25 @@ export default function SpreadsheetDocumentEditor({
     focusSpreadsheetGrid();
   };
 
+  const selectUsedSheetRange = () => {
+    const usedRange = getSpreadsheetUsedRange(activeSheet);
+    currentSelectionRef.current = usedRange;
+    setSelection(usedRange);
+    setSelectionAnchor(null);
+    setEditingCellKey('');
+    onSelectedCellChange?.({
+      sheetId: activeSheet.id,
+      rowIndex: usedRange.startRow,
+      columnIndex: usedRange.startColumn,
+    });
+  };
+
   const selectionClipboardPayload = () => {
     const sheet = workbookRef.current.sheets.find(item => item.id === activeSheet.id) || workbookRef.current.sheets[0];
-    const payload = buildSpreadsheetClipboardPayload(sheet, currentSelection);
+    const usedRange = getSpreadsheetUsedRange(sheet);
+    const payload = buildSpreadsheetClipboardPayload(sheet, currentSelection, {
+      includeDimensions: spreadsheetRangesEqual(currentSelection, usedRange),
+    });
     if (!payload) return null;
     const displayMatrix = [];
     for (let row = currentSelection.startRow; row <= currentSelection.endRow; row += 1) {
@@ -1226,11 +1297,10 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const handlePaste = event => {
-    if (!canEdit || event.target?.closest?.('[data-spreadsheet-formula-input="true"]')) return;
+    if (!canEdit || event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
     const parsed = parseSpreadsheetClipboardData(event.clipboardData);
     if (!parsed?.payload) return;
     const isMatrixPaste = Number(parsed.payload.rowCount) > 1 || Number(parsed.payload.columnCount) > 1;
-    if (!isMatrixPaste && event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
     event.preventDefault();
     const pasted = applyClipboardPayload(parsed.payload, {
       cutState: parsed.source === 'relation' ? clipboardState : null,
@@ -1243,7 +1313,7 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const handleCopy = event => {
-    if (event.target?.closest?.('[data-spreadsheet-formula-input="true"]')) return;
+    if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
     const clipboard = selectionClipboardPayload();
     if (!clipboard) return;
     const plain = spreadsheetClipboardPayloadToText(clipboard.payload, clipboard.displayMatrix);
@@ -1326,6 +1396,12 @@ export default function SpreadsheetDocumentEditor({
       return;
     }
     if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+    if (!event.altKey && hasCommandModifier && key === 'a') {
+      event.preventDefault();
+      event.stopPropagation();
+      selectUsedSheetRange();
+      return;
+    }
     if ((event.metaKey || event.ctrlKey) && ['c', 'v', 'x'].includes(event.key.toLowerCase())) return;
     if (
       canEdit
@@ -1915,12 +1991,8 @@ export default function SpreadsheetDocumentEditor({
       : rowHeight(rowIndex);
     const frozenRow = rowPosition < frozenRows;
     const frozenColumn = columnIndex < frozenColumns;
-    const top = frozenRow
-      ? scrollState.top + COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition]
-      : COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition];
-    const left = frozenColumn
-      ? scrollState.left + ROW_HEADER_WIDTH + columnOffsets[columnIndex]
-      : ROW_HEADER_WIDTH + columnOffsets[columnIndex];
+    const top = COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition];
+    const left = ROW_HEADER_WIDTH + columnOffsets[columnIndex];
     const cell = getSpreadsheetCellObject(activeSheet, rowIndex, columnIndex);
     const rawValue = getSpreadsheetCellRawValue(activeSheet, rowIndex, columnIndex);
     const calculatedValue = evaluator.getValue(activeSheet.id, rowIndex, columnIndex);
@@ -1975,12 +2047,26 @@ export default function SpreadsheetDocumentEditor({
     const cellHasProtection = cellProtectionAccess.rules.length > 0;
     const editing = active && editingCellKey === buildSpreadsheetCellKey(rowIndex, columnIndex) && canEdit && !cellLocked;
     return (
-      <div
+      <SpreadsheetPinnedGridElement
         key={`cell-${rowIndex}-${columnIndex}`}
+        pinHorizontal={frozenColumn}
+        pinVertical={frozenRow}
+        top={top}
+        left={left}
+        width={cellWidth}
+        height={cellHeight}
+        totalWidth={totalWidth}
+        totalHeight={totalHeight}
+        zIndex={frozenRow && frozenColumn ? 12 : (frozenRow || frozenColumn ? 8 : (selected ? 4 : 1))}
+      >
+        <div
         role="gridcell"
         aria-selected={selected}
         data-spreadsheet-row-index={rowIndex}
         data-spreadsheet-column-index={columnIndex}
+        data-spreadsheet-pinned-axes={frozenRow || frozenColumn
+          ? `${frozenColumn ? 'x' : ''}${frozenRow ? 'y' : ''}`
+          : undefined}
         data-spreadsheet-formula-reference={formulaReference?.token || undefined}
         data-spreadsheet-locked={cellLocked ? 'true' : undefined}
         data-spreadsheet-protected={cellHasProtection ? 'true' : undefined}
@@ -2035,11 +2121,6 @@ export default function SpreadsheetDocumentEditor({
           setEditingCellKey(buildSpreadsheetCellKey(rowIndex, columnIndex));
         }}
         style={{
-          position: 'absolute',
-          top,
-          left,
-          width: cellWidth,
-          height: cellHeight,
           boxSizing: 'border-box',
           borderRight: formulaReferenceColor && columnIndex === formulaReference.endColumn
             ? `2px dashed ${formulaReferenceColor}`
@@ -2059,7 +2140,6 @@ export default function SpreadsheetDocumentEditor({
           boxShadow: selected
             ? (selectionEdgeShadows || 'none')
             : (remoteCollaborator ? `inset 0 0 0 2px ${remoteCollaborator.color || '#389e0d'}` : 'none'),
-          zIndex: frozenRow && frozenColumn ? 12 : (frozenRow || frozenColumn ? 8 : (selected ? 4 : 1)),
           overflow: selectionHandle ? 'visible' : 'hidden',
           cursor: cellLocked ? 'not-allowed' : 'cell',
         }}
@@ -2164,7 +2244,8 @@ export default function SpreadsheetDocumentEditor({
             data-spreadsheet-selection-fill-handle="true"
           />
         ) : null}
-      </div>
+        </div>
+      </SpreadsheetPinnedGridElement>
     );
   };
 
@@ -2583,9 +2664,9 @@ export default function SpreadsheetDocumentEditor({
           }));
           onViewportScroll?.({ scrollTop, scrollLeft, scrollHeight, clientHeight });
         }}
-          style={{ flex: 1, minHeight: 0, overflow: 'auto', position: 'relative', background: '#f8fafc' }}
+          style={{ flex: 1, minHeight: 0, overflow: 'auto', overscrollBehavior: 'none', position: 'relative', background: '#f8fafc' }}
         >
-          <div style={{ position: 'relative', width: totalWidth, height: totalHeight, minWidth: '100%' }}>
+          <div data-spreadsheet-grid-content="true" style={{ position: 'relative', width: totalWidth, height: totalHeight, minWidth: '100%' }}>
           {columns.map(columnIndex => {
             const frozen = columnIndex < frozenColumns;
             const selectedHeader = selectsWholeColumns
@@ -2601,58 +2682,63 @@ export default function SpreadsheetDocumentEditor({
               userId: currentUser?.id,
               canManage: canManageProtection,
             }).allowed;
-            const left = frozen
-              ? scrollState.left + ROW_HEADER_WIDTH + columnOffsets[columnIndex]
-              : ROW_HEADER_WIDTH + columnOffsets[columnIndex];
+            const left = ROW_HEADER_WIDTH + columnOffsets[columnIndex];
             return (
-              <div
+              <SpreadsheetPinnedGridElement
                 key={`column-${columnIndex}`}
-                role="columnheader"
-                aria-label={`选择 ${spreadsheetColumnLabel(columnIndex)} 列`}
-                aria-selected={selectedHeader}
-                data-spreadsheet-column-header={columnIndex}
-                onMouseDown={event => {
-                  if (event.button !== 0 || event.target.closest('[data-spreadsheet-resize-handle]')) return;
-                  event.preventDefault();
-                  selectWholeColumn(columnIndex);
-                }}
-                style={{
-                  position: 'absolute',
-                  left,
-                  top: scrollState.top,
-                  width: columnWidth(columnIndex),
-                  height: COLUMN_HEADER_HEIGHT,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxSizing: 'border-box',
-                  borderRight: '1px solid #d1d5db',
-                  borderBottom: '1px solid #d1d5db',
-                  background: selectedHeader ? '#dbeafe' : (highlightedHeader ? '#e6f4ff' : '#f3f4f6'),
-                  color: selectedHeader ? '#1677ff' : '#4b5563',
-                  fontWeight: 600,
-                  boxShadow: selectedHeader ? 'inset 0 -2px 0 #1677ff' : 'none',
-                  zIndex: frozen ? 22 : 18,
-                  userSelect: 'none',
-                  cursor: 'pointer',
-                }}>
-                {spreadsheetColumnLabel(columnIndex)}
-                {activeSheet.filters?.some(filter => Number(filter.columnIndex) === columnIndex) && (
-                  <FilterOutlined style={{ marginLeft: 5, color: '#1677ff', fontSize: 11 }} />
-                )}
-                {canEdit && columnResizeAllowed && (
-                  <span
-                    aria-label={`调整 ${spreadsheetColumnLabel(columnIndex)} 列宽`}
-                    data-spreadsheet-resize-handle="column"
-                    onPointerDown={event => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setResizeDrag({ axis: 'column', index: columnIndex, startPosition: event.clientX, startSize: columnWidth(columnIndex) / zoom, previewSize: columnWidth(columnIndex) / zoom, min: 48, max: 480 });
-                    }}
-                    style={{ position: 'absolute', top: 0, right: -3, width: 7, height: '100%', cursor: 'col-resize', zIndex: 2 }}
-                  />
-                )}
-              </div>
+                pinHorizontal={frozen}
+                pinVertical
+                top={0}
+                left={left}
+                width={columnWidth(columnIndex)}
+                height={COLUMN_HEADER_HEIGHT}
+                totalWidth={totalWidth}
+                totalHeight={totalHeight}
+                zIndex={frozen ? 22 : 18}
+              >
+                <div
+                  role="columnheader"
+                  aria-label={`选择 ${spreadsheetColumnLabel(columnIndex)} 列`}
+                  aria-selected={selectedHeader}
+                  data-spreadsheet-column-header={columnIndex}
+                  data-spreadsheet-pinned-axes={frozen ? 'xy' : 'y'}
+                  onMouseDown={event => {
+                    if (event.button !== 0 || event.target.closest('[data-spreadsheet-resize-handle]')) return;
+                    event.preventDefault();
+                    selectWholeColumn(columnIndex);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxSizing: 'border-box',
+                    borderRight: '1px solid #d1d5db',
+                    borderBottom: '1px solid #d1d5db',
+                    background: selectedHeader ? '#dbeafe' : (highlightedHeader ? '#e6f4ff' : '#f3f4f6'),
+                    color: selectedHeader ? '#1677ff' : '#4b5563',
+                    fontWeight: 600,
+                    boxShadow: selectedHeader ? 'inset 0 -2px 0 #1677ff' : 'none',
+                    userSelect: 'none',
+                    cursor: 'pointer',
+                  }}>
+                  {spreadsheetColumnLabel(columnIndex)}
+                  {activeSheet.filters?.some(filter => Number(filter.columnIndex) === columnIndex) && (
+                    <FilterOutlined style={{ marginLeft: 5, color: '#1677ff', fontSize: 11 }} />
+                  )}
+                  {canEdit && columnResizeAllowed && (
+                    <span
+                      aria-label={`调整 ${spreadsheetColumnLabel(columnIndex)} 列宽`}
+                      data-spreadsheet-resize-handle="column"
+                      onPointerDown={event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setResizeDrag({ axis: 'column', index: columnIndex, startPosition: event.clientX, startSize: columnWidth(columnIndex) / zoom, previewSize: columnWidth(columnIndex) / zoom, min: 48, max: 480 });
+                      }}
+                      style={{ position: 'absolute', top: 0, right: -3, width: 7, height: '100%', cursor: 'col-resize', zIndex: 2 }}
+                    />
+                  )}
+                </div>
+              </SpreadsheetPinnedGridElement>
             );
           })}
 
@@ -2672,71 +2758,82 @@ export default function SpreadsheetDocumentEditor({
               userId: currentUser?.id,
               canManage: canManageProtection,
             }).allowed;
-            const top = frozen
-              ? scrollState.top + COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition]
-              : COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition];
+            const top = COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition];
             return (
               <React.Fragment key={`row-${rowIndex}`}>
-                <div
-                  role="rowheader"
-                  aria-label={`选择第 ${rowIndex + 1} 行`}
-                  aria-selected={selectedHeader}
-                  data-spreadsheet-row-header={rowIndex}
-                  onMouseDown={event => {
-                    if (event.button !== 0 || event.target.closest('[data-spreadsheet-resize-handle]')) return;
-                    event.preventDefault();
-                    selectWholeRow(rowIndex);
-                  }}
-                  style={{
-                    position: 'absolute',
-                    left: scrollState.left,
-                    top,
-                    width: ROW_HEADER_WIDTH,
-                    height: rowHeight(rowIndex),
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    boxSizing: 'border-box',
-                    borderRight: '1px solid #d1d5db',
-                    borderBottom: '1px solid #e5e7eb',
-                    background: selectedHeader ? '#dbeafe' : (highlightedHeader ? '#e6f4ff' : '#f3f4f6'),
-                    color: selectedHeader ? '#1677ff' : '#6b7280',
-                    fontWeight: selectedHeader ? 600 : 400,
-                    boxShadow: selectedHeader ? 'inset -2px 0 0 #1677ff' : 'none',
-                    zIndex: frozen ? 22 : 16,
-                    userSelect: 'none',
-                    cursor: 'pointer',
-                  }}>
-                  {rowIndex + 1}
-                  {canEdit && rowResizeAllowed && (
-                    <span
-                      aria-label={`调整第 ${rowIndex + 1} 行高度`}
-                      data-spreadsheet-resize-handle="row"
-                      onPointerDown={event => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        setResizeDrag({ axis: 'row', index: rowIndex, startPosition: event.clientY, startSize: rowHeight(rowIndex) / zoom, previewSize: rowHeight(rowIndex) / zoom, min: 22, max: 160 });
-                      }}
-                      style={{ position: 'absolute', left: 0, bottom: -3, width: '100%', height: 7, cursor: 'row-resize', zIndex: 2 }}
-                    />
-                  )}
-                </div>
+                <SpreadsheetPinnedGridElement
+                  pinHorizontal
+                  pinVertical={frozen}
+                  top={top}
+                  left={0}
+                  width={ROW_HEADER_WIDTH}
+                  height={rowHeight(rowIndex)}
+                  totalWidth={totalWidth}
+                  totalHeight={totalHeight}
+                  zIndex={frozen ? 22 : 16}
+                >
+                  <div
+                    role="rowheader"
+                    aria-label={`选择第 ${rowIndex + 1} 行`}
+                    aria-selected={selectedHeader}
+                    data-spreadsheet-row-header={rowIndex}
+                    data-spreadsheet-pinned-axes={frozen ? 'xy' : 'x'}
+                    onMouseDown={event => {
+                      if (event.button !== 0 || event.target.closest('[data-spreadsheet-resize-handle]')) return;
+                      event.preventDefault();
+                      selectWholeRow(rowIndex);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxSizing: 'border-box',
+                      borderRight: '1px solid #d1d5db',
+                      borderBottom: '1px solid #e5e7eb',
+                      background: selectedHeader ? '#dbeafe' : (highlightedHeader ? '#e6f4ff' : '#f3f4f6'),
+                      color: selectedHeader ? '#1677ff' : '#6b7280',
+                      fontWeight: selectedHeader ? 600 : 400,
+                      boxShadow: selectedHeader ? 'inset -2px 0 0 #1677ff' : 'none',
+                      userSelect: 'none',
+                      cursor: 'pointer',
+                    }}>
+                    {rowIndex + 1}
+                    {canEdit && rowResizeAllowed && (
+                      <span
+                        aria-label={`调整第 ${rowIndex + 1} 行高度`}
+                        data-spreadsheet-resize-handle="row"
+                        onPointerDown={event => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setResizeDrag({ axis: 'row', index: rowIndex, startPosition: event.clientY, startSize: rowHeight(rowIndex) / zoom, previewSize: rowHeight(rowIndex) / zoom, min: 22, max: 160 });
+                        }}
+                        style={{ position: 'absolute', left: 0, bottom: -3, width: '100%', height: 7, cursor: 'row-resize', zIndex: 2 }}
+                      />
+                    )}
+                  </div>
+                </SpreadsheetPinnedGridElement>
                 {columns.map(columnIndex => renderCell(rowPosition, columnIndex))}
               </React.Fragment>
             );
           })}
 
-          <div style={{
-            position: 'absolute',
-            left: scrollState.left,
-            top: scrollState.top,
-            width: ROW_HEADER_WIDTH,
-            height: COLUMN_HEADER_HEIGHT,
-            borderRight: '1px solid #d1d5db',
-            borderBottom: '1px solid #d1d5db',
-            background: '#e5e7eb',
-            zIndex: 30,
-          }} />
+          <SpreadsheetPinnedGridElement
+            pinHorizontal
+            pinVertical
+            top={0}
+            left={0}
+            width={ROW_HEADER_WIDTH}
+            height={COLUMN_HEADER_HEIGHT}
+            totalWidth={totalWidth}
+            totalHeight={totalHeight}
+            zIndex={30}
+          >
+            <div data-spreadsheet-corner="true" data-spreadsheet-pinned-axes="xy" style={{
+              borderRight: '1px solid #d1d5db',
+              borderBottom: '1px solid #d1d5db',
+              background: '#e5e7eb',
+            }} />
+          </SpreadsheetPinnedGridElement>
           </div>
         </div>
       </Dropdown>

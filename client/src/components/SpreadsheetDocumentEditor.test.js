@@ -139,6 +139,132 @@ test('reports grid scrolling and keeps the workspace focus toggle pinned beside 
   container.remove();
 });
 
+test('keeps headers and frozen cells pinned with native sticky positioning', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  workbook.sheets[0].frozen = { rows: 1, columns: 1 };
+  workbook.sheets[0].cells = {
+    A1: { v: '冻结交叉格' },
+    B1: { v: '冻结首行' },
+    A2: { v: '冻结首列' },
+    B2: { v: '普通单元格' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(<ControlledSpreadsheetEditor initialWorkbook={workbook} />));
+
+  const grid = container.querySelector('[data-spreadsheet-grid="true"]');
+  const frozenCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  const frozenRowCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  const frozenColumnCell = container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="0"]');
+  const initialPositions = {
+    frozenCell: { position: frozenCell.style.position, top: frozenCell.style.top, left: frozenCell.style.left },
+    frozenRowCell: { position: frozenRowCell.style.position, top: frozenRowCell.style.top, left: frozenRowCell.style.left },
+    frozenColumnCell: { position: frozenColumnCell.style.position, top: frozenColumnCell.style.top, left: frozenColumnCell.style.left },
+  };
+
+  grid.scrollTop = 84.5;
+  grid.scrollLeft = 122.25;
+  act(() => grid.dispatchEvent(new Event('scroll', { bubbles: true })));
+
+  expect(initialPositions).toEqual({
+    frozenCell: { position: 'sticky', top: '24px', left: '46px' },
+    frozenRowCell: { position: 'sticky', top: '24px', left: '' },
+    frozenColumnCell: { position: 'sticky', top: '', left: '46px' },
+  });
+  expect(frozenCell.getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect(frozenRowCell.getAttribute('data-spreadsheet-pinned-axes')).toBe('y');
+  expect(frozenColumnCell.getAttribute('data-spreadsheet-pinned-axes')).toBe('x');
+  expect(container.querySelector('[data-spreadsheet-column-header="0"]')
+    .getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect(container.querySelector('[data-spreadsheet-row-header="0"]')
+    .getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect(container.querySelector('[data-spreadsheet-corner="true"]')
+    .getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect({ position: frozenCell.style.position, top: frozenCell.style.top, left: frozenCell.style.left })
+    .toEqual(initialPositions.frozenCell);
+  expect({ position: frozenRowCell.style.position, top: frozenRowCell.style.top, left: frozenRowCell.style.left })
+    .toEqual(initialPositions.frozenRowCell);
+  expect({ position: frozenColumnCell.style.position, top: frozenColumnCell.style.top, left: frozenColumnCell.style.left })
+    .toEqual(initialPositions.frozenColumnCell);
+  expect(container.querySelectorAll('[data-spreadsheet-pinned-wrapper]').length).toBeGreaterThan(0);
+  expect(grid.style.overscrollBehavior).toBe('none');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('selects the used sheet range and copies it into another sheet as one undoable paste', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  const sourceSheet = workbook.sheets[0];
+  sourceSheet.name = '来源Sheet';
+  sourceSheet.cells = {
+    A1: { v: '日期', style: { bold: true, backgroundColor: '#dbeafe' } },
+    B1: { v: '申请量', style: { bold: true } },
+    A2: { v: '2026/7/28' },
+    B2: { v: '=A2', style: { color: '#dc2626' } },
+  };
+  sourceSheet.mergedCells = [{ startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 }];
+  sourceSheet.rowHeights = { 0: 32, 1: 28 };
+  sourceSheet.columnWidths = { 0: 140, 1: 112 };
+  const targetSheet = createDefaultSpreadsheetSheet(1, workbook.sheets);
+  targetSheet.id = 'target-sheet';
+  targetSheet.name = '目标Sheet';
+  targetSheet.cells = { A1: { v: '旧内容' } };
+  workbook.sheets.push(targetSheet);
+
+  let latestWorkbook = workbook;
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={workbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'a', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A1:B2');
+
+  const clipboardValues = {};
+  const clipboardData = {
+    setData: (type, value) => { clipboardValues[type] = value; },
+    getData: type => clipboardValues[type] || '',
+  };
+  const copyEvent = new Event('copy', { bubbles: true, cancelable: true });
+  Object.defineProperty(copyEvent, 'clipboardData', { value: clipboardData });
+  act(() => editor.dispatchEvent(copyEvent));
+  expect(copyEvent.defaultPrevented).toBe(true);
+  expect(JSON.parse(clipboardValues['application/x-relation-spreadsheet+json']).copyDimensions).toBe(true);
+
+  const targetSheetButton = [...container.querySelectorAll('button')]
+    .find(button => button.textContent === '目标Sheet');
+  act(() => targetSheetButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: clipboardData });
+  act(() => editor.dispatchEvent(pasteEvent));
+
+  const pastedSheet = latestWorkbook.sheets.find(sheet => sheet.id === 'target-sheet');
+  expect(pastedSheet.cells).toMatchObject(sourceSheet.cells);
+  expect(pastedSheet.mergedCells).toEqual(sourceSheet.mergedCells);
+  expect(pastedSheet.rowHeights).toMatchObject(sourceSheet.rowHeights);
+  expect(pastedSheet.columnWidths).toMatchObject(sourceSheet.columnWidths);
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A1:B2');
+
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  const restoredSheet = latestWorkbook.sheets.find(sheet => sheet.id === 'target-sheet');
+  expect(restoredSheet.cells).toEqual({ A1: { v: '旧内容' } });
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('virtualizes a large worksheet and renders calculated formula values', () => {
   const workbook = createDefaultSpreadsheetWorkbook();
   workbook.sheets[0] = {
@@ -203,7 +329,7 @@ test('captures scroll offsets before rerendering or unmounting the virtual grid'
   container.remove();
 });
 
-test('leaves single-value paste events inside the cell editor to native editing', () => {
+test('leaves Command+A and clipboard events inside formula or cell inputs native', () => {
   const workbook = createDefaultSpreadsheetWorkbook();
   const onWorkbookChange = jest.fn();
   const container = document.createElement('div');
@@ -221,13 +347,37 @@ test('leaves single-value paste events inside the cell editor to native editing'
     );
   });
 
+  const clipboardWrites = {};
+  const clipboardData = {
+    setData: (type, value) => { clipboardWrites[type] = value; },
+    getData: type => type === 'text/plain' ? 'alpha\tbeta' : '',
+  };
+  const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
+  const formulaSelectAllEvent = new KeyboardEvent('keydown', {
+    key: 'a', metaKey: true, bubbles: true, cancelable: true,
+  });
+  act(() => formulaInput.dispatchEvent(formulaSelectAllEvent));
+  expect(formulaSelectAllEvent.defaultPrevented).toBe(false);
+  const formulaCopyEvent = new Event('copy', { bubbles: true, cancelable: true });
+  Object.defineProperty(formulaCopyEvent, 'clipboardData', { value: clipboardData });
+  act(() => formulaInput.dispatchEvent(formulaCopyEvent));
+  expect(formulaCopyEvent.defaultPrevented).toBe(false);
+
   const firstCell = container.querySelector('[role="gridcell"]');
   act(() => firstCell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
   const cellInput = firstCell.querySelector('input');
-  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
-  Object.defineProperty(pasteEvent, 'clipboardData', {
-    value: { getData: type => type === 'text/plain' ? 'alpha' : '' },
+  const cellSelectAllEvent = new KeyboardEvent('keydown', {
+    key: 'a', metaKey: true, bubbles: true, cancelable: true,
   });
+  act(() => cellInput.dispatchEvent(cellSelectAllEvent));
+  expect(cellSelectAllEvent.defaultPrevented).toBe(false);
+  const cellCopyEvent = new Event('copy', { bubbles: true, cancelable: true });
+  Object.defineProperty(cellCopyEvent, 'clipboardData', { value: clipboardData });
+  act(() => cellInput.dispatchEvent(cellCopyEvent));
+  expect(cellCopyEvent.defaultPrevented).toBe(false);
+  expect(clipboardWrites).toEqual({});
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: clipboardData });
   act(() => cellInput.dispatchEvent(pasteEvent));
 
   expect(pasteEvent.defaultPrevented).toBe(false);
