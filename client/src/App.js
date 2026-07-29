@@ -15,6 +15,7 @@ import {
 import zhCN from 'antd/locale/zh_CN';
 import { AuthProvider, useAuth } from './AuthContext';
 import SidebarToggleButton from './components/SidebarToggleButton';
+import { fixedGlobalSiderStyle, getAppContentLayoutStyle } from './utils/appShellLayout';
 import './App.css';
 
 const ADMIN_ROLES = new Set(['admin', 'ceo', 'coo', 'cto', 'cmo']);
@@ -748,6 +749,7 @@ function AppLayout() {
 
   const selectedKey = activeTabKey;
   const desktopSiderWidth = isMobile ? 0 : (collapsed ? DS.sidebar.collapsedWidth : DS.sidebar.width);
+  const appContentLayoutStyle = getAppContentLayoutStyle(isMobile, desktopSiderWidth);
 
   const handleTabSelect = (tab) => {
     navigate(tab.path || tab.key);
@@ -1211,7 +1213,7 @@ function AppLayout() {
           collapsed={collapsed}
           collapsedWidth={DS.sidebar.collapsedWidth}
           width={DS.sidebar.width}
-          style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', height: '100vh', minHeight: '100vh', maxHeight: '100vh', overflow: 'hidden', position: 'sticky', top: 0, left: 0, borderRight: '1px solid rgba(255,255,255,0.04)', alignSelf: 'stretch' }}
+          style={{ background: DS.sidebar.bg, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderRight: '1px solid rgba(255,255,255,0.04)', ...fixedGlobalSiderStyle }}
         >
           {menuContent}
         </Sider>
@@ -1234,13 +1236,8 @@ function AppLayout() {
       )}
 
       <Layout
-        style={{
-          flex: '0 0 auto',
-          width: isMobile ? '100%' : `calc(100vw - ${desktopSiderWidth}px)`,
-          maxWidth: isMobile ? '100%' : `calc(100vw - ${desktopSiderWidth}px)`,
-          minWidth: 0,
-          overflowX: 'hidden',
-        }}
+        className="app-content-layout"
+        style={appContentLayoutStyle}
       >
         <Header style={{
           background: DS.header.bg, padding: isMobile ? '0 12px' : '0 24px', height: DS.header.height, lineHeight: `${DS.header.height}px`,
