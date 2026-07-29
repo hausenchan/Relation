@@ -15,6 +15,7 @@ function ControlledSpreadsheetEditor({
   initialWorkbook = createDefaultSpreadsheetWorkbook(),
   initialSelectedCell = { sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 },
   onWorkbookChange = () => {},
+  onSelectionChange = () => {},
 }) {
   const [workbook, setWorkbook] = React.useState(initialWorkbook);
   const [selectedCell, setSelectedCell] = React.useState(initialSelectedCell);
@@ -24,6 +25,7 @@ function ControlledSpreadsheetEditor({
       canEdit
       selectedCell={selectedCell}
       onSelectedCellChange={setSelectedCell}
+      onSelectionChange={onSelectionChange}
       onWorkbookChange={nextWorkbook => {
         onWorkbookChange(nextWorkbook);
         setWorkbook(nextWorkbook);
@@ -305,6 +307,49 @@ test('applies native spreadsheet basic formatting to the selected cell', () => {
   container.remove();
 });
 
+test('selects complete rows and columns from spreadsheet headers', () => {
+  const onSelectionChange = jest.fn();
+  const onWorkbookChange = jest.fn();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      onSelectionChange={onSelectionChange}
+      onWorkbookChange={onWorkbookChange}
+    />
+  ));
+
+  const rowHeader = container.querySelector('[data-spreadsheet-row-header="1"]');
+  act(() => rowHeader.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  expect(rowHeader.getAttribute('aria-selected')).toBe('true');
+  expect(rowHeader.style.background).toBe('rgb(219, 234, 254)');
+  expect([...container.querySelectorAll('[data-spreadsheet-row-index="1"]')]
+    .every(cell => cell.getAttribute('aria-selected') === 'true')).toBe(true);
+  expect(container.querySelector('[data-spreadsheet-column-header="0"]').getAttribute('aria-selected')).toBe('false');
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A2:Z2');
+  act(() => container.querySelector('[data-spreadsheet-resize-handle="column"]')
+    .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A2:Z2');
+
+  const columnHeader = container.querySelector('[data-spreadsheet-column-header="2"]');
+  act(() => columnHeader.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  expect(columnHeader.getAttribute('aria-selected')).toBe('true');
+  expect(columnHeader.style.background).toBe('rgb(219, 234, 254)');
+  expect([...container.querySelectorAll('[data-spreadsheet-column-index="2"]')]
+    .every(cell => cell.getAttribute('aria-selected') === 'true')).toBe(true);
+  expect(container.querySelector('[data-spreadsheet-row-header="0"]').getAttribute('aria-selected')).toBe('false');
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('C1:C1000');
+  expect(onSelectionChange).toHaveBeenLastCalledWith({
+    sheetId: 'sheet_1',
+    selection: { startRow: 0, endRow: 999, startColumn: 2, endColumn: 2 },
+  });
+  expect(onWorkbookChange).not.toHaveBeenCalled();
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('offers current row and column freeze presets with undo and redo support', async () => {
   let latestWorkbook = createDefaultSpreadsheetWorkbook();
   const container = document.createElement('div');
@@ -353,15 +398,13 @@ test('offers current row and column freeze presets with undo and redo support', 
   await clickFreezeItem('冻结至当前行（5 行）');
   expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 0 });
   await clickFreezeItem('冻结至当前列（5 列）');
-  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 0, columns: 5 });
-  await clickFreezeItem('冻结至当前行和列（5 行 | 5 列）');
   expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 5 });
 
   const editor = container.querySelector('[aria-label="在线表格编辑区"]');
   act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'z', metaKey: true, bubbles: true, cancelable: true,
   })));
-  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 0, columns: 5 });
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 0 });
   act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'z', metaKey: true, shiftKey: true, bubbles: true, cancelable: true,
   })));
@@ -369,6 +412,13 @@ test('offers current row and column freeze presets with undo and redo support', 
 
   await clickFreezeItem('取消冻结');
   expect(latestWorkbook.sheets[0].frozen).toBeNull();
+  await clickFreezeItem('冻结至当前列（5 列）');
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 0, columns: 5 });
+  await clickFreezeItem('冻结至当前行（5 行）');
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 5 });
+  await clickFreezeItem('取消冻结');
+  await clickFreezeItem('冻结至当前行和列（5 行 | 5 列）');
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 5 });
 
   act(() => root.unmount());
   container.remove();

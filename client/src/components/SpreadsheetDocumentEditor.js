@@ -497,6 +497,10 @@ export default function SpreadsheetDocumentEditor({
     startColumn: activeColumnIndex,
     endColumn: activeColumnIndex,
   });
+  const selectsWholeRows = currentSelection.startColumn === 0
+    && currentSelection.endColumn === activeSheet.columnCount - 1;
+  const selectsWholeColumns = currentSelection.startRow === 0
+    && currentSelection.endRow === activeSheet.rowCount - 1;
   const selectedCellObject = getSpreadsheetCellObject(activeSheet, activeRowIndex, activeColumnIndex);
   const selectedCellRawValue = getSpreadsheetCellRawValue(activeSheet, activeRowIndex, activeColumnIndex);
   const selectedCellStyle = selectedCellObject.style || {};
@@ -535,6 +539,34 @@ export default function SpreadsheetDocumentEditor({
     const targetColumn = merged?.startColumn ?? columnIndex;
     onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: targetRow, columnIndex: targetColumn });
     setSelection(nextRange || normalizeSpreadsheetRange(merged || { rowIndex: targetRow, columnIndex: targetColumn }));
+  };
+
+  const selectWholeRow = rowIndex => {
+    setEditingCellKey('');
+    setSelectionAnchor(null);
+    setIsSelecting(false);
+    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex, columnIndex: 0 });
+    setSelection(normalizeSpreadsheetRange({
+      startRow: rowIndex,
+      endRow: rowIndex,
+      startColumn: 0,
+      endColumn: activeSheet.columnCount - 1,
+    }));
+    window.requestAnimationFrame(() => editorRef.current?.focus());
+  };
+
+  const selectWholeColumn = columnIndex => {
+    setEditingCellKey('');
+    setSelectionAnchor(null);
+    setIsSelecting(false);
+    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: 0, columnIndex });
+    setSelection(normalizeSpreadsheetRange({
+      startRow: 0,
+      endRow: activeSheet.rowCount - 1,
+      startColumn: columnIndex,
+      endColumn: columnIndex,
+    }));
+    window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
   const scrollCellIntoView = (rowIndex, columnIndex) => {
@@ -794,14 +826,14 @@ export default function SpreadsheetDocumentEditor({
       message.warning(`最多冻结前 ${MAX_FROZEN_ROWS} 行`);
       return;
     }
-    updateFrozen({ rows: activeRowIndex + 1, columns: 0 });
+    updateFrozen({ rows: activeRowIndex + 1 });
   };
   const freezeColumnsToCurrent = () => {
     if (activeColumnIndex + 1 > MAX_FROZEN_COLUMNS) {
       message.warning(`最多冻结前 ${MAX_FROZEN_COLUMNS} 列`);
       return;
     }
-    updateFrozen({ rows: 0, columns: activeColumnIndex + 1 });
+    updateFrozen({ columns: activeColumnIndex + 1 });
   };
   const freezeToCurrent = () => {
     if (activeRowIndex + 1 > MAX_FROZEN_ROWS || activeColumnIndex + 1 > MAX_FROZEN_COLUMNS) {
@@ -1020,6 +1052,13 @@ export default function SpreadsheetDocumentEditor({
         : 'center';
     const selected = spreadsheetRangeContainsCell(currentSelection, rowIndex, columnIndex);
     const active = rowIndex === activeRowIndex && columnIndex === activeColumnIndex;
+    const wholeAxisSelection = selectsWholeRows || selectsWholeColumns;
+    const selectionEdgeShadows = wholeAxisSelection && selected ? [
+      rowIndex === currentSelection.startRow ? 'inset 0 2px 0 #1677ff' : '',
+      rowIndex === currentSelection.endRow ? 'inset 0 -2px 0 #1677ff' : '',
+      columnIndex === currentSelection.startColumn ? 'inset 2px 0 0 #1677ff' : '',
+      columnIndex === currentSelection.endColumn ? 'inset -2px 0 0 #1677ff' : '',
+    ].filter(Boolean).join(', ') : '';
     const remoteCollaborator = activeRemoteCollaborators.find(item => (
       spreadsheetRangeContainsCell(item.selection, rowIndex, columnIndex)
     ));
@@ -1078,9 +1117,9 @@ export default function SpreadsheetDocumentEditor({
           background: selected
             ? '#eaf3ff'
             : (remoteCollaborator ? `${remoteCollaborator.color || '#389e0d'}1f` : (style.backgroundColor || '#fff')),
-          boxShadow: active
+          boxShadow: selectionEdgeShadows || (active
             ? 'inset 0 0 0 2px #1677ff'
-            : (remoteCollaborator ? `inset 0 0 0 2px ${remoteCollaborator.color || '#389e0d'}` : 'none'),
+            : (remoteCollaborator ? `inset 0 0 0 2px ${remoteCollaborator.color || '#389e0d'}` : 'none')),
           zIndex: frozenRow && frozenColumn ? 12 : (frozenRow || frozenColumn ? 8 : (active ? 4 : 1)),
           overflow: 'hidden',
           cursor: 'cell',
@@ -1540,28 +1579,45 @@ export default function SpreadsheetDocumentEditor({
         <div style={{ position: 'relative', width: totalWidth, height: totalHeight, minWidth: '100%' }}>
           {columns.map(columnIndex => {
             const frozen = columnIndex < frozenColumns;
+            const selectedHeader = selectsWholeColumns
+              && columnIndex >= currentSelection.startColumn
+              && columnIndex <= currentSelection.endColumn;
+            const highlightedHeader = selectedHeader || (!selectsWholeRows && activeColumnIndex === columnIndex);
             const left = frozen
               ? scrollState.left + ROW_HEADER_WIDTH + columnOffsets[columnIndex]
               : ROW_HEADER_WIDTH + columnOffsets[columnIndex];
             return (
-              <div key={`column-${columnIndex}`} style={{
-                position: 'absolute',
-                left,
-                top: scrollState.top,
-                width: columnWidth(columnIndex),
-                height: COLUMN_HEADER_HEIGHT,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxSizing: 'border-box',
-                borderRight: '1px solid #d1d5db',
-                borderBottom: '1px solid #d1d5db',
-                background: activeColumnIndex === columnIndex ? '#e6f4ff' : '#f3f4f6',
-                color: '#4b5563',
-                fontWeight: 600,
-                zIndex: frozen ? 22 : 18,
-                userSelect: 'none',
-              }}>
+              <div
+                key={`column-${columnIndex}`}
+                role="columnheader"
+                aria-label={`选择 ${spreadsheetColumnLabel(columnIndex)} 列`}
+                aria-selected={selectedHeader}
+                data-spreadsheet-column-header={columnIndex}
+                onMouseDown={event => {
+                  if (event.button !== 0 || event.target.closest('[data-spreadsheet-resize-handle]')) return;
+                  event.preventDefault();
+                  selectWholeColumn(columnIndex);
+                }}
+                style={{
+                  position: 'absolute',
+                  left,
+                  top: scrollState.top,
+                  width: columnWidth(columnIndex),
+                  height: COLUMN_HEADER_HEIGHT,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxSizing: 'border-box',
+                  borderRight: '1px solid #d1d5db',
+                  borderBottom: '1px solid #d1d5db',
+                  background: selectedHeader ? '#dbeafe' : (highlightedHeader ? '#e6f4ff' : '#f3f4f6'),
+                  color: selectedHeader ? '#1677ff' : '#4b5563',
+                  fontWeight: 600,
+                  boxShadow: selectedHeader ? 'inset 0 -2px 0 #1677ff' : 'none',
+                  zIndex: frozen ? 22 : 18,
+                  userSelect: 'none',
+                  cursor: 'pointer',
+                }}>
                 {spreadsheetColumnLabel(columnIndex)}
                 {activeSheet.filters?.some(filter => Number(filter.columnIndex) === columnIndex) && (
                   <FilterOutlined style={{ marginLeft: 5, color: '#1677ff', fontSize: 11 }} />
@@ -1569,6 +1625,7 @@ export default function SpreadsheetDocumentEditor({
                 {canEdit && (
                   <span
                     aria-label={`调整 ${spreadsheetColumnLabel(columnIndex)} 列宽`}
+                    data-spreadsheet-resize-handle="column"
                     onPointerDown={event => {
                       event.preventDefault();
                       event.stopPropagation();
@@ -1584,32 +1641,50 @@ export default function SpreadsheetDocumentEditor({
           {rowPositions.map(rowPosition => {
             const rowIndex = visibleRows[rowPosition];
             const frozen = rowPosition < frozenRows;
+            const selectedHeader = selectsWholeRows
+              && rowIndex >= currentSelection.startRow
+              && rowIndex <= currentSelection.endRow;
+            const highlightedHeader = selectedHeader || (!selectsWholeColumns && activeRowIndex === rowIndex);
             const top = frozen
               ? scrollState.top + COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition]
               : COLUMN_HEADER_HEIGHT + rowOffsets[rowPosition];
             return (
               <React.Fragment key={`row-${rowIndex}`}>
-                <div style={{
-                  position: 'absolute',
-                  left: scrollState.left,
-                  top,
-                  width: ROW_HEADER_WIDTH,
-                  height: rowHeight(rowIndex),
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  boxSizing: 'border-box',
-                  borderRight: '1px solid #d1d5db',
-                  borderBottom: '1px solid #e5e7eb',
-                  background: activeRowIndex === rowIndex ? '#e6f4ff' : '#f3f4f6',
-                  color: '#6b7280',
-                  zIndex: frozen ? 22 : 16,
-                  userSelect: 'none',
-                }}>
+                <div
+                  role="rowheader"
+                  aria-label={`选择第 ${rowIndex + 1} 行`}
+                  aria-selected={selectedHeader}
+                  data-spreadsheet-row-header={rowIndex}
+                  onMouseDown={event => {
+                    if (event.button !== 0 || event.target.closest('[data-spreadsheet-resize-handle]')) return;
+                    event.preventDefault();
+                    selectWholeRow(rowIndex);
+                  }}
+                  style={{
+                    position: 'absolute',
+                    left: scrollState.left,
+                    top,
+                    width: ROW_HEADER_WIDTH,
+                    height: rowHeight(rowIndex),
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxSizing: 'border-box',
+                    borderRight: '1px solid #d1d5db',
+                    borderBottom: '1px solid #e5e7eb',
+                    background: selectedHeader ? '#dbeafe' : (highlightedHeader ? '#e6f4ff' : '#f3f4f6'),
+                    color: selectedHeader ? '#1677ff' : '#6b7280',
+                    fontWeight: selectedHeader ? 600 : 400,
+                    boxShadow: selectedHeader ? 'inset -2px 0 0 #1677ff' : 'none',
+                    zIndex: frozen ? 22 : 16,
+                    userSelect: 'none',
+                    cursor: 'pointer',
+                  }}>
                   {rowIndex + 1}
                   {canEdit && (
                     <span
                       aria-label={`调整第 ${rowIndex + 1} 行高度`}
+                      data-spreadsheet-resize-handle="row"
                       onPointerDown={event => {
                         event.preventDefault();
                         event.stopPropagation();
