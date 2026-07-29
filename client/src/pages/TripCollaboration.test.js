@@ -157,3 +157,79 @@ test('keeps the trip list visible on mobile even when desktop state is collapsed
   act(() => root.unmount());
   container.remove();
 });
+
+test('uses a one-day mobile agenda and can switch to the complete vertical itinerary', async () => {
+  mockBreakpoints = { md: false };
+  mockListTrips.mockResolvedValue([{
+    id: 9,
+    name: '移动端行程',
+    start_date: '2099-07-27',
+    end_date: '2099-07-29',
+    schedule_count: 2,
+    participant_names: ['张学成'],
+    can_edit: 1,
+    can_delete: 1,
+  }]);
+  mockListSchedules.mockResolvedValue([
+    {
+      id: 101,
+      schedule_date: '2099-07-27',
+      period: '上午',
+      time_text: '09:50-12:00',
+      name: '飞机',
+      participant_names: ['张学成'],
+      can_edit: 1,
+      can_delete: 1,
+    },
+    {
+      id: 102,
+      schedule_date: '2099-07-28',
+      period: '下午',
+      time_text: '16:00',
+      name: '客户拜访',
+      participant_names: ['张学成'],
+      can_edit: 1,
+      can_delete: 1,
+    },
+  ]);
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () => {
+    root.render(<TripCollaboration />);
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  });
+  await act(async () => {
+    await new Promise(resolve => window.setTimeout(resolve, 0));
+  });
+
+  expect(container.querySelector('[data-testid="trip-collaboration-grid-scroll"]')).toBeNull();
+  expect(container.querySelector('[data-testid="trip-collaboration-mobile-schedule"]')).not.toBeNull();
+  expect(container.querySelectorAll('.trip-collaboration-mobile-date-button')).toHaveLength(3);
+  expect(container.querySelectorAll('.trip-collaboration-mobile-period')).toHaveLength(4);
+  expect(container.querySelector('.trip-collaboration-mobile-date-button[data-day="2099-07-27"]')?.getAttribute('aria-selected')).toBe('true');
+  expect(container.textContent).toContain('飞机');
+  expect(container.textContent).not.toContain('客户拜访');
+
+  const nextDayButton = container.querySelector('button[aria-label="后一天"]');
+  await act(async () => {
+    nextDayButton.click();
+  });
+  expect(container.querySelector('.trip-collaboration-mobile-date-button[data-day="2099-07-28"]')?.getAttribute('aria-selected')).toBe('true');
+  expect(container.textContent).toContain('客户拜访');
+  expect(container.textContent).not.toContain('飞机');
+
+  const allModeLabel = Array.from(container.querySelectorAll('.ant-segmented-item'))
+    .find(item => item.textContent.trim() === '全部');
+  await act(async () => {
+    allModeLabel.click();
+  });
+  expect(container.querySelector('[data-testid="trip-collaboration-mobile-all-agenda"]')).not.toBeNull();
+  expect(container.querySelectorAll('.trip-collaboration-mobile-day-group')).toHaveLength(2);
+  expect(container.textContent).toContain('飞机');
+  expect(container.textContent).toContain('客户拜访');
+
+  act(() => root.unmount());
+  container.remove();
+});

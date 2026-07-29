@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -10,6 +10,7 @@ import {
   List,
   Modal,
   Popconfirm,
+  Segmented,
   Select,
   Space,
   Spin,
@@ -24,8 +25,10 @@ import {
   DeleteOutlined,
   EditOutlined,
   EnvironmentOutlined,
+  LeftOutlined,
   PlusOutlined,
   ReloadOutlined,
+  RightOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -78,6 +81,12 @@ function getTripDays(trip) {
   return days;
 }
 
+function getDefaultMobileDay(days) {
+  if (!days.length) return null;
+  const today = dayjs().format('YYYY-MM-DD');
+  return days.includes(today) ? today : days[0];
+}
+
 function employeeLabel(user) {
   return user?.display_name || user?.username || '-';
 }
@@ -110,12 +119,16 @@ export default function TripCollaboration() {
   const [startFilter, setStartFilter] = useState(null);
   const [endFilter, setEndFilter] = useState(null);
   const [personFilter, setPersonFilter] = useState(undefined);
+  const [mobileViewMode, setMobileViewMode] = useState('day');
+  const [mobileSelectedDay, setMobileSelectedDay] = useState(null);
   const [tripModalOpen, setTripModalOpen] = useState(false);
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [editingTrip, setEditingTrip] = useState(null);
   const [editingSchedule, setEditingSchedule] = useState(null);
   const [tripForm] = Form.useForm();
   const [scheduleForm] = Form.useForm();
+  const mobileDateStripRef = useRef(null);
+  const mobileDayButtonRefs = useRef(new Map());
 
   const isListCollapsed = !isMobile && listCollapsed;
   const selectedTrip = useMemo(
@@ -161,6 +174,22 @@ export default function TripCollaboration() {
       // Keep in-memory state if localStorage is unavailable.
     }
   }, [listCollapsed]);
+
+  useEffect(() => {
+    setMobileSelectedDay(current => (
+      current && tripDays.includes(current) ? current : getDefaultMobileDay(tripDays)
+    ));
+  }, [tripDays]);
+
+  useEffect(() => {
+    if (!isMobile || mobileViewMode !== 'day' || !mobileSelectedDay) return;
+    const strip = mobileDateStripRef.current;
+    const button = mobileDayButtonRefs.current.get(mobileSelectedDay);
+    if (!strip || !button) return;
+    const nextLeft = Math.max(0, button.offsetLeft - ((strip.clientWidth - button.offsetWidth) / 2));
+    if (typeof strip.scrollTo === 'function') strip.scrollTo({ left: nextLeft, behavior: 'smooth' });
+    else strip.scrollLeft = nextLeft;
+  }, [isMobile, mobileSelectedDay, mobileViewMode]);
 
   const loadUsers = useCallback(async () => {
     const data = await usersApi.listSimple({ include_readonly: true });
@@ -446,7 +475,7 @@ export default function TripCollaboration() {
           borderRadius: 8,
           background: 'linear-gradient(135deg, #ffffff 0%, #f3f9ff 100%)',
           padding: '9px 10px 10px',
-          minHeight: 112,
+          minHeight: isMobile ? 0 : 112,
           boxShadow: '0 4px 12px rgba(22, 119, 255, 0.06)',
           overflow: 'hidden',
         }}
@@ -530,6 +559,169 @@ export default function TripCollaboration() {
     );
   };
 
+  const renderMobilePeriodSection = (day, period, { hideEmpty = false, keyPrefix = 'day' } = {}) => {
+    const items = schedulesBySlot.get(`${day}|${period}`) || [];
+    if (hideEmpty && items.length === 0) return null;
+    return (
+      <section
+        key={`${keyPrefix}-${day}-${period}`}
+        className="trip-collaboration-mobile-period"
+        data-period={period}
+      >
+        <div className="trip-collaboration-mobile-period-header">
+          <div>
+            <Text strong>{period}</Text>
+            {items.length > 0 && <Text type="secondary" className="trip-collaboration-mobile-period-count">{items.length} 个</Text>}
+          </div>
+          <Button
+            type="text"
+            shape="circle"
+            icon={<PlusOutlined />}
+            aria-label={`在${day}${period}添加日程`}
+            onClick={() => openScheduleModal(null, { schedule_date: day, period }, selectedTrip)}
+          />
+        </div>
+        {items.length ? (
+          <div className="trip-collaboration-mobile-schedule-list">
+            {items.map(renderScheduleCard)}
+          </div>
+        ) : (
+          <div className="trip-collaboration-mobile-empty">暂无安排</div>
+        )}
+      </section>
+    );
+  };
+
+  const renderMobileScheduleView = () => {
+    const selectedDay = tripDays.includes(mobileSelectedDay)
+      ? mobileSelectedDay
+      : getDefaultMobileDay(tripDays);
+    const selectedDayIndex = selectedDay ? tripDays.indexOf(selectedDay) : -1;
+    const selectedDayCount = selectedDay
+      ? periods.reduce((count, period) => count + (schedulesBySlot.get(`${selectedDay}|${period}`)?.length || 0), 0)
+      : 0;
+    const daysWithSchedules = tripDays.filter(day => (
+      periods.some(period => (schedulesBySlot.get(`${day}|${period}`)?.length || 0) > 0)
+    ));
+    const moveSelectedDay = (offset) => {
+      if (selectedDayIndex < 0) return;
+      const nextIndex = Math.max(0, Math.min(tripDays.length - 1, selectedDayIndex + offset));
+      setMobileSelectedDay(tripDays[nextIndex]);
+    };
+
+    return (
+      <Spin spinning={scheduleLoading}>
+        <div className="trip-collaboration-mobile-schedule" data-testid="trip-collaboration-mobile-schedule">
+          <div className="trip-collaboration-mobile-view-switch">
+            <Segmented
+              block
+              size="small"
+              value={mobileViewMode}
+              options={[
+                { label: '按日', value: 'day' },
+                { label: '全部', value: 'all' },
+              ]}
+              onChange={setMobileViewMode}
+            />
+          </div>
+
+          {mobileViewMode === 'day' ? (
+            <>
+              <div className="trip-collaboration-mobile-date-nav">
+                <Button
+                  type="text"
+                  shape="circle"
+                  icon={<LeftOutlined />}
+                  aria-label="前一天"
+                  disabled={selectedDayIndex <= 0}
+                  onClick={() => moveSelectedDay(-1)}
+                />
+                <div
+                  ref={mobileDateStripRef}
+                  className="trip-collaboration-mobile-date-strip"
+                  role="tablist"
+                  aria-label="选择行程日期"
+                >
+                  {tripDays.map(day => {
+                    const active = day === selectedDay;
+                    const dayCount = periods.reduce(
+                      (count, period) => count + (schedulesBySlot.get(`${day}|${period}`)?.length || 0),
+                      0
+                    );
+                    return (
+                      <button
+                        key={day}
+                        ref={(node) => {
+                          if (node) mobileDayButtonRefs.current.set(day, node);
+                          else mobileDayButtonRefs.current.delete(day);
+                        }}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        className={`trip-collaboration-mobile-date-button${active ? ' is-active' : ''}`}
+                        data-day={day}
+                        onClick={() => setMobileSelectedDay(day)}
+                      >
+                        <span>{dayjs(day).format('M月D日')}</span>
+                        <small>{dayjs(day).format('ddd')}</small>
+                        {dayCount > 0 && <i>{dayCount}</i>}
+                      </button>
+                    );
+                  })}
+                </div>
+                <Button
+                  type="text"
+                  shape="circle"
+                  icon={<RightOutlined />}
+                  aria-label="后一天"
+                  disabled={selectedDayIndex < 0 || selectedDayIndex >= tripDays.length - 1}
+                  onClick={() => moveSelectedDay(1)}
+                />
+              </div>
+              {selectedDay ? (
+                <div className="trip-collaboration-mobile-day-agenda" data-testid="trip-collaboration-mobile-day-agenda">
+                  <div className="trip-collaboration-mobile-day-summary">
+                    <span>{dayjs(selectedDay).format('M月D日 ddd')}</span>
+                    <Text type="secondary">{selectedDayCount} 个日程</Text>
+                  </div>
+                  {periods.map(period => renderMobilePeriodSection(selectedDay, period))}
+                </div>
+              ) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无有效行程日期" />
+              )}
+            </>
+          ) : (
+            <div className="trip-collaboration-mobile-all-agenda" data-testid="trip-collaboration-mobile-all-agenda">
+              {daysWithSchedules.length ? daysWithSchedules.map(day => {
+                const dayCount = periods.reduce(
+                  (count, period) => count + (schedulesBySlot.get(`${day}|${period}`)?.length || 0),
+                  0
+                );
+                return (
+                  <section key={day} className="trip-collaboration-mobile-day-group" data-day={day}>
+                    <div className="trip-collaboration-mobile-day-group-header">
+                      <div>
+                        <strong>{dayjs(day).format('M月D日')}</strong>
+                        <Text type="secondary">{dayjs(day).format('ddd')}</Text>
+                      </div>
+                      <Tag color="blue" style={{ marginInlineEnd: 0 }}>{dayCount} 个日程</Tag>
+                    </div>
+                    {periods.map(period => renderMobilePeriodSection(day, period, {
+                      hideEmpty: true,
+                      keyPrefix: 'all',
+                    }))}
+                  </section>
+                );
+              }) : (
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前筛选下暂无日程" />
+              )}
+            </div>
+          )}
+        </div>
+      </Spin>
+    );
+  };
+
   const renderScheduleGrid = () => {
     if (!selectedTrip) {
       return (
@@ -539,14 +731,16 @@ export default function TripCollaboration() {
       );
     }
 
-    const minDayWidth = isMobile ? 168 : 190;
-    const timeColWidth = isMobile ? 72 : 92;
+    if (isMobile) return renderMobileScheduleView();
+
+    const minDayWidth = 190;
+    const timeColWidth = 92;
     return (
       <Spin spinning={scheduleLoading}>
         <div
           className="trip-collaboration-grid-scroll"
           data-testid="trip-collaboration-grid-scroll"
-          style={{ maxHeight: isMobile ? 'none' : 'calc(100vh - 236px)' }}
+          style={{ maxHeight: 'calc(100vh - 236px)' }}
         >
           <div
             className="trip-collaboration-grid"
