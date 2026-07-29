@@ -4,8 +4,9 @@ import {
   ArrowRightOutlined,
   BgColorsOutlined,
   BoldOutlined,
+  BorderInnerOutlined,
+  CaretDownOutlined,
   ClearOutlined,
-  ColumnWidthOutlined,
   DeleteColumnOutlined,
   DeleteRowOutlined,
   DownloadOutlined,
@@ -789,14 +790,14 @@ export default function SpreadsheetDocumentEditor({
       message.warning(`最多冻结前 ${MAX_FROZEN_ROWS} 行`);
       return;
     }
-    updateFrozen({ rows: activeRowIndex + 1 });
+    updateFrozen({ rows: activeRowIndex + 1, columns: 0 });
   };
   const freezeColumnsToCurrent = () => {
     if (activeColumnIndex + 1 > MAX_FROZEN_COLUMNS) {
       message.warning(`最多冻结前 ${MAX_FROZEN_COLUMNS} 列`);
       return;
     }
-    updateFrozen({ columns: activeColumnIndex + 1 });
+    updateFrozen({ rows: 0, columns: activeColumnIndex + 1 });
   };
   const freezeToCurrent = () => {
     if (activeRowIndex + 1 > MAX_FROZEN_ROWS || activeColumnIndex + 1 > MAX_FROZEN_COLUMNS) {
@@ -805,6 +806,29 @@ export default function SpreadsheetDocumentEditor({
     }
     updateFrozen({ rows: activeRowIndex + 1, columns: activeColumnIndex + 1 });
   };
+  const freezeActionItems = [
+    {
+      key: 'freeze-row',
+      label: `冻结至当前行（${activeRowIndex + 1} 行）`,
+      onClick: freezeRowsToCurrent,
+    },
+    {
+      key: 'freeze-column',
+      label: `冻结至当前列（${activeColumnIndex + 1} 列）`,
+      onClick: freezeColumnsToCurrent,
+    },
+    {
+      key: 'freeze-row-column',
+      label: `冻结至当前行和列（${activeRowIndex + 1} 行 | ${activeColumnIndex + 1} 列）`,
+      onClick: freezeToCurrent,
+    },
+    {
+      key: 'clear-freeze',
+      label: '取消冻结',
+      disabled: !frozenRows && !frozenColumns,
+      onClick: () => updateFrozen({ rows: 0, columns: 0 }),
+    },
+  ];
 
   const insertFormula = functionName => {
     let targetRow = activeRowIndex;
@@ -939,11 +963,7 @@ export default function SpreadsheetDocumentEditor({
     {
       key: 'view',
       label: '查看',
-      items: [
-        { key: 'freeze-row', label: frozenRows ? '取消冻结行' : `冻结至第 ${activeRowIndex + 1} 行`, onClick: () => frozenRows ? updateFrozen({ rows: 0 }) : freezeRowsToCurrent() },
-        { key: 'freeze-column', label: frozenColumns ? '取消冻结列' : `冻结至 ${spreadsheetColumnLabel(activeColumnIndex)} 列`, onClick: () => frozenColumns ? updateFrozen({ columns: 0 }) : freezeColumnsToCurrent() },
-        { key: 'clear-freeze', label: '取消全部冻结', disabled: !frozenRows && !frozenColumns, onClick: () => updateFrozen({ rows: 0, columns: 0 }) },
-      ],
+      items: freezeActionItems,
     },
   ];
 
@@ -1380,7 +1400,41 @@ export default function SpreadsheetDocumentEditor({
           <SpreadsheetToolbarButton title="升序" disabled={!canEdit} icon={<SortAscendingOutlined />} onClick={() => sortSelection('asc')} />
           <SpreadsheetToolbarButton title="降序" disabled={!canEdit} icon={<SortDescendingOutlined />} onClick={() => sortSelection('desc')} />
           <SpreadsheetToolbarButton title="筛选为当前值" disabled={!canEdit} active={Boolean(activeSheet.filters?.length)} icon={<FilterOutlined />} onClick={filterCurrentValue} />
-          <SpreadsheetToolbarButton title={frozenRows || frozenColumns ? '取消冻结' : '冻结至当前行列'} disabled={!canEdit} active={Boolean(frozenRows || frozenColumns)} icon={<ColumnWidthOutlined />} onClick={() => frozenRows || frozenColumns ? updateFrozen({ rows: 0, columns: 0 }) : freezeToCurrent()} />
+          <Tooltip title="冻结行列">
+            <Dropdown
+              trigger={['click']}
+              placement="bottomLeft"
+              disabled={!canEdit}
+              overlayClassName="relation-spreadsheet-freeze-menu"
+              menu={{
+                items: [
+                  ...freezeActionItems.slice(0, 3).map(item => ({
+                    key: item.key,
+                    label: item.label,
+                  })),
+                  { type: 'divider' },
+                  {
+                    key: freezeActionItems[3].key,
+                    label: freezeActionItems[3].label,
+                    disabled: freezeActionItems[3].disabled,
+                  },
+                ],
+                onClick: ({ key }) => freezeActionItems.find(item => item.key === key)?.onClick?.(),
+              }}
+            >
+              <Button
+                aria-label="冻结行列"
+                data-spreadsheet-freeze-trigger="true"
+                type="text"
+                size="small"
+                disabled={!canEdit}
+                className={`relation-spreadsheet-freeze-trigger${frozenRows || frozenColumns ? ' relation-spreadsheet-freeze-trigger--active' : ''}`}
+              >
+                <BorderInnerOutlined />
+                <CaretDownOutlined className="relation-spreadsheet-freeze-trigger__caret" />
+              </Button>
+            </Dropdown>
+          </Tooltip>
         </div>
       </div>
 

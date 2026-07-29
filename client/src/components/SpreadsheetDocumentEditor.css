@@ -79,3 +79,34 @@
   border-radius: 2px;
   font-size: 12px;
 }
+
+.relation-spreadsheet-freeze-trigger.ant-btn {
+  display: inline-flex;
+  min-width: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding-inline: 6px;
+  border-radius: 2px;
+}
+
+.relation-spreadsheet-freeze-trigger.ant-btn.relation-spreadsheet-freeze-trigger--active {
+  background: #e8f3ff;
+  color: #1677d2;
+}
+
+.relation-spreadsheet-freeze-trigger__caret {
+  font-size: 8px;
+}
+
+.relation-spreadsheet-freeze-menu .ant-dropdown-menu {
+  min-width: 232px;
+  padding-block: 4px;
+  border-radius: 2px;
+}
+
+.relation-spreadsheet-freeze-menu .ant-dropdown-menu-item {
+  min-height: 34px;
+  border-radius: 0;
+  font-size: 13px;
+}

@@ -11,9 +11,13 @@ function setInputValue(input, value) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-function ControlledSpreadsheetEditor({ initialWorkbook = createDefaultSpreadsheetWorkbook(), onWorkbookChange = () => {} }) {
+function ControlledSpreadsheetEditor({
+  initialWorkbook = createDefaultSpreadsheetWorkbook(),
+  initialSelectedCell = { sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 },
+  onWorkbookChange = () => {},
+}) {
   const [workbook, setWorkbook] = React.useState(initialWorkbook);
-  const [selectedCell, setSelectedCell] = React.useState({ sheetId: 'sheet_1', rowIndex: 0, columnIndex: 0 });
+  const [selectedCell, setSelectedCell] = React.useState(initialSelectedCell);
   return (
     <SpreadsheetDocumentEditor
       workbook={workbook}
@@ -247,6 +251,75 @@ test('applies native spreadsheet basic formatting to the selected cell', () => {
   container.remove();
 });
 
+test('offers current row and column freeze presets with undo and redo support', async () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      initialSelectedCell={{ sheetId: 'sheet_1', rowIndex: 4, columnIndex: 4 }}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const openFreezeMenu = async () => {
+    const trigger = container.querySelector('[data-spreadsheet-freeze-trigger="true"]');
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    return [...document.body.querySelectorAll('.relation-spreadsheet-freeze-menu .ant-dropdown-menu-item')];
+  };
+  const clickFreezeItem = async label => {
+    const items = await openFreezeMenu();
+    const item = items.find(candidate => candidate.textContent === label);
+    expect(item).toBeTruthy();
+    await act(async () => {
+      item.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+  };
+
+  let menuItems = await openFreezeMenu();
+  expect(menuItems.map(item => item.textContent)).toEqual([
+    '冻结至当前行（5 行）',
+    '冻结至当前列（5 列）',
+    '冻结至当前行和列（5 行 | 5 列）',
+    '取消冻结',
+  ]);
+  expect(menuItems[3].classList.contains('ant-dropdown-menu-item-disabled')).toBe(true);
+  await act(async () => {
+    container.querySelector('[data-spreadsheet-freeze-trigger="true"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+
+  await clickFreezeItem('冻结至当前行（5 行）');
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 0 });
+  await clickFreezeItem('冻结至当前列（5 列）');
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 0, columns: 5 });
+  await clickFreezeItem('冻结至当前行和列（5 行 | 5 列）');
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 5 });
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 0, columns: 5 });
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, shiftKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].frozen).toEqual({ rows: 5, columns: 5 });
+
+  await clickFreezeItem('取消冻结');
+  expect(latestWorkbook.sheets[0].frozen).toBeNull();
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('starts editing the selected cell when typing a printable key', () => {
   let latestWorkbook = createDefaultSpreadsheetWorkbook();
   const container = document.createElement('div');
@@ -292,9 +365,11 @@ test('keeps Excel import and cell editing disabled for readonly users while allo
 
   const importButton = container.querySelector('[aria-label="导入 Excel"]');
   const exportButton = container.querySelector('[aria-label="导出 Excel"]');
+  const freezeTrigger = container.querySelector('[data-spreadsheet-freeze-trigger="true"]');
   const fileInput = container.querySelector('input[type="file"]');
   const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
   expect(importButton.disabled).toBe(true);
+  expect(freezeTrigger.disabled).toBe(true);
   expect(fileInput.disabled).toBe(true);
   expect(exportButton.disabled).toBe(false);
   expect(formulaInput.readOnly).toBe(true);
