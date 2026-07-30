@@ -11712,6 +11712,173 @@ function syncOpportunityFollowUpTask({
   if (changed) clearRuntimeCache('follow-up-tasks:');
 }
 
+function resolveLegacyOpportunityAssigner(...candidateIds) {
+  for (const candidateId of candidateIds) {
+    const numericId = Number(candidateId);
+    if (Number.isInteger(numericId) && numericId > 0) return numericId;
+  }
+  return 1;
+}
+
+function upsertLegacyOpportunityFollowUpTask({
+  sourceType,
+  sourceId,
+  relatedId,
+  relatedName,
+  opportunityTitle,
+  sourceDescription,
+  sourceOutcome,
+  opportunityType,
+  opportunityAssignee,
+  assignedBy,
+}) {
+  const sourceConfig = sourceType === 'competitor_research'
+    ? { column: 'competitor_research_id', fallbackName: '未知公司' }
+    : sourceType === 'interaction'
+      ? { column: 'interaction_id', fallbackName: '未知人脉' }
+      : null;
+  const numericSourceId = Number(sourceId);
+  const assigneeId = Number(opportunityAssignee) || null;
+  const normalizedTitle = String(safeDecrypt(opportunityTitle) || '').trim();
+  if (!sourceConfig || !Number.isInteger(numericSourceId) || numericSourceId <= 0 || !normalizedTitle || !assigneeId) {
+    return false;
+  }
+
+  const normalizedType = opportunityType || null;
+  const ownerId = resolveLegacyOpportunityAssigner(assignedBy);
+  const taskTitle = `${String(relatedName || '').trim() || sourceConfig.fallbackName} - ${normalizedTitle}`;
+  const taskDescription = buildOpportunityTaskDescription(
+    safeDecrypt(sourceDescription),
+    safeDecrypt(sourceOutcome),
+  );
+  const encrypted = encryptRow('follow_up_tasks', {
+    title: taskTitle,
+    opportunity_title: normalizedTitle,
+    opportunity_note: taskDescription,
+  });
+  const relationColumns = sourceType === 'competitor_research'
+    ? { interactionId: 0, personId: 0, competitorResearchId: numericSourceId, companyId: Number(relatedId) || 0 }
+    : { interactionId: numericSourceId, personId: Number(relatedId) || 0, competitorResearchId: null, companyId: null };
+  const linkedTasks = db.prepare(`
+    SELECT id, title, opportunity_title, opportunity_note, task_type, assigned_to, assigned_by,
+      status, interaction_id, person_id, competitor_research_id, company_id
+    FROM follow_up_tasks
+    WHERE ${sourceConfig.column} = ?
+    ORDER BY id ASC
+  `).all(numericSourceId);
+
+  if (linkedTasks.length === 0) {
+    db.prepare(`
+      INSERT INTO follow_up_tasks (
+        title, interaction_id, person_id, competitor_research_id, company_id,
+        opportunity_title, opportunity_note, task_type, assigned_to, assigned_by, status
+      ) VALUES (?,?,?,?,?,?,?,?,?,?, 'pending')
+    `).run(
+      encrypted.title,
+      relationColumns.interactionId,
+      relationColumns.personId,
+      relationColumns.competitorResearchId,
+      relationColumns.companyId,
+      encrypted.opportunity_title,
+      encrypted.opportunity_note,
+      normalizedType,
+      assigneeId,
+      ownerId,
+    );
+    return true;
+  }
+
+  let changed = false;
+  const updateTask = db.prepare(`
+    UPDATE follow_up_tasks
+    SET title = ?, interaction_id = ?, person_id = ?, competitor_research_id = ?, company_id = ?,
+      opportunity_title = ?, opportunity_note = ?, task_type = ?, assigned_to = ?, assigned_by = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `);
+  for (const task of linkedTasks) {
+    const nextAssignedTo = task.status === 'done' ? (Number(task.assigned_to) || assigneeId) : assigneeId;
+    const needsUpdate = (
+      safeDecrypt(task.title) !== taskTitle
+      || safeDecrypt(task.opportunity_title) !== normalizedTitle
+      || safeDecrypt(task.opportunity_note) !== taskDescription
+      || (task.task_type || null) !== normalizedType
+      || Number(task.assigned_to) !== nextAssignedTo
+      || Number(task.assigned_by) !== ownerId
+      || Number(task.interaction_id || 0) !== Number(relationColumns.interactionId || 0)
+      || Number(task.person_id || 0) !== Number(relationColumns.personId || 0)
+      || Number(task.competitor_research_id || 0) !== Number(relationColumns.competitorResearchId || 0)
+      || Number(task.company_id || 0) !== Number(relationColumns.companyId || 0)
+    );
+    if (!needsUpdate) continue;
+    updateTask.run(
+      encrypted.title,
+      relationColumns.interactionId,
+      relationColumns.personId,
+      relationColumns.competitorResearchId,
+      relationColumns.companyId,
+      encrypted.opportunity_title,
+      encrypted.opportunity_note,
+      normalizedType,
+      nextAssignedTo,
+      ownerId,
+      task.id,
+    );
+    changed = true;
+  }
+  return changed;
+}
+
+function backfillLegacyOpportunityFollowUpTasks() {
+  let changed = false;
+  const interactions = db.prepare(`
+    SELECT i.id, i.person_id, i.opportunity_title, i.opportunity_type, i.opportunity_assignee,
+      i.description, i.outcome, i.created_by, p.name as person_name,
+      p.created_by as person_created_by, p.assigned_to as person_assigned_to
+    FROM interactions i
+    LEFT JOIN persons p ON i.person_id = p.id
+    WHERE i.opportunity_title IS NOT NULL AND i.opportunity_assignee IS NOT NULL
+  `).all();
+  for (const row of interactions) {
+    changed = upsertLegacyOpportunityFollowUpTask({
+      sourceType: 'interaction',
+      sourceId: row.id,
+      relatedId: row.person_id,
+      relatedName: safeDecrypt(row.person_name),
+      opportunityTitle: row.opportunity_title,
+      sourceDescription: row.description,
+      sourceOutcome: row.outcome,
+      opportunityType: row.opportunity_type,
+      opportunityAssignee: row.opportunity_assignee,
+      assignedBy: resolveLegacyOpportunityAssigner(row.created_by, row.person_created_by, row.person_assigned_to),
+    }) || changed;
+  }
+
+  const competitorResearchRows = db.prepare(`
+    SELECT cr.id, cr.company_id, cr.opportunity_title, cr.opportunity_type, cr.opportunity_assignee,
+      cr.content, cr.outcome, cr.created_by, c.name as company_name
+    FROM competitor_research cr
+    LEFT JOIN companies c ON cr.company_id = c.id
+    WHERE cr.opportunity_title IS NOT NULL AND cr.opportunity_assignee IS NOT NULL
+  `).all();
+  for (const row of competitorResearchRows) {
+    changed = upsertLegacyOpportunityFollowUpTask({
+      sourceType: 'competitor_research',
+      sourceId: row.id,
+      relatedId: row.company_id,
+      relatedName: safeDecrypt(row.company_name),
+      opportunityTitle: row.opportunity_title,
+      sourceDescription: row.content,
+      sourceOutcome: row.outcome,
+      opportunityType: row.opportunity_type,
+      opportunityAssignee: row.opportunity_assignee,
+      assignedBy: row.created_by,
+    }) || changed;
+  }
+
+  if (changed) clearRuntimeCache('follow-up-tasks:');
+}
+
 app.post('/api/interactions', (req, res) => {
   const { person_id, type, date, amount, description, outcome, follow_result, next_action, next_action_date, importance, gift_name,
     opportunity_title, opportunity_status, opportunity_assignee, opportunity_note, opportunity_type, watcher_ids } = req.body;
@@ -19329,6 +19496,12 @@ createIndexesIfColumnsExist('competitor_research', [
   { name: 'idx_competitor_research_opportunity_assignee', columnsSql: 'opportunity_assignee', columns: ['opportunity_assignee'] },
   { name: 'idx_competitor_research_opportunity_status', columnsSql: 'opportunity_status', columns: ['opportunity_status'] },
 ]);
+
+try {
+  backfillLegacyOpportunityFollowUpTasks();
+} catch (error) {
+  console.warn('[follow-up-tasks:legacy-backfill] skipped:', error.message);
+}
 
 app.get('/api/competitor_research', (req, res) => {
   const { company_id } = req.query;

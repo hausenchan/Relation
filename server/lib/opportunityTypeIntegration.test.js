@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
+const Database = require('better-sqlite3');
 const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
@@ -78,6 +79,162 @@ async function createUser(baseUrl, token, input) {
   assert.equal(response.status, 200, JSON.stringify(response.payload));
   return Number(response.payload.id);
 }
+
+async function stopServer(child) {
+  if (child.exitCode === null) {
+    child.kill('SIGTERM');
+    await Promise.race([once(child, 'exit'), new Promise(resolve => setTimeout(resolve, 2000))]);
+  }
+}
+
+async function startServer(databasePath) {
+  const port = await getFreePort();
+  const child = spawn(process.execPath, ['server/index.js'], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: 'test',
+      RELATION_DB_PATH: databasePath,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  await waitForServer(child);
+  return { child, baseUrl: `http://127.0.0.1:${port}` };
+}
+
+test('legacy opportunity records backfill follow-up task descriptions and assigner notifications', { timeout: 60000 }, async t => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-legacy-opportunity-'));
+  const databasePath = path.join(tempDir, 'data.db');
+  const children = [];
+
+  t.after(async () => {
+    await Promise.all(children.map(stopServer));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  let server = await startServer(databasePath);
+  children.push(server.child);
+  let baseUrl = server.baseUrl;
+  const admin = await login(baseUrl);
+  const suffix = `${process.pid}_${Date.now()}`;
+  const password = 'legacy-opportunity-123';
+  const creatorUsername = `legacy_creator_${suffix}`;
+  const workerUsername = `legacy_worker_${suffix}`;
+  const creatorId = await createUser(baseUrl, admin.token, {
+    username: creatorUsername,
+    display_name: '旧商机创建人',
+    password,
+  });
+  const workerId = await createUser(baseUrl, admin.token, {
+    username: workerUsername,
+    display_name: '旧商机执行人',
+    password,
+  });
+  const creator = await login(baseUrl, creatorUsername, password);
+
+  const person = await request(baseUrl, '/api/persons', {
+    method: 'POST',
+    token: creator.token,
+    body: { name: `旧互动商机人脉 ${suffix}`, company: `旧互动商机公司 ${suffix}`, person_category: 'business' },
+  });
+  assert.equal(person.status, 200, JSON.stringify(person.payload));
+
+  const interaction = await request(baseUrl, '/api/interactions', {
+    method: 'POST',
+    token: creator.token,
+    body: {
+      person_id: Number(person.payload.id),
+      type: 'meeting',
+      date: '2026-07-30',
+      importance: 'normal',
+      description: '旧互动描述',
+      outcome: '旧互动结果',
+      opportunity_title: '旧互动商机',
+      opportunity_status: 'new',
+      opportunity_assignee: workerId,
+    },
+  });
+  assert.equal(interaction.status, 200, JSON.stringify(interaction.payload));
+  const interactionId = Number(interaction.payload.id);
+
+  const company = await request(baseUrl, '/api/companies', {
+    method: 'POST',
+    token: creator.token,
+    body: { name: `旧公司研究客户 ${suffix}`, category: 'client' },
+  });
+  assert.equal(company.status, 200, JSON.stringify(company.payload));
+  const competitor = await request(baseUrl, '/api/competitor_research', {
+    method: 'POST',
+    token: creator.token,
+    body: {
+      company_id: Number(company.payload.id),
+      date: '2026-07-30',
+      title: '旧公司研究记录',
+      importance: 'normal',
+      content: '旧公司研究描述',
+      source: '测试',
+      outcome: '旧公司研究结果',
+      opportunity_title: '旧公司研究商机',
+      opportunity_status: 'following',
+      opportunity_assignee: workerId,
+      opportunity_type: '增长-客户',
+    },
+  });
+  assert.equal(competitor.status, 200, JSON.stringify(competitor.payload));
+  const competitorId = Number(competitor.payload.id);
+
+  await stopServer(server.child);
+
+  const legacyDb = new Database(databasePath);
+  legacyDb.prepare('DELETE FROM follow_up_tasks WHERE interaction_id = ?').run(interactionId);
+  legacyDb.prepare(`
+    UPDATE follow_up_tasks
+    SET assigned_by = 1, opportunity_note = NULL
+    WHERE competitor_research_id = ?
+  `).run(competitorId);
+  legacyDb.close();
+
+  server = await startServer(databasePath);
+  children.push(server.child);
+  baseUrl = server.baseUrl;
+  const restartedAdmin = await login(baseUrl);
+  const restartedWorker = await login(baseUrl, workerUsername, password);
+  const restartedCreator = await login(baseUrl, creatorUsername, password);
+
+  const followUps = await request(baseUrl, '/api/follow-up-tasks?all=1', { token: restartedAdmin.token });
+  assert.equal(followUps.status, 200, JSON.stringify(followUps.payload));
+  const legacyInteractionTask = followUps.payload.find(item => Number(item.interaction_id) === interactionId);
+  assert.equal(legacyInteractionTask?.opportunity_note, '描述：旧互动描述\n结果：旧互动结果');
+  assert.equal(Number(legacyInteractionTask?.assigned_by), creatorId);
+  assert.equal(Number(legacyInteractionTask?.assigned_to), workerId);
+
+  const legacyCompetitorTask = followUps.payload.find(item => Number(item.competitor_research_id) === competitorId);
+  assert.equal(legacyCompetitorTask?.opportunity_note, '描述：旧公司研究描述\n结果：旧公司研究结果');
+  assert.equal(Number(legacyCompetitorTask?.assigned_by), creatorId);
+  assert.equal(Number(legacyCompetitorTask?.assigned_to), workerId);
+  assert.equal(legacyCompetitorTask?.task_type, '增长-客户');
+
+  for (const task of [legacyInteractionTask, legacyCompetitorTask]) {
+    const statusUpdate = await request(baseUrl, `/api/follow-up-tasks/${task.id}`, {
+      method: 'PUT',
+      token: restartedWorker.token,
+      body: { status: 'in_progress' },
+    });
+    assert.equal(statusUpdate.status, 200, JSON.stringify(statusUpdate.payload));
+  }
+
+  const creatorNotifications = await request(baseUrl, '/api/notifications', { token: restartedCreator.token });
+  assert.equal(creatorNotifications.status, 200, JSON.stringify(creatorNotifications.payload));
+  assert.equal(
+    creatorNotifications.payload.some(item => item.type === 'task_status_updated' && item.title.includes('旧互动商机')),
+    true,
+  );
+  assert.equal(
+    creatorNotifications.payload.some(item => item.type === 'task_status_updated' && item.title.includes('旧公司研究商机')),
+    true,
+  );
+});
 
 test('opportunity type stays in sync with interaction and competitor follow-up tasks', { timeout: 45000 }, async t => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-opportunity-type-'));
