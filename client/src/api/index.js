@@ -579,6 +579,43 @@ export const aiTrainingApi = {
   getRuntimeStatus: () => api.get('/agents/ai-training/runtime-status').then(r => r.data),
 };
 
+export const businessDailyReportsApi = {
+  scopes: () => api.get('/agents/business-daily-reports/scopes').then(r => r.data),
+  runtimeStatus: (params) => api.get('/agents/business-daily-reports/runtime-status', { params }).then(r => r.data),
+  list: (params) => api.get('/agents/business-daily-reports', { params }).then(r => r.data),
+  create: (data) => api.post('/agents/business-daily-reports', data).then(r => r.data),
+  get: (id) => api.get(`/agents/business-daily-reports/${id}`).then(r => r.data),
+  runs: (id) => api.get(`/agents/business-daily-reports/${id}/runs`).then(r => r.data),
+  html: (id, params) => api.get(`/agents/business-daily-reports/${id}/html`, {
+    params,
+    responseType: 'text',
+  }).then(r => r.data),
+  artifact: (id, type, params) => api.get(
+    `/agents/business-daily-reports/${id}/artifacts/${encodeURIComponent(type)}`,
+    { params },
+  ).then(r => r.data),
+  artifactText: (id, type, params) => api.get(
+    `/agents/business-daily-reports/${id}/artifacts/${encodeURIComponent(type)}`,
+    { params, responseType: 'text' },
+  ).then(r => r.data),
+  regenerate: (id) => api.post(`/agents/business-daily-reports/${id}/regenerate`).then(r => r.data),
+  revisions: (id, params) => api.get(`/agents/business-daily-reports/${id}/revisions`, { params }).then(r => r.data),
+  createRevision: (id, data) => api.post(`/agents/business-daily-reports/${id}/revisions`, data).then(r => r.data),
+  updateRevision: (id, revisionId, data) => api.put(
+    `/agents/business-daily-reports/${id}/revisions/${revisionId}`,
+    data,
+  ).then(r => r.data),
+  submitRevision: (id, revisionId) => api.post(
+    `/agents/business-daily-reports/${id}/revisions/${revisionId}/submit`,
+  ).then(r => r.data),
+  reviewRevision: (id, revisionId, data) => api.post(
+    `/agents/business-daily-reports/${id}/revisions/${revisionId}/review`,
+    data,
+  ).then(r => r.data),
+  delete: (id, data) => api.delete(`/agents/business-daily-reports/${id}`, { data }).then(r => r.data),
+  restore: (id) => api.post(`/agents/business-daily-reports/${id}/restore`).then(r => r.data),
+};
+
 export const productAssetsApi = {
   list: (params) => api.get('/product-assets', { params }).then(r => r.data),
   get: (id) => api.get(`/product-assets/${id}`).then(r => r.data),
