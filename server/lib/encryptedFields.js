@@ -87,12 +87,17 @@ module.exports = {
   },
 
   product_asset_release_tasks: {
-    fields: ['error_message', 'log_text'],
+    fields: ['error_message', 'log_text', 'proxy_snapshot'],
     indexed: [],
   },
 
   product_asset_release_records: {
     fields: ['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain', 'release_link', 'release_note', 'upload_summary'],
+    indexed: [],
+  },
+
+  product_release_proxies: {
+    fields: ['username', 'password'],
     indexed: [],
   },
 

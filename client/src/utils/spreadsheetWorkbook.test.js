@@ -10,6 +10,7 @@ import {
   getDocumentContentSignature,
   getSpreadsheetConditionalStyle,
   getSpreadsheetColumnFilterOptions,
+  getSpreadsheetFilterColumns,
   getSpreadsheetFilterRange,
   getSpreadsheetProtectedRangeAccess,
   getSpreadsheetVisibleRows,
@@ -578,6 +579,58 @@ describe('spreadsheet workbook model', () => {
     shiftSpreadsheetColumns(sheet, 1, -1, workbook);
     expect(sheet.filterRange).toEqual({ startRow: 1, endRow: 4, startColumn: 0, endColumn: 1 });
     expect(sheet.filters).toEqual([{ columnIndex: 1, operator: 'equals', value: '1' }]);
+  });
+
+  test('preserves non-contiguous filter columns and migrates them with inserted or deleted columns', () => {
+    const workbook = normalizeSpreadsheetWorkbook({
+      ...createDefaultSpreadsheetWorkbook(),
+      sheets: [{
+        ...createDefaultSpreadsheetWorkbook().sheets[0],
+        filterRange: {
+          startRow: 0,
+          endRow: 4,
+          startColumn: 1,
+          endColumn: 5,
+          columns: [5, 1, 3, 3],
+        },
+        filters: [
+          { columnIndex: 1, operator: 'in', values: ['A'] },
+          { columnIndex: 2, operator: 'in', values: ['不应保留'] },
+          { columnIndex: 5, operator: 'in', values: ['B'] },
+        ],
+      }],
+    });
+    const sheet = workbook.sheets[0];
+
+    expect(getSpreadsheetFilterRange(sheet)).toEqual({
+      startRow: 0,
+      endRow: 4,
+      startColumn: 1,
+      endColumn: 5,
+      columns: [1, 3, 5],
+    });
+    expect(getSpreadsheetFilterColumns(sheet)).toEqual([1, 3, 5]);
+    expect(sheet.filters.map(filter => filter.columnIndex)).toEqual([1, 5]);
+
+    shiftSpreadsheetColumns(sheet, 2, 1, workbook);
+    expect(sheet.filterRange).toEqual({
+      startRow: 0,
+      endRow: 4,
+      startColumn: 1,
+      endColumn: 6,
+      columns: [1, 4, 6],
+    });
+    expect(sheet.filters.map(filter => filter.columnIndex)).toEqual([1, 6]);
+
+    shiftSpreadsheetColumns(sheet, 4, -1, workbook);
+    expect(sheet.filterRange).toEqual({
+      startRow: 0,
+      endRow: 4,
+      startColumn: 1,
+      endColumn: 5,
+      columns: [1, 5],
+    });
+    expect(sheet.filters.map(filter => filter.columnIndex)).toEqual([1, 5]);
   });
 
   test('shifts cells, formulas and merge ranges when rows or columns change', () => {

@@ -763,6 +763,146 @@ test('enables a single-column value filter from its header cell and keeps it und
   expect(latestWorkbook.sheets[0].filterRange)
     .toEqual({ startRow: 0, endRow: 3, startColumn: 1, endColumn: 1 });
 
+  act(() => container.querySelector('[data-spreadsheet-filter-toggle="true"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(latestWorkbook.sheets[0].filterRange).toBeNull();
+  expect(latestWorkbook.sheets[0].filters).toEqual([]);
+  expect(container.querySelectorAll('[data-spreadsheet-filter-trigger]')).toHaveLength(0);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('selects arbitrary columns with Command or Ctrl and only enables filters on those columns', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '日期' }, B1: { v: '申请量' }, C1: { v: '填充列' }, D1: { v: '完成量' }, E1: { v: '填充列2' }, F1: { v: '转化率' },
+    A2: { v: '07-28' }, B2: { v: '5575' }, C2: { v: '-' }, D2: { v: '3103' }, E2: { v: '-' }, F2: { v: '55.66%' },
+    A3: { v: '07-29' }, B3: { v: '6445' }, C3: { v: '-' }, D3: { v: '3792' }, E3: { v: '-' }, F3: { v: '58.84%' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />,
+  ));
+
+  const clickColumn = (columnIndex, modifiers = {}) => act(() => (
+    container.querySelector(`[data-spreadsheet-column-header="${columnIndex}"]`)
+      .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, ...modifiers }))
+  ));
+  clickColumn(1);
+  clickColumn(3, { metaKey: true });
+  expect(container.querySelector('[data-spreadsheet-column-header="3"]').getAttribute('aria-selected')).toBe('true');
+  clickColumn(3, { metaKey: true });
+  expect(container.querySelector('[data-spreadsheet-column-header="3"]').getAttribute('aria-selected')).toBe('false');
+  clickColumn(3, { metaKey: true });
+  clickColumn(5, { ctrlKey: true });
+
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('B:B,D:D,F:F');
+  expect([1, 3, 5].map(columnIndex => (
+    container.querySelector(`[data-spreadsheet-column-header="${columnIndex}"]`).getAttribute('aria-selected')
+  ))).toEqual(['true', 'true', 'true']);
+  expect(container.querySelector('[data-spreadsheet-column-header="2"]').getAttribute('aria-selected')).toBe('false');
+  expect(container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="3"]')
+    .getAttribute('aria-selected')).toBe('true');
+  expect(container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="4"]')
+    .getAttribute('aria-selected')).toBe('false');
+
+  act(() => container.querySelector('[aria-label="筛选"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filterRange).toEqual({
+    startRow: 0,
+    endRow: 2,
+    startColumn: 1,
+    endColumn: 5,
+    columns: [1, 3, 5],
+  });
+  expect([...container.querySelectorAll('[data-spreadsheet-filter-trigger]')]
+    .map(trigger => trigger.getAttribute('data-spreadsheet-filter-trigger'))).toEqual(['1', '3', '5']);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('uses a selected row as the filter header and extends through all used rows and columns', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '日期' }, B1: { v: '申请量' }, C1: { v: '状态' },
+    A2: { v: '07-28' }, B2: { v: '5575' }, C2: { v: '完成' },
+    A3: { v: '07-29' }, B3: { v: '6445' }, C3: { v: '进行中' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />,
+  ));
+
+  act(() => container.querySelector('[data-spreadsheet-row-header="0"]')
+    .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  act(() => container.querySelector('[aria-label="筛选"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 2, startColumn: 0, endColumn: 2 });
+  expect([...container.querySelectorAll('[data-spreadsheet-filter-trigger]')]
+    .map(trigger => trigger.getAttribute('data-spreadsheet-filter-trigger'))).toEqual(['0', '1', '2']);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('clears filter results without removing controls and can then cancel the filter entirely', async () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '状态' }, A2: { v: '完成' }, A3: { v: '进行中' },
+  };
+  latestWorkbook.sheets[0].filterRange = {
+    startRow: 0, endRow: 2, startColumn: 0, endColumn: 0,
+  };
+  latestWorkbook.sheets[0].filters = [
+    { columnIndex: 0, operator: 'in', values: ['完成'] },
+  ];
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />,
+  ));
+
+  const clickFilterMenuItem = async label => {
+    await act(async () => {
+      container.querySelector('[aria-label="筛选菜单"]')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await Promise.resolve();
+    });
+    const menuItem = [...document.body.querySelectorAll('.ant-dropdown-menu-item')]
+      .find(item => item.textContent.includes(label));
+    expect(menuItem).not.toBeNull();
+    act(() => menuItem.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  };
+
+  await clickFilterMenuItem('清除筛选结果');
+  expect(latestWorkbook.sheets[0].filters).toEqual([]);
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 2, startColumn: 0, endColumn: 0 });
+  expect(container.querySelector('[data-spreadsheet-filter-trigger="0"]')).not.toBeNull();
+
+  await clickFilterMenuItem('取消筛选');
+  expect(latestWorkbook.sheets[0].filterRange).toBeNull();
+  expect(container.querySelector('[data-spreadsheet-filter-trigger="0"]')).toBeNull();
+
   act(() => root.unmount());
   container.remove();
 });

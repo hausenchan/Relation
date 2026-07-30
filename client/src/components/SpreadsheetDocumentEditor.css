@@ -54,6 +54,42 @@
   color: #1677d2;
 }
 
+.relation-spreadsheet-filter-toolbar {
+  display: inline-flex;
+  height: 24px;
+  align-items: stretch;
+  border-radius: 2px;
+}
+
+.relation-spreadsheet-filter-toolbar > .ant-btn {
+  min-width: 24px;
+  padding-inline: 5px;
+  border-radius: 0;
+}
+
+.relation-spreadsheet-filter-toolbar > .ant-btn:first-child {
+  border-radius: 2px 0 0 2px;
+}
+
+.relation-spreadsheet-filter-toolbar > .ant-dropdown-trigger {
+  min-width: 16px;
+  padding-inline: 3px;
+  border-radius: 0 2px 2px 0;
+  font-size: 8px;
+}
+
+.relation-spreadsheet-filter-toolbar > .ant-btn:hover,
+.relation-spreadsheet-filter-toolbar--active > .ant-btn {
+  background: #e8f3ff;
+  color: #1677d2;
+}
+
+.relation-spreadsheet-filter-menu .ant-dropdown-menu {
+  min-width: 176px;
+  padding-block: 4px;
+  border-radius: 2px;
+}
+
 .relation-spreadsheet-cell-lock {
   position: absolute;
   top: 2px;

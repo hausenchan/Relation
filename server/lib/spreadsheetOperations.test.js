@@ -104,6 +104,20 @@ test('atomically applies sheet and workbook property operations with cell change
       after: { rows: 1, columns: 2 },
     },
     {
+      id: 'filter-range',
+      type: 'set_sheet_property',
+      sheet_id: 'sheet_1',
+      property: 'filterRange',
+      before: null,
+      after: {
+        startRow: 0,
+        endRow: 10,
+        startColumn: 0,
+        endColumn: 2,
+        columns: [0, 2],
+      },
+    },
+    {
       id: 'set-styles',
       type: 'set_workbook_property',
       property: 'styles',
@@ -117,6 +131,13 @@ test('atomically applies sheet and workbook property operations with cell change
   assert.deepEqual(result.conflicts, []);
   assert.equal(result.workbook.sheets[0].name, '经营数据');
   assert.deepEqual(result.workbook.sheets[0].frozen, { rows: 1, columns: 2 });
+  assert.deepEqual(result.workbook.sheets[0].filterRange, {
+    startRow: 0,
+    endRow: 10,
+    startColumn: 0,
+    endColumn: 2,
+    columns: [0, 2],
+  });
   assert.deepEqual(result.workbook.styles, { currency: { format: 'CNY' } });
   assert.deepEqual(result.workbook.sheets[0].cells.B1, { v: '=A1+1' });
   assert.equal(result.workbook.sheets[1].cells.A1.v, '=经营数据!A1');

@@ -11,6 +11,7 @@ const mockListSubjects = jest.fn();
 const mockGetSubject = jest.fn();
 const mockListTemplates = jest.fn();
 const mockModalConfirm = jest.fn();
+const mockMessageError = jest.fn();
 
 jest.mock('antd', () => {
   const actual = jest.requireActual('antd');
@@ -22,6 +23,9 @@ jest.mock('antd', () => {
     },
     Modal: Object.assign(actual.Modal, {
       confirm: (...args) => mockModalConfirm(...args),
+    }),
+    message: Object.assign(actual.message, {
+      error: (...args) => mockMessageError(...args),
     }),
   };
 });
@@ -191,7 +195,15 @@ beforeEach(() => {
     reduction_count: 0,
   }]);
   mockGetAsset.mockResolvedValue({ id: 1, app_name: '测试产品' });
-  mockCreateRelease.mockResolvedValue({ id: 88, status: 'success' });
+  mockCreateRelease.mockResolvedValue({
+    id: 88,
+    status: 'success',
+    proxy_summary: [
+      { field: 'api_domain', hostname: 'api.example.test', proxy_name: '默认出口' },
+      { field: 'analytics_domain', hostname: 'analytics.example.test', proxy_name: '默认出口' },
+      { field: 'cdn_domain', hostname: 'cdn.example.test', proxy_name: '默认出口' },
+    ],
+  });
   mockGetReleaseTask.mockResolvedValue({ task: { id: 88, status: 'success' } });
   mockListReleases.mockResolvedValue([]);
   mockListUsers.mockResolvedValue([]);
@@ -265,6 +277,8 @@ test('does not open product details after confirming a release task', async () =
   expect(mockGetAsset).not.toHaveBeenCalled();
   expect(document.body.textContent).not.toContain('产品资产详情');
   expect(document.body.textContent).toContain('提版执行进度');
+  expect(document.body.textContent).toContain('已匹配 3 个提版域名代理');
+  expect(document.body.textContent).toContain('api.example.test · 默认出口');
 
   act(() => root.unmount());
   container.remove();
@@ -337,6 +351,43 @@ test('refreshes product assets after a release task reaches success', async () =
   await waitFor(() => expect(mockListAssets).toHaveBeenCalledTimes(3));
   expect(document.body.textContent).toContain('普通模版');
   expect(document.body.textContent).toContain('已完成');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('shows the server error when release proxy matching is missing', async () => {
+  mockCreateRelease.mockRejectedValueOnce({
+    response: { data: { error: '提版信息不完整：以下域名没有匹配到启用的 IP 代理：API 域名' } },
+  });
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () => {
+    root.render(<ProductAssets />);
+    await flushUi();
+  });
+  await click(await waitFor(() => {
+    const button = findButton('提版');
+    expect(button).toBeDefined();
+    return button;
+  }));
+  await selectTemplate('普通模版');
+  await click(await waitFor(() => {
+    const button = findButton('确认参数');
+    expect(button).toBeDefined();
+    return button;
+  }));
+  const confirmConfig = await waitFor(() => mockModalConfirm.mock.calls[0][0]);
+  await act(async () => {
+    await expect(confirmConfig.onOk()).rejects.toEqual(expect.objectContaining({
+      response: expect.objectContaining({ data: expect.objectContaining({ error: expect.stringContaining('IP 代理') }) }),
+    }));
+    await flushUi();
+  });
+  expect(mockMessageError).toHaveBeenCalledWith(expect.stringContaining('IP 代理'));
+  expect(document.body.textContent).not.toContain('已匹配 3 个提版域名代理');
 
   act(() => root.unmount());
   container.remove();

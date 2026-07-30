@@ -110,6 +110,8 @@ console.log('上传版本: fake-domain-1.0.0');
 
   await waitForServer(child);
   const baseUrl = `http://127.0.0.1:${port}`;
+  const unauthenticatedProxyList = await request(baseUrl, '/api/product-release-proxies');
+  assert.equal(unauthenticatedProxyList.status, 401);
   const login = await request(baseUrl, '/api/auth/login', {
     method: 'POST',
     body: { username: 'admin', password: 'admin123' },
@@ -245,6 +247,80 @@ console.log('上传版本: fake-domain-1.0.0');
   });
   assert.equal(asset.status, 200, JSON.stringify(asset.payload));
 
+  const missingProxyRelease = await request(baseUrl, `/api/product-assets/${asset.payload.id}/releases`, {
+    method: 'POST',
+    token,
+    body: {
+      app_id: '2026072700010001',
+      template_id: template.payload.id,
+    },
+  });
+  assert.equal(missingProxyRelease.status, 400, JSON.stringify(missingProxyRelease.payload));
+  assert.match(missingProxyRelease.payload.error, /IP 代理/);
+
+  const noMenuUsername = `proxy-no-menu-${Date.now()}`;
+  const noMenuUser = await request(baseUrl, '/api/users', {
+    method: 'POST',
+    token,
+    body: {
+      username: noMenuUsername,
+      password: 'readonly-pass-1',
+      display_name: '无菜单代理测试用户',
+      role: 'member',
+    },
+  });
+  assert.equal(noMenuUser.status, 200, JSON.stringify(noMenuUser.payload));
+  const noMenuLogin = await request(baseUrl, '/api/auth/login', {
+    method: 'POST',
+    body: { username: noMenuUsername, password: 'readonly-pass-1' },
+  });
+  assert.equal(noMenuLogin.status, 200, JSON.stringify(noMenuLogin.payload));
+  const noMenuProxyList = await request(baseUrl, '/api/product-release-proxies', { token: noMenuLogin.payload.token });
+  assert.equal(noMenuProxyList.status, 403, JSON.stringify(noMenuProxyList.payload));
+
+  const proxy = await request(baseUrl, '/api/product-release-proxies', {
+    method: 'POST',
+    token,
+    body: {
+      name: '提版默认出口',
+      protocol: 'http',
+      host: '127.0.0.1',
+      port: 8080,
+      username: 'proxy-user',
+      password: 'proxy-password',
+      domain_suffixes: ['*'],
+      priority: 10,
+      status: 'enabled',
+      remark: '集成测试代理',
+    },
+  });
+  assert.equal(proxy.status, 200, JSON.stringify(proxy.payload));
+  const proxyList = await request(baseUrl, '/api/product-release-proxies', { token });
+  assert.equal(proxyList.status, 200, JSON.stringify(proxyList.payload));
+  assert.equal(proxyList.payload[0].name, '提版默认出口');
+  assert.equal(proxyList.payload[0].password, undefined);
+  assert.equal(proxyList.payload[0].username, undefined);
+  assert.equal(proxyList.payload[0].has_password, true);
+  const proxyDetail = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, { token });
+  assert.equal(proxyDetail.status, 200, JSON.stringify(proxyDetail.payload));
+  assert.equal(proxyDetail.payload.domain_suffixes[0], '*');
+  const proxyUpdate = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, {
+    method: 'PUT',
+    token,
+    body: { remark: '集成测试代理已更新' },
+  });
+  assert.equal(proxyUpdate.status, 200, JSON.stringify(proxyUpdate.payload));
+
+  const proxyDb = new Database(databasePath, { readonly: true });
+  const rawProxy = proxyDb.prepare('SELECT username, password, domain_suffixes_json FROM product_release_proxies WHERE id = ?').get(proxy.payload.id);
+  proxyDb.close();
+  assert.match(rawProxy.username, /^enc:v1:/);
+  assert.match(rawProxy.password, /^enc:v1:/);
+  assert.equal(rawProxy.domain_suffixes_json, '["*"]');
+  const preservedProxy = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, { token });
+  assert.equal(preservedProxy.status, 200, JSON.stringify(preservedProxy.payload));
+  assert.equal(preservedProxy.payload.has_password, true);
+
   const release = await request(baseUrl, `/api/product-assets/${asset.payload.id}/releases`, {
     method: 'POST',
     token,
@@ -263,7 +339,17 @@ console.log('上传版本: fake-domain-1.0.0');
   assert.equal(task.record.cdn_domain, 'https://cdn.subject.example.com');
   assert.equal(task.record.short_drama_domain, 'https://drama.subject.example.com');
   assert.equal(task.record.uploaded_version, 'fake-domain-1.0.0');
+  assert.equal(task.task.proxy_summary.length, 3);
+  assert.match(task.task.log_text, /任务级代理已关闭/);
   assert.match(task.task.log_text, /upload\.js stdout: 上传版本: fake-domain-1\.0\.0/);
+  assert.doesNotMatch(task.task.log_text, /proxy-password|Proxy-Authorization|127\.0\.0\.1:8080/);
+  const rawTaskDb = new Database(databasePath, { readonly: true });
+  const rawTask = rawTaskDb.prepare('SELECT proxy_snapshot, proxy_summary FROM product_asset_release_tasks WHERE id = ?').get(release.payload.id);
+  const rawRecord = rawTaskDb.prepare('SELECT proxy_summary FROM product_asset_release_records WHERE task_id = ?').get(release.payload.id);
+  rawTaskDb.close();
+  assert.match(rawTask.proxy_snapshot, /^enc:v1:/);
+  assert.doesNotMatch(rawTask.proxy_snapshot, /proxy-password/);
+  assert.doesNotMatch(rawRecord.proxy_summary, /proxy-password/);
   const uploadArgs = JSON.parse(fs.readFileSync(uploadArgsPath, 'utf8'));
   assert.equal(uploadArgs[uploadArgs.indexOf('--project') + 1], 'src');
   assert.equal(uploadArgs[uploadArgs.indexOf('--short-drama-template') + 1], '0');
@@ -301,6 +387,71 @@ process.exit(1);
   assert.match(failedTask.task.error_message, /缺少依赖 crypto-js/);
   assert.doesNotMatch(failedTask.task.error_message, /\u001b|\[31m|task was failed/);
   assert.match(failedTask.task.log_text, /upload\.js stderr: Error: cannot resolve module 'crypto-js'/);
+  assert.match(failedTask.task.log_text, /任务级代理已关闭/);
+
+  const readonlyUsername = `proxy-readonly-${Date.now()}`;
+  const readonlyUser = await request(baseUrl, '/api/users', {
+    method: 'POST',
+    token,
+    body: {
+      username: readonlyUsername,
+      password: 'readonly-pass-2',
+      display_name: '只读代理测试用户',
+      role: 'readonly',
+    },
+  });
+  assert.equal(readonlyUser.status, 200, JSON.stringify(readonlyUser.payload));
+  const menuGrant = await request(baseUrl, `/api/admin/menu-perms/${readonlyUser.payload.id}`, {
+    method: 'PUT',
+    token,
+    body: { menuKeys: ['/product-templates'] },
+  });
+  assert.equal(menuGrant.status, 200, JSON.stringify(menuGrant.payload));
+  const readonlyLogin = await request(baseUrl, '/api/auth/login', {
+    method: 'POST',
+    body: { username: readonlyUsername, password: 'readonly-pass-2' },
+  });
+  assert.equal(readonlyLogin.status, 200, JSON.stringify(readonlyLogin.payload));
+  const readonlyToken = readonlyLogin.payload.token;
+  const readonlyList = await request(baseUrl, '/api/product-release-proxies', { token: readonlyToken });
+  assert.equal(readonlyList.status, 200, JSON.stringify(readonlyList.payload));
+  const readonlyCreate = await request(baseUrl, '/api/product-release-proxies', {
+    method: 'POST',
+    token: readonlyToken,
+    body: { name: 'readonly-create', protocol: 'http', host: '127.0.0.1', port: 8080, domain_suffixes: ['*'] },
+  });
+  assert.equal(readonlyCreate.status, 403);
+  const readonlyUpdate = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, {
+    method: 'PUT',
+    token: readonlyToken,
+    body: { remark: 'readonly should fail' },
+  });
+  assert.equal(readonlyUpdate.status, 403);
+  const readonlyDelete = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, {
+    method: 'DELETE',
+    token: readonlyToken,
+  });
+  assert.equal(readonlyDelete.status, 403);
+
+  const clearPassword = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, {
+    method: 'PUT',
+    token,
+    body: { clear_password: true },
+  });
+  assert.equal(clearPassword.status, 200, JSON.stringify(clearPassword.payload));
+  const clearedProxy = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, { token });
+  assert.equal(clearedProxy.status, 200, JSON.stringify(clearedProxy.payload));
+  assert.equal(clearedProxy.payload.has_password, false);
+  const clearedProxyDb = new Database(databasePath, { readonly: true });
+  const clearedRawProxy = clearedProxyDb.prepare('SELECT password FROM product_release_proxies WHERE id = ?').get(proxy.payload.id);
+  clearedProxyDb.close();
+  assert.equal(clearedRawProxy.password, null);
+
+  const deletedProxy = await request(baseUrl, `/api/product-release-proxies/${proxy.payload.id}`, {
+    method: 'DELETE',
+    token,
+  });
+  assert.equal(deletedProxy.status, 200, JSON.stringify(deletedProxy.payload));
 });
 
 test('product assets menu access can read all assets across owners', { timeout: 30000 }, async t => {

@@ -448,6 +448,24 @@ function clampSpreadsheetRange(range, rowCount, columnCount) {
   return next.endRow >= next.startRow && next.endColumn >= next.startColumn ? next : null;
 }
 
+function normalizeSpreadsheetFilterRange(range, rowCount, columnCount) {
+  const normalized = clampSpreadsheetRange(range, rowCount, columnCount);
+  if (!normalized || !Array.isArray(range?.columns)) return normalized;
+  const columns = [...new Set(range.columns
+    .map(Number)
+    .filter(columnIndex => (
+      Number.isInteger(columnIndex)
+      && columnIndex >= 0
+      && columnIndex < columnCount
+    )))]
+    .sort((left, right) => left - right);
+  if (!columns.length) return null;
+  normalized.startColumn = columns[0];
+  normalized.endColumn = columns[columns.length - 1];
+  const continuous = columns.every((columnIndex, index) => columnIndex === columns[0] + index);
+  return continuous ? normalized : { ...normalized, columns };
+}
+
 function normalizeSpreadsheetRuleRanges(rules, rowCount, columnCount, prefix) {
   const usedIds = new Set();
   return (Array.isArray(rules) ? rules : []).flatMap((rule, index) => {
@@ -494,6 +512,17 @@ export function normalizeSpreadsheetWorkbook(content) {
     const columnCount = Math.max(10, Number(sourceSheet?.columnCount) || DEFAULT_COLUMN_COUNT, maxColumnIndex + 1);
     const frozenRows = Math.max(0, Math.min(rowCount, MAX_FROZEN_ROWS, Number(sourceSheet?.frozen?.rows) || 0));
     const frozenColumns = Math.max(0, Math.min(columnCount, MAX_FROZEN_COLUMNS, Number(sourceSheet?.frozen?.columns) || 0));
+    const filterRange = normalizeSpreadsheetFilterRange(sourceSheet?.filterRange, rowCount, columnCount);
+    const filterColumns = filterRange
+      ? new Set(Array.isArray(filterRange.columns)
+        ? filterRange.columns
+        : Array.from(
+          { length: filterRange.endColumn - filterRange.startColumn + 1 },
+          (_, filterColumnOffset) => filterRange.startColumn + filterColumnOffset,
+        ))
+      : null;
+    const filters = normalizeSpreadsheetFilters(sourceSheet?.filters, columnCount)
+      .filter(filter => !filterColumns || filterColumns.has(Number(filter.columnIndex)));
     return {
       ...sourceSheet,
       id,
@@ -504,8 +533,8 @@ export function normalizeSpreadsheetWorkbook(content) {
       rowHeights: sourceSheet?.rowHeights && typeof sourceSheet.rowHeights === 'object' ? sourceSheet.rowHeights : {},
       columnWidths: sourceSheet?.columnWidths && typeof sourceSheet.columnWidths === 'object' ? sourceSheet.columnWidths : {},
       mergedCells: normalizeMergedCells(sourceSheet?.mergedCells, rowCount, columnCount),
-      filters: normalizeSpreadsheetFilters(sourceSheet?.filters, columnCount),
-      filterRange: clampSpreadsheetRange(sourceSheet?.filterRange, rowCount, columnCount),
+      filters,
+      filterRange,
       frozen: frozenRows || frozenColumns ? { rows: frozenRows, columns: frozenColumns } : null,
       protectedRanges: normalizeSpreadsheetRuleRanges(sourceSheet?.protectedRanges, rowCount, columnCount, 'lock'),
       conditionalFormats: normalizeSpreadsheetRuleRanges(sourceSheet?.conditionalFormats, rowCount, columnCount, 'condition'),
@@ -1654,7 +1683,7 @@ export function getSpreadsheetFilterRange(sheet) {
   if (!sheet) return null;
   const rowCount = Math.max(1, Number(sheet.rowCount) || DEFAULT_ROW_COUNT);
   const columnCount = Math.max(1, Number(sheet.columnCount) || DEFAULT_COLUMN_COUNT);
-  const explicitRange = clampSpreadsheetRange(sheet.filterRange, rowCount, columnCount);
+  const explicitRange = normalizeSpreadsheetFilterRange(sheet.filterRange, rowCount, columnCount);
   if (explicitRange) return explicitRange;
   const filterColumns = (sheet.filters || [])
     .map(filter => Number(filter?.columnIndex))
@@ -1669,17 +1698,25 @@ export function getSpreadsheetFilterRange(sheet) {
   };
 }
 
+export function getSpreadsheetFilterColumns(sheet) {
+  const range = getSpreadsheetFilterRange(sheet);
+  if (!range) return [];
+  if (Array.isArray(range.columns)) return [...range.columns];
+  return Array.from(
+    { length: range.endColumn - range.startColumn + 1 },
+    (_, index) => range.startColumn + index,
+  );
+}
+
 export function setSpreadsheetFilterRange(sheet, range) {
   if (!sheet) return sheet;
   const rowCount = Math.max(1, Number(sheet.rowCount) || DEFAULT_ROW_COUNT);
   const columnCount = Math.max(1, Number(sheet.columnCount) || DEFAULT_COLUMN_COUNT);
-  const nextRange = clampSpreadsheetRange(range, rowCount, columnCount);
+  const nextRange = normalizeSpreadsheetFilterRange(range, rowCount, columnCount);
+  const nextColumns = new Set(nextRange ? getSpreadsheetFilterColumns({ ...sheet, filterRange: nextRange }) : []);
   sheet.filterRange = nextRange;
   sheet.filters = nextRange
-    ? (sheet.filters || []).filter(filter => (
-      Number(filter.columnIndex) >= nextRange.startColumn
-      && Number(filter.columnIndex) <= nextRange.endColumn
-    ))
+    ? (sheet.filters || []).filter(filter => nextColumns.has(Number(filter.columnIndex)))
     : [];
   return sheet;
 }
@@ -1712,8 +1749,9 @@ export function getSpreadsheetColumnFilterOptions(workbookValue, sheetId, column
   const workbook = evaluator.workbook;
   const sheet = workbook.sheets.find(item => item.id === sheetId) || workbook.sheets[0];
   const range = getSpreadsheetFilterRange(sheet);
+  const filterColumns = new Set(getSpreadsheetFilterColumns(sheet));
   const targetColumn = Number(columnIndex);
-  if (!range || targetColumn < range.startColumn || targetColumn > range.endColumn) return [];
+  if (!range || !filterColumns.has(targetColumn)) return [];
   const options = new Map();
   for (let rowIndex = range.startRow + 1; rowIndex <= range.endRow; rowIndex += 1) {
     const value = String(evaluator.getValue(sheet.id, rowIndex, targetColumn) ?? '');
@@ -1736,9 +1774,9 @@ export function getSpreadsheetVisibleRows(workbookValue, sheetId) {
   const sheet = workbook.sheets.find(item => item.id === sheetId) || workbook.sheets[0];
   const filters = Array.isArray(sheet.filters) ? sheet.filters : [];
   const filterRange = getSpreadsheetFilterRange(sheet);
+  const filterColumns = new Set(getSpreadsheetFilterColumns(sheet));
   const activeFilters = filterRange ? filters.filter(filter => (
-    Number(filter.columnIndex) >= filterRange.startColumn
-    && Number(filter.columnIndex) <= filterRange.endColumn
+    filterColumns.has(Number(filter.columnIndex))
   )).map(filter => ({
     ...filter,
     normalizedValues: filter.operator === 'in' || filter.operator === 'not_in'
@@ -1893,6 +1931,7 @@ function shiftSpreadsheetRuleRanges(rules, axis, startIndex, delta) {
 }
 
 function shiftSpreadsheetViewRange(range, axis, startIndex, delta) {
+  const sourceColumns = Array.isArray(range?.columns) ? range.columns : null;
   const next = normalizeSpreadsheetRange(range);
   if (!next) return null;
   const startKey = axis === 'row' ? 'startRow' : 'startColumn';
@@ -1907,7 +1946,22 @@ function shiftSpreadsheetViewRange(range, axis, startIndex, delta) {
     next[endKey] += delta;
   } else if (startIndex <= next[endKey]) next[endKey] += delta;
   if (next[startKey] < 0 || next[endKey] < next[startKey]) return null;
-  return next;
+  if (!sourceColumns) return next;
+  if (axis !== 'column') return { ...next, columns: [...sourceColumns] };
+  const columns = [...new Set(sourceColumns.flatMap(value => {
+    const columnIndex = Number(value);
+    if (!Number.isInteger(columnIndex)) return [];
+    if (delta < 0 && columnIndex === startIndex) return [];
+    return [columnIndex >= startIndex ? columnIndex + delta : columnIndex];
+  }).filter(columnIndex => columnIndex >= 0))].sort((left, right) => left - right);
+  if (!columns.length) return null;
+  const rangeWithColumns = {
+    ...next,
+    startColumn: columns[0],
+    endColumn: columns[columns.length - 1],
+  };
+  const continuous = columns.every((columnIndex, index) => columnIndex === columns[0] + index);
+  return continuous ? rangeWithColumns : { ...rangeWithColumns, columns };
 }
 
 function mapSpreadsheetRuleRanges(rules, mapper) {
