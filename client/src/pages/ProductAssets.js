@@ -517,7 +517,7 @@ export default function ProductAssets() {
           setReleaseConfirmLoading(true);
           try {
             const result = await productAssetsApi.createRelease(releaseAsset.id, values);
-            setReleaseTask({ task: { id: result.id, status: result.status } });
+            setReleaseTask({ task: { id: result.id, status: result.status, proxy_summary: result.proxy_summary || [] } });
             setReleaseModalOpen(false);
             message.success('提版任务已创建');
             load();
@@ -1257,6 +1257,22 @@ export default function ProductAssets() {
                 )
                 : '弹窗会自动刷新任务状态和脚本日志，可直接观察当前执行进度。'}
             />
+            {releaseTask.task.proxy_summary?.length > 0 && (
+              <Alert
+                type="success"
+                showIcon
+                message={`已匹配 ${releaseTask.task.proxy_summary.length} 个提版域名代理`}
+                description={(
+                  <Space wrap size={[6, 4]}>
+                    {releaseTask.task.proxy_summary.map(item => (
+                      <Tag key={`${item.field}-${item.hostname}`}>
+                        {item.hostname} · {item.proxy_name || `代理 #${item.proxy_id}`}
+                      </Tag>
+                    ))}
+                  </Space>
+                )}
+              />
+            )}
             {releaseTask.task.status !== 'failed' && (
               <Descriptions column={isMobile ? 1 : 2} size="small" bordered>
                 <Descriptions.Item label="任务 ID">{releaseTask.task.id || '-'}</Descriptions.Item>
@@ -1323,6 +1339,11 @@ export default function ProductAssets() {
                         <Text type="secondary">{item.uploaded_version || item.release_version || '-'}</Text>
                       </Space>
                       <Text type="secondary">提交时间：{item.submitted_at?.replace('T', ' ').slice(0, 19) || '-'}</Text>
+                      {item.proxy_summary?.length > 0 && (
+                        <Text type="secondary">
+                          代理匹配：{item.proxy_summary.map(proxy => `${proxy.hostname} · ${proxy.proxy_name || `代理 #${proxy.proxy_id}`}`).join('、')}
+                        </Text>
+                      )}
                     </Space>
                   </List.Item>
                 )}

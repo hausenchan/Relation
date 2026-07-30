@@ -623,6 +623,14 @@ export const productTemplatesApi = {
   runtimeCheck: () => api.post('/release-runtime/check').then(r => r.data),
 };
 
+export const productReleaseProxiesApi = {
+  list: (params) => api.get('/product-release-proxies', { params }).then(r => r.data),
+  get: (id) => api.get(`/product-release-proxies/${id}`).then(r => r.data),
+  create: (data) => api.post('/product-release-proxies', data).then(r => r.data),
+  update: (id, data) => api.put(`/product-release-proxies/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/product-release-proxies/${id}`).then(r => r.data),
+};
+
 function buildCompanySubjectFormData(data = {}, identityKeyFile) {
   const formData = new FormData();
   Object.entries(data).forEach(([key, value]) => {

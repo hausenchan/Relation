@@ -27,6 +27,14 @@ const {
   validateRelativeProjectPath,
   validateTemplatePayload,
 } = require('./lib/productTemplateRelease');
+const {
+  buildProxySnapshot,
+  buildProxySummary,
+  createProductReleaseProxyRouter,
+  normalizeProxyPayload,
+  resolveProxySelections,
+  serializeProxy,
+} = require('./lib/productReleaseProxy');
 const NetworkCaptureManager = require('./lib/networkCapture');
 const { importWolaiUrlToBlocks } = require('./lib/wolaiUrlImport');
 const { importWolaiMcpToBlocks } = require('./lib/wolaiMcpImport');
@@ -2685,15 +2693,50 @@ db.exec(`
     ON product_asset_release_records(asset_id, submitted_at, id);
   CREATE INDEX IF NOT EXISTS idx_product_release_records_task
     ON product_asset_release_records(task_id);
+
+  CREATE TABLE IF NOT EXISTS product_release_proxies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    protocol TEXT NOT NULL DEFAULT 'http',
+    host TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    username TEXT,
+    password TEXT,
+    domain_suffixes_json TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 100,
+    status TEXT NOT NULL DEFAULT 'enabled',
+    remark TEXT,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_product_release_proxies_status
+    ON product_release_proxies(status);
+  CREATE INDEX IF NOT EXISTS idx_product_release_proxies_priority
+    ON product_release_proxies(priority, updated_at, id);
 `);
+
+const productReleaseTaskCols = db.prepare("PRAGMA table_info(product_asset_release_tasks)").all().map(c => c.name);
+if (productReleaseTaskCols.length > 0) {
+  if (!productReleaseTaskCols.includes('proxy_snapshot')) db.exec("ALTER TABLE product_asset_release_tasks ADD COLUMN proxy_snapshot TEXT");
+  if (!productReleaseTaskCols.includes('proxy_summary')) db.exec("ALTER TABLE product_asset_release_tasks ADD COLUMN proxy_summary TEXT");
+}
+const productReleaseRecordCols = db.prepare("PRAGMA table_info(product_asset_release_records)").all().map(c => c.name);
+if (productReleaseRecordCols.length > 0 && !productReleaseRecordCols.includes('proxy_summary')) {
+  db.exec("ALTER TABLE product_asset_release_records ADD COLUMN proxy_summary TEXT");
+}
 
 ensureMysqlLongTextColumn('company_subjects', 'identity_key', 'NULL');
 ['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain']
   .forEach(column => ensureMysqlLongTextColumn('company_subjects', column, 'NULL'));
 ensureMysqlLongTextColumn('product_template_versions', 'snapshot_json', 'NULL');
-['error_message', 'log_text'].forEach(column => ensureMysqlLongTextColumn('product_asset_release_tasks', column, 'NULL'));
+['error_message', 'log_text', 'proxy_snapshot', 'proxy_summary']
+  .forEach(column => ensureMysqlLongTextColumn('product_asset_release_tasks', column, 'NULL'));
 ['api_domain', 'analytics_domain', 'cdn_domain', 'short_drama_domain', 'release_link', 'release_note', 'upload_summary']
   .forEach(column => ensureMysqlLongTextColumn('product_asset_release_records', column, 'NULL'));
+ensureMysqlLongTextColumn('product_asset_release_records', 'proxy_summary', 'NULL');
+ensureMysqlLongTextColumn('product_release_proxies', 'domain_suffixes_json');
 
 const interruptedReleaseError = encryptRow('product_asset_release_tasks', { error_message: '服务重启导致任务中断' }).error_message;
 db.prepare(`
@@ -21653,7 +21696,8 @@ const PRODUCT_TEMPLATE_ALLOWED_FIELDS = [
   'project_path', 'description', 'remark',
 ];
 const PRODUCT_RELEASE_TASK_FIELDS = [
-  'status', 'current_step', 'attempt_count', 'error_message', 'log_text', 'started_at', 'finished_at',
+  'status', 'current_step', 'attempt_count', 'error_message', 'log_text', 'proxy_snapshot', 'proxy_summary',
+  'started_at', 'finished_at',
 ];
 const PRODUCT_RELEASE_STATUS_LABELS = {
   pending: '排队中',
@@ -21661,6 +21705,13 @@ const PRODUCT_RELEASE_STATUS_LABELS = {
   success: '已完成',
   failed: '失败',
   cancelled: '已取消',
+};
+const PRODUCT_RELEASE_DOMAIN_LABELS = {
+  api_domain: 'API 域名',
+  analytics_domain: '埋点域名',
+  cdn_domain: 'CDN 域名',
+  short_drama_domain: '短剧域名',
+  default: '默认代理（*）',
 };
 
 function serializeProductTemplate(row) {
@@ -21793,15 +21844,49 @@ function getVisibleProductAsset(assetId, user) {
 function serializeReleaseTask(row) {
   if (!row) return null;
   const decrypted = decryptRow('product_asset_release_tasks', row);
+  const { proxy_snapshot: _proxySnapshot, proxy_summary: rawProxySummary, ...safeTask } = decrypted;
+  let proxySummary = [];
+  try { proxySummary = rawProxySummary ? JSON.parse(rawProxySummary) : []; } catch { proxySummary = []; }
   return {
-    ...decrypted,
-    status_label: PRODUCT_RELEASE_STATUS_LABELS[decrypted.status] || decrypted.status,
+    ...safeTask,
+    proxy_summary: Array.isArray(proxySummary) ? proxySummary : [],
+    status_label: PRODUCT_RELEASE_STATUS_LABELS[safeTask.status] || safeTask.status,
   };
 }
 
 function serializeReleaseRecord(row) {
   if (!row) return null;
-  return decryptRow('product_asset_release_records', row);
+  const decrypted = decryptRow('product_asset_release_records', row);
+  let proxySummary = [];
+  try { proxySummary = decrypted.proxy_summary ? JSON.parse(decrypted.proxy_summary) : []; } catch { proxySummary = []; }
+  return { ...decrypted, proxy_summary: Array.isArray(proxySummary) ? proxySummary : [] };
+}
+
+function parseProxySummary(value) {
+  try {
+    const parsed = value ? JSON.parse(value) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function getProductReleaseProxyRows() {
+  const rows = db.prepare('SELECT * FROM product_release_proxies ORDER BY priority ASC, updated_at DESC, id DESC').all();
+  return decryptRows('product_release_proxies', rows).map(row => ({
+    ...row,
+    domain_suffixes: parseProxySummary(row.domain_suffixes_json),
+  }));
+}
+
+function getProductReleaseProxy(id) {
+  const row = db.prepare('SELECT * FROM product_release_proxies WHERE id = ?').get(id);
+  if (!row) return null;
+  const decrypted = decryptRow('product_release_proxies', row);
+  return {
+    ...decrypted,
+    domain_suffixes: parseProxySummary(decrypted.domain_suffixes_json),
+  };
 }
 
 function updateProductReleaseTask(taskId, patch) {
@@ -21902,78 +21987,111 @@ async function executeProductAssetReleaseTask(taskId) {
   const root = getProductTemplateWorkRoot();
   const taskRoot = path.join(root, 'release', String(taskId));
   let lastError = null;
+  let releaseProxyRouter = null;
+  let releaseProxyEnv = process.env;
   updateProductReleaseTask(taskId, { status: 'running', started_at: new Date().toISOString(), current_step: 'prepare' });
   setProductAssetReleaseSummary(task, 'running');
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    updateProductReleaseTask(taskId, { attempt_count: attempt });
-    try {
-      fs.rmSync(taskRoot, { recursive: true, force: true });
-      fs.mkdirSync(taskRoot, { recursive: true });
-      updateProductReleaseLog(taskId, `开始第 ${attempt} 次提版`, { current_step: 'prepare' });
-      const projectPathResult = validateRelativeProjectPath(version.project_path || template.project_path);
-      if (projectPathResult.error) {
-        const error = new Error(projectPathResult.error);
-        error.code = 'TEMPLATE_CONFIG_INVALID';
-        throw error;
-      }
-      const projectPath = projectPathResult.value;
+  try {
+    const taskSnapshot = decryptRow('product_asset_release_tasks', task).proxy_snapshot;
+    let proxySnapshot = [];
+    try { proxySnapshot = taskSnapshot ? JSON.parse(taskSnapshot) : []; } catch { proxySnapshot = []; }
+    if (!Array.isArray(proxySnapshot) || proxySnapshot.length === 0) {
+      const error = new Error('提版任务缺少代理配置快照，请重新创建提版任务');
+      error.code = 'RELEASE_PROXY_SNAPSHOT_MISSING';
+      throw error;
+    }
+    releaseProxyRouter = createProductReleaseProxyRouter(proxySnapshot);
+    await releaseProxyRouter.start();
+    releaseProxyEnv = releaseProxyRouter.buildEnvironment();
+    updateProductReleaseLog(taskId, '已按提版域名开启任务级代理，开始后续操作', { current_step: 'prepare' });
 
-      const identitySource = getReleaseIdentityKey(task.subject_id);
-      let identityTempRoot = null;
-      let identityKeyPath = identitySource.identityKeyPath;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      updateProductReleaseTask(taskId, { attempt_count: attempt });
       try {
-        if (!identityKeyPath) {
-          identityTempRoot = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'relation-minidev-'));
-          identityKeyPath = path.join(identityTempRoot, 'config.json');
-          fs.writeFileSync(identityKeyPath, identitySource.identityKey, { mode: 0o600 });
+        fs.rmSync(taskRoot, { recursive: true, force: true });
+        fs.mkdirSync(taskRoot, { recursive: true });
+        updateProductReleaseLog(taskId, `开始第 ${attempt} 次提版`, { current_step: 'prepare' });
+        const projectPathResult = validateRelativeProjectPath(version.project_path || template.project_path);
+        if (projectPathResult.error) {
+          const error = new Error(projectPathResult.error);
+          error.code = 'TEMPLATE_CONFIG_INVALID';
+          throw error;
         }
-        updateProductReleaseLog(taskId, '校验通过，开始调用 upload.js 提版脚本', { current_step: 'upload' });
-        const uploaded = await runUploadScript({
-          appId: task.app_id,
-          projectPath,
-          tempProjectPath: path.join(taskRoot, 'upload-project'),
-          identityKeyPath,
-          template: template.code || template.name || `template-${template.id}`,
-          shortDramaTemplate: isShortDramaTemplate(template),
-          domains: {
-            api_domain: release.api_domain,
-            analytics_domain: release.analytics_domain,
-            cdn_domain: release.cdn_domain,
-            short_drama_domain: release.short_drama_domain,
-          },
-          version: release.release_version,
-          versionDescription: release.release_note,
-          onLog: message => updateProductReleaseLog(taskId, message),
+        const projectPath = projectPathResult.value;
+
+        const identitySource = getReleaseIdentityKey(task.subject_id);
+        let identityTempRoot = null;
+        let identityKeyPath = identitySource.identityKeyPath;
+        try {
+          if (!identityKeyPath) {
+            identityTempRoot = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'relation-minidev-'));
+            identityKeyPath = path.join(identityTempRoot, 'config.json');
+            fs.writeFileSync(identityKeyPath, identitySource.identityKey, { mode: 0o600 });
+          }
+          updateProductReleaseLog(taskId, '校验通过，开始调用 upload.js 提版脚本', { current_step: 'upload' });
+          const uploaded = await runUploadScript({
+            appId: task.app_id,
+            projectPath,
+            tempProjectPath: path.join(taskRoot, 'upload-project'),
+            identityKeyPath,
+            template: template.code || template.name || `template-${template.id}`,
+            shortDramaTemplate: isShortDramaTemplate(template),
+            domains: {
+              api_domain: release.api_domain,
+              analytics_domain: release.analytics_domain,
+              cdn_domain: release.cdn_domain,
+              short_drama_domain: release.short_drama_domain,
+            },
+            version: release.release_version,
+            versionDescription: release.release_note,
+            env: releaseProxyEnv,
+            onLog: message => updateProductReleaseLog(taskId, message),
+          });
+          const encodedSummary = encryptRow('product_asset_release_records', { upload_summary: uploaded.summary }).upload_summary;
+          db.prepare(`
+            UPDATE product_asset_release_records
+            SET release_status = 'launched', uploaded_version = ?, upload_summary = ?, completed_at = CURRENT_TIMESTAMP
+            WHERE task_id = ?
+          `).run(uploaded.uploadedVersion, encodedSummary, taskId);
+          updateProductReleaseTask(taskId, {
+            status: 'success',
+            current_step: 'completed',
+            error_message: null,
+            finished_at: new Date().toISOString(),
+          });
+          updateProductReleaseLog(taskId, `提版完成，上传版本 ${uploaded.uploadedVersion || '-'}`);
+          setProductAssetReleaseSummary(task, 'launched', uploaded.uploadedVersion);
+          return;
+        } finally {
+          if (identityTempRoot) fs.rmSync(identityTempRoot, { recursive: true, force: true });
+        }
+      } catch (error) {
+        lastError = error;
+        updateProductReleaseLog(taskId, `第 ${attempt} 次提版失败：${sanitizeProductReleaseLog(error.message)}`, {
+          current_step: 'failed',
+          error_message: sanitizeProductReleaseLog(error.message),
         });
-        const encodedSummary = encryptRow('product_asset_release_records', { upload_summary: uploaded.summary }).upload_summary;
-        db.prepare(`
-          UPDATE product_asset_release_records
-          SET release_status = 'launched', uploaded_version = ?, upload_summary = ?, completed_at = CURRENT_TIMESTAMP
-          WHERE task_id = ?
-        `).run(uploaded.uploadedVersion, encodedSummary, taskId);
-        updateProductReleaseTask(taskId, {
-          status: 'success',
-          current_step: 'completed',
-          error_message: null,
-          finished_at: new Date().toISOString(),
-        });
-        updateProductReleaseLog(taskId, `提版完成，上传版本 ${uploaded.uploadedVersion || '-'}`);
-        setProductAssetReleaseSummary(task, 'launched', uploaded.uploadedVersion);
-        return;
-      } finally {
-        if (identityTempRoot) fs.rmSync(identityTempRoot, { recursive: true, force: true });
+        if (attempt < 2 && isReleaseRetryable(error)) {
+          updateProductReleaseLog(taskId, '任务将在短暂等待后重试');
+          await new Promise(resolve => setTimeout(resolve, 300));
+          continue;
+        }
       }
-    } catch (error) {
-      lastError = error;
-      updateProductReleaseLog(taskId, `第 ${attempt} 次提版失败：${sanitizeProductReleaseLog(error.message)}`, {
-        current_step: 'failed',
-        error_message: sanitizeProductReleaseLog(error.message),
-      });
-      if (attempt < 2 && isReleaseRetryable(error)) {
-        updateProductReleaseLog(taskId, '任务将在短暂等待后重试');
-        await new Promise(resolve => setTimeout(resolve, 300));
-        continue;
+    }
+  } catch (error) {
+    lastError = error;
+    updateProductReleaseLog(taskId, `提版代理准备失败：${sanitizeProductReleaseLog(error.message)}`, {
+      current_step: 'failed',
+      error_message: sanitizeProductReleaseLog(error.message),
+    });
+  } finally {
+    if (releaseProxyRouter) {
+      try {
+        await releaseProxyRouter.close();
+        updateProductReleaseLog(taskId, '提版结束，任务级代理已关闭');
+      } catch (error) {
+        updateProductReleaseLog(taskId, `任务级代理关闭异常：${sanitizeProductReleaseLog(error.message)}`);
       }
     }
   }
@@ -21999,6 +22117,103 @@ function requireProductTemplateMenu(req, res, next) {
   }
   next();
 }
+
+app.get('/api/product-release-proxies', requireProductTemplateMenu, (req, res) => {
+  const { name, status, domain_suffix } = req.query;
+  const rows = getProductReleaseProxyRows()
+    .filter(row => !name || String(row.name || '').toLowerCase().includes(String(name).trim().toLowerCase()))
+    .filter(row => !status || row.status === status)
+    .filter(row => !domain_suffix || row.domain_suffixes.some(suffix => String(suffix).toLowerCase().includes(String(domain_suffix).trim().toLowerCase())))
+    .map(serializeProxy);
+  res.json(rows);
+});
+
+app.get('/api/product-release-proxies/:id', requireProductTemplateMenu, (req, res) => {
+  const proxy = getProductReleaseProxy(req.params.id);
+  if (!proxy) return res.status(404).json({ error: '代理配置不存在' });
+  res.json(serializeProxy(proxy));
+});
+
+app.post('/api/product-release-proxies', requireProductTemplateMenu, canWrite, (req, res) => {
+  const parsed = normalizeProxyPayload(req.body || {});
+  if (parsed.errors?.length) return res.status(400).json({ error: parsed.errors.join('；') });
+  const values = parsed.values;
+  const encoded = encryptRow('product_release_proxies', {
+    username: values.username || null,
+    password: values.password || null,
+  });
+  const result = db.prepare(`
+    INSERT INTO product_release_proxies (
+      name, protocol, host, port, username, password, domain_suffixes_json,
+      priority, status, remark, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    values.name,
+    values.protocol,
+    values.host,
+    values.port,
+    encoded.username,
+    encoded.password,
+    JSON.stringify(values.domain_suffixes),
+    values.priority,
+    values.status,
+    values.remark || null,
+    req.user.id,
+  );
+  res.json({ id: result.lastInsertRowid });
+});
+
+app.put('/api/product-release-proxies/:id', requireProductTemplateMenu, canWrite, (req, res) => {
+  const existing = getProductReleaseProxy(req.params.id);
+  if (!existing) return res.status(404).json({ error: '代理配置不存在' });
+  const parsed = normalizeProxyPayload(req.body || {}, { partial: true });
+  if (parsed.errors?.length) return res.status(400).json({ error: parsed.errors.join('；') });
+  const values = { ...parsed.values };
+  if (req.body?.clear_username) values.username = null;
+  if (req.body?.clear_password) values.password = null;
+  const next = {
+    name: values.name === undefined ? existing.name : values.name,
+    protocol: values.protocol === undefined ? existing.protocol : values.protocol,
+    host: values.host === undefined ? existing.host : values.host,
+    port: values.port === undefined ? existing.port : values.port,
+    username: values.username === undefined ? existing.username : values.username,
+    password: values.password === undefined ? existing.password : values.password,
+    domain_suffixes: values.domain_suffixes === undefined ? existing.domain_suffixes : values.domain_suffixes,
+    priority: values.priority === undefined ? existing.priority : values.priority,
+    status: values.status === undefined ? existing.status : values.status,
+    remark: values.remark === undefined ? existing.remark : values.remark,
+  };
+  const encoded = encryptRow('product_release_proxies', {
+    username: next.username || null,
+    password: next.password || null,
+  });
+  db.prepare(`
+    UPDATE product_release_proxies
+    SET name = ?, protocol = ?, host = ?, port = ?, username = ?, password = ?,
+      domain_suffixes_json = ?, priority = ?, status = ?, remark = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    next.name,
+    next.protocol,
+    next.host,
+    next.port,
+    encoded.username,
+    encoded.password,
+    JSON.stringify(next.domain_suffixes),
+    next.priority,
+    next.status,
+    next.remark || null,
+    req.params.id,
+  );
+  res.json({ success: true });
+});
+
+app.delete('/api/product-release-proxies/:id', requireProductTemplateMenu, canWrite, (req, res) => {
+  const existing = db.prepare('SELECT id FROM product_release_proxies WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: '代理配置不存在' });
+  db.prepare('DELETE FROM product_release_proxies WHERE id = ?').run(req.params.id);
+  res.json({ success: true });
+});
 
 app.get('/api/product-templates', requireProductTemplateMenu, (req, res) => {
   const { name, template_type, budget_type, platform, status } = req.query;
@@ -22147,6 +22362,24 @@ app.post('/api/product-assets/:id/releases', requireProductAssetMenu, canWrite, 
     const requiredFields = shortDramaTemplate ? 'API、埋点、CDN、短剧四类' : 'API、埋点、CDN 三类';
     return res.status(400).json({ error: `提版信息不完整：主体域名配置不完整或格式不正确（${subjectDomains.errors.join('；')}）。请前往「主体管理」编辑关联主体，补充${requiredFields} HTTPS 域名后重试；非短剧模版无需配置短剧域名。` });
   }
+  const releaseDomains = {
+    api_domain: subjectDomains.values.api_domain,
+    analytics_domain: subjectDomains.values.analytics_domain,
+    cdn_domain: subjectDomains.values.cdn_domain,
+  };
+  if (shortDramaTemplate) releaseDomains.short_drama_domain = subjectDomains.values.short_drama_domain;
+  const proxyResolution = resolveProxySelections(releaseDomains, getProductReleaseProxyRows());
+  if (proxyResolution.missing.length > 0) {
+    const missingLabels = proxyResolution.missing.map(item => {
+      const label = PRODUCT_RELEASE_DOMAIN_LABELS[item.field] || item.field;
+      return item.hostname === '*' ? label : `${label}（${item.hostname}）`;
+    });
+    return res.status(400).json({
+      error: `提版信息不完整：以下域名没有匹配到启用的 IP 代理：${missingLabels.join('、')}。请前往「产品模版」的「代理」Tab 配置后重试。`,
+    });
+  }
+  const proxySnapshot = buildProxySnapshot(proxyResolution.selections, proxyResolution.defaultProxy);
+  const proxySummary = buildProxySummary(proxyResolution.selections);
   try {
     requireReleaseIdentityKeyPath(subject.id);
     getUploadScriptPath();
@@ -22162,11 +22395,24 @@ app.post('/api/product-assets/:id/releases', requireProductAssetMenu, canWrite, 
   const subjectId = asset.company_subject_id || null;
   try {
     const taskId = db.transaction(() => {
+      const encodedTask = encryptRow('product_asset_release_tasks', {
+        proxy_snapshot: JSON.stringify(proxySnapshot),
+      });
       const task = db.prepare(`
         INSERT INTO product_asset_release_tasks (
-          asset_id, template_id, template_version_id, subject_id, app_id, status, current_step, created_by
-        ) VALUES (?, ?, ?, ?, ?, 'pending', 'queued', ?)
-      `).run(asset.id, template.id, version.id, subjectId, values.app_id, req.user.id);
+          asset_id, template_id, template_version_id, subject_id, app_id, status, current_step,
+          proxy_snapshot, proxy_summary, created_by
+        ) VALUES (?, ?, ?, ?, ?, 'pending', 'queued', ?, ?, ?)
+      `).run(
+        asset.id,
+        template.id,
+        version.id,
+        subjectId,
+        values.app_id,
+        encodedTask.proxy_snapshot,
+        JSON.stringify(proxySummary),
+        req.user.id,
+      );
       const encoded = encryptRow('product_asset_release_records', {
         ...subjectDomains.values,
         release_link: values.release_link,
@@ -22176,12 +22422,12 @@ app.post('/api/product-assets/:id/releases', requireProductAssetMenu, canWrite, 
         INSERT INTO product_asset_release_records (
           task_id, asset_id, template_id, template_version_id, subject_id, app_id,
           api_domain, analytics_domain, cdn_domain, short_drama_domain, release_status,
-          release_version, release_link, release_note, submitted_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+          release_version, release_link, release_note, proxy_summary, submitted_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
       `).run(
         task.lastInsertRowid, asset.id, template.id, version.id, subjectId, values.app_id,
         encoded.api_domain, encoded.analytics_domain, encoded.cdn_domain, encoded.short_drama_domain,
-        values.release_version || null, encoded.release_link, encoded.release_note, req.user.id,
+        values.release_version || null, encoded.release_link, encoded.release_note, JSON.stringify(proxySummary), req.user.id,
       );
       setProductAssetReleaseSummary({ id: task.lastInsertRowid, asset_id: asset.id, template_id: template.id, template_version_id: version.id }, 'pending');
       return task.lastInsertRowid;
@@ -22189,7 +22435,7 @@ app.post('/api/product-assets/:id/releases', requireProductAssetMenu, canWrite, 
     setImmediate(() => executeProductAssetReleaseTask(taskId).catch(error => {
       console.error(`[product-release] task ${taskId} runner failed: ${sanitizeProductReleaseLog(error.message)}`);
     }));
-    res.status(202).json({ id: taskId, status: 'pending', validated: true });
+    res.status(202).json({ id: taskId, status: 'pending', validated: true, proxy_summary: proxySummary });
   } catch (error) {
     if (/UNIQUE/i.test(error.message)) return res.status(409).json({ error: '同一 appId 已有提版任务正在执行' });
     throw error;
