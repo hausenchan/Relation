@@ -2,6 +2,33 @@
 
 最后更新：2026-07-30
 
+## 旧商机跟进任务兼容修复（2026-07-30）
+
+### 已完成
+
+- 新增启动幂等回填：旧互动商机和旧竞品/公司研究商机只要已有商机标题和负责人，即使没有重新编辑保存，
+  也会自动补建或修复 `follow_up_tasks`。
+- 旧跟进任务会回填两行任务描述、任务类型、执行人、原始指派人和来源关联字段；补偿过程不补发历史
+  指派通知，只保证后续工作台操作和状态通知按新口径生效。
+- 修复旧公司研究商机任务历史迁移中 `assigned_by` 固定为 `1` 的问题，后续 B 开始/挂起/完成任务时
+  通知会发给原商机创建人 A。
+- `AGENTS.md` 新增“存量数据兼容”开发规范，要求后续新增功能必须检查旧字段、旧枚举、缺关联记录，
+  并补幂等迁移和旧记录自动化测试。
+- `系统需求与权限设计PRD.md` 已更新存量商机自动补偿口径。
+
+### 验证
+
+- `node --check server/index.js` 通过。
+- `node --test server/lib/businessContactSearch.test.js` 通过，4/4。
+- `node --test server/lib/opportunityTypeIntegration.test.js` 通过，3/3；新增覆盖旧互动商机缺任务、
+  旧公司研究商机缺描述/指派人时重启自动修复，并验证 B 更新状态后 A 收到 `task_status_updated`。
+- `node --test server/lib/taskSharingIntegration.test.js` 通过，2/2。
+- `cd client && CI=true ./node_modules/.bin/react-scripts test --watchAll=false --runInBand --testPathPattern=Dashboard`
+  通过，2 个套件、8 条测试；仅有既有 Ant Design `destroyOnClose` 警告。
+- `cd client && BUILD_PATH=/tmp/relation-old-opportunity-fix-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-old-opportunity-fix-build npm run performance:frontend` 通过：首屏 JS gzip
+  `329.8KB / 400KB`，最大异步 chunk `420.8KB / 500KB`。
+
 ## 产品模版提版代理（2026-07-30）
 
 ### 已完成
