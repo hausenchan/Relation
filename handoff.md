@@ -2,6 +2,147 @@
 
 最后更新：2026-07-30
 
+## Agent 中台业务日报 MVP（2026-07-30）
+
+### 已完成
+
+- 新增 Agent 中台“业务日报”菜单与`/agents/business-daily-reports`列表、详情和编辑路由；页面支持指定
+  日期生成、状态/日期/回收站筛选、七阶段进度、HTML 详情、机器原稿、修订历史、执行与产物查看、
+  重新生成、文字修订、提交/审核、软删除和恢复，桌面与移动端均使用统一业务页样式。
+- 日报入口已扩展为“YYZ项目总览 / 业务线 / 媒体”范围树：业务线覆盖支小、H5/百度JS、CPA及三个
+  子类、淘小、微小、宝箱/签到，媒体首期覆盖媒体大盘和爱奇艺极速版；桌面使用左侧树，窄屏使用
+  树形选择器，范围保存在 URL，生成、去重、版本号、列表和重跑均按范围隔离。
+- 新增`server/lib/businessDailyReports.js`领域模块和`ai_business_daily_*`六张表，机器原稿不可覆盖，
+  人工修订只接受叙述字段、使用`base_revision_no + lock_version`防并发覆盖；产物、修订和运行摘要使用
+  现有 AES-GCM 字段加密，HTML 经服务端清洗后在无脚本 sandbox iframe 中展示。
+- 接口同时校验`/agents/business-daily-reports`菜单权限和`business_daily_report`敏感模块成员；
+  `readonly/guest`只读，审核/恢复要求`manage`权限，所有写操作进入统一操作日志。
+- 支持通过`RELATION_AI_DISTILL_MYSQL_DATABASE`及同前缀连接变量使用独立
+  `relation_ai_distill`逻辑库；未配置时只回退当前线上 MySQL 的独立表族，不读取本地 DB。日报库不建
+  跨库用户外键，展示名从 Relation 主库批量补齐。
+- 生成接口已返回`202`并异步记录阶段。当前若 Skill 未发布、Mid-Max 未配置或`source-v2`执行器未完成，
+  会以明确错误码失败并保留记录，不生成伪报告或把缺失值写成 0。
+- 支小业务范围`business_line:ZHIXIAO`已支持导入本机 zhixiao-ai 生成的固定 HTML 日报：后端默认读取
+  `/Users/chenhaozan/Documents/AI/Gcad/dataAnalysis/支小数据new.html`，可用`ZHIXIAO_REPORT_HTML_PATH`
+  覆盖；导入 Relation 时移除本地`zfb666`密码门并保存为`zhixiao_html_report`产物，原始本地 HTML
+  不改动，访问由业务日报菜单与敏感模块权限控制。
+- 支小业务“生成日报”按钮已接入本机生成器执行链路：选中`business_line:ZHIXIAO`时，runtime status
+  不再使用`yyz-dashboard-analysis`发布与 Mid-Max connector blocker，而是检查支小生成器、8 份固定
+  源报表和 HTML 输出状态；创建日报会先运行`generate_multi3_report_project.py`编译检查与生成，再导入
+  去密码门后的 HTML。前端状态和运行步骤只展示文件名、缺失清单、数量和时间，不暴露本机完整路径。
+- 日报详情在存在`zhixiao_html_report`产物时显示独立“支小业务”Tab，通过受限 sandbox iframe 展示
+  可交互 HTML；普通“当前日报 / 机器原稿”继续走无脚本清洗展示边界，不向前端暴露本地文件路径。
+
+### 待办
+
+- 完成`yyz-dashboard-analysis`的`source-v2/normalized-v2`确定性执行器、完整分页、缺失值、财务事实源和
+  质量门禁，在 AI 训练台发布 Skill 后替换当前受控失败执行器。
+- 阶段 2 再实现数字结构化纠错与派生指标重算、质量评分、错误分类、训练候选和新旧 Skill 回放；当前
+  MVP 已建 annotations/training_links 表，但尚未开放对应 UI 与 API。
+- 生产部署前创建`relation_ai_distill`库和最小权限账号，配置 Mid-Max 只读数据源，并使用隔离 MySQL
+  完成登录、权限、生成失败/成功、修订并发、删除恢复和审计回归。
+- 将支小业务本地 HTML 导入链路接入隔离 MySQL 的 HTTP 回归，覆盖创建`business_line:ZHIXIAO`日报、
+  产物读取、无密码门展示和日期不一致 warning。
+- 后续再把“从 Mid-Max 导出 8 份 XLS”接为受控前置自动化；当前 Web 按钮不操作 Chrome，不索要或保存
+  Mid-Max 密码，源文件缺失时任务以明确错误码失败。
+
+### 验证
+
+- `node --test server/lib/businessDailyReports.test.js`通过，8/8；覆盖日期门禁、范围目录、旧表范围版本迁移、
+  范围级生成版本、活动任务识别、七阶段失败、机器指标不可被文字修订覆盖、修订并发冲突、软删除恢复
+  和 HTML 清洗；新增覆盖支小 HTML 密码门移除及额外 HTML 产物入库读取。
+- `node --check server/index.js`、`server/lib/businessDailyReports.js`、`server/lib/database.js`通过。
+- `BUILD_PATH=/tmp/relation-business-daily-scope-build-final npm run build`通过。
+- `BUILD_PATH=/tmp/relation-business-daily-scope-build-final npm run performance:budget`通过：首屏 JavaScript
+  `329.5KB / 400KB`，79 个异步 chunk，最大`420.8KB / 500KB`。
+- `BUILD_PATH=/tmp/relation-business-daily-zhixiao-build npm run build`通过。
+- `BUILD_PATH=/tmp/relation-business-daily-zhixiao-build npm run performance:budget`通过：首屏 JavaScript
+  `329.5KB / 400KB`，79 个异步 chunk，最大`420.8KB / 500KB`。
+- `BUILD_PATH=/tmp/relation-business-daily-zhixiao-runner-build npm run build`通过。
+- `BUILD_PATH=/tmp/relation-business-daily-zhixiao-runner-build npm run performance:budget`通过：首屏 JavaScript
+  `329.5KB / 400KB`，79 个异步 chunk，最大`420.8KB / 500KB`。
+- `npm run skill:check:yyz-dashboard-analysis`通过，权威目录与运行时镜像 checksum 均为
+  `bac0f55df986f900c108d004ed3f8dd9a3471cca27af4a882f8c95c8dccb5d08`。
+- 未连接生产或共享 MySQL 执行启动/接口集成测试，避免在未确认隔离库时自动建表；仍需隔离 MySQL 回归。
+
+## Agent 中台业务日报训练与蒸馏 PRD（2026-07-30）
+
+### 已完成
+
+- 新增`Agent中台-业务日报训练与蒸馏PRD.md`，定义 Agent 中台“业务日报”独立菜单、列表页、详情页、
+  编辑页、异步生成状态、权限和 API 设计；MVP 固定为 YYZ 项目日报并调用已发布的
+  `yyz-dashboard-analysis`版本。
+- 明确日报的主要目的为 Skill 训练和蒸馏：机器原稿不可覆盖，人工编辑形成版本化修订，自动保留字段级
+  和段落级差异、错误类型、证据、评分和审核结果，再进入现有 AI 训练台案例候选与评测体系。
+- 明确数字纠错和文字编辑分离：结论、原因和策略可直接修订；收入、成本、毛利、UV、订单等核心指标
+  必须通过结构化纠错修改并重新计算派生指标，不开放任意 HTML 源码编辑。
+- 明确日报删除使用可恢复软删除；来源日报删除不会级联破坏已审核案例或评测题。详情页使用鉴权接口、
+  受限 iframe 和 CSP 展示持久化 HTML，打开详情不重新运行 Skill。
+
+### 待办
+
+- 在真实接入前先完成 `yyz-dashboard-analysis` 的`source-v2/normalized-v2`数据契约、缺失值、全量分页、
+  财务事实源和质量门禁，修复实际来源数据运行旧生成器时输出全 0 的问题。
+- PRD 阶段 1 已实现，后续按本文件顶部“Agent 中台业务日报 MVP”的待办推进真实执行器、数字纠错、
+  评分和训练候选；联调不生成脱敏合成报告，运行条件不足时保留明确失败记录。
+
+## 业务中台 UI 统一规范（2026-07-30）
+
+### 已完成
+
+- 新增 `Relation业务中台UI规范.md`，将工作台、媒体管理、人脉管理、互动记录、商机、公司研究、
+  策略、需求、产品资产、主体管理、产品模版等页面纳入统一业务列表页规范。
+- 明确统一页面结构、字体层级、基础色和状态色、间距尺寸、页面治理栏、轻量指标卡、筛选工具条、
+  表格、Tag、按钮、移动端卡片、详情/编辑抽屉和禁止项。
+- 在 `AGENTS.md` 增加长期约束：后续新增或改造同类业务页必须优先遵守该 UI 规范，不再新增零散
+  页面级视觉风格。
+- 商机页 `/leads` 已完成第一版视觉改造：新增可复用 `client/src/styles/businessPage.css`，商机页面接入
+  统一页面治理栏、白底轻量指标卡、筛选工具条、表格密度、状态标签和移动端卡片样式；未改变接口、
+  筛选语义、列顺序或新增/编辑/详情业务流程。
+- 根据验收反馈，商机页继续保留统计卡区域，仅把统计卡、筛选区和表格的字号、颜色、间距、主字段
+  链接色收敛到更接近媒体管理台账的克制风格。
+- 根据二次验收反馈，商机页进一步向媒体管理台账风格靠拢：去掉顶部刷新按钮，统计区从大卡片压缩为
+  轻摘要条，筛选区补充搜索与商机类型筛选，表格操作列改为左侧弱化 `···` 菜单，支持查看详情、
+  编辑商机和删除商机；详情抽屉右上角同步使用更多菜单。
+- 根据截图细化，商机页状态改为工作台同款 `Badge` 圆点加文本，不再使用带边框的状态胶囊；表格列
+  标题、主标题、副描述、空值和 Tag 字号/颜色/字重继续贴近媒体管理；“互动/竞研”从“商机”列拆出为
+  独立“来源”列展示。
+- 工作台顶部统计卡从大渐变卡片调整为媒体管理式轻量白底卡：保留原图标并左置在标题前，数字下方
+  舒展展示，激活筛选态使用浅蓝边框和轻阴影；AI 建议页顶部统计同步复用该轻量样式。
+- 人脉管理列表按互动记录和媒体管理台账风格细化：姓名列改为黑色主标题、灰色职位副标题，移除突兀
+  蓝色链接感；外部人才的潜力评级、转化阶段、意向程度合并为“人才状态”一列，非人才记录仅弱化显示
+  `-`，避免三列大面积空白。
+
+### 待办
+
+- 第一批视觉改造建议继续处理策略、需求、产品资产，重点把大面积渐变统计卡、筛选条、表格密度和
+  操作按钮收敛到统一风格；商机页可先由业务验收视觉方向。
+- 第二批再处理工作台、媒体管理、人脉管理、互动记录、公司研究；第三批处理主体管理、产品模版。
+
+### 验证
+
+- 商机页关联测试命令未找到对应测试文件，未执行断言。
+- `BUILD_PATH=/tmp/relation-leads-ui-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-leads-ui-build npm run performance:budget` 通过：首屏 JavaScript
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+- `BUILD_PATH=/tmp/relation-leads-media-style-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-leads-media-style-build npm run performance:budget` 通过：首屏 JavaScript
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+- `BUILD_PATH=/tmp/relation-leads-ledger-style-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-leads-ledger-style-build npm run performance:budget` 通过：首屏 JavaScript
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+- `BUILD_PATH=/tmp/relation-leads-final-style-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-leads-final-style-build npm run performance:budget` 通过：首屏 JavaScript
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+- `CI=true ./node_modules/.bin/react-scripts test --watchAll=false --runInBand --testPathPattern=Dashboard`
+  通过，1 个套件、4 条测试。
+- `BUILD_PATH=/tmp/relation-dashboard-light-stats-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-dashboard-light-stats-build npm run performance:budget` 通过：首屏 JavaScript
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+- `BUILD_PATH=/tmp/relation-persons-ledger-style-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-persons-ledger-style-build npm run performance:budget` 通过：首屏 JavaScript
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`；仓库内未找到人脉页专项测试文件。
+
 ## 工作台商机任务描述与通知类型枚举（2026-07-30）
 
 ### 已完成

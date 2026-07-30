@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zhixiao AI"
+  short_description: "End-to-end Zhixiao export and HTML report"
+  default_prompt: "Use $zhixiao-ai to export today's 支小 backend reports and regenerate 支小数据new.html."

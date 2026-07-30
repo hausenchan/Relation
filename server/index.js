@@ -6,6 +6,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const { spawnSync } = require('node:child_process');
 const Database = require('./lib/database');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -84,6 +85,15 @@ const {
 } = require('./lib/aiSuggestionStore');
 const { createAiTrainingExternalConnectorRuntime } = require('./lib/aiTrainingConnectors');
 const { createAiTrainingEventStream } = require('./lib/aiTrainingEventStream');
+const {
+  BUSINESS_DAILY_REPORT_MENU_KEY,
+  BUSINESS_DAILY_REPORT_MODULE_KEY,
+  BUSINESS_DAILY_REPORT_SCOPE_TREE,
+  BUSINESS_DAILY_REPORT_SKILL_CODE,
+  BusinessDailyReportError,
+  createBusinessDailyReportStore,
+  normalizeZhixiaoReportHtmlForArtifact,
+} = require('./lib/businessDailyReports');
 const {
   canAccessMediaManagement: resolveMediaManagementAccess,
   createMediaManagementRouter,
@@ -874,6 +884,37 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 const DB_PATH = process.env.RELATION_DB_PATH || path.join(__dirname, 'data.db');
 const db = new Database(DB_PATH);
+const BUSINESS_DAILY_REPORT_DATABASE_NAME = String(
+  process.env.RELATION_AI_DISTILL_MYSQL_DATABASE || '',
+).trim();
+const BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE = Boolean(
+  BUSINESS_DAILY_REPORT_DATABASE_NAME && Database.isMysql(),
+);
+const businessDailyReportDb = BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE
+  ? new Database(null, {
+    mysql: {
+      host: process.env.RELATION_AI_DISTILL_MYSQL_HOST
+        || process.env.MYSQL_HOST
+        || process.env.RELATION_MYSQL_HOST,
+      port: process.env.RELATION_AI_DISTILL_MYSQL_PORT
+        || process.env.MYSQL_PORT
+        || process.env.RELATION_MYSQL_PORT,
+      user: process.env.RELATION_AI_DISTILL_MYSQL_USER
+        || process.env.MYSQL_USER
+        || process.env.RELATION_MYSQL_USER,
+      password: process.env.RELATION_AI_DISTILL_MYSQL_PASSWORD
+        ?? process.env.MYSQL_PASSWORD
+        ?? process.env.RELATION_MYSQL_PASSWORD,
+      database: BUSINESS_DAILY_REPORT_DATABASE_NAME,
+      charset: process.env.RELATION_AI_DISTILL_MYSQL_CHARSET
+        || process.env.MYSQL_CHARSET
+        || 'utf8mb4',
+      timezone: process.env.RELATION_AI_DISTILL_MYSQL_TIMEZONE
+        || process.env.MYSQL_TIMEZONE
+        || process.env.RELATION_MYSQL_TIMEZONE,
+    },
+  })
+  : db;
 const AI_SUGGESTION_DEFAULT_BUSINESS_LINE = 'zhixiao';
 const RUNTIME_CACHE_TTL_MS = Number(process.env.RELATION_RUNTIME_CACHE_TTL_MS || 60000);
 const AUTH_USER_CACHE_TTL_MS = Number(process.env.RELATION_AUTH_USER_CACHE_TTL_MS || 60000);
@@ -1174,6 +1215,11 @@ db.prepare(`
   VALUES ('operational_meeting', '经营周会', '经营周会准备内容、会议提纲和会议结论等高敏内容')
 `).run();
 
+db.prepare(`
+  INSERT OR IGNORE INTO sensitive_modules (module_key, module_name, description)
+  VALUES (?, '业务日报', 'YYZ业务日报中的收入、成本、毛利、用户及生成产物等敏感经营数据')
+`).run(BUSINESS_DAILY_REPORT_MODULE_KEY);
+
 const operationalMeetingMemberCount = db.prepare(`
   SELECT COUNT(*) as count
   FROM sensitive_module_members
@@ -1195,6 +1241,33 @@ if (!operationalMeetingMemberCount) {
     VALUES ('operational_meeting', ?, 'manage', ?)
   `);
   seedMembers.forEach(member => insertSensitiveMember.run(member.id, member.id));
+}
+
+const businessDailyReportMemberCount = db.prepare(`
+  SELECT COUNT(*) as count
+  FROM sensitive_module_members
+  WHERE module_key = ?
+`).get(BUSINESS_DAILY_REPORT_MODULE_KEY).count;
+if (!businessDailyReportMemberCount) {
+  const seedUserCols = db.prepare("PRAGMA table_info(users)").all().map(c => c.name);
+  const executiveRoleFilter = seedUserCols.includes('executive_role')
+    ? " OR executive_role IN ('ceo', 'coo', 'cto', 'cmo')"
+    : '';
+  const seedMembers = db.prepare(`
+    SELECT id
+    FROM users
+    WHERE role IN ('admin', 'ceo', 'coo', 'cto', 'cmo')
+      ${executiveRoleFilter}
+  `).all();
+  const insertSensitiveMember = db.prepare(`
+    INSERT OR IGNORE INTO sensitive_module_members (module_key, user_id, permission_level, created_by)
+    VALUES (?, ?, 'manage', ?)
+  `);
+  seedMembers.forEach(member => insertSensitiveMember.run(
+    BUSINESS_DAILY_REPORT_MODULE_KEY,
+    member.id,
+    member.id,
+  ));
 }
 
 // =========== 建表 ===========
@@ -4065,6 +4138,14 @@ const OPERATION_LOG_ROUTE_CONFIGS = [
   { pattern: /^\/agents\/budget-opportunities\/(\d+)\/review$/, businessType: 'Agent 经营中台', table: 'agent_budget_opportunities', idGroup: 1, action: '审核预算机会' },
   { pattern: /^\/agents\/notification-rules$/, businessType: 'Agent 经营中台', table: 'agent_notification_rules', responseId: true, action: '保存通知规则' },
   { pattern: /^\/agents\/notification-rules\/(\d+)$/, businessType: 'Agent 经营中台', table: 'agent_notification_rules', idGroup: 1 },
+  { pattern: /^\/agents\/business-daily-reports$/, businessType: 'Agent 业务日报', table: 'ai_business_daily_reports', responseId: true, action: '生成业务日报' },
+  { pattern: /^\/agents\/business-daily-reports\/(\d+)\/regenerate$/, businessType: 'Agent 业务日报', table: 'ai_business_daily_reports', responseId: true, action: '重新生成业务日报' },
+  { pattern: /^\/agents\/business-daily-reports\/(\d+)\/revisions$/, businessType: 'Agent 业务日报修订', table: 'ai_business_daily_report_revisions', responseId: true, action: '创建日报修订' },
+  { pattern: /^\/agents\/business-daily-reports\/(\d+)\/revisions\/(\d+)$/, businessType: 'Agent 业务日报修订', table: 'ai_business_daily_report_revisions', idGroup: 2, action: '保存日报修订' },
+  { pattern: /^\/agents\/business-daily-reports\/(\d+)\/revisions\/(\d+)\/submit$/, businessType: 'Agent 业务日报修订', table: 'ai_business_daily_report_revisions', idGroup: 2, action: '提交日报修订审核' },
+  { pattern: /^\/agents\/business-daily-reports\/(\d+)\/revisions\/(\d+)\/review$/, businessType: 'Agent 业务日报修订', table: 'ai_business_daily_report_revisions', idGroup: 2, action: '审核日报修订' },
+  { pattern: /^\/agents\/business-daily-reports\/(\d+)$/, businessType: 'Agent 业务日报', table: 'ai_business_daily_reports', idGroup: 1, action: '删除业务日报' },
+  { pattern: /^\/agents\/business-daily-reports\/(\d+)\/restore$/, businessType: 'Agent 业务日报', table: 'ai_business_daily_reports', idGroup: 1, action: '恢复业务日报' },
   { pattern: /^\/network-capture\/start$/, businessType: '网络抓包', action: '启动代理' },
   { pattern: /^\/network-capture\/stop$/, businessType: '网络抓包', action: '停止代理' },
   { pattern: /^\/network-capture\/clear$/, businessType: '网络抓包', action: '清空记录' },
@@ -4141,7 +4222,7 @@ function sanitizeLogPayload(value, depth = 0) {
   for (const [key, raw] of Object.entries(value)) {
     if (/(password|passwd|pwd|token|secret|authorization|jwt|hash|master_key|hmac_key)/i.test(key)) {
       out[key] = '[已脱敏]';
-    } else if (/(^content$|content_json|content_before|content_after|snapshot_json|workbook|blocks|cells|operations|html|markdown|payload|^file$|file_data|file_content|blob)/i.test(key)) {
+    } else if (/(^content$|content_json|content_before|content_after|snapshot_json|report_model|narrative|original_value|corrected_value|evidence_refs|workbook|blocks|cells|operations|html|markdown|payload|^file$|file_data|file_content|blob)/i.test(key)) {
       out[key] = summarizeLargeLogPayload(raw);
     } else {
       out[key] = sanitizeLogPayload(raw, depth + 1);
@@ -14086,6 +14167,17 @@ function seedAiTrainingBusinessGrowthMvpSkills(actorUserId = 1) {
 
 seedAiTrainingBusinessGrowthMvpSkills();
 
+const businessDailyReportStore = createBusinessDailyReportStore({
+  db: businessDailyReportDb,
+  identityDb: db,
+  encryptRow,
+  decryptRow,
+});
+const recoveredBusinessDailyReportCount = businessDailyReportStore.recoverInterruptedReports();
+if (recoveredBusinessDailyReportCount > 0) {
+  console.warn(`[business-daily-report] marked ${recoveredBusinessDailyReportCount} interrupted runs as failed`);
+}
+
 function ensureAiTrainingEvalSet(caseItem, actorUserId) {
   const setCode = `eval_${toAiTrainingSlug(caseItem.scene_code)}_${toAiTrainingSlug(caseItem.business_line)}`;
   let evalSet = db.prepare('SELECT * FROM ai_training_eval_sets WHERE set_code = ?').get(setCode);
@@ -17255,6 +17347,823 @@ app.get('/api/agents/ai-training/runtime-status', (req, res) => {
   } catch (error) {
     console.error('加载 AI 训练运行状态失败:', error);
     res.status(500).json({ error: '加载 AI 训练运行状态失败' });
+  }
+});
+
+// =========== Agent 业务日报 API ===========
+function requireBusinessDailyReportAccess(req, res, next) {
+  if (!hasMenuAccess(req.user, BUSINESS_DAILY_REPORT_MENU_KEY)) {
+    return res.status(403).json({ error: '无业务日报菜单权限' });
+  }
+  if (!hasSensitiveModuleAccess(req.user, BUSINESS_DAILY_REPORT_MODULE_KEY)) {
+    return res.status(403).json({ error: '无业务日报敏感经营数据权限' });
+  }
+  next();
+}
+
+function canManageBusinessDailyReports(user) {
+  const membership = getSensitiveModuleMember(user?.id, BUSINESS_DAILY_REPORT_MODULE_KEY);
+  return Boolean(membership && (
+    membership.permission_level === 'manage'
+    || isPrivilegedIdentity(user)
+  ));
+}
+
+function getPublishedBusinessDailyReportSkill() {
+  const row = db.prepare(`
+    SELECT
+      sk.id,
+      sk.skill_code,
+      sk.name,
+      sk.status,
+      sk.publish_version_id,
+      sv.id AS version_id,
+      sv.version_no,
+      sv.version_label,
+      sv.status AS version_status,
+      sv.system_prompt,
+      sv.input_schema_json,
+      sv.output_schema_json,
+      sv.reasoning_steps_text,
+      sv.output_template_text,
+      sv.guardrails_text,
+      sv.hook_policy_json,
+      sv.published_at
+    FROM ai_training_skills sk
+    JOIN ai_training_skill_versions sv ON sv.id = sk.publish_version_id
+    WHERE sk.skill_code = ?
+      AND sk.status = 'published'
+      AND sv.status = 'published'
+    LIMIT 1
+  `).get(BUSINESS_DAILY_REPORT_SKILL_CODE);
+  if (!row) return null;
+  const treeHash = crypto.createHash('sha256').update(JSON.stringify({
+    skill_code: row.skill_code,
+    version_no: row.version_no,
+    system_prompt: row.system_prompt,
+    input_schema_json: row.input_schema_json,
+    output_schema_json: row.output_schema_json,
+    reasoning_steps_text: row.reasoning_steps_text,
+    output_template_text: row.output_template_text,
+    guardrails_text: row.guardrails_text,
+    hook_policy_json: row.hook_policy_json,
+  })).digest('hex');
+  return {
+    ...row,
+    tree_hash: treeHash,
+  };
+}
+
+function getBusinessDailyReportRuntimeStatus(user, { scopeType = null, scopeCode = null } = {}) {
+  if (isZhixiaoBusinessDailyReportScope(scopeType, scopeCode)) {
+    return getZhixiaoBusinessDailyReportRuntimeStatus();
+  }
+  const skill = getPublishedBusinessDailyReportSkill();
+  const connectors = createAiTrainingExternalConnectorRuntime({ user });
+  const blockers = [];
+  if (!skill) {
+    blockers.push({
+      code: 'SKILL_NOT_PUBLISHED',
+      message: `AI训练台尚未发布 ${BUSINESS_DAILY_REPORT_SKILL_CODE}`,
+    });
+  }
+  if (!connectors.status?.midmax?.enabled) {
+    blockers.push({
+      code: 'MIDMAX_SOURCE_NOT_CONFIGURED',
+      message: '当前账号尚未配置可用的 Mid-Max 只读数据源',
+    });
+  }
+  blockers.push({
+    code: 'SOURCE_V2_EXECUTOR_NOT_READY',
+    message: 'source-v2/normalized-v2 确定性采集、清洗和对账执行器尚未完成',
+  });
+  return {
+    available: false,
+    business_code: 'YYZ',
+    skill_code: BUSINESS_DAILY_REPORT_SKILL_CODE,
+    skill: skill ? {
+      id: Number(skill.id),
+      version_id: Number(skill.version_id),
+      version_no: skill.version_no,
+      version_label: skill.version_label,
+      published_at: skill.published_at,
+    } : null,
+    connectors: connectors.status,
+    contract_version: 'source-v2',
+    storage: {
+      engine: 'mysql',
+      isolation: BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE ? 'dedicated_schema' : 'table_namespace',
+      dedicated_schema_configured: BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE,
+    },
+    blockers,
+  };
+}
+
+function sendBusinessDailyReportError(res, error, fallbackMessage) {
+  if (error instanceof BusinessDailyReportError) {
+    return res.status(error.status || 400).json({
+      error: error.message,
+      code: error.code,
+    });
+  }
+  console.error(fallbackMessage, error);
+  return res.status(500).json({ error: fallbackMessage });
+}
+
+function getZhixiaoReportHtmlPath() {
+  return process.env.ZHIXIAO_REPORT_HTML_PATH
+    || path.join(
+      process.env.HOME || process.cwd(),
+      'Documents',
+      'AI',
+      'Gcad',
+      'dataAnalysis',
+      '支小数据new.html',
+    );
+}
+
+function getZhixiaoReportProjectDir() {
+  return process.env.ZHIXIAO_REPORT_PROJECT_DIR
+    || path.join(process.env.HOME || process.cwd(), 'Documents', 'AI', 'Gcad', 'dataAnalysis');
+}
+
+function getZhixiaoReportSourceDir() {
+  return process.env.ZHIXIAO_REPORT_SOURCE_DIR
+    || path.join(process.env.HOME || process.cwd(), 'Documents', 'AI', 'Gcad', 'adOpt', '支小应用数据报表');
+}
+
+function getZhixiaoReportGeneratorPath() {
+  return process.env.ZHIXIAO_REPORT_GENERATOR_PATH
+    || path.join(getZhixiaoReportProjectDir(), 'generate_multi3_report_project.py');
+}
+
+function getZhixiaoPythonCommand() {
+  return process.env.ZHIXIAO_REPORT_PYTHON || process.env.PYTHON || 'python3';
+}
+
+function getZhixiaoPythonPath() {
+  const fallback = path.join(
+    process.env.HOME || process.cwd(),
+    'Documents',
+    'AI',
+    'Gcad',
+    'adOpt',
+    '.codex-tmp',
+    'pydeps',
+  );
+  return process.env.ZHIXIAO_REPORT_PYTHONPATH || (fs.existsSync(fallback) ? fallback : '');
+}
+
+function isZhixiaoBusinessDailyReportScope(scopeType, scopeCode) {
+  return scopeType === 'business_line' && String(scopeCode || '').toUpperCase() === 'ZHIXIAO';
+}
+
+const ZHIXIAO_REQUIRED_REPORT_FILES = [
+  '支小大盘汇总.xls',
+  '新后台订单.xls',
+  '支小应用收入.xls',
+  '广告位维度汇总.xls',
+  '支小媒体数据.xls',
+  '支小媒体应用任务维度.xls',
+  '应用媒体数据占比 .xls',
+  '广告位维度汇总-灯火投放.xls',
+];
+
+function clipZhixiaoRuntimeText(value, maxLength = 4000) {
+  const text = String(value || '').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength)}...`;
+}
+
+function getZhixiaoSourceFileStatus() {
+  const sourceDir = getZhixiaoReportSourceDir();
+  const files = ZHIXIAO_REQUIRED_REPORT_FILES.map(filename => {
+    const filePath = path.join(sourceDir, filename);
+    const exists = fs.existsSync(filePath);
+    const stat = exists ? fs.statSync(filePath) : null;
+    return {
+      filename,
+      exists,
+      size: stat?.size || 0,
+      modified_at: stat ? stat.mtime.toISOString() : null,
+    };
+  });
+  return {
+    source_dir: sourceDir,
+    files,
+    ready_count: files.filter(file => file.exists).length,
+    required_count: files.length,
+    missing_files: files.filter(file => !file.exists).map(file => file.filename),
+  };
+}
+
+function getZhixiaoBusinessDailyReportRuntimeStatus() {
+  const generatorPath = getZhixiaoReportGeneratorPath();
+  const htmlPath = getZhixiaoReportHtmlPath();
+  const sourceStatus = getZhixiaoSourceFileStatus();
+  const blockers = [];
+  if (!fs.existsSync(generatorPath)) {
+    blockers.push({
+      code: 'ZHIXIAO_GENERATOR_NOT_FOUND',
+      message: '支小日报生成器脚本不存在，请先安装或修复 zhixiao-ai 本机生成项目',
+    });
+  }
+  if (sourceStatus.missing_files.length > 0) {
+    blockers.push({
+      code: 'ZHIXIAO_SOURCE_FILES_MISSING',
+      message: `支小源报表缺失 ${sourceStatus.missing_files.length} 份：${sourceStatus.missing_files.join('、')}`,
+    });
+  }
+  return {
+    available: blockers.length === 0,
+    business_code: 'YYZ',
+    skill_code: 'zhixiao-ai',
+    skill: {
+      code: 'zhixiao-ai',
+      source_path: 'YYZ/intelligence/data-intelligence/skills/zhixiao-ai',
+    },
+    contract_version: 'zhixiao-local-html-v1',
+    storage: {
+      engine: 'mysql',
+      isolation: BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE ? 'dedicated_schema' : 'table_namespace',
+      dedicated_schema_configured: BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE,
+    },
+    local_runtime: {
+      generator_exists: fs.existsSync(generatorPath),
+      generator_filename: path.basename(generatorPath),
+      html_exists: fs.existsSync(htmlPath),
+      html_filename: path.basename(htmlPath),
+      python: getZhixiaoPythonCommand(),
+      source: {
+        ready_count: sourceStatus.ready_count,
+        required_count: sourceStatus.required_count,
+        missing_files: sourceStatus.missing_files,
+        files: sourceStatus.files.map(file => ({
+          filename: file.filename,
+          exists: file.exists,
+          size: file.size,
+          modified_at: file.modified_at,
+        })),
+      },
+    },
+    blockers,
+  };
+}
+
+function assertZhixiaoRuntimeReadyForGeneration() {
+  const status = getZhixiaoBusinessDailyReportRuntimeStatus();
+  if (!status.available) {
+    const first = status.blockers[0];
+    throw new BusinessDailyReportError(first.message, {
+      code: first.code,
+      status: 409,
+    });
+  }
+  return status;
+}
+
+function runZhixiaoReportPythonStep(label, args, { timeoutMs }) {
+  const pythonPath = getZhixiaoPythonPath();
+  const env = { ...process.env };
+  if (pythonPath) {
+    env.PYTHONPATH = env.PYTHONPATH ? `${pythonPath}${path.delimiter}${env.PYTHONPATH}` : pythonPath;
+  }
+  const result = spawnSync(getZhixiaoPythonCommand(), args, {
+    cwd: getZhixiaoReportProjectDir(),
+    env,
+    encoding: 'utf8',
+    timeout: timeoutMs,
+    maxBuffer: 1024 * 1024 * 10,
+  });
+  const output = {
+    label,
+    command: getZhixiaoPythonCommand(),
+    args,
+    status: result.status,
+    signal: result.signal,
+    stdout: clipZhixiaoRuntimeText(result.stdout),
+    stderr: clipZhixiaoRuntimeText(result.stderr),
+  };
+  if (result.error || result.status !== 0) {
+    throw new BusinessDailyReportError(`${label}失败：${clipZhixiaoRuntimeText(result.stderr || result.stdout || result.error?.message, 800)}`, {
+      code: result.error?.code === 'ETIMEDOUT' ? 'ZHIXIAO_GENERATOR_TIMEOUT' : 'ZHIXIAO_GENERATOR_FAILED',
+      status: 500,
+      details: output,
+    });
+  }
+  return output;
+}
+
+function runZhixiaoReportGenerator() {
+  const runtime = assertZhixiaoRuntimeReadyForGeneration();
+  const generatorPath = getZhixiaoReportGeneratorPath();
+  const timeoutMs = Math.max(30000, Number(process.env.ZHIXIAO_REPORT_GENERATOR_TIMEOUT_MS || 300000));
+  const compile = runZhixiaoReportPythonStep('支小日报生成器编译检查', ['-m', 'py_compile', generatorPath], {
+    timeoutMs: Math.min(timeoutMs, 60000),
+  });
+  const generated = runZhixiaoReportPythonStep('支小日报生成', [generatorPath], { timeoutMs });
+  if (!fs.existsSync(getZhixiaoReportHtmlPath())) {
+    throw new BusinessDailyReportError('支小日报生成完成后未发现 HTML 输出文件', {
+      code: 'ZHIXIAO_HTML_NOT_FOUND_AFTER_GENERATION',
+      status: 500,
+    });
+  }
+  return {
+    runtime,
+    compile,
+    generated,
+    html_path: getZhixiaoReportHtmlPath(),
+    html_modified_at: fs.statSync(getZhixiaoReportHtmlPath()).mtime.toISOString(),
+  };
+}
+
+function extractZhixiaoReportLatestDate(html, fallbackDate) {
+  const passKeyMatch = String(html || '').match(/zfb_pass_multi_(\d{4}-\d{2}-\d{2})/);
+  if (passKeyMatch) return passKeyMatch[1];
+  const latestMatch = String(html || '').match(/"latest"\s*:\s*"(\d{4}-\d{2}-\d{2})"/);
+  return latestMatch?.[1] || fallbackDate;
+}
+
+function buildZhixiaoBusinessDailyReportCompletion(report) {
+  const htmlPath = getZhixiaoReportHtmlPath();
+  if (!fs.existsSync(htmlPath)) {
+    throw new BusinessDailyReportError('本机支小 HTML 报告不存在，请先运行 zhixiao-ai 生成报告。', {
+      code: 'ZHIXIAO_HTML_NOT_FOUND',
+      status: 409,
+    });
+  }
+  const originalHtml = fs.readFileSync(htmlPath, 'utf8');
+  const artifactHtml = normalizeZhixiaoReportHtmlForArtifact(originalHtml);
+  const latestDate = extractZhixiaoReportLatestDate(artifactHtml, report.report_date);
+  const sourceStat = fs.statSync(htmlPath);
+  const reportModel = {
+    business_code: 'YYZ',
+    scope_type: report.scope_type,
+    scope_code: report.scope_code,
+    scope_name: report.scope_name,
+    report_date: report.report_date,
+    latest_source_date: latestDate,
+    source_artifact: {
+      type: 'zhixiao_html_report',
+      filename: path.basename(htmlPath),
+      size: sourceStat.size,
+      modified_at: sourceStat.mtime.toISOString(),
+    },
+    narrative: {
+      summary: `已导入支小业务 HTML 日报，最新数据日期 ${latestDate}。`,
+      risks: latestDate !== report.report_date
+        ? `本次日报日期为 ${report.report_date}，支小 HTML 最新数据日期为 ${latestDate}，请确认日期窗口是否符合预期。`
+        : '支小 HTML 已在导入 Relation 时移除本地密码门，访问权限由业务日报模块控制。',
+      notes: '原始本地 HTML 仍保留 zfb666 密码；Relation 展示版作为 zhixiao_html_report 产物入库。',
+    },
+  };
+
+  return {
+    source: {
+      type: 'local_zhixiao_html',
+      filename: path.basename(htmlPath),
+      size: sourceStat.size,
+      modified_at: sourceStat.mtime.toISOString(),
+      latest_date: latestDate,
+    },
+    normalized: {
+      type: 'zhixiao_html_artifact',
+      password_gate_removed: true,
+      latest_date: latestDate,
+    },
+    reportModel,
+    reportHtml: artifactHtml,
+    artifacts: [{
+      artifactType: 'zhixiao_html_report',
+      content: artifactHtml,
+      contentType: 'text/html; charset=utf-8',
+    }],
+    decisionMarkdown: [
+      `# 支小业务日报导入`,
+      '',
+      `- 本地 HTML 文件：${path.basename(htmlPath)}`,
+      `- HTML 最新数据日期：${latestDate}`,
+      `- Relation 展示版已移除本地密码门，由业务日报权限控制访问。`,
+    ].join('\n'),
+    qualityStatus: latestDate === report.report_date ? 'passed' : 'warning',
+  };
+}
+
+function scheduleBusinessDailyReportGeneration(reportId, user) {
+  setImmediate(() => {
+    let currentStageCode = 'collecting';
+    try {
+      const report = businessDailyReportStore.getReport(reportId, { includeDeleted: false });
+      const runtime = getBusinessDailyReportRuntimeStatus(user, {
+        scopeType: report.scope_type,
+        scopeCode: report.scope_code,
+      });
+      businessDailyReportStore.completeStage(reportId, 'queued', {
+        outputSummary: { accepted: true },
+      });
+      businessDailyReportStore.startStage(reportId, 'collecting', {
+        inputSummary: {
+          source: isZhixiaoBusinessDailyReportScope(report.scope_type, report.scope_code)
+            ? 'local_zhixiao_reports'
+            : 'Mid-Max',
+          skill_code: runtime.skill_code || BUSINESS_DAILY_REPORT_SKILL_CODE,
+          skill_version: runtime.skill?.version_no || null,
+          scope_type: report.scope_type,
+          scope_code: report.scope_code,
+          scope_name: report.scope_name,
+        },
+      });
+      if (report.scope_type === 'business_line' && report.scope_code === 'ZHIXIAO') {
+        const sourceStatus = getZhixiaoSourceFileStatus();
+        businessDailyReportStore.completeStage(reportId, 'collecting', {
+          outputSummary: {
+            source: 'local_zhixiao_reports',
+            ready_count: sourceStatus.ready_count,
+            required_count: sourceStatus.required_count,
+          },
+        });
+        currentStageCode = 'validating_source';
+        businessDailyReportStore.startStage(reportId, 'validating_source', {
+          inputSummary: {
+            required_files: ZHIXIAO_REQUIRED_REPORT_FILES,
+          },
+        });
+        assertZhixiaoRuntimeReadyForGeneration();
+        businessDailyReportStore.completeStage(reportId, 'validating_source', {
+          outputSummary: {
+            missing_files: [],
+            generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+          },
+        });
+        currentStageCode = 'normalizing';
+        businessDailyReportStore.startStage(reportId, 'normalizing', {
+          inputSummary: {
+            generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+            html_filename: path.basename(getZhixiaoReportHtmlPath()),
+          },
+        });
+        const generation = runZhixiaoReportGenerator();
+        businessDailyReportStore.completeStage(reportId, 'normalizing', {
+          outputSummary: {
+            html_modified_at: generation.html_modified_at,
+            compile_stdout: generation.compile.stdout,
+            generator_stdout: generation.generated.stdout,
+            generator_stderr: generation.generated.stderr,
+          },
+        });
+        const completion = buildZhixiaoBusinessDailyReportCompletion(report);
+        currentStageCode = 'reconciling';
+        businessDailyReportStore.completeStage(reportId, 'reconciling', {
+          outputSummary: { quality_status: completion.qualityStatus },
+        });
+        currentStageCode = 'analyzing';
+        businessDailyReportStore.completeStage(reportId, 'analyzing', {
+          outputSummary: {
+            scope_name: report.scope_name,
+            latest_source_date: completion.reportModel?.latest_source_date,
+          },
+        });
+        currentStageCode = 'rendering';
+        businessDailyReportStore.completeStage(reportId, 'rendering', {
+          outputSummary: {
+            artifact_type: 'zhixiao_html_report',
+            password_gate_removed: true,
+          },
+        });
+        businessDailyReportStore.completeReport(reportId, completion);
+        return;
+      }
+      const blocker = runtime.blockers[0];
+      businessDailyReportStore.failReport(reportId, 'collecting', {
+        errorCode: blocker.code,
+        errorMessage: `${blocker.message}。任务已保留，待运行条件补齐后可重新生成。`,
+      });
+    } catch (error) {
+      console.error('[business-daily-report] generation failed:', error);
+      try {
+        businessDailyReportStore.failReport(reportId, currentStageCode, {
+          errorCode: error instanceof BusinessDailyReportError ? error.code : 'GENERATION_INTERNAL_ERROR',
+          errorMessage: error instanceof BusinessDailyReportError
+            ? error.message
+            : '日报生成任务发生内部错误，请查看服务端日志后重试。',
+        });
+      } catch (persistError) {
+        console.error('[business-daily-report] persist failure failed:', persistError);
+      }
+    }
+  });
+}
+
+app.use('/api/agents/business-daily-reports', requireBusinessDailyReportAccess);
+
+app.get('/api/agents/business-daily-reports/scopes', (req, res) => {
+  res.json({
+    catalog_version: 'yyz-report-scope-v1',
+    business_code: 'YYZ',
+    items: BUSINESS_DAILY_REPORT_SCOPE_TREE,
+  });
+});
+
+app.get('/api/agents/business-daily-reports/runtime-status', (req, res) => {
+  try {
+    res.json(getBusinessDailyReportRuntimeStatus(req.user, {
+      scopeType: req.query.scope_type,
+      scopeCode: req.query.scope_code,
+    }));
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '加载业务日报运行状态失败');
+  }
+});
+
+app.get('/api/agents/business-daily-reports', (req, res) => {
+  try {
+    res.json(businessDailyReportStore.listReports({
+      page: req.query.page,
+      pageSize: req.query.page_size,
+      status: req.query.status,
+      reportDate: req.query.report_date,
+      keyword: req.query.keyword,
+      deleted: req.query.deleted === '1' || req.query.deleted === 'true',
+      scopeType: req.query.scope_type,
+      scopeCode: req.query.scope_code,
+    }));
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '加载业务日报列表失败');
+  }
+});
+
+app.post('/api/agents/business-daily-reports', canWrite, (req, res) => {
+  try {
+    const skill = getPublishedBusinessDailyReportSkill();
+    const existing = businessDailyReportStore.findActiveReport({
+      reportDate: req.body?.report_date,
+      userId: req.user.id,
+      skillVersionId: skill?.version_id || null,
+      scopeType: req.body?.scope_type,
+      scopeCode: req.body?.scope_code,
+    });
+    if (existing) {
+      return res.status(202).json({
+        id: existing.id,
+        report: existing,
+        deduplicated: true,
+        runtime: getBusinessDailyReportRuntimeStatus(req.user, {
+          scopeType: req.body?.scope_type,
+          scopeCode: req.body?.scope_code,
+        }),
+      });
+    }
+    const report = businessDailyReportStore.createReport({
+      reportDate: req.body?.report_date,
+      userId: req.user.id,
+      skill,
+      scopeType: req.body?.scope_type,
+      scopeCode: req.body?.scope_code,
+    });
+    scheduleBusinessDailyReportGeneration(report.id, req.user);
+    res.status(202).json({
+      id: report.id,
+      report,
+      runtime: getBusinessDailyReportRuntimeStatus(req.user, {
+        scopeType: req.body?.scope_type,
+        scopeCode: req.body?.scope_code,
+      }),
+    });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '创建业务日报失败');
+  }
+});
+
+app.get('/api/agents/business-daily-reports/:id', (req, res) => {
+  try {
+    const report = businessDailyReportStore.getReport(req.params.id);
+    res.json({
+      report,
+      runs: businessDailyReportStore.listRuns(req.params.id),
+      revisions: businessDailyReportStore.listRevisions(req.params.id),
+      artifacts: businessDailyReportStore.listArtifacts(req.params.id),
+      permissions: {
+        can_write: !['readonly', 'guest'].includes(req.user.role),
+        can_manage: canManageBusinessDailyReports(req.user),
+        can_delete: Number(report.created_by) === Number(req.user.id)
+          || canManageBusinessDailyReports(req.user),
+        can_restore: canManageBusinessDailyReports(req.user),
+      },
+    });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '加载业务日报详情失败');
+  }
+});
+
+app.get('/api/agents/business-daily-reports/:id/runs', (req, res) => {
+  try {
+    res.json(businessDailyReportStore.listRuns(req.params.id));
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '加载日报执行步骤失败');
+  }
+});
+
+app.get('/api/agents/business-daily-reports/:id/html', (req, res) => {
+  try {
+    const html = businessDailyReportStore.getHtml(req.params.id, {
+      revisionId: req.query.revision_id,
+      machine: req.query.machine === '1' || req.query.machine === 'true',
+    });
+    res.setHeader('Content-Security-Policy', [
+      "default-src 'none'",
+      "style-src 'unsafe-inline'",
+      "img-src data:",
+      "font-src data:",
+      "connect-src 'none'",
+      "frame-src 'none'",
+      "object-src 'none'",
+      "form-action 'none'",
+      "base-uri 'none'",
+      "frame-ancestors 'self'",
+    ].join('; '));
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.type('html').send(html);
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '加载日报 HTML 失败');
+  }
+});
+
+app.get('/api/agents/business-daily-reports/:id/artifacts/:type', (req, res) => {
+  const allowedTypes = new Set([
+    'source_json',
+    'normalized_json',
+    'report_model_json',
+    'decision_md',
+    'execution_manifest',
+    'zhixiao_html_report',
+  ]);
+  if (!allowedTypes.has(req.params.type)) {
+    return res.status(400).json({ error: '不支持读取该产物类型' });
+  }
+  try {
+    const artifact = businessDailyReportStore.getArtifact(req.params.id, req.params.type, {
+      revisionId: req.query.revision_id,
+    });
+    res.setHeader('Cache-Control', 'private, no-store');
+    if (String(artifact.content_type || '').includes('text/html')) {
+      res.setHeader('Content-Security-Policy', [
+        "default-src 'none'",
+        "script-src 'unsafe-inline'",
+        "style-src 'unsafe-inline'",
+        "img-src data:",
+        "font-src data:",
+        "connect-src 'none'",
+        "frame-src 'none'",
+        "object-src 'none'",
+        "form-action 'none'",
+        "base-uri 'none'",
+        "frame-ancestors 'self'",
+      ].join('; '));
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.type('html').send(artifact.content_text || '');
+    }
+    if (String(artifact.content_type || '').includes('application/json')) {
+      try {
+        return res.json(JSON.parse(artifact.content_text));
+      } catch {
+        return res.status(500).json({ error: '日报 JSON 产物格式无效' });
+      }
+    }
+    return res.type(artifact.content_type || 'text/plain').send(artifact.content_text || '');
+  } catch (error) {
+    return sendBusinessDailyReportError(res, error, '加载日报产物失败');
+  }
+});
+
+app.post('/api/agents/business-daily-reports/:id/regenerate', canWrite, (req, res) => {
+  try {
+    const sourceReport = businessDailyReportStore.getReport(req.params.id, { includeDeleted: false });
+    const skill = getPublishedBusinessDailyReportSkill();
+    const existing = businessDailyReportStore.findActiveReport({
+      reportDate: sourceReport.report_date,
+      userId: req.user.id,
+      skillVersionId: skill?.version_id || null,
+      scopeType: sourceReport.scope_type,
+      scopeCode: sourceReport.scope_code,
+    });
+    if (existing) {
+      return res.status(202).json({ id: existing.id, report: existing, deduplicated: true });
+    }
+    const report = businessDailyReportStore.createReport({
+      reportDate: sourceReport.report_date,
+      userId: req.user.id,
+      skill,
+      scopeType: sourceReport.scope_type,
+      scopeCode: sourceReport.scope_code,
+    });
+    scheduleBusinessDailyReportGeneration(report.id, req.user);
+    res.status(202).json({ id: report.id, report });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '重新生成业务日报失败');
+  }
+});
+
+app.get('/api/agents/business-daily-reports/:id/revisions', (req, res) => {
+  try {
+    res.json(businessDailyReportStore.listRevisions(req.params.id, {
+      includeModel: req.query.include_model === '1' || req.query.include_model === 'true',
+    }));
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '加载日报修订历史失败');
+  }
+});
+
+app.post('/api/agents/business-daily-reports/:id/revisions', canWrite, (req, res) => {
+  try {
+    const revision = businessDailyReportStore.createRevision(req.params.id, {
+      userId: req.user.id,
+      narrative: req.body?.narrative,
+      changeSummary: req.body?.change_summary,
+    });
+    res.status(201).json({ id: revision.id, revision });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '创建日报修订失败');
+  }
+});
+
+app.put('/api/agents/business-daily-reports/:id/revisions/:revisionId', canWrite, (req, res) => {
+  try {
+    const revision = businessDailyReportStore.updateRevision(
+      req.params.id,
+      req.params.revisionId,
+      {
+        userId: req.user.id,
+        narrative: req.body?.narrative,
+        changeSummary: req.body?.change_summary,
+        baseRevisionNo: req.body?.base_revision_no,
+        lockVersion: req.body?.lock_version,
+      },
+    );
+    res.json({ success: true, revision });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '保存日报修订失败');
+  }
+});
+
+app.post('/api/agents/business-daily-reports/:id/revisions/:revisionId/submit', canWrite, (req, res) => {
+  try {
+    const revision = businessDailyReportStore.submitRevision(
+      req.params.id,
+      req.params.revisionId,
+      req.user.id,
+    );
+    res.json({ success: true, revision });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '提交日报修订失败');
+  }
+});
+
+app.post('/api/agents/business-daily-reports/:id/revisions/:revisionId/review', canWrite, (req, res) => {
+  if (!canManageBusinessDailyReports(req.user)) {
+    return res.status(403).json({ error: '无日报修订审核权限' });
+  }
+  try {
+    const revision = businessDailyReportStore.reviewRevision(
+      req.params.id,
+      req.params.revisionId,
+      {
+        userId: req.user.id,
+        action: req.body?.action,
+        comment: req.body?.comment,
+      },
+    );
+    res.json({ success: true, revision });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '审核日报修订失败');
+  }
+});
+
+app.delete('/api/agents/business-daily-reports/:id', canWrite, (req, res) => {
+  try {
+    const report = businessDailyReportStore.getReport(req.params.id, { includeDeleted: false });
+    if (Number(report.created_by) !== Number(req.user.id) && !canManageBusinessDailyReports(req.user)) {
+      return res.status(403).json({ error: '无权删除他人创建的日报' });
+    }
+    const deleted = businessDailyReportStore.softDelete(req.params.id, {
+      userId: req.user.id,
+      reason: req.body?.reason,
+    });
+    res.json({ success: true, report: deleted });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '删除业务日报失败');
+  }
+});
+
+app.post('/api/agents/business-daily-reports/:id/restore', canWrite, (req, res) => {
+  if (!canManageBusinessDailyReports(req.user)) {
+    return res.status(403).json({ error: '无业务日报恢复权限' });
+  }
+  try {
+    const report = businessDailyReportStore.restore(req.params.id);
+    res.json({ success: true, report });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '恢复业务日报失败');
   }
 });
 
