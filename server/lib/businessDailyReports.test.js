@@ -234,12 +234,14 @@ test('store preserves generation history, revisions and recoverable deletion', (
   const scoped = store.createReport({
     reportDate: '2026-07-25',
     userId: 1,
+    skillCode: 'zhixiao-ai',
     scopeType: 'business_line',
     scopeCode: 'ZHIXIAO',
   });
   assert.equal(scoped.generation_no, 3);
   assert.equal(scoped.scope_generation_no, 1);
   assert.equal(scoped.scope_name, '支小业务');
+  assert.equal(scoped.skill_code, 'zhixiao-ai');
   assert.equal(store.listReports({ scopeType: 'business_line', scopeCode: 'ZHIXIAO' }).total, 1);
   assert.equal(store.listReports({ scopeType: 'project', scopeCode: 'YYZ' }).total, 2);
   store.failReport(scoped.id, 'queued', {

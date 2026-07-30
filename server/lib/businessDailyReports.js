@@ -965,6 +965,7 @@ function createBusinessDailyReportStore({ db, identityDb = db, encryptRow, decry
       reportDate,
       userId,
       skill = null,
+      skillCode = BUSINESS_DAILY_REPORT_SKILL_CODE,
       scopeType = 'project',
       scopeCode = 'YYZ',
     }) {
@@ -1009,7 +1010,7 @@ function createBusinessDailyReportStore({ db, identityDb = db, encryptRow, decry
           title,
           skill?.id || null,
           skill?.version_id || null,
-          BUSINESS_DAILY_REPORT_SKILL_CODE,
+          skillCode || BUSINESS_DAILY_REPORT_SKILL_CODE,
           skill?.version_no || null,
           skill?.tree_hash || null,
           actorUserId,
