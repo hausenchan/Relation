@@ -18104,7 +18104,9 @@ app.get('/api/agents/business-daily-reports', (req, res) => {
 
 app.post('/api/agents/business-daily-reports', canWrite, (req, res) => {
   try {
-    const skill = getPublishedBusinessDailyReportSkill();
+    const isZhixiaoScope = isZhixiaoBusinessDailyReportScope(req.body?.scope_type, req.body?.scope_code);
+    const skill = isZhixiaoScope ? null : getPublishedBusinessDailyReportSkill();
+    const skillCode = isZhixiaoScope ? 'zhixiao-ai' : BUSINESS_DAILY_REPORT_SKILL_CODE;
     const existing = businessDailyReportStore.findActiveReport({
       reportDate: req.body?.report_date,
       userId: req.user.id,
@@ -18127,6 +18129,7 @@ app.post('/api/agents/business-daily-reports', canWrite, (req, res) => {
       reportDate: req.body?.report_date,
       userId: req.user.id,
       skill,
+      skillCode,
       scopeType: req.body?.scope_type,
       scopeCode: req.body?.scope_code,
     });
@@ -18249,7 +18252,9 @@ app.get('/api/agents/business-daily-reports/:id/artifacts/:type', (req, res) => 
 app.post('/api/agents/business-daily-reports/:id/regenerate', canWrite, (req, res) => {
   try {
     const sourceReport = businessDailyReportStore.getReport(req.params.id, { includeDeleted: false });
-    const skill = getPublishedBusinessDailyReportSkill();
+    const isZhixiaoScope = isZhixiaoBusinessDailyReportScope(sourceReport.scope_type, sourceReport.scope_code);
+    const skill = isZhixiaoScope ? null : getPublishedBusinessDailyReportSkill();
+    const skillCode = isZhixiaoScope ? 'zhixiao-ai' : BUSINESS_DAILY_REPORT_SKILL_CODE;
     const existing = businessDailyReportStore.findActiveReport({
       reportDate: sourceReport.report_date,
       userId: req.user.id,
@@ -18264,6 +18269,7 @@ app.post('/api/agents/business-daily-reports/:id/regenerate', canWrite, (req, re
       reportDate: sourceReport.report_date,
       userId: req.user.id,
       skill,
+      skillCode,
       scopeType: sourceReport.scope_type,
       scopeCode: sourceReport.scope_code,
     });
