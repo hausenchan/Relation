@@ -5,7 +5,8 @@ import {
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
   CheckOutlined, PlayCircleOutlined, PauseCircleOutlined, FlagOutlined, UserOutlined,
   ThunderboltOutlined, ScheduleOutlined, LikeFilled, CheckCircleFilled,
-  RobotOutlined, BulbOutlined, BarChartOutlined, FundOutlined, EyeOutlined
+  RobotOutlined, BulbOutlined, BarChartOutlined, FundOutlined, EyeOutlined,
+  MoreOutlined
 } from '@ant-design/icons';
 import { statsApi, remindersApi, tasksApi, followUpTasksApi, usersApi, aiSuggestionsApi } from '../api';
 import { useAuth } from '../AuthContext';
@@ -17,6 +18,7 @@ import {
   sortDashboardTasksByDefault,
 } from '../utils/dashboardTaskSort';
 import { TASK_TYPE_META as taskTypeMap, TASK_TYPE_OPTIONS, TASK_TYPE_VALUES } from '../utils/taskTypes';
+import './Dashboard.css';
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -379,6 +381,8 @@ export default function Dashboard() {
   const [opportunityEditSaving, setOpportunityEditSaving] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
+  const [detailSection, setDetailSection] = useState('');
+  const [mobileTaskAction, setMobileTaskAction] = useState(null);
   const [taskColumnWidths, setTaskColumnWidths] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('dashboardTaskColumnWidths') || '{}');
@@ -917,9 +921,16 @@ export default function Dashboard() {
     opportunityEditForm.resetFields();
   };
 
-  const openTaskDetail = (record) => {
+  const openTaskDetail = (record, section = '') => {
     setDetailRecord(record);
+    setDetailSection(section);
     setDetailOpen(true);
+  };
+
+  const closeTaskDetail = () => {
+    setDetailOpen(false);
+    setDetailRecord(null);
+    setDetailSection('');
   };
 
   const ignoreTaskRowEvent = (event) => {
@@ -1033,6 +1044,11 @@ export default function Dashboard() {
     return sameId(record.created_by, user?.id) || sameId(record.assigned_to, user?.id);
   };
 
+  const getTaskActionPermissions = (record, section = '') => ({
+    canEdit: section !== 'team' && canEditTaskRecord(record),
+    canDelete: section === 'execution' && canDeleteTaskRecord(record),
+  });
+
   const handleUpdateStatus = async (record, status) => {
     try {
       if (record?.task_source === 'opportunity') {
@@ -1138,9 +1154,46 @@ export default function Dashboard() {
       }
       message.success('删除成功');
       loadData();
+      return true;
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '删除失败');
+      return false;
     }
+  };
+
+  const openMobileTaskActions = (record, section, event) => {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    setMobileTaskAction({ record, section });
+  };
+
+  const editFromMobileTaskActions = () => {
+    const record = mobileTaskAction?.record;
+    if (!record) return;
+    setMobileTaskAction(null);
+    if (sameId(detailRecord?.id, record.id)) closeTaskDetail();
+    if (record.task_source === 'opportunity') {
+      openOpportunityEdit(record);
+    } else {
+      openEdit(record);
+    }
+  };
+
+  const confirmDeleteTask = () => {
+    const record = mobileTaskAction?.record;
+    if (!record) return;
+    setMobileTaskAction(null);
+    Modal.confirm({
+      title: '删除任务？',
+      content: '删除后无法恢复，请确认是否继续。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        const deleted = await handleDelete(record);
+        if (deleted && sameId(detailRecord?.id, record.id)) closeTaskDetail();
+      },
+    });
   };
 
   const renderTaskEditorForm = () => (
@@ -1855,68 +1908,117 @@ export default function Dashboard() {
   ];
 
   const renderTaskCard = (record, section) => {
+    const { canEdit, canDelete } = getTaskActionPermissions(record, section);
+    const canChangeStatus = canEdit && (section === 'execution' || section === 'watched');
+    const canStart = canChangeStatus && ['pending', 'suspended'].includes(record.status);
+    const canSuspend = canChangeStatus && record.status === 'in_progress';
+    const canDone = canChangeStatus && record.status === 'in_progress';
+    const dateItems = [
+      ['计划', record.plan_date],
+      ['预估完成', record.estimated_completion_date],
+      ['开始', record.start_date],
+      ['完成', record.complete_date],
+    ].filter(([, value]) => value).map(([label, value]) => `${label} ${dayjs(value).format('MM-DD')}`);
+    const assignerName = record.created_by_name || record.assigned_by_name || record.assigner_name;
+    const executorName = record.assigned_to_name || record.follower_name;
+    const peopleItems = [
+      assignerName ? `指派人 ${assignerName}` : '',
+      executorName ? `执行人 ${executorName}` : '',
+      record.shared_to_names ? `共享给 ${record.shared_to_names}` : '',
+    ].filter(Boolean);
+    const hasMoreActions = canEdit || canDelete;
+    const openDetail = () => openTaskDetail(record, section);
+    const handleCardKeyDown = (event) => {
+      if (event.target !== event.currentTarget) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        openDetail();
+      }
+    };
+
     return (
-      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <List.Item className="dashboard-task-mobile-list-item">
         <div
-          onDoubleClick={(event) => {
-            if (ignoreTaskRowEvent(event)) return;
-            openTaskDetail(record);
-          }}
-          style={{
-            width: '100%',
-            padding: 14,
-            border: '1px solid #f0f0f0',
-            borderRadius: 12,
-            background: '#fff',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-          }}
+          className="dashboard-task-mobile-card"
+          role="button"
+          tabIndex={0}
+          aria-label={`查看任务详情：${record.title || ''}`}
+          onClick={(event) => { if (!ignoreTaskRowEvent(event)) openDetail(); }}
+          onKeyDown={handleCardKeyDown}
         >
-          <Space direction="vertical" size={10} style={{ width: '100%' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexDirection: isMobile ? 'column' : 'row' }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: 15, fontWeight: 600, color: '#1f2937', marginBottom: 4, overflowWrap: 'anywhere' }}>{record.title}</div>
-                {(record.description || record.opportunity_note) && (
-                  <Typography.Paragraph
-                    ellipsis={{ rows: 2, expandable: false }}
-                    type="secondary"
-                    style={{ marginBottom: 0 }}
-                  >
-                    {record.description || record.opportunity_note}
-                  </Typography.Paragraph>
-                )}
-              </div>
-              <Space direction={isMobile ? 'horizontal' : 'vertical'} size={4} align={isMobile ? 'start' : 'end'} wrap={isMobile} style={{ width: isMobile ? '100%' : undefined }}>
-                <Tag color={record.task_source === 'opportunity' ? 'purple' : 'blue'}>{record.task_source_label}</Tag>
-                <Badge status={record.display_status_badge} text={record.display_status_label} />
-              </Space>
+          <div className="dashboard-task-mobile-card-header">
+            <div className="dashboard-task-mobile-card-heading">
+              <div className="dashboard-task-mobile-card-title">{record.title || '-'}</div>
+              {(record.description || record.opportunity_note) && (
+                <div className="dashboard-task-mobile-card-description">
+                  {record.description || record.opportunity_note}
+                </div>
+              )}
             </div>
-
-            <Space wrap size={[6, 6]}>
-              {record.priority && <Tag color={priorityMap[record.priority]?.color}>{priorityMap[record.priority]?.label}</Tag>}
-              {record.task_type && <Tag color={taskTypeMap[record.task_type]?.color || 'default'}>{taskTypeMap[record.task_type]?.label || record.task_type}</Tag>}
-              {Number(record.shared_to_me) === 1 && <Tag color="cyan">共享给我</Tag>}
-              {record.plan_date && <Tag>计划 {dayjs(record.plan_date).format('MM-DD')}</Tag>}
-              {record.estimated_completion_date && <Tag>预估完成 {dayjs(record.estimated_completion_date).format('MM-DD')}</Tag>}
-              {record.start_date && <Tag color="processing">开始 {dayjs(record.start_date).format('MM-DD')}</Tag>}
-              {record.complete_date && <Tag color="success">完成 {dayjs(record.complete_date).format('MM-DD')}</Tag>}
-            </Space>
-
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {record.created_by_name && <Typography.Text type="secondary">指派人：{record.created_by_name}</Typography.Text>}
-              {record.assigned_to_name && <Typography.Text type="secondary">执行人：{record.assigned_to_name}</Typography.Text>}
-              {record.assigner_name && <Typography.Text type="secondary">指派人：{record.assigner_name}</Typography.Text>}
-              {record.follower_name && <Typography.Text type="secondary">跟进人：{record.follower_name}</Typography.Text>}
-              {record.shared_to_names && <Typography.Text type="secondary">共享给：{record.shared_to_names}</Typography.Text>}
-            </div>
-
-            {record.display_result && (
-              <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                结果：{record.display_result}
-              </Typography.Paragraph>
+            {hasMoreActions && (
+              <Button
+                type="text"
+                size="small"
+                className="dashboard-task-mobile-card-more"
+                icon={<MoreOutlined />}
+                aria-label={`更多操作：${record.title || '任务'}`}
+                onPointerDown={event => event.stopPropagation()}
+                onClick={event => openMobileTaskActions(record, section, event)}
+              />
             )}
+          </div>
 
-            {renderTaskActions(record, { section, mobile: isMobile })}
-          </Space>
+          <div className="dashboard-task-mobile-card-tags">
+            <Tag color={record.task_source === 'opportunity' ? 'purple' : Number(record.shared_to_me) === 1 ? 'cyan' : 'blue'}>
+              {record.task_source_label}
+            </Tag>
+            <span className="dashboard-task-mobile-card-status">
+              <Badge status={record.display_status_badge} text={record.display_status_label} />
+            </span>
+            {record.priority && (
+              <Tag color={priorityMap[record.priority]?.color}>优先级·{priorityMap[record.priority]?.label}</Tag>
+            )}
+            {record.task_type && (
+              <Tag color={taskTypeMap[record.task_type]?.color || 'default'}>
+                {taskTypeMap[record.task_type]?.label || record.task_type}
+              </Tag>
+            )}
+            {Number(record.shared_to_me) === 1 && <Tag color="cyan">共享给我</Tag>}
+          </div>
+
+          {dateItems.length > 0 && (
+            <div className="dashboard-task-mobile-card-dates">{dateItems.join(' · ')}</div>
+          )}
+          {peopleItems.length > 0 && (
+            <div className="dashboard-task-mobile-card-people">{peopleItems.join(' · ')}</div>
+          )}
+
+          {record.display_result && (
+            <div className="dashboard-task-mobile-card-result">
+              <span className="dashboard-task-mobile-card-result-label">结果</span>
+              <span className="dashboard-task-mobile-card-result-value">{record.display_result}</span>
+            </div>
+          )}
+
+          {(canStart || canSuspend || canDone) && (
+            <div className="dashboard-task-mobile-card-quick-actions">
+              {canStart && (
+                <Button size="small" icon={<PlayCircleOutlined />} onClick={() => handleUpdateStatus(record, 'in_progress')}>
+                  {record.status === 'suspended' ? '恢复' : '开始'}
+                </Button>
+              )}
+              {canSuspend && (
+                <Button size="small" icon={<PauseCircleOutlined />} onClick={() => handleUpdateStatus(record, 'suspended')}>
+                  挂起
+                </Button>
+              )}
+              {canDone && (
+                <Button type="primary" size="small" icon={<CheckOutlined />} onClick={() => openCompleteTask(record)}>
+                  完成
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </List.Item>
     );
@@ -2606,6 +2708,11 @@ export default function Dashboard() {
   const topSummaryCards = canViewAiSuggestions && activeTaskTab === TASK_TAB_KEYS.ai
     ? aiSuggestionSummaryCards
     : taskStatCards;
+  const mobileTaskActionPermissions = getTaskActionPermissions(
+    mobileTaskAction?.record,
+    mobileTaskAction?.section,
+  );
+  const detailTaskActionPermissions = getTaskActionPermissions(detailRecord, detailSection);
 
   return (
     <div style={{ padding: isMobile ? 0 : undefined }}>
@@ -2740,6 +2847,32 @@ export default function Dashboard() {
           />
         </Card>
       )}
+
+      <Drawer
+        className="dashboard-task-mobile-action-sheet"
+        placement="bottom"
+        height={mobileTaskActionPermissions.canEdit && mobileTaskActionPermissions.canDelete ? 224 : 174}
+        closable={false}
+        zIndex={1100}
+        open={isMobile && !!mobileTaskAction}
+        onClose={() => setMobileTaskAction(null)}
+        styles={{ body: { padding: '8px 12px calc(10px + env(safe-area-inset-bottom))' } }}
+      >
+        <div className="dashboard-task-mobile-action-list" role="menu" aria-label="任务操作">
+          {mobileTaskActionPermissions.canEdit && (
+            <Button type="text" icon={<EditOutlined />} role="menuitem" onClick={editFromMobileTaskActions}>
+              编辑任务
+            </Button>
+          )}
+          {mobileTaskActionPermissions.canDelete && (
+            <Button type="text" danger icon={<DeleteOutlined />} role="menuitem" onClick={confirmDeleteTask}>
+              删除任务
+            </Button>
+          )}
+          <div className="dashboard-task-mobile-action-divider" />
+          <Button type="text" role="menuitem" onClick={() => setMobileTaskAction(null)}>取消</Button>
+        </div>
+      </Drawer>
 
       {isMobile ? (
         <Drawer
@@ -2900,25 +3033,35 @@ export default function Dashboard() {
       <Drawer
         title="任务详情"
         open={detailOpen}
-        onClose={() => setDetailOpen(false)}
+        onClose={closeTaskDetail}
         width={isMobile ? '100%' : 520}
         styles={isMobile ? { body: { maxHeight: 'calc(100vh - 56px)', overflowY: 'auto' } } : undefined}
         extra={
-          canEditTaskRecord(detailRecord) && (
-            <Button
-              icon={<EditOutlined />}
-              onClick={() => {
-                setDetailOpen(false);
-                if (detailRecord.task_source === 'opportunity') {
-                  openOpportunityEdit(detailRecord);
-                } else {
-                  openEdit(detailRecord);
-                }
-              }}
-            >
-              编辑
-            </Button>
-          )
+          isMobile
+            ? (detailTaskActionPermissions.canEdit || detailTaskActionPermissions.canDelete) && (
+              <Button
+                type="text"
+                size="small"
+                icon={<MoreOutlined />}
+                aria-label="更多任务操作"
+                onClick={event => openMobileTaskActions(detailRecord, detailSection, event)}
+              />
+            )
+            : canEditTaskRecord(detailRecord) && (
+              <Button
+                icon={<EditOutlined />}
+                onClick={() => {
+                  closeTaskDetail();
+                  if (detailRecord.task_source === 'opportunity') {
+                    openOpportunityEdit(detailRecord);
+                  } else {
+                    openEdit(detailRecord);
+                  }
+                }}
+              >
+                编辑
+              </Button>
+            )
         }
       >
         {detailRecord && (

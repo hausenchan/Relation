@@ -88,7 +88,7 @@ import {
   updateDefaultDocumentShareUsers,
   updateExplicitDocumentShareUsers,
 } from '../utils/documentDefaultShares';
-import { getDocumentKind, isSpreadsheetDocument } from '../utils/documentKind';
+import { getDocumentKind, isSpreadsheetDocument, shouldHandleDocumentUndoShortcut } from '../utils/documentKind';
 import { loadFreshDocumentHistoryDetail } from '../utils/documentHistory';
 import {
   buildSpreadsheetCollaborationHint,
@@ -4763,7 +4763,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
 
   useEffect(() => {
     const handleUndoKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!shouldHandleDocumentUndoShortcut(selectedDoc) || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const key = String(event.key || '').toLowerCase();
       if (key !== 'z' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
@@ -4771,7 +4771,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     window.addEventListener('keydown', handleUndoKeyDown);
     return () => window.removeEventListener('keydown', handleUndoKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
+  }, [selectedDoc?.id, selectedDoc?.document_kind, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
 
   useEffect(() => {
     const handleSaveKeyDown = (event) => {
