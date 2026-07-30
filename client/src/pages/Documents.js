@@ -3037,12 +3037,6 @@ function getFolderPathLabel(folder, folderPathMap = null) {
   ].filter(Boolean).join(' / ');
 }
 
-function getFolderInnerPathLabel(folder, folderPathMap = null) {
-  if (!folder) return '';
-  const pathParts = folderPathMap?.get?.(Number(folder.id)) || [folder.name];
-  return pathParts.filter(Boolean).join(' / ');
-}
-
 function isDocumentFolderCompatibleWithLocation(folder, values = {}) {
   if (!folder) return false;
   if (values.domain && folder.domain !== values.domain) return false;
@@ -3902,8 +3896,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     ? folders.find(folder => Number(folder.id) === Number(selectedDoc.folder_id))
     : null;
   const selectedDocFolderPathTag = selectedDocFolder
-    ? getFolderInnerPathLabel(selectedDocFolder, folderPathMap)
-    : (selectedDoc?.folder_name || '');
+    ? getFolderPathLabel(selectedDocFolder, folderPathMap)
+    : [selectedDocDomainTag, selectedDocDepartmentTag, selectedDoc?.folder_name]
+      .map(value => String(value || '').trim())
+      .filter((value, index, values) => value && values.indexOf(value) === index)
+      .join(' / ');
   const compactSpreadsheetWorkspace = !embedded && !isMobile && isSpreadsheetDocument(selectedDoc);
   const spreadsheetWorkspaceChrome = getSpreadsheetWorkspaceChromeState({
     autoCollapsed: spreadsheetContextAutoCollapsed,
