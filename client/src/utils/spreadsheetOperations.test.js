@@ -58,7 +58,13 @@ test('builds sheet property operations for rename, dimensions, sizing, filters, 
     columnWidths: { 0: 160 },
     mergedCells: [{ startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 }],
     filters: [{ columnIndex: 0, value: '华东' }],
-    filterRange: { startRow: 0, endRow: 10, startColumn: 0, endColumn: 2 },
+    filterRange: {
+      startRow: 0,
+      endRow: 10,
+      startColumn: 0,
+      endColumn: 2,
+      columns: [0, 2],
+    },
     frozen: { rows: 2, columns: 1 },
   });
 

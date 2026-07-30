@@ -49,6 +49,7 @@ import {
   formatSpreadsheetDisplayValue,
   getSpreadsheetConditionalStyle,
   getSpreadsheetColumnFilterOptions,
+  getSpreadsheetFilterColumns,
   getSpreadsheetFilterRange,
   getSpreadsheetProtectedRangeAccess,
   getSpreadsheetCellObject,
@@ -654,6 +655,7 @@ export default function SpreadsheetDocumentEditor({
   const [cellFormatOpen, setCellFormatOpen] = useState(false);
   const [customSortOpen, setCustomSortOpen] = useState(false);
   const [filterPanel, setFilterPanel] = useState(null);
+  const [selectedColumnIndexes, setSelectedColumnIndexes] = useState([]);
   const [protectionOpen, setProtectionOpen] = useState(false);
   const [conditionalFormatOpen, setConditionalFormatOpen] = useState(false);
   const [dataValidationOpen, setDataValidationOpen] = useState(false);
@@ -734,6 +736,7 @@ export default function SpreadsheetDocumentEditor({
 
   useEffect(() => {
     setFilterPanel(null);
+    setSelectedColumnIndexes([]);
   }, [activeSheet.id]);
 
   useEffect(() => {
@@ -1150,9 +1153,13 @@ export default function SpreadsheetDocumentEditor({
     && currentSelection.endColumn === activeSheet.columnCount - 1;
   const selectsWholeColumns = currentSelection.startRow === 0
     && currentSelection.endRow === activeSheet.rowCount - 1;
+  const selectedColumnIndexSet = new Set(selectedColumnIndexes);
+  const hasDiscreteColumnSelection = selectedColumnIndexes.length > 1;
   const selectedCellCount = (currentSelection.endRow - currentSelection.startRow + 1)
     * (currentSelection.endColumn - currentSelection.startColumn + 1);
   const activeFilterRange = getSpreadsheetFilterRange(activeSheet);
+  const activeFilterColumns = getSpreadsheetFilterColumns(activeSheet);
+  const activeFilterColumnSet = new Set(activeFilterColumns);
   const filterPanelColumnIndex = filterPanel?.sheetId === activeSheet.id
     ? Number(filterPanel.columnIndex)
     : null;
@@ -1206,7 +1213,9 @@ export default function SpreadsheetDocumentEditor({
   const selectedSummaryDefinition = SELECTION_SUMMARY_METRICS.find(
     item => item.key === effectiveSelectionSummaryMetric,
   ) || SELECTION_SUMMARY_METRICS[0];
-  const showSelectionSummary = selectedCellCount > 1 && selectionSummary.count > 0;
+  const showSelectionSummary = !hasDiscreteColumnSelection
+    && selectedCellCount > 1
+    && selectionSummary.count > 0;
   const selectionSummaryMenuItems = SELECTION_SUMMARY_METRICS.map(item => ({
     key: item.key,
     disabled: item.numeric && !selectionSummary.numericCount,
@@ -1247,6 +1256,14 @@ export default function SpreadsheetDocumentEditor({
   const selectedFontFamily = selectedCellStyle.fontFamily || DEFAULT_FONT_FAMILY;
   const selectedFontSize = Number(selectedCellStyle.fontSize) || DEFAULT_FONT_SIZE;
   const selectionLabel = spreadsheetRangeLabel(currentSelection) || activeCellKey;
+  const nameBoxLabel = hasDiscreteColumnSelection
+    ? selectedColumnIndexes
+      .map(columnIndex => {
+        const label = spreadsheetColumnLabel(columnIndex);
+        return `${label}:${label}`;
+      })
+      .join(',')
+    : selectionLabel;
   const protectionRangeLabel = spreadsheetRangeLabel(selectedProtectionRule?.range || currentSelection) || selectionLabel;
   const formulaReferences = useMemo(() => (
     extractSpreadsheetFormulaReferences(selectedCellRawValue, activeSheet.name)
@@ -1336,6 +1353,7 @@ export default function SpreadsheetDocumentEditor({
     const nextSelection = nextRange
       || normalizeSpreadsheetRange(merged || { rowIndex: targetRow, columnIndex: targetColumn });
     onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: targetRow, columnIndex: targetColumn });
+    setSelectedColumnIndexes([]);
     currentSelectionRef.current = nextSelection;
     setSelection(nextSelection);
   };
@@ -1350,6 +1368,7 @@ export default function SpreadsheetDocumentEditor({
     setEditingCellKey('');
     setSelectionAnchor(null);
     setIsSelecting(false);
+    setSelectedColumnIndexes([]);
     onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex, columnIndex: 0 });
     setSelection(nextRange);
     currentSelectionRef.current = nextRange;
@@ -1357,17 +1376,35 @@ export default function SpreadsheetDocumentEditor({
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
-  const selectWholeColumn = columnIndex => {
+  const selectWholeColumn = (columnIndex, { additive = false } = {}) => {
+    const nextColumnIndexes = (() => {
+      if (!additive) return [columnIndex];
+      const current = selectedColumnIndexes.length
+        ? selectedColumnIndexes
+        : (selectsWholeColumns
+          ? Array.from(
+            { length: currentSelection.endColumn - currentSelection.startColumn + 1 },
+            (_, index) => currentSelection.startColumn + index,
+          )
+          : []);
+      if (!current.includes(columnIndex)) return [...current, columnIndex].sort((left, right) => left - right);
+      if (current.length === 1) return current;
+      return current.filter(index => index !== columnIndex);
+    })();
+    const activeSelectionColumn = nextColumnIndexes.includes(columnIndex)
+      ? columnIndex
+      : nextColumnIndexes[nextColumnIndexes.length - 1];
     const nextRange = normalizeSpreadsheetRange({
       startRow: 0,
       endRow: activeSheet.rowCount - 1,
-      startColumn: columnIndex,
-      endColumn: columnIndex,
+      startColumn: activeSelectionColumn,
+      endColumn: activeSelectionColumn,
     });
     setEditingCellKey('');
     setSelectionAnchor(null);
     setIsSelecting(false);
-    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: 0, columnIndex });
+    setSelectedColumnIndexes(nextColumnIndexes);
+    onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: 0, columnIndex: activeSelectionColumn });
     setSelection(nextRange);
     currentSelectionRef.current = nextRange;
     if (formatPainterRef.current) applyFormatPainterToRange(nextRange);
@@ -1477,6 +1514,7 @@ export default function SpreadsheetDocumentEditor({
     currentSelectionRef.current = usedRange;
     setSelection(usedRange);
     setSelectionAnchor(null);
+    setSelectedColumnIndexes([]);
     setEditingCellKey('');
     onSelectedCellChange?.({
       sheetId: activeSheet.id,
@@ -1511,6 +1549,7 @@ export default function SpreadsheetDocumentEditor({
       endColumn,
     });
     currentSelectionRef.current = nextRange;
+    setSelectedColumnIndexes([]);
     setSelection(nextRange);
   };
 
@@ -1919,6 +1958,15 @@ export default function SpreadsheetDocumentEditor({
 
   const resolveSelectionFilterRange = () => {
     const usedRange = getSpreadsheetUsedRange(activeSheet);
+    if (selectedColumnIndexes.length) {
+      return {
+        startRow: usedRange.startRow,
+        endRow: usedRange.endRow,
+        startColumn: selectedColumnIndexes[0],
+        endColumn: selectedColumnIndexes[selectedColumnIndexes.length - 1],
+        ...(selectedColumnIndexes.length > 1 ? { columns: selectedColumnIndexes } : {}),
+      };
+    }
     if (selectsWholeColumns) {
       return normalizeSpreadsheetRange({
         startRow: usedRange.startRow,
@@ -1930,7 +1978,7 @@ export default function SpreadsheetDocumentEditor({
     if (selectsWholeRows) {
       return normalizeSpreadsheetRange({
         startRow: currentSelection.startRow,
-        endRow: currentSelection.endRow,
+        endRow: Math.max(currentSelection.endRow, usedRange.endRow),
         startColumn: usedRange.startColumn,
         endColumn: usedRange.endColumn,
       });
@@ -1946,20 +1994,36 @@ export default function SpreadsheetDocumentEditor({
     return normalizeSpreadsheetRange(currentSelection);
   };
 
+  const ensureFilterRangeEditable = (range, columns) => columns.every(columnIndex => (
+    ensureSpreadsheetRangeEditable({
+      startRow: range.startRow,
+      endRow: range.endRow,
+      startColumn: columnIndex,
+      endColumn: columnIndex,
+    })
+  ));
+
   const enableFiltersForSelection = () => {
     const range = resolveSelectionFilterRange();
     if (!range || range.endRow <= range.startRow) {
       message.warning('筛选区域至少需要一行标题和一行数据');
       return;
     }
-    if (!ensureSpreadsheetRangeEditable(range)) return;
+    const filterColumns = Array.isArray(range.columns)
+      ? range.columns
+      : Array.from(
+        { length: range.endColumn - range.startColumn + 1 },
+        (_, index) => range.startColumn + index,
+      );
+    if (!ensureFilterRangeEditable(range, filterColumns)) return;
     const headerHasMergedCells = (activeSheet.mergedCells || []).some(merged => {
       const normalized = normalizeSpreadsheetRange(merged);
       return normalized
         && normalized.startRow <= range.startRow
         && normalized.endRow >= range.startRow
-        && normalized.startColumn <= range.endColumn
-        && normalized.endColumn >= range.startColumn;
+        && filterColumns.some(columnIndex => (
+          columnIndex >= normalized.startColumn && columnIndex <= normalized.endColumn
+        ));
     });
     if (headerHasMergedCells) {
       message.warning('筛选标题行不能包含合并单元格，请先取消合并');
@@ -1971,7 +2035,7 @@ export default function SpreadsheetDocumentEditor({
       return draft;
     });
     setFilterPanel(null);
-    message.success(`已为 ${range.endColumn - range.startColumn + 1} 列启用筛选`);
+    message.success(`已为 ${filterColumns.length} 列启用筛选`);
     focusSpreadsheetGrid();
   };
 
@@ -2030,6 +2094,7 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const clearFilters = () => {
+    if (!activeFilterRange || !ensureFilterRangeEditable(activeFilterRange, activeFilterColumns)) return;
     applyWorkbookUpdate(draft => {
       draft.sheets.find(item => item.id === activeSheet.id).filters = [];
       return draft;
@@ -2039,6 +2104,7 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const disableFilters = () => {
+    if (!activeFilterRange || !ensureFilterRangeEditable(activeFilterRange, activeFilterColumns)) return;
     applyWorkbookUpdate(draft => {
       setSpreadsheetFilterRange(draft.sheets.find(item => item.id === activeSheet.id), null);
       return draft;
@@ -2046,6 +2112,26 @@ export default function SpreadsheetDocumentEditor({
     setFilterPanel(null);
     focusSpreadsheetGrid();
   };
+  const filterActionItems = [
+    {
+      key: 'enable-filter',
+      label: activeFilterRange ? '更新筛选范围' : '为选中列启用筛选',
+      disabled: selectionMutationDisabled,
+      onClick: enableFiltersForSelection,
+    },
+    {
+      key: 'clear-filter',
+      label: '清除筛选结果',
+      disabled: !canEdit || !activeSheet.filters?.length,
+      onClick: clearFilters,
+    },
+    {
+      key: 'disable-filter',
+      label: '取消筛选',
+      disabled: !canEdit || !activeFilterRange,
+      onClick: disableFilters,
+    },
+  ];
   const updateFrozen = patch => applyWorkbookUpdate(draft => {
     const sheet = draft.sheets.find(item => item.id === activeSheet.id);
     const next = { rows: Number(sheet.frozen?.rows) || 0, columns: Number(sheet.frozen?.columns) || 0, ...patch };
@@ -2152,6 +2238,7 @@ export default function SpreadsheetDocumentEditor({
     const sheet = workbook.sheets.find(item => item.id === sheetId);
     if (!sheet) return;
     onSelectedCellChange?.({ sheetId, rowIndex: 0, columnIndex: 0 });
+    setSelectedColumnIndexes([]);
     setSelection(normalizeSpreadsheetRange({ rowIndex: 0, columnIndex: 0 }));
     setEditingCellKey('');
     if (canEdit) applyWorkbookUpdate(draft => ({ ...draft, activeSheetId: sheetId }), { recordHistory: false });
@@ -2368,9 +2455,7 @@ export default function SpreadsheetDocumentEditor({
       items: [
         { key: 'sort-asc', label: '按当前列升序', onClick: () => sortSelection('asc') },
         { key: 'sort-desc', label: '按当前列降序', onClick: () => sortSelection('desc') },
-        { key: 'enable-filter', label: '为选中列启用筛选', onClick: enableFiltersForSelection },
-        { key: 'clear-filter', label: '清除筛选', disabled: !activeSheet.filters?.length, onClick: clearFilters },
-        { key: 'disable-filter', label: '关闭筛选', disabled: !activeFilterRange, onClick: disableFilters },
+        ...filterActionItems,
       ],
     },
     {
@@ -2456,8 +2541,18 @@ export default function SpreadsheetDocumentEditor({
     },
     {
       key: 'enable-filter',
-      label: '为选中列启用筛选',
+      label: activeFilterRange ? '更新筛选范围' : '为选中列启用筛选',
       disabled: !canEdit || selectionLocked,
+    },
+    {
+      key: 'clear-filter',
+      label: '清除筛选结果',
+      disabled: !canEdit || !activeSheet.filters?.length,
+    },
+    {
+      key: 'disable-filter',
+      label: '取消筛选',
+      disabled: !canEdit || !activeFilterRange,
     },
     {
       key: 'merge',
@@ -2497,6 +2592,8 @@ export default function SpreadsheetDocumentEditor({
     else if (key === 'sort-desc') sortSelection('desc');
     else if (key === 'sort-custom') setCustomSortOpen(true);
     else if (key === 'enable-filter') enableFiltersForSelection();
+    else if (key === 'clear-filter') clearFilters();
+    else if (key === 'disable-filter') disableFilters();
     else if (key === 'merge') toggleMerge();
     else if (key === 'cell-format') setCellFormatOpen(true);
     else if (key === 'protection') setProtectionOpen(true);
@@ -2543,15 +2640,18 @@ export default function SpreadsheetDocumentEditor({
       : style.verticalAlign === 'bottom'
         ? 'flex-end'
         : 'center';
-    const selected = spreadsheetRangeContainsCell(currentSelection, rowIndex, columnIndex);
+    const selected = hasDiscreteColumnSelection
+      ? selectedColumnIndexSet.has(columnIndex)
+      : spreadsheetRangeContainsCell(currentSelection, rowIndex, columnIndex);
     const active = rowIndex === activeRowIndex && columnIndex === activeColumnIndex;
     const selectionEdgeShadows = selected ? [
-      rowIndex === currentSelection.startRow ? `inset 0 2px 0 ${SELECTION_BORDER_COLOR}` : '',
-      rowIndex === currentSelection.endRow ? `inset 0 -2px 0 ${SELECTION_BORDER_COLOR}` : '',
-      columnIndex === currentSelection.startColumn ? `inset 2px 0 0 ${SELECTION_BORDER_COLOR}` : '',
-      columnIndex === currentSelection.endColumn ? `inset -2px 0 0 ${SELECTION_BORDER_COLOR}` : '',
+      rowIndex === (hasDiscreteColumnSelection ? 0 : currentSelection.startRow) ? `inset 0 2px 0 ${SELECTION_BORDER_COLOR}` : '',
+      rowIndex === (hasDiscreteColumnSelection ? activeSheet.rowCount - 1 : currentSelection.endRow) ? `inset 0 -2px 0 ${SELECTION_BORDER_COLOR}` : '',
+      hasDiscreteColumnSelection || columnIndex === currentSelection.startColumn ? `inset 2px 0 0 ${SELECTION_BORDER_COLOR}` : '',
+      hasDiscreteColumnSelection || columnIndex === currentSelection.endColumn ? `inset -2px 0 0 ${SELECTION_BORDER_COLOR}` : '',
     ].filter(Boolean).join(', ') : '';
-    const selectionHandle = selected
+    const selectionHandle = !hasDiscreteColumnSelection
+      && selected
       && rowIndex === currentSelection.endRow
       && columnIndex === currentSelection.endColumn;
     const formulaReference = formulaReferences.find(reference => (
@@ -2571,8 +2671,7 @@ export default function SpreadsheetDocumentEditor({
     const listValidationRule = cellValidationRules.find(rule => rule.type === 'list' && Array.isArray(rule.values));
     const filterHeader = activeFilterRange
       && rowIndex === activeFilterRange.startRow
-      && columnIndex >= activeFilterRange.startColumn
-      && columnIndex <= activeFilterRange.endColumn;
+      && activeFilterColumnSet.has(columnIndex);
     const columnFilter = filterHeader
       ? (activeSheet.filters || []).find(filter => Number(filter.columnIndex) === columnIndex)
       : null;
@@ -3110,7 +3209,46 @@ export default function SpreadsheetDocumentEditor({
           </Dropdown>
           <SpreadsheetToolbarButton title="升序" disabled={selectionMutationDisabled} icon={<SortAscendingOutlined />} onClick={() => sortSelection('asc')} />
           <SpreadsheetToolbarButton title="降序" disabled={selectionMutationDisabled} icon={<SortDescendingOutlined />} onClick={() => sortSelection('desc')} />
-          <SpreadsheetToolbarButton title="筛选" disabled={selectionMutationDisabled} active={Boolean(activeFilterRange)} icon={<FilterOutlined />} onClick={enableFiltersForSelection} />
+          <div className={`relation-spreadsheet-filter-toolbar${activeFilterRange ? ' relation-spreadsheet-filter-toolbar--active' : ''}`}>
+            <Tooltip title={activeFilterRange ? '取消筛选' : '筛选'}>
+              <Button
+                aria-label={activeFilterRange ? '取消筛选' : '筛选'}
+                data-spreadsheet-filter-toggle="true"
+                type="text"
+                size="small"
+                disabled={activeFilterRange ? !canEdit : selectionMutationDisabled}
+                icon={<FilterOutlined />}
+                onClick={activeFilterRange ? disableFilters : enableFiltersForSelection}
+              />
+            </Tooltip>
+            <Dropdown
+              trigger={['click']}
+              placement="bottomRight"
+              disabled={!canEdit}
+              overlayClassName="relation-spreadsheet-filter-menu"
+              menu={{
+                items: [
+                  filterActionItems[0],
+                  { type: 'divider' },
+                  filterActionItems[1],
+                  filterActionItems[2],
+                ].map(item => item.type ? item : ({
+                  key: item.key,
+                  label: item.label,
+                  disabled: item.disabled,
+                })),
+                onClick: ({ key }) => filterActionItems.find(item => item.key === key)?.onClick?.(),
+              }}
+            >
+              <Button
+                aria-label="筛选菜单"
+                type="text"
+                size="small"
+                disabled={!canEdit}
+                icon={<CaretDownOutlined />}
+              />
+            </Dropdown>
+          </div>
           <Tooltip title="冻结行列">
             <Dropdown
               trigger={['click']}
@@ -3186,7 +3324,7 @@ export default function SpreadsheetDocumentEditor({
         padding: fillAvailableHeight ? 0 : '7px 10px',
         borderBottom: '1px solid #e5e7eb',
       }}>
-        <Input className="relation-spreadsheet-name-box" size="small" value={selectionLabel} readOnly />
+        <Input className="relation-spreadsheet-name-box" size="small" value={nameBoxLabel} readOnly />
         <Input
           className="relation-spreadsheet-formula-input"
           data-spreadsheet-formula-input="true"
@@ -3250,9 +3388,12 @@ export default function SpreadsheetDocumentEditor({
           <div data-spreadsheet-grid-content="true" style={{ position: 'relative', width: totalWidth, height: totalHeight, minWidth: '100%' }}>
           {columns.map(columnIndex => {
             const frozen = columnIndex < frozenColumns;
-            const selectedHeader = selectsWholeColumns
+            const selectedHeader = selectedColumnIndexSet.has(columnIndex) || (
+              !selectedColumnIndexes.length
+              && selectsWholeColumns
               && columnIndex >= currentSelection.startColumn
-              && columnIndex <= currentSelection.endColumn;
+              && columnIndex <= currentSelection.endColumn
+            );
             const highlightedHeader = selectedHeader || (!selectsWholeRows && activeColumnIndex === columnIndex);
             const columnResizeAllowed = getSpreadsheetProtectedRangeAccess(activeSheet, {
               startRow: 0,
@@ -3286,7 +3427,7 @@ export default function SpreadsheetDocumentEditor({
                   onMouseDown={event => {
                     if (event.button !== 0 || event.target.closest('[data-spreadsheet-resize-handle]')) return;
                     event.preventDefault();
-                    selectWholeColumn(columnIndex);
+                    selectWholeColumn(columnIndex, { additive: event.metaKey || event.ctrlKey });
                   }}
                   style={{
                     display: 'flex',
@@ -3519,7 +3660,15 @@ export default function SpreadsheetDocumentEditor({
         <div className="relation-spreadsheet-sheet-bar__end">
           <span className="relation-spreadsheet-sheet-bar__divider" aria-hidden="true" />
           {activeSheet.filters?.length > 0 && (
-            <Button className="relation-spreadsheet-clear-filter" type="link" size="small" onClick={clearFilters}>清除筛选</Button>
+            <Button
+              className="relation-spreadsheet-clear-filter"
+              type="link"
+              size="small"
+              disabled={!canEdit}
+              onClick={clearFilters}
+            >
+              清除筛选结果
+            </Button>
           )}
           {showSelectionSummary ? (
             <Dropdown
