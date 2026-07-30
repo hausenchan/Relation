@@ -9,6 +9,8 @@ import {
   formatSpreadsheetDisplayValue,
   getDocumentContentSignature,
   getSpreadsheetConditionalStyle,
+  getSpreadsheetColumnFilterOptions,
+  getSpreadsheetFilterRange,
   getSpreadsheetProtectedRangeAccess,
   getSpreadsheetVisibleRows,
   getNextSpreadsheetSheetName,
@@ -20,6 +22,7 @@ import {
   resolveSpreadsheetSortRange,
   setSpreadsheetCellValue,
   setSpreadsheetColumnFilter,
+  setSpreadsheetFilterRange,
   shiftSpreadsheetCells,
   shiftSpreadsheetColumns,
   shiftSpreadsheetRows,
@@ -523,7 +526,58 @@ describe('spreadsheet workbook model', () => {
   test('filters rows by the selected column value and keeps the header visible', () => {
     const workbook = workbookWithCells({ A1: '状态', A2: '进行中', A3: '完成', A4: '进行中' });
     setSpreadsheetColumnFilter(workbook.sheets[0], 0, '进行中');
-    expect(getSpreadsheetVisibleRows(workbook, 'sheet_1').slice(0, 4)).toEqual([0, 1, 3]);
+    expect(getSpreadsheetVisibleRows(workbook, 'sheet_1').filter(rowIndex => rowIndex <= 3)).toEqual([0, 1, 3]);
+  });
+
+  test('filters a selected range by multiple checked-value columns and counts every option', () => {
+    const workbook = workbookWithCells({
+      A1: '状态', B1: '区域',
+      A2: '进行中', B2: '华东',
+      A3: '完成', B3: '华东',
+      A4: '进行中', B4: '华南',
+      A5: '进行中', B5: '华东',
+      A6: '进行中', B6: '',
+    });
+    const sheet = workbook.sheets[0];
+    setSpreadsheetFilterRange(sheet, {
+      startRow: 0,
+      endRow: 5,
+      startColumn: 0,
+      endColumn: 1,
+    });
+    setSpreadsheetColumnFilter(sheet, 0, ['进行中'], 'in');
+    setSpreadsheetColumnFilter(sheet, 1, ['华东'], 'in');
+
+    expect(getSpreadsheetVisibleRows(workbook, 'sheet_1').filter(rowIndex => rowIndex <= 5))
+      .toEqual([0, 1, 4]);
+    expect(getSpreadsheetColumnFilterOptions(workbook, 'sheet_1', 1)).toEqual([
+      { value: '', label: '(空白)', count: 1 },
+      { value: '华东', label: '华东', count: 3 },
+      { value: '华南', label: '华南', count: 1 },
+    ]);
+  });
+
+  test('normalizes and shifts filter ranges together with their column conditions', () => {
+    const workbook = normalizeSpreadsheetWorkbook({
+      ...createDefaultSpreadsheetWorkbook(),
+      sheets: [{
+        ...createDefaultSpreadsheetWorkbook().sheets[0],
+        filterRange: { startRow: 0, endRow: 3, startColumn: 0, endColumn: 2 },
+        filters: [
+          { columnIndex: 1, operator: 'in', values: ['华东', '华南', '华东'] },
+          { columnIndex: 2, operator: 'equals', value: 1 },
+        ],
+      }],
+    });
+    const sheet = workbook.sheets[0];
+    expect(getSpreadsheetFilterRange(sheet)).toEqual({ startRow: 0, endRow: 3, startColumn: 0, endColumn: 2 });
+    expect(sheet.filters[0].values).toEqual(['华东', '华南']);
+
+    shiftSpreadsheetRows(sheet, 0, 1, workbook);
+    expect(sheet.filterRange).toEqual({ startRow: 1, endRow: 4, startColumn: 0, endColumn: 2 });
+    shiftSpreadsheetColumns(sheet, 1, -1, workbook);
+    expect(sheet.filterRange).toEqual({ startRow: 1, endRow: 4, startColumn: 0, endColumn: 1 });
+    expect(sheet.filters).toEqual([{ columnIndex: 1, operator: 'equals', value: '1' }]);
   });
 
   test('shifts cells, formulas and merge ranges when rows or columns change', () => {

@@ -139,6 +139,180 @@ test('reports grid scrolling and keeps the workspace focus toggle pinned beside 
   container.remove();
 });
 
+test('keeps headers and frozen cells pinned with native sticky positioning', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  workbook.sheets[0].frozen = { rows: 1, columns: 1 };
+  workbook.sheets[0].cells = {
+    A1: { v: '冻结交叉格' },
+    B1: { v: '冻结首行' },
+    A2: { v: '冻结首列' },
+    B2: { v: '普通单元格' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(<ControlledSpreadsheetEditor initialWorkbook={workbook} />));
+
+  const grid = container.querySelector('[data-spreadsheet-grid="true"]');
+  const frozenCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  const frozenRowCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  const frozenColumnCell = container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="0"]');
+  const initialPositions = {
+    frozenCell: { position: frozenCell.style.position, top: frozenCell.style.top, left: frozenCell.style.left },
+    frozenRowCell: { position: frozenRowCell.style.position, top: frozenRowCell.style.top, left: frozenRowCell.style.left },
+    frozenColumnCell: { position: frozenColumnCell.style.position, top: frozenColumnCell.style.top, left: frozenColumnCell.style.left },
+  };
+
+  grid.scrollTop = 84.5;
+  grid.scrollLeft = 122.25;
+  act(() => grid.dispatchEvent(new Event('scroll', { bubbles: true })));
+
+  expect(initialPositions).toEqual({
+    frozenCell: { position: 'sticky', top: '24px', left: '46px' },
+    frozenRowCell: { position: 'sticky', top: '24px', left: '' },
+    frozenColumnCell: { position: 'sticky', top: '', left: '46px' },
+  });
+  expect(frozenCell.getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect(frozenRowCell.getAttribute('data-spreadsheet-pinned-axes')).toBe('y');
+  expect(frozenColumnCell.getAttribute('data-spreadsheet-pinned-axes')).toBe('x');
+  expect(container.querySelector('[data-spreadsheet-column-header="0"]')
+    .getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect(container.querySelector('[data-spreadsheet-row-header="0"]')
+    .getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect(container.querySelector('[data-spreadsheet-corner="true"]')
+    .getAttribute('data-spreadsheet-pinned-axes')).toBe('xy');
+  expect({ position: frozenCell.style.position, top: frozenCell.style.top, left: frozenCell.style.left })
+    .toEqual(initialPositions.frozenCell);
+  expect({ position: frozenRowCell.style.position, top: frozenRowCell.style.top, left: frozenRowCell.style.left })
+    .toEqual(initialPositions.frozenRowCell);
+  expect({ position: frozenColumnCell.style.position, top: frozenColumnCell.style.top, left: frozenColumnCell.style.left })
+    .toEqual(initialPositions.frozenColumnCell);
+  expect(container.querySelectorAll('[data-spreadsheet-pinned-wrapper]').length).toBeGreaterThan(0);
+  expect(grid.style.overscrollBehavior).toBe('none');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('selects the used sheet range and copies it into another sheet as one undoable paste', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  const sourceSheet = workbook.sheets[0];
+  sourceSheet.name = '来源Sheet';
+  sourceSheet.cells = {
+    A1: { v: '日期', style: { bold: true, backgroundColor: '#dbeafe' } },
+    B1: { v: '申请量', style: { bold: true } },
+    A2: { v: '2026/7/28' },
+    B2: { v: '=A2', style: { color: '#dc2626' } },
+  };
+  sourceSheet.mergedCells = [{ startRow: 0, endRow: 0, startColumn: 0, endColumn: 1 }];
+  sourceSheet.rowHeights = { 0: 32, 1: 28 };
+  sourceSheet.columnWidths = { 0: 140, 1: 112 };
+  const targetSheet = createDefaultSpreadsheetSheet(1, workbook.sheets);
+  targetSheet.id = 'target-sheet';
+  targetSheet.name = '目标Sheet';
+  targetSheet.cells = { A1: { v: '旧内容' } };
+  workbook.sheets.push(targetSheet);
+
+  let latestWorkbook = workbook;
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={workbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'a', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A1:B2');
+
+  const clipboardValues = {};
+  const clipboardData = {
+    setData: (type, value) => { clipboardValues[type] = value; },
+    getData: type => clipboardValues[type] || '',
+  };
+  const copyEvent = new Event('copy', { bubbles: true, cancelable: true });
+  Object.defineProperty(copyEvent, 'clipboardData', { value: clipboardData });
+  act(() => editor.dispatchEvent(copyEvent));
+  expect(copyEvent.defaultPrevented).toBe(true);
+  expect(JSON.parse(clipboardValues['application/x-relation-spreadsheet+json']).copyDimensions).toBe(true);
+
+  const targetSheetButton = [...container.querySelectorAll('button')]
+    .find(button => button.textContent === '目标Sheet');
+  act(() => targetSheetButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: clipboardData });
+  act(() => editor.dispatchEvent(pasteEvent));
+
+  const pastedSheet = latestWorkbook.sheets.find(sheet => sheet.id === 'target-sheet');
+  expect(pastedSheet.cells).toMatchObject(sourceSheet.cells);
+  expect(pastedSheet.mergedCells).toEqual(sourceSheet.mergedCells);
+  expect(pastedSheet.rowHeights).toMatchObject(sourceSheet.rowHeights);
+  expect(pastedSheet.columnWidths).toMatchObject(sourceSheet.columnWidths);
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A1:B2');
+
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  const restoredSheet = latestWorkbook.sheets.find(sheet => sheet.id === 'target-sheet');
+  expect(restoredSheet.cells).toEqual({ A1: { v: '旧内容' } });
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('pastes Shimo columns as displayed values when source formulas are unavailable', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  let latestWorkbook = workbook;
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={workbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const targetCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  act(() => targetCell.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  act(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true })));
+
+  const clipboardData = {
+    getData: type => ({
+      'text/html': `<html><body data-source="shimo"><table><tbody>
+        <tr><td style="font-weight:700">汇总申请uv</td></tr>
+        <tr><td data-formula="=SHIMO_ONLY(A1)">5575</td></tr>
+        <tr><td data-formula="='源数据'!C2">6445</td></tr>
+      </tbody></table></body></html>`,
+      'text/plain': '汇总申请uv\n5575\n6445',
+    }[type] || ''),
+  };
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: clipboardData });
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(pasteEvent));
+
+  expect(pasteEvent.defaultPrevented).toBe(true);
+  expect([latestWorkbook.sheets[0].cells.B1?.v, latestWorkbook.sheets[0].cells.B2?.v, latestWorkbook.sheets[0].cells.B3?.v])
+    .toEqual(['汇总申请uv', '5575', '6445']);
+  expect(container.querySelector('[data-spreadsheet-row-index="1"][data-spreadsheet-column-index="1"]').textContent)
+    .toContain('5575');
+
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
+  })));
+  expect([latestWorkbook.sheets[0].cells.B1, latestWorkbook.sheets[0].cells.B2, latestWorkbook.sheets[0].cells.B3])
+    .toEqual([undefined, undefined, undefined]);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('virtualizes a large worksheet and renders calculated formula values', () => {
   const workbook = createDefaultSpreadsheetWorkbook();
   workbook.sheets[0] = {
@@ -203,7 +377,7 @@ test('captures scroll offsets before rerendering or unmounting the virtual grid'
   container.remove();
 });
 
-test('leaves single-value paste events inside the cell editor to native editing', () => {
+test('leaves Command+A and clipboard events inside formula or cell inputs native', () => {
   const workbook = createDefaultSpreadsheetWorkbook();
   const onWorkbookChange = jest.fn();
   const container = document.createElement('div');
@@ -221,13 +395,37 @@ test('leaves single-value paste events inside the cell editor to native editing'
     );
   });
 
+  const clipboardWrites = {};
+  const clipboardData = {
+    setData: (type, value) => { clipboardWrites[type] = value; },
+    getData: type => type === 'text/plain' ? 'alpha\tbeta' : '',
+  };
+  const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
+  const formulaSelectAllEvent = new KeyboardEvent('keydown', {
+    key: 'a', metaKey: true, bubbles: true, cancelable: true,
+  });
+  act(() => formulaInput.dispatchEvent(formulaSelectAllEvent));
+  expect(formulaSelectAllEvent.defaultPrevented).toBe(false);
+  const formulaCopyEvent = new Event('copy', { bubbles: true, cancelable: true });
+  Object.defineProperty(formulaCopyEvent, 'clipboardData', { value: clipboardData });
+  act(() => formulaInput.dispatchEvent(formulaCopyEvent));
+  expect(formulaCopyEvent.defaultPrevented).toBe(false);
+
   const firstCell = container.querySelector('[role="gridcell"]');
   act(() => firstCell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })));
   const cellInput = firstCell.querySelector('input');
-  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
-  Object.defineProperty(pasteEvent, 'clipboardData', {
-    value: { getData: type => type === 'text/plain' ? 'alpha' : '' },
+  const cellSelectAllEvent = new KeyboardEvent('keydown', {
+    key: 'a', metaKey: true, bubbles: true, cancelable: true,
   });
+  act(() => cellInput.dispatchEvent(cellSelectAllEvent));
+  expect(cellSelectAllEvent.defaultPrevented).toBe(false);
+  const cellCopyEvent = new Event('copy', { bubbles: true, cancelable: true });
+  Object.defineProperty(cellCopyEvent, 'clipboardData', { value: clipboardData });
+  act(() => cellInput.dispatchEvent(cellCopyEvent));
+  expect(cellCopyEvent.defaultPrevented).toBe(false);
+  expect(clipboardWrites).toEqual({});
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: clipboardData });
   act(() => cellInput.dispatchEvent(pasteEvent));
 
   expect(pasteEvent.defaultPrevented).toBe(false);
@@ -420,13 +618,111 @@ test('sorts a selected whole column descending without moving blanks before valu
   container.remove();
 });
 
+test('enables a single-column value filter from its header cell and keeps it undoable', async () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '日期' }, B1: { v: '区域' },
+    A2: { v: '07-28' }, B2: { v: '华东' },
+    A3: { v: '07-29' }, B3: { v: '华南' },
+    A4: { v: '07-30' }, B4: { v: '华东' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />,
+  ));
+
+  act(() => container.querySelector('[data-spreadsheet-column-header="1"]')
+    .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  act(() => container.querySelector('[aria-label="筛选"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 3, startColumn: 1, endColumn: 1 });
+  const filterTrigger = container.querySelector('[data-spreadsheet-filter-trigger="1"]');
+  expect(filterTrigger).not.toBeNull();
+  expect(filterTrigger.closest('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]'))
+    .not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-column-header="1"] .anticon-filter')).toBeNull();
+
+  await act(async () => {
+    filterTrigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  const panel = document.body.querySelector('[data-spreadsheet-filter-panel="true"]');
+  expect(panel).not.toBeNull();
+  expect(panel.textContent).toContain('按值筛选 · B 列');
+  expect(panel.textContent).toContain('华东');
+  expect(panel.textContent).toContain('2');
+  expect(panel.textContent).toContain('华南');
+
+  const southCheckbox = panel.querySelector('[data-spreadsheet-filter-option="华南"]');
+  act(() => southCheckbox.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  const applyButton = [...panel.querySelectorAll('button')]
+    .find(button => button.textContent.includes('应用筛选'));
+  act(() => applyButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filters).toEqual([
+    { columnIndex: 1, operator: 'in', values: ['华东'] },
+  ]);
+  expect(container.querySelector('[data-spreadsheet-row-index="2"][data-spreadsheet-column-index="1"]')).toBeNull();
+  expect(container.querySelector('[data-spreadsheet-row-index="3"][data-spreadsheet-column-index="1"]')).not.toBeNull();
+
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].filters).toEqual([]);
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 3, startColumn: 1, endColumn: 1 });
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('enables filter controls for every used column from the select-all corner', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '日期' }, B1: { v: '申请量' }, C1: { v: '状态' },
+    A2: { v: '07-28' }, B2: { v: '5575' }, C2: { v: '完成' },
+    A3: { v: '07-29' }, B3: { v: '6445' }, C3: { v: '进行中' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />,
+  ));
+
+  act(() => container.querySelector('[data-spreadsheet-corner="true"]')
+    .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A1:C3');
+  act(() => container.querySelector('[aria-label="筛选"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 2, startColumn: 0, endColumn: 2 });
+  expect(container.querySelectorAll('[data-spreadsheet-filter-trigger]').length).toBe(3);
+  expect([...container.querySelectorAll('[data-spreadsheet-filter-trigger]')]
+    .map(trigger => trigger.getAttribute('data-spreadsheet-filter-trigger'))).toEqual(['0', '1', '2']);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('renders a Shimo-style range outline and selection statistics', async () => {
   const onWorkbookChange = jest.fn();
   const workbook = createDefaultSpreadsheetWorkbook();
   workbook.sheets[0].cells = {
     B2: { v: '10' },
     B3: { v: '20' },
-    B4: { v: '30' },
+    B4: { v: '31' },
   };
   const container = document.createElement('div');
   document.body.appendChild(container);
@@ -450,8 +746,8 @@ test('renders a Shimo-style range outline and selection statistics', async () =>
 
   const summary = container.querySelector('[data-spreadsheet-selection-summary="true"]');
   expect(summary).not.toBeNull();
-  expect(summary.textContent).toContain('总和:60');
-  expect(summary.querySelector('[data-spreadsheet-selection-summary-value="true"]').textContent).toBe('60');
+  expect(summary.textContent).toContain('总和:61');
+  expect(summary.querySelector('[data-spreadsheet-selection-summary-value="true"]').textContent).toBe('61');
   await act(async () => {
     summary.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await Promise.resolve();
@@ -470,11 +766,79 @@ test('renders a Shimo-style range outline and selection statistics', async () =>
     averageItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await Promise.resolve();
   });
-  expect(summary.textContent).toContain('平均:20');
+  expect(summary.textContent).toContain('平均:20.33');
+  expect(summary.querySelector('[data-spreadsheet-selection-summary-value="true"]').textContent).toBe('20.33');
   expect(onWorkbookChange).not.toHaveBeenCalled();
 
   act(() => root.unmount());
   container.remove();
+});
+
+test('auto-scrolls the virtual grid while extending a selection beyond the viewport', () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  workbook.sheets[0].rowCount = 80;
+  workbook.sheets[0].cells = Object.fromEntries(Array.from({ length: 22 }, (_, index) => [
+    `B${index + 1}`,
+    { v: index === 0 ? '下载类申请uv' : String(5500 + index) },
+  ]));
+  const animationFrames = [];
+  const requestAnimationFrameSpy = jest.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => {
+    animationFrames.push(callback);
+    return animationFrames.length;
+  });
+  const cancelAnimationFrameSpy = jest.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(<ControlledSpreadsheetEditor initialWorkbook={workbook} />));
+
+  const grid = container.querySelector('[data-spreadsheet-grid="true"]');
+  Object.defineProperties(grid, {
+    clientWidth: { configurable: true, value: 320 },
+    clientHeight: { configurable: true, value: 120 },
+    scrollWidth: { configurable: true, value: 620 },
+    scrollHeight: { configurable: true, value: 1944 },
+  });
+  grid.getBoundingClientRect = () => ({
+    left: 0,
+    top: 0,
+    right: 320,
+    bottom: 120,
+    width: 320,
+    height: 120,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  });
+  const firstCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]');
+  act(() => firstCell.dispatchEvent(new MouseEvent('mousedown', {
+    button: 0, clientX: 150, clientY: 36, bubbles: true,
+  })));
+  act(() => window.dispatchEvent(new MouseEvent('mousemove', {
+    buttons: 1, clientX: 150, clientY: 118, bubbles: true,
+  })));
+
+  for (let index = 0; index < 30; index += 1) {
+    const callback = animationFrames.shift();
+    if (!callback) break;
+    act(() => callback(index * 16));
+    const endRow = Number(container.querySelector('.relation-spreadsheet-name-box').value.match(/B(\d+)$/)?.[1] || 0);
+    if (endRow >= 22) break;
+  }
+  act(() => window.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true })));
+
+  expect(grid.scrollTop).toBeGreaterThan(0);
+  expect(Number(container.querySelector('.relation-spreadsheet-name-box').value.match(/B(\d+)$/)?.[1] || 0))
+    .toBeGreaterThanOrEqual(22);
+  const stoppedScrollTop = grid.scrollTop;
+  const pendingFrame = animationFrames.shift();
+  if (pendingFrame) act(() => pendingFrame(512));
+  expect(grid.scrollTop).toBe(stoppedScrollTop);
+
+  act(() => root.unmount());
+  container.remove();
+  requestAnimationFrameSpy.mockRestore();
+  cancelAnimationFrameSpy.mockRestore();
 });
 
 test('copies and pastes formulas from the cell context menu as one undoable operation', async () => {
