@@ -5,10 +5,6 @@
   "dependencies": {
     "@ant-design/icons": "^5.3.6",
     "@ant-design/plots": "^2.6.8",
-    "@univerjs/preset-sheets-core": "^0.25.1",
-    "@univerjs/preset-sheets-filter": "^0.25.1",
-    "@univerjs/preset-sheets-sort": "^0.25.1",
-    "@univerjs/presets": "^0.25.1",
     "antd": "^5.15.0",
     "axios": "^1.6.8",
     "dayjs": "^1.11.10",

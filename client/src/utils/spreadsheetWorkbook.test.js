@@ -1,6 +1,7 @@
 import {
   applySpreadsheetFormatPattern,
   buildSpreadsheetCellKey,
+  buildSpreadsheetFormulaReference,
   createSpreadsheetFormatPattern,
   createDefaultSpreadsheetWorkbook,
   createDefaultSpreadsheetSheet,
@@ -9,6 +10,7 @@ import {
   formatSpreadsheetDisplayValue,
   getDocumentContentSignature,
   getSpreadsheetConditionalStyle,
+  getSpreadsheetQuickNumberFormat,
   getSpreadsheetProtectedRangeAccess,
   getSpreadsheetVisibleRows,
   getNextSpreadsheetSheetName,
@@ -71,6 +73,22 @@ describe('spreadsheet workbook model', () => {
     })).toBe('(1,234.5)');
     expect(formatSpreadsheetDisplayValue('0.125', { type: 'percentage', decimals: 1 })).toBe('12.5%');
     expect(formatSpreadsheetDisplayValue('0.5', { type: 'fraction' })).toBe('1/2');
+    expect(getSpreadsheetQuickNumberFormat(null, 'percentage')).toEqual({
+      type: 'percentage', decimals: 0, useGrouping: false,
+    });
+    expect(getSpreadsheetQuickNumberFormat(null, 'grouping')).toEqual({
+      type: 'number', decimals: 2, useGrouping: true,
+    });
+    expect(getSpreadsheetQuickNumberFormat(
+      { type: 'number', decimals: 2, useGrouping: true },
+      'increase-decimals',
+    )).toEqual({ type: 'number', decimals: 3, useGrouping: true });
+    expect(getSpreadsheetQuickNumberFormat(
+      { type: 'number', decimals: 3, useGrouping: true },
+      'decrease-decimals',
+    )).toEqual({ type: 'number', decimals: 2, useGrouping: true });
+    expect(formatSpreadsheetDisplayValue('2', getSpreadsheetQuickNumberFormat(null, 'percentage'))).toBe('200%');
+    expect(formatSpreadsheetDisplayValue('2', getSpreadsheetQuickNumberFormat(null, 'grouping'))).toBe('2.00');
   });
 
   test('normalizes legacy or invalid content into a workbook', () => {
@@ -318,6 +336,45 @@ describe('spreadsheet workbook model', () => {
     expect(evaluator.getValue('sheet_1', 3, 0)).toBe('#VALUE!');
     expect(evaluator.getValue('sheet_1', 4, 0)).toBe('#CYCLE!');
     expect(evaluator.getValue('sheet_1', 5, 0)).toBe('#CYCLE!');
+  });
+
+  test('calculates and migrates multiple quoted cross-sheet references with hyphenated Chinese names', () => {
+    const workbook = createDefaultSpreadsheetWorkbook();
+    workbook.sheets[0].id = 'formula';
+    workbook.sheets[0].name = '汇总';
+    workbook.sheets[0].cells = {
+      A1: { v: "='飞猪-海韵'!Q18+'小德果园-海韵'!R18+'酷狗音乐-学成'!R18" },
+    };
+    const sourceSheets = [
+      ['flypig', '飞猪-海韵', 'Q18', '10'],
+      ['orchard', '小德果园-海韵', 'R18', '20'],
+      ['kugou', '酷狗音乐-学成', 'R18', '30'],
+    ].map(([id, name, key, value], index) => ({
+      ...createDefaultSpreadsheetSheet(index + 1, workbook.sheets),
+      id,
+      name,
+      cells: { [key]: { v: value } },
+    }));
+    workbook.sheets.push(...sourceSheets);
+
+    expect(createSpreadsheetFormulaEvaluator(workbook).getValue('formula', 0, 0)).toBe(60);
+    expect(extractSpreadsheetFormulaReferences(workbook.sheets[0].cells.A1.v, '汇总'))
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ sheetName: '飞猪-海韵', token: "'飞猪-海韵'!Q18" }),
+        expect.objectContaining({ sheetName: '小德果园-海韵', token: "'小德果园-海韵'!R18" }),
+        expect.objectContaining({ sheetName: '酷狗音乐-学成', token: "'酷狗音乐-学成'!R18" }),
+      ]));
+    expect(buildSpreadsheetFormulaReference('飞猪-海韵', 'Q18', '汇总')).toBe("'飞猪-海韵'!Q18");
+
+    renameSpreadsheetSheet(workbook, 'flypig', '飞猪-海韵新');
+    expect(workbook.sheets[0].cells.A1.v)
+      .toBe("='飞猪-海韵新'!Q18+'小德果园-海韵'!R18+'酷狗音乐-学成'!R18");
+    expect(createSpreadsheetFormulaEvaluator(workbook).getValue('formula', 0, 0)).toBe(60);
+
+    workbook.sheets = workbook.sheets.filter(sheet => sheet.id !== 'orchard');
+    expect(createSpreadsheetFormulaEvaluator(workbook).getValue('formula', 0, 0)).toBe('#REF!');
+    expect(workbook.sheets[0].cells.A1.v)
+      .toBe("='飞猪-海韵新'!Q18+'小德果园-海韵'!R18+'酷狗音乐-学成'!R18");
   });
 
   test('extracts visible formula references without matching quoted text', () => {

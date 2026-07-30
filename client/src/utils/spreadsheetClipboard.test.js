@@ -10,7 +10,7 @@ import {
 import { createDefaultSpreadsheetWorkbook } from './spreadsheetWorkbook';
 
 function clipboardData(values) {
-  return { getData: type => values[type] || '' };
+  return { getData: type => values[type] || '', types: Object.keys(values) };
 }
 
 test('round-trips Relation cells, formulas, styles, HTML, and TSV clipboard formats', () => {
@@ -78,6 +78,46 @@ test('reads formulas and basic styles from Shimo-like HTML when metadata is expo
   expect(result.sourceLooksLikeShimo).toBe(true);
   expect(result.payload.cells[0][0]).toMatchObject({ v: '1658.46', style: { bold: true } });
   expect(result.payload.cells[0][1]).toMatchObject({ v: '=P4/T4' });
+});
+
+test('reads nested Shimo formula metadata and preserves the copied source range', () => {
+  const result = parseSpreadsheetHtmlClipboard(`
+    <html><body data-source="shimo"><table data-copy-range="F6:G7"><tbody>
+      <tr><td data-cell-meta='{"formula":"=F6+F7"}'>5</td><td>6</td></tr>
+      <tr><td>7</td><td><span data-shimo-formula="='飞猪-海韵'!Q18">10</span></td></tr>
+    </tbody></table></body></html>
+  `);
+  expect(result.hasFormulaMetadata).toBe(true);
+  expect(result.payload.sourceRange).toEqual({
+    startRow: 5, endRow: 6, startColumn: 5, endColumn: 6,
+  });
+  expect(result.payload.cells[0][0]).toMatchObject({ v: '=F6+F7' });
+  expect(result.payload.cells[1][1]).toMatchObject({ v: "='飞猪-海韵'!Q18" });
+});
+
+test('merges formulas from plain text when interoperable HTML only contains display values', () => {
+  const parsed = parseSpreadsheetClipboardData(clipboardData({
+    'text/html': '<table><tr><td>10</td><td>30</td></tr></table>',
+    'text/plain': "10\t='飞猪-海韵'!Q18+'小德果园-海韵'!R18",
+  }));
+  expect(parsed.source).toBe('html');
+  expect(parsed.hasFormulaMetadata).toBe(true);
+  expect(parsed.payload.cells[0][1].v).toBe("='飞猪-海韵'!Q18+'小德果园-海韵'!R18");
+});
+
+test('reads formula cells from a structured Shimo clipboard MIME payload', () => {
+  const parsed = parseSpreadsheetClipboardData(clipboardData({
+    'application/x-shimo-spreadsheet': JSON.stringify({
+      cells: [[
+        { displayValue: '10' },
+        { displayValue: '30', formula: '=A1*3' },
+      ]],
+    }),
+  }));
+  expect(parsed.source).toBe('structured');
+  expect(parsed.sourceLooksLikeShimo).toBe(true);
+  expect(parsed.hasFormulaMetadata).toBe(true);
+  expect(parsed.payload.cells[0][1].v).toBe('=A1*3');
 });
 
 test('falls back to a text matrix when HTML and Relation data are absent', () => {

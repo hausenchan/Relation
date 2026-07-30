@@ -454,6 +454,137 @@ test('shows formula raw text and highlights referenced cells', () => {
   container.remove();
 });
 
+test('builds a formula by clicking referenced cells and commits it to the original target', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    F6: { v: '2' },
+    F7: { v: '3' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      initialSelectedCell={{ sheetId: 'sheet_1', rowIndex: 6, columnIndex: 6 }}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
+  act(() => formulaInput.focus());
+  act(() => setInputValue(formulaInput, '='));
+  const f6 = container.querySelector('[data-spreadsheet-row-index="5"][data-spreadsheet-column-index="5"]');
+  act(() => f6.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, cancelable: true })));
+  expect(formulaInput.value).toBe('=F6');
+
+  act(() => setInputValue(formulaInput, '=F6+'));
+  const f7 = container.querySelector('[data-spreadsheet-row-index="6"][data-spreadsheet-column-index="5"]');
+  act(() => f7.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, cancelable: true })));
+  expect(formulaInput.value).toBe('=F6+F7');
+  expect(container.querySelectorAll('.relation-spreadsheet-formula-editor__highlight span')).toHaveLength(2);
+
+  act(() => formulaInput.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.G7.v).toBe('=F6+F7');
+  expect(container.querySelector('[data-spreadsheet-formula-input="true"]').value).toBe('=F6+F7');
+  expect(container.querySelector('[data-spreadsheet-row-index="6"][data-spreadsheet-column-index="6"]').textContent)
+    .toContain('5');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('inserts a quoted cross-sheet reference while navigating sheet tabs in formula mode', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].id = 'summary';
+  latestWorkbook.sheets[0].name = '汇总';
+  const sourceSheet = {
+    ...createDefaultSpreadsheetSheet(1, latestWorkbook.sheets),
+    id: 'source',
+    name: '飞猪-海韵',
+    cells: { A1: { v: '12' } },
+  };
+  latestWorkbook.sheets.push(sourceSheet);
+  latestWorkbook.activeSheetId = 'summary';
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      initialSelectedCell={{ sheetId: 'summary', rowIndex: 0, columnIndex: 0 }}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
+  act(() => formulaInput.focus());
+  act(() => setInputValue(formulaInput, '='));
+  const sourceTab = [...container.querySelectorAll('[role="tab"]')]
+    .find(button => button.textContent.includes('飞猪-海韵'));
+  act(() => {
+    sourceTab.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, cancelable: true }));
+    sourceTab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+  });
+  const sourceCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  act(() => sourceCell.dispatchEvent(new MouseEvent('mousedown', {
+    bubbles: true, button: 0, cancelable: true,
+  })));
+  expect(formulaInput.value).toBe("='飞猪-海韵'!A1");
+
+  act(() => formulaInput.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets.find(sheet => sheet.id === 'summary').cells.A1.v)
+    .toBe("='飞猪-海韵'!A1");
+  expect(container.querySelector('[data-spreadsheet-formula-input="true"]').value)
+    .toBe("='飞猪-海韵'!A1");
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('applies percentage, grouping, and decimal shortcuts without changing the raw value', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = { A1: { v: '2' } };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const cell = () => container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  act(() => container.querySelector('[aria-label="百分比"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(cell().textContent).toContain('200%');
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('2');
+
+  act(() => container.querySelector('[aria-label="千分位分隔符"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(cell().textContent).toContain('2.00');
+  act(() => container.querySelector('[aria-label="增加小数位数"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(cell().textContent).toContain('2.000');
+  act(() => container.querySelector('[aria-label="减少小数位数"]').dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(cell().textContent).toContain('2.00');
+  expect(latestWorkbook.sheets[0].cells.A1).toMatchObject({
+    v: '2',
+    style: { numberFormat: { type: 'number', decimals: 2, useGrouping: true } },
+  });
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A1.style.numberFormat.decimals).toBe(3);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('sorts a selected whole column descending without moving blanks before values', () => {
   let latestWorkbook = createDefaultSpreadsheetWorkbook();
   latestWorkbook.sheets[0].cells = {
@@ -1030,9 +1161,46 @@ test('starts editing the selected cell when typing a printable key', () => {
   const editor = container.querySelector('[aria-label="在线表格编辑区"]');
   act(() => editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'X', bubbles: true, cancelable: true })));
 
-  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('X');
+  expect(latestWorkbook.sheets[0].cells.A1).toBeUndefined();
   expect(container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"] input')?.value)
     .toBe('X');
+  const cellInput = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"] input');
+  act(() => cellInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })));
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('X');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('commits the live input value when Enter arrives before React draft state flushes', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const nativeValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const cell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  act(() => cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })));
+  const cellInput = cell.querySelector('input');
+  nativeValueSetter.call(cellInput, '快速中文输入');
+  act(() => cellInput.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('快速中文输入');
+
+  const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
+  act(() => formulaInput.focus());
+  nativeValueSetter.call(formulaInput, '=1+2');
+  act(() => formulaInput.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A2.v).toBe('=1+2');
 
   act(() => root.unmount());
   container.remove();

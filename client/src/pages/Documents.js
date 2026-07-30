@@ -75,7 +75,7 @@ import { useSearchParams } from 'react-router-dom';
 import { attachmentsApi, documentsApi, projectGroupsApi, teamsApi, usersApi } from '../api';
 import { useAuth } from '../AuthContext';
 import SidebarToggleButton from '../components/SidebarToggleButton';
-import LegacySpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
+import SpreadsheetDocumentEditor from '../components/SpreadsheetDocumentEditor';
 import MentionPicker, {
   getContentEditableMentionTrigger,
   insertMentionIntoContentEditable,
@@ -175,15 +175,6 @@ import {
 } from '../utils/spreadsheetWorkbook';
 import DOMPurify from 'dompurify';
 import './DocumentsSpreadsheetLayout.css';
-
-const loadUniverSpreadsheetDocumentEditor = () => {
-  if (typeof window !== 'undefined' && typeof window.__RELATION_LOAD_UNIVER_SPREADSHEET__ === 'function') {
-    return window.__RELATION_LOAD_UNIVER_SPREADSHEET__();
-  }
-  return Promise.reject(new Error('Univer preview loader is not registered'));
-};
-
-const UniverSpreadsheetDocumentEditor = React.lazy(loadUniverSpreadsheetDocumentEditor);
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
@@ -481,7 +472,6 @@ const documentFolderSidebarWidthStorageKey = 'documents.folderSidebarWidth';
 const documentFolderSidebarDefaultWidth = 340;
 const documentFolderSidebarMinWidth = 300;
 const documentFolderSidebarMaxWidth = 560;
-const univerSpreadsheetPreviewStorageKey = 'relation_univer_spreadsheet_preview';
 const tableFillColorOptions = ['#ffffff', '#f8fafc', '#fee2e2', '#ffedd5', '#fef3c7', '#dcfce7', '#dbeafe', '#e0e7ff', '#f3e8ff'];
 const tableTextColorOptions = ['#111827', '#475569', '#b91c1c', '#c2410c', '#a16207', '#15803d', '#1d4ed8', '#4338ca', '#7e22ce'];
 const databaseFieldTypeOptions = [
@@ -504,63 +494,6 @@ const pasteHtmlBlockSelector = [
   'p', 'li', 'table', 'div',
   'img',
 ].join(',');
-
-function readStoredUniverSpreadsheetPreviewFlag() {
-  if (typeof window === 'undefined') return false;
-  try {
-    return window.localStorage.getItem(univerSpreadsheetPreviewStorageKey) === '1';
-  } catch {
-    return false;
-  }
-}
-
-function getUniverSpreadsheetPreviewSearchFlag(searchParams) {
-  const rawValue = searchParams.get('univer_spreadsheet') || searchParams.get('univerSpreadsheet');
-  if (rawValue === null) return null;
-  const normalized = String(rawValue).trim().toLowerCase();
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true;
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
-  return null;
-}
-
-function persistUniverSpreadsheetPreviewFlag(enabled) {
-  if (typeof window === 'undefined') return;
-  try {
-    if (enabled) {
-      window.localStorage.setItem(univerSpreadsheetPreviewStorageKey, '1');
-    } else {
-      window.localStorage.removeItem(univerSpreadsheetPreviewStorageKey);
-    }
-  } catch {
-    // localStorage may be blocked; the URL parameter still controls this render.
-  }
-}
-
-class SpreadsheetEditorFallbackBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  componentDidUpdate(prevProps) {
-    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
-      this.setState({ hasError: false });
-    }
-  }
-
-  componentDidCatch(error) {
-    console.error('[documents:univer-spreadsheet-preview]', error);
-  }
-
-  render() {
-    if (this.state.hasError) return this.props.fallback;
-    return this.props.children;
-  }
-}
 
 function getDocumentIdFromSearch(searchParams) {
   for (const key of documentLinkParamKeys) {
@@ -3415,7 +3348,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const { user: currentUser } = useAuth();
   const screens = useBreakpoint();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [enableUniverSpreadsheetPreview, setEnableUniverSpreadsheetPreview] = useState(readStoredUniverSpreadsheetPreviewFlag);
   const isMobile = !screens.md;
   const [folders, setFolders] = useState([]);
   const [projectGroups, setProjectGroups] = useState([]);
@@ -3818,13 +3750,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   useEffect(() => {
     setSpreadsheetContextAutoCollapsed(false);
   }, [selectedDocId]);
-
-  useEffect(() => {
-    const nextPreviewFlag = getUniverSpreadsheetPreviewSearchFlag(searchParams);
-    if (nextPreviewFlag === null) return;
-    persistUniverSpreadsheetPreviewFlag(nextPreviewFlag);
-    setEnableUniverSpreadsheetPreview(nextPreviewFlag);
-  }, [searchParams]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -15164,9 +15089,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       resolveSpreadsheetContextAutoCollapsed(current, metrics)
     ));
   };
-  const legacySpreadsheetEditor = (
-    <LegacySpreadsheetDocumentEditor
-      key={`legacy-${selectedDoc?.id || 'spreadsheet'}`}
+  const spreadsheetEditor = (
+    <SpreadsheetDocumentEditor
+      key={`spreadsheet-${selectedDoc?.id || 'spreadsheet'}`}
       workbook={selectedDoc?.content}
       canEdit={canEditSelectedSpreadsheet}
       isMobile={isMobile}
@@ -15190,23 +15115,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       onViewportScroll={compactSpreadsheetWorkspace ? handleSpreadsheetViewportScroll : undefined}
     />
   );
-  const univerSpreadsheetEditor = (
-    <SpreadsheetEditorFallbackBoundary
-      resetKey={`${selectedDoc?.id || 'spreadsheet'}:${enableUniverSpreadsheetPreview ? 'univer' : 'legacy'}`}
-      fallback={legacySpreadsheetEditor}
-    >
-      <React.Suspense fallback={legacySpreadsheetEditor}>
-        <UniverSpreadsheetDocumentEditor
-          key={`univer-${selectedDoc?.id || 'spreadsheet'}`}
-          workbook={selectedDoc?.content}
-          canEdit={canEditSelectedSpreadsheet}
-          onWorkbookChange={nextWorkbook => updateSelectedSpreadsheetWorkbook(() => nextWorkbook)}
-          collaborationNotice={activeSpreadsheetConflictHint ? '' : remoteUpdateHint}
-          fillAvailableHeight={compactSpreadsheetWorkspace}
-        />
-      </React.Suspense>
-    </SpreadsheetEditorFallbackBoundary>
-  );
   const renderSpreadsheetEditor = () => (
     <div className={`documents-spreadsheet-editor-stack${compactSpreadsheetWorkspace ? ' documents-spreadsheet-editor-stack--fill' : ''}`}>
       {activeSpreadsheetConflictHint ? (
@@ -15218,7 +15126,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           style={{ borderRadius: 0, borderWidth: '1px 1px 0' }}
         />
       ) : null}
-      {enableUniverSpreadsheetPreview ? univerSpreadsheetEditor : legacySpreadsheetEditor}
+      {spreadsheetEditor}
     </div>
   );
   const renderBlockInput = (block, index, heading) => {

@@ -2,6 +2,7 @@ import {
   buildSpreadsheetCellKey,
   getSpreadsheetCellObject,
   normalizeSpreadsheetRange,
+  parseSpreadsheetCellKey,
   translateSpreadsheetFormulaForPaste,
 } from './spreadsheetWorkbook';
 
@@ -162,11 +163,74 @@ function parseCellStyle(element) {
   }).filter(([, value]) => value !== '' && value !== null && value !== undefined));
 }
 
+function formulaFromStructuredValue(value, depth = 0) {
+  if (depth > 6 || value === null || value === undefined) return '';
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (text.startsWith('=')) return text;
+    if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+      try {
+        return formulaFromStructuredValue(JSON.parse(text), depth + 1);
+      } catch {
+        return '';
+      }
+    }
+    return '';
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const formula = formulaFromStructuredValue(item, depth + 1);
+      if (formula) return formula;
+    }
+    return '';
+  }
+  if (typeof value !== 'object') return '';
+  const entries = Object.entries(value);
+  const preferred = entries.filter(([key]) => /(^|[_-])(formula|fmla|fx|expression)($|[_-])/i.test(key));
+  for (const [, candidate] of [...preferred, ...entries]) {
+    const formula = formulaFromStructuredValue(candidate, depth + 1);
+    if (formula) return formula;
+  }
+  return '';
+}
+
 function cellFormulaFromHtml(element) {
-  const attributes = ['data-formula', 'data-cell-formula', 'data-sheets-formula', 'x:fmla', 'formula'];
-  const value = attributes.map(name => element.getAttribute(name)).find(Boolean);
-  if (!value) return '';
-  return String(value).startsWith('=') ? String(value) : `=${value}`;
+  const candidates = [element, ...element.querySelectorAll('*')];
+  const exactAttributes = ['data-formula', 'data-cell-formula', 'data-sheets-formula', 'data-shimo-formula', 'x:fmla', 'formula'];
+  for (const candidate of candidates) {
+    for (const name of exactAttributes) {
+      const value = candidate.getAttribute?.(name);
+      if (!value) continue;
+      const formula = formulaFromStructuredValue(value) || String(value);
+      return formula.startsWith('=') ? formula : `=${formula}`;
+    }
+    for (const attribute of [...(candidate.attributes || [])]) {
+      if (!/(formula|fmla|cell|meta|payload|value)/i.test(attribute.name)) continue;
+      const formula = formulaFromStructuredValue(attribute.value);
+      if (formula) return formula;
+    }
+  }
+  return '';
+}
+
+function sourceRangeFromHtml(documentValue, table, rowCount, columnCount) {
+  const candidates = [table, documentValue.body, documentValue.documentElement].filter(Boolean);
+  const attributeNames = ['data-range', 'data-copy-range', 'data-selection-range', 'data-source-range'];
+  for (const candidate of candidates) {
+    for (const name of attributeNames) {
+      const value = candidate.getAttribute?.(name);
+      const startText = String(value || '').match(/\$?[A-Z]+\$?[1-9]\d*/i)?.[0];
+      const start = parseSpreadsheetCellKey(startText);
+      if (!start) continue;
+      return {
+        startRow: start.rowIndex,
+        endRow: start.rowIndex + Math.max(0, rowCount - 1),
+        startColumn: start.columnIndex,
+        endColumn: start.columnIndex + Math.max(0, columnCount - 1),
+      };
+    }
+  }
+  return null;
 }
 
 export function parseSpreadsheetHtmlClipboard(html) {
@@ -201,12 +265,13 @@ export function parseSpreadsheetHtmlClipboard(html) {
   });
   const cells = normalizedCellMatrix(matrix);
   if (!cells.length) return null;
+  const sourceRange = sourceRangeFromHtml(documentValue, table, cells.length, cells[0]?.length || 0);
   return {
     payload: {
       format: RELATION_SPREADSHEET_CLIPBOARD_FORMAT,
       sourceSheetId: '',
       sourceSheetName: '',
-      sourceRange: null,
+      sourceRange,
       rowCount: cells.length,
       columnCount: cells[0]?.length || 0,
       cells,
@@ -214,6 +279,83 @@ export function parseSpreadsheetHtmlClipboard(html) {
     hasFormulaMetadata,
     sourceLooksLikeShimo: /shimo|shimowendang/i.test(String(html)),
   };
+}
+
+function cellFromStructuredClipboardValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return { v: String(value) };
+  const formula = formulaFromStructuredValue(value);
+  const rawValue = value.v ?? value.value ?? value.text ?? value.displayValue ?? value.formattedValue ?? '';
+  const cell = { v: formula || String(rawValue ?? '') };
+  if (value.style && typeof value.style === 'object') cell.style = clone(value.style);
+  return cell;
+}
+
+function findStructuredClipboardMatrix(value, depth = 0) {
+  if (depth > 5 || value === null || value === undefined) return null;
+  if (Array.isArray(value)) {
+    if (value.length && value.every(row => Array.isArray(row))) {
+      return normalizedCellMatrix(value.map(row => row.map(cellFromStructuredClipboardValue)));
+    }
+    for (const item of value) {
+      const matrix = findStructuredClipboardMatrix(item, depth + 1);
+      if (matrix?.length) return matrix;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const preferredKeys = ['cells', 'cellData', 'matrix', 'data', 'values', 'clipboardData'];
+  for (const key of preferredKeys) {
+    if (!(key in value)) continue;
+    const matrix = findStructuredClipboardMatrix(value[key], depth + 1);
+    if (matrix?.length) return matrix;
+  }
+  for (const candidate of Object.values(value)) {
+    const matrix = findStructuredClipboardMatrix(candidate, depth + 1);
+    if (matrix?.length) return matrix;
+  }
+  return null;
+}
+
+function parseStructuredSpreadsheetClipboard(raw) {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const cells = findStructuredClipboardMatrix(parsed);
+    if (!cells?.length) return null;
+    const sourceRange = normalizeSpreadsheetRange(parsed.sourceRange || parsed.range || parsed.selectionRange);
+    return {
+      payload: {
+        format: RELATION_SPREADSHEET_CLIPBOARD_FORMAT,
+        sourceSheetId: String(parsed.sourceSheetId || parsed.sheetId || ''),
+        sourceSheetName: String(parsed.sourceSheetName || parsed.sheetName || ''),
+        sourceRange,
+        rowCount: cells.length,
+        columnCount: cells[0]?.length || 0,
+        cells,
+      },
+      hasFormulaMetadata: cells.some(row => row.some(cell => String(getCellRawValue(cell)).startsWith('='))),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function mergeTextFormulasIntoHtmlPayload(htmlResult, textPayload) {
+  if (!htmlResult?.payload?.cells?.length || !textPayload?.cells?.length) return htmlResult;
+  if (htmlResult.payload.cells.length !== textPayload.cells.length
+    || htmlResult.payload.cells[0]?.length !== textPayload.cells[0]?.length) return htmlResult;
+  let mergedFormula = false;
+  const cells = htmlResult.payload.cells.map((row, rowIndex) => row.map((cell, columnIndex) => {
+    const textCell = textPayload.cells[rowIndex]?.[columnIndex];
+    const formula = String(getCellRawValue(textCell) || '');
+    if (!formula.startsWith('=')) return cell;
+    mergedFormula = true;
+    return { ...(cell || {}), v: formula };
+  }));
+  return mergedFormula
+    ? { ...htmlResult, payload: { ...htmlResult.payload, cells }, hasFormulaMetadata: true }
+    : htmlResult;
 }
 
 export function parseSpreadsheetTextClipboard(text) {
@@ -246,9 +388,26 @@ export function parseSpreadsheetClipboardData(clipboardData) {
       // Fall through to interoperable clipboard formats.
     }
   }
-  const htmlResult = parseSpreadsheetHtmlClipboard(clipboardData.getData('text/html'));
-  if (htmlResult) return { ...htmlResult, source: 'html' };
+  const customTypes = Array.from(clipboardData.types || []).filter(type => (
+    ![RELATION_SPREADSHEET_CLIPBOARD_MIME, 'text/html', 'text/plain'].includes(type)
+    && /(shimo|spreadsheet|sheets|excel)/i.test(type)
+  ));
+  for (const type of customTypes) {
+    const structured = parseStructuredSpreadsheetClipboard(clipboardData.getData(type));
+    if (structured) {
+      return {
+        ...structured,
+        source: 'structured',
+        sourceLooksLikeShimo: /shimo/i.test(type),
+      };
+    }
+  }
   const payload = parseSpreadsheetTextClipboard(clipboardData.getData('text/plain'));
+  const htmlResult = mergeTextFormulasIntoHtmlPayload(
+    parseSpreadsheetHtmlClipboard(clipboardData.getData('text/html')),
+    payload,
+  );
+  if (htmlResult) return { ...htmlResult, source: 'html' };
   return payload ? { payload, source: 'text', hasFormulaMetadata: false } : null;
 }
 

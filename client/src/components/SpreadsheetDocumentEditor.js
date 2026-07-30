@@ -13,6 +13,7 @@ import {
   DeleteRowOutlined,
   DownloadOutlined,
   FilterOutlined,
+  FieldNumberOutlined,
   FormatPainterOutlined,
   FullscreenExitOutlined,
   FullscreenOutlined,
@@ -24,6 +25,7 @@ import {
   MergeCellsOutlined,
   MinusOutlined,
   PlusOutlined,
+  PercentageOutlined,
   SortAscendingOutlined,
   SortDescendingOutlined,
   TableOutlined,
@@ -39,6 +41,7 @@ import {
 import './SpreadsheetDocumentEditor.css';
 import {
   applySpreadsheetFormatPattern,
+  buildSpreadsheetFormulaReference,
   buildSpreadsheetCellKey,
   createDefaultSpreadsheetSheet,
   createSpreadsheetFormatPattern,
@@ -47,6 +50,7 @@ import {
   findSpreadsheetMergedRange,
   formatSpreadsheetDisplayValue,
   getSpreadsheetConditionalStyle,
+  getSpreadsheetQuickNumberFormat,
   getSpreadsheetProtectedRangeAccess,
   getSpreadsheetCellObject,
   getSpreadsheetCellRawValue,
@@ -198,6 +202,24 @@ function spreadsheetRangeLabel(range) {
   const start = buildSpreadsheetCellKey(normalized.startRow, normalized.startColumn);
   const end = buildSpreadsheetCellKey(normalized.endRow, normalized.endColumn);
   return start === end ? start : `${start}:${end}`;
+}
+
+function renderSpreadsheetFormulaText(value, references = []) {
+  const source = String(value ?? '');
+  if (!source.startsWith('=') || !references.length) return source;
+  const parts = [];
+  let cursor = 0;
+  references.forEach((reference, index) => {
+    if (reference.startOffset > cursor) parts.push(source.slice(cursor, reference.startOffset));
+    parts.push(
+      <span key={`${reference.startOffset}-${reference.endOffset}-${index}`} style={{ color: reference.color }}>
+        {source.slice(reference.startOffset, reference.endOffset)}
+      </span>,
+    );
+    cursor = reference.endOffset;
+  });
+  if (cursor < source.length) parts.push(source.slice(cursor));
+  return parts;
 }
 
 function spreadsheetCellShiftAffectedRange(range, direction, sheet) {
@@ -477,7 +499,9 @@ export default function SpreadsheetDocumentEditor({
   }));
   const [selectionAnchor, setSelectionAnchor] = useState(null);
   const [isSelecting, setIsSelecting] = useState(false);
-  const [editingCellKey, setEditingCellKey] = useState('');
+  const [cellEditSession, setCellEditSession] = useState(null);
+  const [formulaEditSession, setFormulaEditSession] = useState(null);
+  const [formulaInputScrollLeft, setFormulaInputScrollLeft] = useState(0);
   const [mentionState, setMentionState] = useState(null);
   const [scrollState, setScrollState] = useState({ top: 0, left: 0, width: 800, height: 500 });
   const [zoom, setZoom] = useState(1);
@@ -493,12 +517,15 @@ export default function SpreadsheetDocumentEditor({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const editorRef = useRef(null);
   const viewportRef = useRef(null);
+  const formulaInputRef = useRef(null);
   const fileInputRef = useRef(null);
   const editorActiveRef = useRef(false);
   const workbookRef = useRef(workbook);
   const undoStackRef = useRef([]);
   const redoStackRef = useRef([]);
-  const inputTransactionRef = useRef(null);
+  const cellEditSessionRef = useRef(null);
+  const formulaEditSessionRef = useRef(null);
+  const formulaReferenceNavigationRef = useRef(false);
   const keyCommandRef = useRef(null);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const formatPainterRef = useRef(null);
@@ -507,6 +534,16 @@ export default function SpreadsheetDocumentEditor({
   const suppressCellEditUntilRef = useRef(0);
   workbookRef.current = workbook;
   onSelectionChangeRef.current = onSelectionChange;
+
+  const updateCellEditSession = next => {
+    cellEditSessionRef.current = next;
+    setCellEditSession(next);
+  };
+
+  const updateFormulaEditSession = next => {
+    formulaEditSessionRef.current = next;
+    setFormulaEditSession(next);
+  };
 
   const detectInputMention = (event, rowIndex, columnIndex) => {
     if (!canEdit || !mentionContext?.entity_type || !mentionContext?.entity_id) {
@@ -543,7 +580,21 @@ export default function SpreadsheetDocumentEditor({
     if (!mentionState || !user) return;
     const name = user.name || user.display_name || user.username || '';
     const nextValue = `${mentionState.value.slice(0, mentionState.atOffset)}@${name} ${mentionState.value.slice(mentionState.endOffset)}`;
-    updateCellValue(mentionState.rowIndex, mentionState.columnIndex, nextValue, { recordHistory: false });
+    const cellSession = cellEditSessionRef.current;
+    const formulaSession = formulaEditSessionRef.current;
+    if (cellSession
+      && cellSession.sheetId === activeSheet.id
+      && cellSession.rowIndex === mentionState.rowIndex
+      && cellSession.columnIndex === mentionState.columnIndex) {
+      updateCellEditSession({ ...cellSession, draft: nextValue, cursor: mentionState.atOffset + name.length + 2 });
+    } else if (formulaSession
+      && formulaSession.targetSheetId === activeSheet.id
+      && formulaSession.rowIndex === mentionState.rowIndex
+      && formulaSession.columnIndex === mentionState.columnIndex) {
+      updateFormulaEditSession({ ...formulaSession, draft: nextValue, cursor: mentionState.atOffset + name.length + 2 });
+    } else {
+      updateCellValue(mentionState.rowIndex, mentionState.columnIndex, nextValue);
+    }
     setMentionState(null);
     scheduleMentionNotification({
       context: mentionContext,
@@ -637,61 +688,164 @@ export default function SpreadsheetDocumentEditor({
     redoStackRef.current = [];
   };
 
-  const beginInputTransaction = (source) => {
-    if (inputTransactionRef.current?.source === source) return;
-    commitInputTransaction();
-    inputTransactionRef.current = { source, before: serializeWorkbookSnapshot(workbookRef.current) };
-  };
+  const commitDraftSessionToWorkbook = session => {
+    if (!session || !canEdit) return false;
+    const sheetId = session.targetSheetId || session.sheetId;
+    const currentWorkbook = workbookRef.current;
+    const currentSheet = currentWorkbook.sheets.find(item => String(item.id) === String(sheetId));
+    if (!currentSheet) {
+      message.error('目标工作表已不存在，未保存本次输入');
+      return false;
+    }
+    const access = getSpreadsheetProtectedRangeAccess(currentSheet, {
+      rowIndex: session.rowIndex,
+      columnIndex: session.columnIndex,
+    }, {
+      userId: currentUser?.id,
+      canManage: canManageProtection,
+    });
+    if (!access.allowed) {
+      message.warning(access.deniedRules[0]?.description || '目标单元格已锁定，你没有编辑权限');
+      return false;
+    }
+    const draftValue = String(session.draft ?? '');
+    const currentValue = String(getSpreadsheetCellRawValue(currentSheet, session.rowIndex, session.columnIndex) ?? '');
+    if (draftValue === currentValue) return true;
 
-  const commitInputTransaction = () => {
-    const transaction = inputTransactionRef.current;
-    inputTransactionRef.current = null;
-    const sourceMatch = String(transaction?.source || '').match(/^(?:cell|formula):([^:]+):([A-Z]+\d+)$/i);
-    if (transaction && sourceMatch && transaction.before !== serializeWorkbookSnapshot(workbookRef.current)) {
-      const parsedCell = parseSpreadsheetCellKey(sourceMatch[2]);
-      const sheet = workbookRef.current.sheets.find(item => String(item.id) === sourceMatch[1]);
-      if (sheet && parsedCell) {
-        const validationEvaluator = createSpreadsheetFormulaEvaluator(workbookRef.current);
-        const rawValue = getSpreadsheetCellRawValue(sheet, parsedCell.rowIndex, parsedCell.columnIndex);
-        const validationValue = String(rawValue).startsWith('=')
-          ? validationEvaluator.getValue(sheet.id, parsedCell.rowIndex, parsedCell.columnIndex)
-          : rawValue;
-        const validation = validateSpreadsheetCellInput(
-          sheet,
-          parsedCell.rowIndex,
-          parsedCell.columnIndex,
-          validationValue,
-          {
-            evaluateCustomFormula: rule => validationEvaluator.evaluateFormula(sheet.id, rule.formula) === true,
-          },
-        );
-        if (!validation.valid && validation.action === 'reject') {
-          const previous = normalizeSpreadsheetWorkbook(JSON.parse(transaction.before));
-          workbookRef.current = previous;
-          onWorkbookChange?.(previous);
-          message.error(validation.message);
-          return false;
-        }
-        if (!validation.valid) message.warning(validation.message);
-      }
+    const before = serializeWorkbookSnapshot(currentWorkbook);
+    const draftWorkbook = JSON.parse(before);
+    const draftSheet = draftWorkbook.sheets.find(item => String(item.id) === String(sheetId));
+    setSpreadsheetCellValue(draftSheet, session.rowIndex, session.columnIndex, draftValue);
+    draftWorkbook.activeSheetId = draftSheet.id;
+    const nextWorkbook = normalizeSpreadsheetWorkbook(draftWorkbook);
+    const validationEvaluator = createSpreadsheetFormulaEvaluator(nextWorkbook);
+    const validationValue = draftValue.startsWith('=')
+      ? validationEvaluator.getValue(draftSheet.id, session.rowIndex, session.columnIndex)
+      : draftValue;
+    const validation = validateSpreadsheetCellInput(
+      nextWorkbook.sheets.find(item => item.id === draftSheet.id),
+      session.rowIndex,
+      session.columnIndex,
+      validationValue,
+      {
+        evaluateCustomFormula: rule => validationEvaluator.evaluateFormula(draftSheet.id, rule.formula) === true,
+      },
+    );
+    if (!validation.valid && validation.action === 'reject') {
+      message.error(validation.message);
+      return false;
     }
-    if (transaction && transaction.before !== serializeWorkbookSnapshot(workbookRef.current)) {
-      recordUndoSnapshot(transaction.before);
-    }
+    if (!validation.valid) message.warning(validation.message);
+    recordUndoSnapshot(before);
+    workbookRef.current = nextWorkbook;
+    onWorkbookChange?.(nextWorkbook);
     return true;
   };
 
-  const cancelInputTransaction = () => {
-    const transaction = inputTransactionRef.current;
-    inputTransactionRef.current = null;
-    if (!transaction || transaction.before === serializeWorkbookSnapshot(workbookRef.current)) return;
-    const previous = normalizeSpreadsheetWorkbook(JSON.parse(transaction.before));
-    workbookRef.current = previous;
-    onWorkbookChange?.(previous);
+  const commitCellEditSession = (draftValue) => {
+    const session = cellEditSessionRef.current;
+    if (!session) return true;
+    const sessionToCommit = draftValue === undefined
+      ? session
+      : { ...session, draft: String(draftValue ?? '') };
+    updateCellEditSession(null);
+    return commitDraftSessionToWorkbook(sessionToCommit);
+  };
+
+  const cancelCellEditSession = () => {
+    if (!cellEditSessionRef.current) return;
+    updateCellEditSession(null);
+    setMentionState(null);
+  };
+
+  const restoreFormulaTargetSelection = session => {
+    if (!session) return;
+    const nextSelection = normalizeSpreadsheetRange({
+      rowIndex: session.rowIndex,
+      columnIndex: session.columnIndex,
+    });
+    onSelectedCellChange?.({
+      sheetId: session.targetSheetId,
+      rowIndex: session.rowIndex,
+      columnIndex: session.columnIndex,
+    });
+    currentSelectionRef.current = nextSelection;
+    setSelection(nextSelection);
+  };
+
+  const commitFormulaEditSession = ({ restoreTarget = false, draftValue } = {}) => {
+    const session = formulaEditSessionRef.current;
+    if (!session) return true;
+    const sessionToCommit = draftValue === undefined
+      ? session
+      : { ...session, draft: String(draftValue ?? '') };
+    updateFormulaEditSession(null);
+    setFormulaInputScrollLeft(0);
+    const committed = commitDraftSessionToWorkbook(sessionToCommit);
+    if (restoreTarget) restoreFormulaTargetSelection(sessionToCommit);
+    return committed;
+  };
+
+  const cancelFormulaEditSession = ({ restoreTarget = true } = {}) => {
+    const session = formulaEditSessionRef.current;
+    if (!session) return;
+    updateFormulaEditSession(null);
+    setFormulaInputScrollLeft(0);
+    setMentionState(null);
+    if (restoreTarget) restoreFormulaTargetSelection(session);
+  };
+
+  const commitPendingEdits = () => {
+    const cellCommitted = commitCellEditSession();
+    const formulaCommitted = commitFormulaEditSession();
+    return cellCommitted && formulaCommitted;
+  };
+
+  const beginCellEdit = (rowIndex, columnIndex, initialDraft = null) => {
+    commitFormulaEditSession();
+    const sheet = workbookRef.current.sheets.find(item => item.id === activeSheet.id) || workbookRef.current.sheets[0];
+    const rawValue = getSpreadsheetCellRawValue(sheet, rowIndex, columnIndex);
+    updateCellEditSession({
+      sheetId: sheet.id,
+      rowIndex,
+      columnIndex,
+      draft: initialDraft === null ? String(rawValue ?? '') : String(initialDraft),
+      cursor: initialDraft === null ? String(rawValue ?? '').length : String(initialDraft).length,
+    });
+  };
+
+  const beginFormulaEdit = input => {
+    if (formulaEditSessionRef.current) return formulaEditSessionRef.current;
+    const pendingCellSession = cellEditSessionRef.current;
+    if (pendingCellSession) {
+      updateCellEditSession(null);
+      const inputCursor = Number(input?.selectionStart ?? pendingCellSession.cursor);
+      const transferred = {
+        targetSheetId: pendingCellSession.sheetId,
+        rowIndex: pendingCellSession.rowIndex,
+        columnIndex: pendingCellSession.columnIndex,
+        draft: pendingCellSession.draft,
+        cursor: Number.isFinite(inputCursor) ? inputCursor : pendingCellSession.draft.length,
+      };
+      updateFormulaEditSession(transferred);
+      return transferred;
+    }
+    const sheet = workbookRef.current.sheets.find(item => item.id === activeSheet.id) || workbookRef.current.sheets[0];
+    const rawValue = String(getSpreadsheetCellRawValue(sheet, activeRowIndex, activeColumnIndex) ?? '');
+    const inputCursor = Number(input?.selectionStart);
+    const session = {
+      targetSheetId: sheet.id,
+      rowIndex: activeRowIndex,
+      columnIndex: activeColumnIndex,
+      draft: rawValue,
+      cursor: Number.isFinite(inputCursor) ? inputCursor : rawValue.length,
+    };
+    updateFormulaEditSession(session);
+    return session;
   };
 
   const undoWorkbookChange = () => {
-    commitInputTransaction();
+    commitPendingEdits();
     const previous = undoStackRef.current.pop();
     if (!previous) {
       message.info('没有可撤回的操作');
@@ -708,7 +862,7 @@ export default function SpreadsheetDocumentEditor({
   };
 
   const redoWorkbookChange = () => {
-    commitInputTransaction();
+    commitPendingEdits();
     const next = redoStackRef.current.pop();
     if (!next) {
       message.info('没有可重做的操作');
@@ -907,22 +1061,46 @@ export default function SpreadsheetDocumentEditor({
   ));
   const selectedCellObject = getSpreadsheetCellObject(activeSheet, activeRowIndex, activeColumnIndex);
   const selectedCellRawValue = getSpreadsheetCellRawValue(activeSheet, activeRowIndex, activeColumnIndex);
+  const activeCellEditSession = cellEditSession
+    && cellEditSession.sheetId === activeSheet.id
+    && cellEditSession.rowIndex === activeRowIndex
+    && cellEditSession.columnIndex === activeColumnIndex
+    ? cellEditSession
+    : null;
+  const formulaInputValue = formulaEditSession?.draft
+    ?? activeCellEditSession?.draft
+    ?? String(selectedCellRawValue ?? '');
+  const formulaOriginSheet = workbook.sheets.find(sheet => (
+    sheet.id === (formulaEditSession?.targetSheetId || activeCellEditSession?.sheetId || activeSheet.id)
+  )) || activeSheet;
+  const formulaOriginRow = formulaEditSession?.rowIndex ?? activeCellEditSession?.rowIndex ?? activeRowIndex;
+  const formulaOriginColumn = formulaEditSession?.columnIndex ?? activeCellEditSession?.columnIndex ?? activeColumnIndex;
+  const formulaInputLocked = !getSpreadsheetProtectedRangeAccess(formulaOriginSheet, {
+    rowIndex: formulaOriginRow,
+    columnIndex: formulaOriginColumn,
+  }, {
+    userId: currentUser?.id,
+    canManage: canManageProtection,
+  }).allowed;
   const selectedCellStyle = selectedCellObject.style || {};
   const selectedFontFamily = selectedCellStyle.fontFamily || DEFAULT_FONT_FAMILY;
   const selectedFontSize = Number(selectedCellStyle.fontSize) || DEFAULT_FONT_SIZE;
   const selectionLabel = spreadsheetRangeLabel(currentSelection) || activeCellKey;
   const protectionRangeLabel = spreadsheetRangeLabel(selectedProtectionRule?.range || currentSelection) || selectionLabel;
-  const formulaReferences = useMemo(() => (
-    extractSpreadsheetFormulaReferences(selectedCellRawValue, activeSheet.name)
-      .filter(reference => (
-        String(reference.sheetName || '').toLocaleLowerCase('zh-CN') === String(activeSheet.name || '').toLocaleLowerCase('zh-CN')
-        && String(reference.endSheetName || '').toLocaleLowerCase('zh-CN') === String(activeSheet.name || '').toLocaleLowerCase('zh-CN')
-      ))
+  const allFormulaReferences = useMemo(() => (
+    extractSpreadsheetFormulaReferences(formulaInputValue, formulaOriginSheet.name)
       .map((reference, index) => ({
         ...reference,
         color: FORMULA_REFERENCE_COLORS[index % FORMULA_REFERENCE_COLORS.length],
       }))
-  ), [selectedCellRawValue, activeSheet.name]);
+  ), [formulaInputValue, formulaOriginSheet.name]);
+  const formulaReferences = useMemo(() => (
+    allFormulaReferences
+      .filter(reference => (
+        String(reference.sheetName || '').toLocaleLowerCase('zh-CN') === String(activeSheet.name || '').toLocaleLowerCase('zh-CN')
+        && String(reference.endSheetName || '').toLocaleLowerCase('zh-CN') === String(activeSheet.name || '').toLocaleLowerCase('zh-CN')
+      ))
+  ), [allFormulaReferences, activeSheet.name]);
   const remoteCollaborators = useMemo(() => (
     (Array.isArray(collaborators) ? collaborators : []).filter(item => item?.session_id && item?.user_name)
   ), [collaborators]);
@@ -968,13 +1146,64 @@ export default function SpreadsheetDocumentEditor({
     return false;
   };
 
+  const updateActiveCellDraft = (value, cursor = null) => {
+    const session = cellEditSessionRef.current;
+    if (!session) return;
+    updateCellEditSession({
+      ...session,
+      draft: String(value ?? ''),
+      cursor: cursor === null ? String(value ?? '').length : cursor,
+    });
+  };
+
+  const updateActiveFormulaDraft = (value, cursor = null) => {
+    const session = formulaEditSessionRef.current;
+    if (!session) return;
+    updateFormulaEditSession({
+      ...session,
+      draft: String(value ?? ''),
+      cursor: cursor === null ? String(value ?? '').length : cursor,
+    });
+  };
+
+  const insertFormulaReferenceFromCell = (rowIndex, columnIndex) => {
+    const formulaSession = formulaEditSessionRef.current;
+    const cellSession = cellEditSessionRef.current;
+    const session = formulaSession || cellSession;
+    if (!session || !String(session.draft || '').startsWith('=')) return false;
+    const targetSheetId = session.targetSheetId || session.sheetId;
+    const targetSheet = workbookRef.current.sheets.find(sheet => sheet.id === targetSheetId);
+    if (!targetSheet) return false;
+    const reference = buildSpreadsheetFormulaReference(
+      activeSheet.name,
+      buildSpreadsheetCellKey(rowIndex, columnIndex),
+      targetSheet.name,
+    );
+    const inputCursor = formulaSession
+      ? formulaInputRef.current?.selectionStart
+      : session.cursor;
+    const cursor = clamp(Number(inputCursor ?? session.draft.length), 0, session.draft.length);
+    const nextDraft = `${session.draft.slice(0, cursor)}${reference}${session.draft.slice(cursor)}`;
+    const nextCursor = cursor + reference.length;
+    if (formulaSession) {
+      updateActiveFormulaDraft(nextDraft, nextCursor);
+      window.requestAnimationFrame(() => {
+        formulaInputRef.current?.focus({ preventScroll: true });
+        formulaInputRef.current?.setSelectionRange(nextCursor, nextCursor);
+      });
+    } else {
+      updateActiveCellDraft(nextDraft, nextCursor);
+    }
+    return true;
+  };
+
   const activateFormatPainter = continuous => {
     if (!canEdit) return;
     const sourceSheet = workbookRef.current.sheets.find(sheet => sheet.id === activeSheet.id)
       || workbookRef.current.sheets[0];
     const pattern = createSpreadsheetFormatPattern(sourceSheet, currentSelection);
     if (!pattern) return;
-    setEditingCellKey('');
+    commitPendingEdits();
     setActiveFormatPainter({ pattern, continuous: Boolean(continuous) });
     focusSpreadsheetGrid();
   };
@@ -1011,7 +1240,7 @@ export default function SpreadsheetDocumentEditor({
       startColumn: 0,
       endColumn: activeSheet.columnCount - 1,
     });
-    setEditingCellKey('');
+    commitPendingEdits();
     setSelectionAnchor(null);
     setIsSelecting(false);
     onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex, columnIndex: 0 });
@@ -1028,7 +1257,7 @@ export default function SpreadsheetDocumentEditor({
       startColumn: columnIndex,
       endColumn: columnIndex,
     });
-    setEditingCellKey('');
+    commitPendingEdits();
     setSelectionAnchor(null);
     setIsSelecting(false);
     onSelectedCellChange?.({ sheetId: activeSheet.id, rowIndex: 0, columnIndex });
@@ -1088,6 +1317,11 @@ export default function SpreadsheetDocumentEditor({
       return draft;
     });
     focusSpreadsheetGrid();
+  };
+
+  const applyQuickNumberFormat = action => {
+    const numberFormat = getSpreadsheetQuickNumberFormat(selectedCellStyle.numberFormat, action);
+    updateRangeStyle({ numberFormat });
   };
 
   const clearSheetRange = (sheet, range, mode = 'content') => {
@@ -1358,10 +1592,7 @@ export default function SpreadsheetDocumentEditor({
     ) {
       if (!ensureSpreadsheetRangeEditable({ rowIndex: activeRowIndex, columnIndex: activeColumnIndex })) return;
       event.preventDefault();
-      const transactionKey = `cell:${activeSheet.id}:${activeCellKey}`;
-      beginInputTransaction(transactionKey);
-      updateCellValue(activeRowIndex, activeColumnIndex, event.key, { recordHistory: false });
-      setEditingCellKey(buildSpreadsheetCellKey(activeRowIndex, activeColumnIndex));
+      beginCellEdit(activeRowIndex, activeColumnIndex, event.key);
       return;
     }
     if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -1649,10 +1880,26 @@ export default function SpreadsheetDocumentEditor({
   const switchSheet = sheetId => {
     const sheet = workbook.sheets.find(item => item.id === sheetId);
     if (!sheet) return;
+    if (cellEditSessionRef.current && !String(cellEditSessionRef.current.draft || '').startsWith('=')) {
+      commitCellEditSession();
+    } else if (cellEditSessionRef.current) {
+      const session = cellEditSessionRef.current;
+      updateCellEditSession(null);
+      updateFormulaEditSession({
+        targetSheetId: session.sheetId,
+        rowIndex: session.rowIndex,
+        columnIndex: session.columnIndex,
+        draft: session.draft,
+        cursor: session.cursor,
+      });
+    }
     onSelectedCellChange?.({ sheetId, rowIndex: 0, columnIndex: 0 });
     setSelection(normalizeSpreadsheetRange({ rowIndex: 0, columnIndex: 0 }));
-    setEditingCellKey('');
     if (canEdit) applyWorkbookUpdate(draft => ({ ...draft, activeSheetId: sheetId }), { recordHistory: false });
+    window.requestAnimationFrame(() => {
+      formulaReferenceNavigationRef.current = false;
+      if (formulaEditSessionRef.current) formulaInputRef.current?.focus({ preventScroll: true });
+    });
   };
   const addSheet = () => {
     const currentSheets = workbookRef.current.sheets || [];
@@ -2066,7 +2313,13 @@ export default function SpreadsheetDocumentEditor({
     const listValidationRule = cellValidationRules.find(rule => rule.type === 'list' && Array.isArray(rule.values));
     const cellLocked = !cellProtectionAccess.allowed;
     const cellHasProtection = cellProtectionAccess.rules.length > 0;
-    const editing = active && editingCellKey === buildSpreadsheetCellKey(rowIndex, columnIndex) && canEdit && !cellLocked;
+    const editingSession = cellEditSession
+      && cellEditSession.sheetId === activeSheet.id
+      && cellEditSession.rowIndex === rowIndex
+      && cellEditSession.columnIndex === columnIndex
+      ? cellEditSession
+      : null;
+    const editing = active && Boolean(editingSession) && canEdit && !cellLocked;
     return (
       <div
         key={`cell-${rowIndex}-${columnIndex}`}
@@ -2089,7 +2342,12 @@ export default function SpreadsheetDocumentEditor({
         onMouseDown={event => {
           if (event.button !== 0) return;
           event.preventDefault();
-          setEditingCellKey('');
+          if (insertFormulaReferenceFromCell(rowIndex, columnIndex)) {
+            setIsSelecting(false);
+            if (formulaEditSessionRef.current) notifySelection(rowIndex, columnIndex);
+            return;
+          }
+          commitPendingEdits();
           const anchor = event.shiftKey
             ? (selectionAnchor || { rowIndex: currentSelection.startRow, columnIndex: currentSelection.startColumn })
             : { rowIndex, columnIndex };
@@ -2114,7 +2372,7 @@ export default function SpreadsheetDocumentEditor({
           setSelection(nextSelection);
         }}
         onContextMenu={() => {
-          setEditingCellKey('');
+          commitPendingEdits();
           if (!spreadsheetRangeContainsCell(currentSelection, rowIndex, columnIndex)) {
             notifySelection(rowIndex, columnIndex);
           }
@@ -2122,10 +2380,10 @@ export default function SpreadsheetDocumentEditor({
         }}
         onDoubleClick={() => {
           if (formatPainterRef.current || Date.now() < suppressCellEditUntilRef.current) return;
+          if (String(formulaEditSessionRef.current?.draft || '').startsWith('=')) return;
           if (!ensureSpreadsheetRangeEditable({ rowIndex, columnIndex })) return;
           notifySelection(rowIndex, columnIndex);
-          beginInputTransaction(`cell:${activeSheet.id}:${buildSpreadsheetCellKey(rowIndex, columnIndex)}`);
-          setEditingCellKey(buildSpreadsheetCellKey(rowIndex, columnIndex));
+          beginCellEdit(rowIndex, columnIndex);
         }}
         style={{
           position: 'absolute',
@@ -2189,28 +2447,29 @@ export default function SpreadsheetDocumentEditor({
           <Input
             autoFocus
             variant="borderless"
-            value={rawValue}
+            value={editingSession.draft}
             onMouseDown={event => event.stopPropagation()}
-            onFocus={() => beginInputTransaction(`cell:${activeSheet.id}:${buildSpreadsheetCellKey(rowIndex, columnIndex)}`)}
             onChange={event => {
-              updateCellValue(rowIndex, columnIndex, event.target.value, { recordHistory: false });
+              updateActiveCellDraft(event.target.value, event.target.selectionStart);
               window.setTimeout(() => detectInputMention(event, rowIndex, columnIndex), 0);
             }}
-            onBlur={() => {
-              commitInputTransaction();
-              setEditingCellKey('');
+            onSelect={event => updateActiveCellDraft(event.currentTarget.value, event.currentTarget.selectionStart)}
+            onBlur={event => {
+              if (formulaReferenceNavigationRef.current) return;
+              commitCellEditSession(event.currentTarget.value);
             }}
             onKeyDown={event => {
+              if (event.isComposing || event.nativeEvent?.isComposing) return;
               if (event.key === 'Enter' || event.key === 'Tab') {
                 event.preventDefault();
-                commitInputTransaction();
-                setEditingCellKey('');
-                moveSelection(event.key === 'Enter' ? (event.shiftKey ? -1 : 1) : 0, event.key === 'Tab' ? (event.shiftKey ? -1 : 1) : 0);
+                const committed = commitCellEditSession(event.currentTarget.value);
+                if (committed) {
+                  moveSelection(event.key === 'Enter' ? (event.shiftKey ? -1 : 1) : 0, event.key === 'Tab' ? (event.shiftKey ? -1 : 1) : 0);
+                }
                 window.requestAnimationFrame(() => editorRef.current?.focus());
               } else if (event.key === 'Escape') {
                 event.preventDefault();
-                cancelInputTransaction();
-                setEditingCellKey('');
+                cancelCellEditSession();
                 window.requestAnimationFrame(() => editorRef.current?.focus());
               }
             }}
@@ -2428,6 +2687,33 @@ export default function SpreadsheetDocumentEditor({
               }}
             />
           </Tooltip>
+          <SpreadsheetToolbarButton
+            title="百分比"
+            disabled={selectionMutationDisabled}
+            active={selectedCellStyle.numberFormat?.type === 'percentage'}
+            icon={<PercentageOutlined />}
+            onClick={() => applyQuickNumberFormat('percentage')}
+          />
+          <SpreadsheetToolbarButton
+            title="千分位分隔符"
+            disabled={selectionMutationDisabled}
+            active={selectedCellStyle.numberFormat?.type === 'number' && selectedCellStyle.numberFormat?.useGrouping === true}
+            icon={<FieldNumberOutlined />}
+            onClick={() => applyQuickNumberFormat('grouping')}
+          />
+          <SpreadsheetToolbarButton
+            title="增加小数位数"
+            disabled={selectionMutationDisabled}
+            icon={<span className="relation-spreadsheet-decimal-icon">.00&#8594;</span>}
+            onClick={() => applyQuickNumberFormat('increase-decimals')}
+          />
+          <SpreadsheetToolbarButton
+            title="减少小数位数"
+            disabled={selectionMutationDisabled}
+            icon={<span className="relation-spreadsheet-decimal-icon">.0&#8592;</span>}
+            onClick={() => applyQuickNumberFormat('decrease-decimals')}
+          />
+          <div style={{ width: 1, height: 20, background: '#d9d9d9', margin: '0 4px' }} />
           <Select
             aria-label="字体"
             size="small"
@@ -2618,36 +2904,60 @@ export default function SpreadsheetDocumentEditor({
         borderBottom: '1px solid #e5e7eb',
       }}>
         <Input className="relation-spreadsheet-name-box" size="small" value={selectionLabel} readOnly />
-        <Input
-          className="relation-spreadsheet-formula-input"
-          data-spreadsheet-formula-input="true"
-          data-spreadsheet-formula-reference-count={formulaReferences.length}
-          size="small"
-          prefix={<Text type="secondary">fx</Text>}
-          value={selectedCellRawValue}
-          readOnly={!canEdit || selectionLocked}
-          onFocus={() => beginInputTransaction(`formula:${activeSheet.id}:${activeCellKey}`)}
-          onChange={event => {
-            beginInputTransaction(`formula:${activeSheet.id}:${activeCellKey}`);
-            updateCellValue(activeRowIndex, activeColumnIndex, event.target.value, { recordHistory: false });
-            window.setTimeout(() => detectInputMention(event, activeRowIndex, activeColumnIndex), 0);
-          }}
-          onBlur={commitInputTransaction}
-          onKeyDown={event => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              commitInputTransaction();
-              event.currentTarget.blur();
-              window.requestAnimationFrame(() => editorRef.current?.focus());
-            } else if (event.key === 'Escape') {
-              event.preventDefault();
-              cancelInputTransaction();
-              event.currentTarget.blur();
-              window.requestAnimationFrame(() => editorRef.current?.focus());
-            }
-          }}
-          placeholder="输入值或以 = 开头的公式"
-        />
+        <div className="relation-spreadsheet-formula-editor">
+          <Text type="secondary" className="relation-spreadsheet-formula-editor__fx">fx</Text>
+          <div className="relation-spreadsheet-formula-editor__field">
+            {formulaInputValue.startsWith('=') ? (
+              <div
+                className="relation-spreadsheet-formula-editor__highlight"
+                aria-hidden="true"
+                style={{ transform: `translateX(${-formulaInputScrollLeft}px)` }}
+              >
+                {renderSpreadsheetFormulaText(formulaInputValue, allFormulaReferences)}
+              </div>
+            ) : null}
+            <Input
+              ref={formulaInputRef}
+              className={`relation-spreadsheet-formula-input${formulaInputValue.startsWith('=') ? ' relation-spreadsheet-formula-input--highlighted' : ''}`}
+              data-spreadsheet-formula-input="true"
+              data-spreadsheet-formula-reference-count={allFormulaReferences.length}
+              aria-label="公式栏"
+              size="small"
+              value={formulaInputValue}
+              readOnly={!canEdit || formulaInputLocked}
+              onFocus={event => beginFormulaEdit(event.currentTarget)}
+              onChange={event => {
+                if (!formulaEditSessionRef.current) beginFormulaEdit(event.currentTarget);
+                updateActiveFormulaDraft(event.target.value, event.target.selectionStart);
+                window.setTimeout(() => detectInputMention(event, formulaOriginRow, formulaOriginColumn), 0);
+              }}
+              onSelect={event => updateActiveFormulaDraft(event.currentTarget.value, event.currentTarget.selectionStart)}
+              onScroll={event => setFormulaInputScrollLeft(event.currentTarget.scrollLeft)}
+              onBlur={event => {
+                if (formulaReferenceNavigationRef.current) return;
+                commitFormulaEditSession({ draftValue: event.currentTarget.value });
+              }}
+              onKeyDown={event => {
+                if (event.isComposing || event.nativeEvent?.isComposing) return;
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitFormulaEditSession({
+                    restoreTarget: true,
+                    draftValue: event.currentTarget.value,
+                  });
+                  event.currentTarget.blur();
+                  window.requestAnimationFrame(() => editorRef.current?.focus());
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  cancelFormulaEditSession({ restoreTarget: true });
+                  event.currentTarget.blur();
+                  window.requestAnimationFrame(() => editorRef.current?.focus());
+                }
+              }}
+              placeholder="输入值或以 = 开头的公式"
+            />
+          </div>
+        </div>
       </div>
 
       <Dropdown
@@ -2885,6 +3195,12 @@ export default function SpreadsheetDocumentEditor({
                       aria-selected={active}
                       aria-pressed={active}
                       title={sheet.name}
+                      onMouseDown={event => {
+                        const draft = formulaEditSessionRef.current?.draft || cellEditSessionRef.current?.draft || '';
+                        if (!String(draft).startsWith('=')) return;
+                        formulaReferenceNavigationRef.current = true;
+                        event.preventDefault();
+                      }}
                       onClick={() => switchSheet(sheet.id)}
                       onDoubleClick={() => canEdit && renameSheet(sheet)}
                     >

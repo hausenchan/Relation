@@ -261,11 +261,20 @@ export function getNextSpreadsheetSheetName(sheets = []) {
   return `工作表${index}`;
 }
 
-function spreadsheetFormulaSheetName(name) {
+export function spreadsheetFormulaSheetName(name) {
   const value = String(name || '');
   return /^[A-Za-z_$\u3400-\u9fff][A-Za-z0-9_.$\u3400-\u9fff]*$/.test(value)
     ? value
     : `'${value.replace(/'/g, "''")}'`;
+}
+
+export function buildSpreadsheetFormulaReference(sheetName, reference, formulaSheetName = '') {
+  const coordinate = String(reference || '').trim();
+  if (!coordinate) return '';
+  if (!sheetName || spreadsheetSheetNameKey(sheetName) === spreadsheetSheetNameKey(formulaSheetName)) {
+    return coordinate;
+  }
+  return `${spreadsheetFormulaSheetName(sheetName)}!${coordinate}`;
 }
 
 function replaceSpreadsheetFormulaSheetReferences(formula, previousName, nextName) {
@@ -737,6 +746,40 @@ export function formatSpreadsheetDisplayValue(value, numberFormat) {
     return `(${formatted.replace('-', '')})`;
   }
   return formatted;
+}
+
+export function getSpreadsheetQuickNumberFormat(numberFormat, action) {
+  const current = numberFormat && typeof numberFormat === 'object'
+    ? clone(numberFormat)
+    : { type: typeof numberFormat === 'string' ? numberFormat : 'general' };
+  const numericTypes = new Set(['number', 'percentage', 'currency', 'accounting', 'scientific']);
+  const hasNumericType = numericTypes.has(current.type);
+  const currentType = hasNumericType ? current.type : 'number';
+  const defaultDecimals = hasNumericType && ['number', 'currency', 'accounting'].includes(currentType) ? 2 : 0;
+  const currentDecimals = Number.isFinite(Number(current.decimals))
+    ? Math.max(0, Math.min(10, Number(current.decimals)))
+    : defaultDecimals;
+
+  if (action === 'percentage') {
+    return {
+      type: 'percentage',
+      decimals: current.type === 'percentage' ? currentDecimals : 0,
+      useGrouping: false,
+    };
+  }
+  if (action === 'grouping') {
+    return { type: 'number', decimals: 2, useGrouping: true };
+  }
+  if (action === 'increase-decimals' || action === 'decrease-decimals') {
+    const delta = action === 'increase-decimals' ? 1 : -1;
+    return {
+      ...current,
+      type: currentType,
+      decimals: Math.max(0, Math.min(10, currentDecimals + delta)),
+      useGrouping: current.useGrouping === true,
+    };
+  }
+  return current.type === 'general' ? null : current;
 }
 
 function cloneSpreadsheetCellStyle(style) {
