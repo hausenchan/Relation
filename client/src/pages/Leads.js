@@ -1,19 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Table, Tag, Space, Typography, Button, Select, Modal, Form, message, Badge,
-  Drawer, Descriptions, Input, Card, Row, Col, Avatar, DatePicker, Divider, Upload, Grid, List
+  Tag, Space, Typography, Button, Select, Modal, Form, message,
+  Drawer, Descriptions, Input, Row, Col, Avatar, DatePicker, Divider, Upload, Grid, List
 } from 'antd';
 import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined, FunnelPlotOutlined, UserAddOutlined, SyncOutlined, TrophyOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
+import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 import { TASK_TYPE_META, TASK_TYPE_OPTIONS } from '../utils/taskTypes';
+import '../styles/businessPage.css';
 
 const { Text } = Typography;
 const { Option } = Select;
 const { useBreakpoint } = Grid;
 
-const listPrimaryTextStyle = { fontSize: 14, color: '#1f2937', lineHeight: 1.6 };
 const listSecondaryTextStyle = { fontSize: 12, color: '#6b7280', lineHeight: 1.5 };
 const listTableRowStyle = { cursor: 'pointer', fontSize: 13 };
 const listPlainTextStyle = { fontSize: 13, color: '#374151' };
@@ -25,14 +26,38 @@ const opportunityStatusMap = {
   lost: { label: '已关闭', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' },
 };
 
+const opportunityStatColorMap = {
+  total: { color: '#4f46e5', bg: '#eef2ff' },
+  new: { color: '#4f46e5', bg: '#eef2ff' },
+  following: { color: '#d97706', bg: '#fffbeb' },
+  won: { color: '#16a34a', bg: '#ecfdf5' },
+};
+
+const renderOpportunityStatus = (value) => {
+  const status = opportunityStatusMap[value] || { label: value || '-', color: '#667085', bg: '#f3f4f6', border: '#d1d5db' };
+  return (
+    <span
+      className="business-status-pill"
+      style={{
+        '--status-color': status.color,
+        '--status-bg': status.bg,
+        '--status-border': status.border,
+      }}
+    >
+      <span className="business-status-dot" />
+      {status.label}
+    </span>
+  );
+};
+
 const renderTableText = (value, empty = '-') => (
   value
     ? <Text title={value} style={{ ...listPlainTextStyle, display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{value}</Text>
-    : <Text type="secondary" style={{ fontSize: 13 }}>{empty}</Text>
+    : <Text className="business-empty-text">{empty}</Text>
 );
 
 const renderShortDate = (value) => (
-  value ? <Text style={listPlainTextStyle}>{dayjs(value).format('MM-DD')}</Text> : <Text type="secondary">-</Text>
+  value ? <Text style={listPlainTextStyle}>{dayjs(value).format('MM-DD')}</Text> : <Text className="business-empty-text">-</Text>
 );
 
 const interactionTypeMap = {
@@ -289,6 +314,12 @@ export default function Leads() {
     load();
   };
 
+  const renderOpportunityLongTextEditor = (placeholder, minHeight = 100, rows = 2) => (
+    addSourceType === 'interaction'
+      ? <RichTextEditor placeholder={placeholder} minHeight={minHeight} />
+      : <Input.TextArea rows={rows} placeholder={placeholder} />
+  );
+
   const openAttachments = async (record, event) => {
     event?.stopPropagation?.();
     try {
@@ -337,7 +368,7 @@ export default function Leads() {
       title: '商机ID',
       dataIndex: 'source_id',
       width: 90,
-      render: v => <Text strong style={{ fontSize: 13, color: '#374151' }}>{v || '-'}</Text>,
+      render: v => <Text strong style={{ fontSize: 13, color: '#344054' }}>{v || '-'}</Text>,
     },
     {
       title: '商机',
@@ -351,14 +382,13 @@ export default function Leads() {
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                <Text
-                  strong
+                <span
+                  className="business-primary-link"
                   title={r.opportunity_title}
-                  style={{ ...listPrimaryTextStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                 >
                   {r.opportunity_title || '-'}
-                </Text>
-                <Tag style={{ margin: 0, borderRadius: 4, fontSize: 11, lineHeight: '16px', padding: '0 6px', flex: '0 0 auto' }} color={isCompetitor ? 'orange' : 'blue'}>
+                </span>
+                <Tag className="business-tag" style={{ flex: '0 0 auto' }} color={isCompetitor ? 'orange' : 'blue'}>
                   {isCompetitor ? '竞研' : '互动'}
                 </Tag>
                 {r.attachment_count > 0 && (
@@ -389,32 +419,29 @@ export default function Leads() {
       title: '状态',
       dataIndex: 'opportunity_status',
       width: 100,
-      render: v => {
-        const s = opportunityStatusMap[v] || { label: v || '-' };
-        return <Badge status="processing" text={s.label} />;
-      },
+      render: renderOpportunityStatus,
     },
     {
       title: '商机类型',
       dataIndex: 'opportunity_type',
       width: 120,
       render: value => value
-        ? <Tag color={TASK_TYPE_META[value]?.color || 'default'}>{TASK_TYPE_META[value]?.label || value}</Tag>
-        : <Text type="secondary">-</Text>,
+        ? <Tag className="business-tag" color={TASK_TYPE_META[value]?.color || 'default'}>{TASK_TYPE_META[value]?.label || value}</Tag>
+        : <Text className="business-empty-text">-</Text>,
     },
     {
       title: '指派给',
       dataIndex: 'assignee_name',
       width: 150,
       responsive: ['lg'],
-      render: v => v || '未指派',
+      render: v => v || <Text className="business-empty-text">未指派</Text>,
     },
     {
       title: '创建人',
       dataIndex: 'created_by_name',
       width: 120,
       responsive: ['lg'],
-      render: v => v || '-',
+      render: v => v || <Text className="business-empty-text">-</Text>,
     },
     {
       title: '关注人',
@@ -423,7 +450,7 @@ export default function Leads() {
       responsive: ['lg'],
       render: v => v
         ? <Text title={v} style={{ display: 'block', maxWidth: 132, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13, color: '#374151' }}>{v}</Text>
-        : <Text style={{ fontSize: 12, color: '#d1d5db' }}>-</Text>,
+        : <Text className="business-empty-text">-</Text>,
     },
     {
       title: '最近互动',
@@ -447,28 +474,19 @@ export default function Leads() {
   ];
 
   const renderLeadCard = (record) => {
-    const status = opportunityStatusMap[record.opportunity_status] || { label: record.opportunity_status || '-', color: '#6b7280', bg: '#f3f4f6', border: '#d1d5db' };
     const isCompetitor = record.source_type === 'competitor_research';
     const subjectName = isCompetitor ? (record.company_name || '-') : (record.person_name || '-');
     const subjectSub = isCompetitor ? '公司' : (record.company || record.current_company || '');
 
     return (
-      <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
+      <List.Item className="business-mobile-list-item">
         <div
+          className="business-mobile-card"
           role="button"
           tabIndex={0}
           onClick={() => openDetail(record)}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') openDetail(record);
-          }}
-          style={{
-            width: '100%',
-            padding: 14,
-            border: '1px solid #f0f0f0',
-            borderRadius: 12,
-            background: '#fff',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
-            cursor: 'pointer',
           }}
         >
           <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -484,23 +502,12 @@ export default function Leads() {
                 </Space>
               </div>
               <Space direction="vertical" size={6} align="end">
-                <Tag style={{ borderRadius: 6, fontSize: 12 }} color={isCompetitor ? 'orange' : 'blue'}>
+                <Tag className="business-tag" color={isCompetitor ? 'orange' : 'blue'}>
                   {isCompetitor ? '竞研' : '互动'}
                 </Tag>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 5,
-                  padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 500,
-                  color: status.color, background: status.bg, border: `1px solid ${status.border}`,
-                  whiteSpace: 'nowrap',
-                }}>
-                  <span style={{
-                    display: 'inline-block', width: 6, height: 6, borderRadius: '50%',
-                    background: status.color, flexShrink: 0,
-                  }} />
-                  {status.label}
-                </span>
+                {renderOpportunityStatus(record.opportunity_status)}
                 {record.opportunity_type && (
-                  <Tag color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'} style={{ margin: 0 }}>
+                  <Tag className="business-tag" color={TASK_TYPE_META[record.opportunity_type]?.color || 'default'}>
                     {TASK_TYPE_META[record.opportunity_type]?.label || record.opportunity_type}
                   </Tag>
                 )}
@@ -515,7 +522,7 @@ export default function Leads() {
 
             {record.follow_result && (
               <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                跟进结果：{record.follow_result}
+                跟进结果：{richTextToPlain(record.follow_result)}
               </Typography.Paragraph>
             )}
 
@@ -584,52 +591,78 @@ export default function Leads() {
     );
   };
 
+  const statItems = [
+    {
+      key: 'total',
+      label: '全部商机',
+      value: data.length,
+      icon: <FunnelPlotOutlined />,
+      ...opportunityStatColorMap.total,
+    },
+    {
+      key: 'new',
+      label: '新商机',
+      value: data.filter(d => d.opportunity_status === 'new').length,
+      icon: <UserAddOutlined />,
+      ...opportunityStatColorMap.new,
+    },
+    {
+      key: 'following',
+      label: '跟进中',
+      value: data.filter(d => d.opportunity_status === 'following').length,
+      icon: <SyncOutlined />,
+      ...opportunityStatColorMap.following,
+    },
+    {
+      key: 'won',
+      label: '已成交',
+      value: data.filter(d => d.opportunity_status === 'won').length,
+      icon: <TrophyOutlined />,
+      ...opportunityStatColorMap.won,
+    },
+  ];
+
   return (
-    <div style={{ padding: isMobile ? 0 : undefined }}>
-      {/* 统计概览 */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
-          gap: isMobile ? 10 : 16,
-          marginBottom: isMobile ? 16 : 24,
-          width: '100%',
-        }}
-      >
-        {[
-          { label: '全部商机', value: data.length, icon: <FunnelPlotOutlined />, gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' },
-          { label: '新商机', value: data.filter(d => d.opportunity_status === 'new').length, icon: <UserAddOutlined />, gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)' },
-          { label: '跟进中', value: data.filter(d => d.opportunity_status === 'following').length, icon: <SyncOutlined />, gradient: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' },
-          { label: '已成交', value: data.filter(d => d.opportunity_status === 'won').length, icon: <TrophyOutlined />, gradient: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' },
-        ].map((item, idx) => (
-          <div key={idx} style={{ minWidth: 0 }}>
-            <Card
-              className="stat-card"
-              style={{ background: item.gradient, borderRadius: 12, border: 'none', cursor: 'default' }}
-              styles={{ body: { padding: isMobile ? '16px 18px' : '18px 18px' } }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <div style={{ fontSize: isMobile ? 12 : 13, color: 'rgba(255,255,255,0.8)', marginBottom: 8, fontWeight: 500, whiteSpace: 'nowrap' }}>{item.label}</div>
-                  <div style={{ fontSize: isMobile ? 28 : 32, fontWeight: 700, color: '#fff', lineHeight: 1.2 }}>{item.value}</div>
-                </div>
-                <div style={{ width: isMobile ? 34 : 42, height: isMobile ? 34 : 42, borderRadius: 12, background: 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: isMobile ? 18 : 20, color: '#fff' }}>
-                  {item.icon}
-                </div>
-              </div>
-            </Card>
+    <div className="business-page">
+      <div className="business-page-header">
+        <div className="business-page-title">
+          <h1 className="business-page-title-text">商机</h1>
+          <span className="business-page-count">{data.length} 条</span>
+        </div>
+        <div className="business-page-actions">
+          <Button icon={<SyncOutlined />} onClick={load} loading={loading}>刷新</Button>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openAddLead}>添加商机</Button>
+        </div>
+      </div>
+
+      <div className="business-stats-grid">
+        {statItems.map(item => (
+          <div
+            key={item.key}
+            className="business-stat-card"
+            style={{
+              '--business-stat-color': item.color,
+              '--business-stat-bg': item.bg,
+            }}
+          >
+            <div className="business-stat-card-main">
+              <div className="business-stat-card-label">{item.label}</div>
+              <div className="business-stat-card-value">{item.value}</div>
+            </div>
+            <div className="business-stat-card-icon">
+              {item.icon}
+            </div>
           </div>
         ))}
       </div>
 
-      {/* 筛选与表格 */}
-      <Card style={{ borderRadius: 8, border: '1px solid #e5e7eb', boxShadow: 'none' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-          <Space wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
+      <div className="business-table-panel">
+        <div className="business-filter-bar">
+          <div className="business-filter-controls">
             <Select
+              className="business-filter-control"
               placeholder="商机状态"
               allowClear
-              style={{ width: isMobile ? '100%' : 130 }}
               value={filterStatus || undefined}
               onChange={v => setFilterStatus(v || '')}
             >
@@ -638,17 +671,16 @@ export default function Leads() {
               ))}
             </Select>
             <Select
+              className="business-filter-control"
               placeholder="指派人"
               allowClear
               showSearch
-              style={{ width: isMobile ? '100%' : 160 }}
               value={filterAssignee || undefined}
               onChange={v => setFilterAssignee(v || '')}
               filterOption={(input, option) => (option?.label ?? '').toLowerCase().includes(input.toLowerCase())}
               options={users.map(u => ({ value: u.id, label: u.display_name || u.username }))}
             />
-          </Space>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openAddLead} style={{ width: isMobile ? '100%' : undefined }}>添加商机</Button>
+          </div>
         </div>
 
         {isMobile ? (
@@ -662,6 +694,7 @@ export default function Leads() {
           />
         ) : (
           <ResizableTable
+            className="business-data-table"
             storageKey="leads-table-columns"
             columns={columns}
             dataSource={data}
@@ -678,7 +711,7 @@ export default function Leads() {
             })}
           />
         )}
-      </Card>
+      </div>
 
       <Modal
         title={<span style={{ fontWeight: 600, fontSize: 15, color: '#1f2937' }}>编辑商机信息</span>}
@@ -762,11 +795,13 @@ export default function Leads() {
                   ? <Tag color={TASK_TYPE_META[detailRecord.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[detailRecord.opportunity_type]?.label || detailRecord.opportunity_type}</Tag>
                   : '-'}
               </Descriptions.Item>
-              <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
+              <Descriptions.Item label="商机说明"><RichTextView value={detailRecord.opportunity_note} /></Descriptions.Item>
               <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
-              <Descriptions.Item label="互动描述"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div></Descriptions.Item>
-              <Descriptions.Item label="互动结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.outcome || '-'}</div></Descriptions.Item>
-              <Descriptions.Item label="跟进结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.follow_result || '-'}</div></Descriptions.Item>
+              <Descriptions.Item label="互动描述"><RichTextView value={detailRecord.description} /></Descriptions.Item>
+              <Descriptions.Item label="互动结果"><RichTextView value={detailRecord.outcome} /></Descriptions.Item>
+              <Descriptions.Item label="跟进结果"><RichTextView value={detailRecord.follow_result} /></Descriptions.Item>
+              <Descriptions.Item label="下一步行动"><RichTextView value={detailRecord.next_action} /></Descriptions.Item>
+              <Descriptions.Item label="下一步日期">{detailRecord.next_action_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="关注人">{detailRecord.watcher_names || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{detailRecord.created_by_name || '-'}</Descriptions.Item>
             </Descriptions>
@@ -907,11 +942,11 @@ export default function Leads() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item label="商机说明" name="opportunity_note">
-            <Input.TextArea rows={2} placeholder="背景、需求、补充说明等" />
+          <Form.Item label="商机说明" name="opportunity_note" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('背景、需求、补充说明等', 100)}
           </Form.Item>
-          <Form.Item label="跟进结果" name="follow_result">
-            <Input.TextArea rows={2} placeholder="填写当前商机跟进结果" />
+          <Form.Item label="跟进结果" name="follow_result" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('填写当前商机跟进结果', 100)}
           </Form.Item>
           <Form.Item label="关注人" name="watcher_ids">
             <Select
@@ -943,11 +978,11 @@ export default function Leads() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea rows={2} placeholder="详细描述" />
+          <Form.Item label="描述" name="description" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('详细描述', 120)}
           </Form.Item>
-          <Form.Item label="结果" name="outcome">
-            <Input.TextArea rows={2} placeholder="结果或收获" />
+          <Form.Item label="结果" name="outcome" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('结果或收获', 100)}
           </Form.Item>
           {addSourceType === 'competitor_research' && (
             <Form.Item label="影响分析" name="impact">
@@ -955,9 +990,9 @@ export default function Leads() {
             </Form.Item>
           )}
           <Row gutter={16}>
-            <Col span={isMobile ? 24 : 12}>
-              <Form.Item label="下一步行动" name="next_action">
-                <Input placeholder="后续跟进事项" />
+            <Col span={24}>
+              <Form.Item label="下一步行动" name="next_action" valuePropName="value" trigger="onChange">
+                {renderOpportunityLongTextEditor('后续跟进事项', 100)}
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>

@@ -56,13 +56,27 @@ async function request(baseUrl, route, { method = 'GET', token = '', body } = {}
   return { status: response.status, payload };
 }
 
-async function login(baseUrl) {
+async function login(baseUrl, username = 'admin', password = 'admin123') {
   const response = await request(baseUrl, '/api/auth/login', {
     method: 'POST',
-    body: { username: 'admin', password: 'admin123' },
+    body: { username, password },
   });
   assert.equal(response.status, 200, JSON.stringify(response.payload));
   return response.payload;
+}
+
+async function createUser(baseUrl, token, input) {
+  const response = await request(baseUrl, '/api/users', {
+    method: 'POST',
+    token,
+    body: {
+      password: input.password,
+      role: 'member',
+      ...input,
+    },
+  });
+  assert.equal(response.status, 200, JSON.stringify(response.payload));
+  return Number(response.payload.id);
 }
 
 test('opportunity type stays in sync with interaction and competitor follow-up tasks', { timeout: 45000 }, async t => {
@@ -94,6 +108,14 @@ test('opportunity type stays in sync with interaction and competitor follow-up t
   const token = admin.token;
   const adminId = Number(admin.user.id);
   const suffix = `${process.pid}_${Date.now()}`;
+  const workerUsername = `opportunity_worker_${suffix}`;
+  const workerPassword = 'opportunity-worker-123';
+  const workerId = await createUser(baseUrl, token, {
+    username: workerUsername,
+    display_name: '商机任务执行人',
+    password: workerPassword,
+  });
+  const worker = await login(baseUrl, workerUsername, workerPassword);
   const personCompany = `互动搜索公司 ${suffix}`;
 
   const personResponse = await request(baseUrl, '/api/persons', {
@@ -134,7 +156,7 @@ test('opportunity type stays in sync with interaction and competitor follow-up t
     next_action: '',
     opportunity_title: '存量互动商机',
     opportunity_status: 'new',
-    opportunity_assignee: adminId,
+    opportunity_assignee: workerId,
     opportunity_note: '待补选类型',
   };
   const interaction = await request(baseUrl, '/api/interactions', {
@@ -158,7 +180,29 @@ test('opportunity type stays in sync with interaction and competitor follow-up t
 
   let followUps = await request(baseUrl, '/api/follow-up-tasks?all=1', { token });
   assert.equal(followUps.status, 200, JSON.stringify(followUps.payload));
-  assert.equal(followUps.payload.find(item => Number(item.interaction_id) === interactionId)?.task_type, null);
+  const interactionFollowUp = followUps.payload.find(item => Number(item.interaction_id) === interactionId);
+  assert.equal(interactionFollowUp?.task_type, null);
+  assert.equal(interactionFollowUp?.opportunity_note, '描述：存量商机先保持空类型\n结果：-');
+
+  const workerNotifications = await request(baseUrl, '/api/notifications', { token: worker.token });
+  assert.equal(workerNotifications.status, 200, JSON.stringify(workerNotifications.payload));
+  assert.equal(
+    workerNotifications.payload.some(item => item.type === 'opportunity_task_assigned' && item.title.includes('存量互动商机')),
+    true,
+  );
+
+  const workerStartsOpportunityTask = await request(baseUrl, `/api/follow-up-tasks/${interactionFollowUp.id}`, {
+    method: 'PUT',
+    token: worker.token,
+    body: { status: 'in_progress' },
+  });
+  assert.equal(workerStartsOpportunityTask.status, 200, JSON.stringify(workerStartsOpportunityTask.payload));
+  const adminNotificationsAfterOpportunityStatus = await request(baseUrl, '/api/notifications', { token });
+  assert.equal(adminNotificationsAfterOpportunityStatus.status, 200, JSON.stringify(adminNotificationsAfterOpportunityStatus.payload));
+  assert.equal(
+    adminNotificationsAfterOpportunityStatus.payload.some(item => item.type === 'task_status_updated' && item.title.includes('存量互动商机')),
+    true,
+  );
 
   const classifyLegacyInteraction = await request(baseUrl, `/api/opportunities/${interactionId}`, {
     method: 'PUT',
@@ -242,4 +286,76 @@ test('opportunity type stays in sync with interaction and competitor follow-up t
   assert.equal(clearCompetitorType.status, 200, JSON.stringify(clearCompetitorType.payload));
   followUps = await request(baseUrl, '/api/follow-up-tasks?all=1', { token });
   assert.equal(followUps.payload.find(item => Number(item.competitor_research_id) === competitorId)?.task_type, null);
+});
+
+test('interactions default to newest created records first', { timeout: 30000 }, async t => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-interactions-sort-'));
+  const databasePath = path.join(tempDir, 'data.db');
+  const port = await getFreePort();
+  const child = spawn(process.execPath, ['server/index.js'], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: 'test',
+      RELATION_DB_PATH: databasePath,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  t.after(async () => {
+    if (child.exitCode === null) {
+      child.kill('SIGTERM');
+      await Promise.race([once(child, 'exit'), new Promise(resolve => setTimeout(resolve, 2000))]);
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await waitForServer(child);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const admin = await login(baseUrl);
+  const token = admin.token;
+  const suffix = `${process.pid}_${Date.now()}`;
+  const personCompany = `互动排序公司 ${suffix}`;
+
+  const personResponse = await request(baseUrl, '/api/persons', {
+    method: 'POST',
+    token,
+    body: { name: `互动排序人脉 ${suffix}`, company: personCompany, person_category: 'business' },
+  });
+  assert.equal(personResponse.status, 200, JSON.stringify(personResponse.payload));
+  const personId = Number(personResponse.payload.id);
+
+  const olderInteraction = await request(baseUrl, '/api/interactions', {
+    method: 'POST',
+    token,
+    body: {
+      person_id: personId,
+      type: 'meeting',
+      date: '2026-07-29',
+      importance: 'normal',
+      description: '先创建的互动',
+    },
+  });
+  assert.equal(olderInteraction.status, 200, JSON.stringify(olderInteraction.payload));
+
+  const newerInteraction = await request(baseUrl, '/api/interactions', {
+    method: 'POST',
+    token,
+    body: {
+      person_id: personId,
+      type: 'meeting',
+      date: '2026-07-29',
+      importance: 'normal',
+      description: '后创建的互动',
+    },
+  });
+  assert.equal(newerInteraction.status, 200, JSON.stringify(newerInteraction.payload));
+
+  const list = await request(baseUrl, `/api/interactions?search=${encodeURIComponent(personCompany)}`, { token });
+  assert.equal(list.status, 200, JSON.stringify(list.payload));
+  assert.deepEqual(
+    list.payload.map(item => Number(item.id)),
+    [Number(newerInteraction.payload.id), Number(olderInteraction.payload.id)]
+  );
 });

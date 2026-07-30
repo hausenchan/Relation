@@ -302,6 +302,7 @@ export const followUpTasksApi = {
   watch: (params) => api.get('/follow-up-tasks/watch', { params }).then(r => r.data),
   watchCount: () => api.get('/follow-up-tasks/watch/count').then(r => r.data),
   update: (id, data) => api.put(`/follow-up-tasks/${id}`, data).then(r => r.data),
+  delete: (id) => api.delete(`/follow-up-tasks/${id}`).then(r => r.data),
 };
 
 export const remindersApi = {

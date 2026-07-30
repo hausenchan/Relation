@@ -62,6 +62,20 @@ const opportunityStatusMap = {
 const isPrivateInteraction = (record) =>
   (record?.person_visibility_scope || record?.visibility_scope) === PRIVATE_PERSON_SCOPE;
 
+export const getInteractionPersonCompanyLabel = (person) => person?.company || person?.current_company || '';
+
+export const buildInteractionPersonSelectOptions = (persons = []) => persons.map(person => {
+  const company = getInteractionPersonCompanyLabel(person);
+  const label = company ? `${person.name}（${company}）` : person.name;
+  return {
+    value: person.id,
+    label,
+  };
+});
+
+export const filterInteractionPersonOption = (input, option) =>
+  String(option?.label || '').toLowerCase().includes(String(input || '').toLowerCase());
+
 export default function Interactions() {
   const { user } = useAuth();
   const screens = useBreakpoint();
@@ -100,6 +114,7 @@ export default function Interactions() {
   const [fileList, setFileList] = useState([]);
   const [form] = Form.useForm();
   const interactionType = Form.useWatch('type', form);
+  const personOptions = buildInteractionPersonSelectOptions(persons);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -271,8 +286,8 @@ export default function Interactions() {
         return <Tag color={m.color}>{m.label}</Tag>;
       },
     },
-    { title: '结果', dataIndex: 'outcome', ellipsis: true },
-    { title: '下次跟进', dataIndex: 'next_action', ellipsis: true },
+    { title: '结果', dataIndex: 'outcome', ellipsis: true, render: v => richTextToPlain(v) || '-' },
+    { title: '下次跟进', dataIndex: 'next_action', ellipsis: true, render: v => richTextToPlain(v) || '-' },
     { title: '跟进日期', dataIndex: 'next_action_date' },
     {
       title: '商机标题',
@@ -338,8 +353,9 @@ export default function Interactions() {
     ].filter(Boolean);
     const summaries = [
       { key: 'description', label: '描述', value: richTextToPlain(record.description) },
-      { key: 'outcome', label: '结果', value: record.outcome },
-      { key: 'next-action', label: '下次跟进', value: record.next_action },
+      { key: 'outcome', label: '结果', value: richTextToPlain(record.outcome) },
+      { key: 'follow-result', label: '跟进结果', value: richTextToPlain(record.follow_result) },
+      { key: 'next-action', label: '下次跟进', value: richTextToPlain(record.next_action) },
     ].filter(item => item.value);
 
     const openDetail = () => setDetailRecord(record);
@@ -686,16 +702,11 @@ export default function Interactions() {
                 <Form.Item label="选择人员" name="person_id" rules={[{ required: true }]}>
                   <Select
                     placeholder="选择姓名"
+                    optionFilterProp="label"
                     showSearch
-                    filterOption={(input, option) => option.children.toLowerCase().includes(input.toLowerCase())}
-                  >
-                    {persons.map(p => (
-                      <Option key={p.id} value={p.id}>
-                        {p.name}
-                        {(p.company || p.current_company) && ` (${p.company || p.current_company})`}
-                      </Option>
-                    ))}
-                  </Select>
+                    filterOption={filterInteractionPersonOption}
+                    options={personOptions}
+                  />
                 </Form.Item>
               </Col>
             )}
@@ -732,16 +743,16 @@ export default function Interactions() {
               </Form.Item>
             </Col>
             <Col span={24}>
-              <Form.Item label="结果/收获" name="outcome">
-                <Input />
+              <Form.Item label="结果" name="outcome" valuePropName="value" trigger="onChange">
+                <RichTextEditor placeholder="互动结果或收获..." minHeight={100} />
               </Form.Item>
             </Col>
-            <Col span={12}>
-              <Form.Item label="下次跟进事项" name="next_action">
-                <Input />
+            <Col span={24}>
+              <Form.Item label="下一步行动" name="next_action" valuePropName="value" trigger="onChange">
+                <RichTextEditor placeholder="下一步跟进事项..." minHeight={100} />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col span={isMobile ? 24 : 12}>
               <Form.Item label="跟进日期" name="next_action_date">
                 <DatePicker style={{ width: '100%' }} />
               </Form.Item>
@@ -788,8 +799,13 @@ export default function Interactions() {
                   </Form.Item>
                 </Col>
                 <Col span={24}>
-                  <Form.Item label="商机补充说明" name="opportunity_note">
-                    <Input.TextArea rows={2} placeholder="背景、需求或其他说明" />
+                  <Form.Item label="商机说明" name="opportunity_note" valuePropName="value" trigger="onChange">
+                    <RichTextEditor placeholder="背景、需求或其他说明..." minHeight={100} />
+                  </Form.Item>
+                </Col>
+                <Col span={24}>
+                  <Form.Item label="跟进结果" name="follow_result" valuePropName="value" trigger="onChange">
+                    <RichTextEditor placeholder="当前商机跟进结果..." minHeight={100} />
                   </Form.Item>
                 </Col>
               </Row>
@@ -881,10 +897,13 @@ export default function Interactions() {
                   <RichTextView value={r.description} />
                 </Descriptions.Item>
                 <Descriptions.Item label="结果" span={isMobile ? 1 : 2}>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
+                  <RichTextView value={r.outcome} />
+                </Descriptions.Item>
+                <Descriptions.Item label="跟进结果" span={isMobile ? 1 : 2}>
+                  <RichTextView value={r.follow_result} />
                 </Descriptions.Item>
                 <Descriptions.Item label="下次跟进" span={isMobile ? 1 : 2}>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.next_action || '-'}</div>
+                  <RichTextView value={r.next_action} />
                 </Descriptions.Item>
                 <Descriptions.Item label="商机" span={isMobile ? 1 : 2}>
                   {r.opportunity_title ? (
@@ -903,7 +922,7 @@ export default function Interactions() {
                     : '-'}
                 </Descriptions.Item>
                 <Descriptions.Item label="商机说明" span={isMobile ? 1 : 2}>
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note || '-'}</div>
+                  <RichTextView value={r.opportunity_note} />
                 </Descriptions.Item>
                 <Descriptions.Item label="创建人">
                   {creator ? (creator.display_name || creator.username) : '-'}

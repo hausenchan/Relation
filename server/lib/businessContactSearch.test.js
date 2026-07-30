@@ -5,6 +5,7 @@ const {
   matchesInteractionSearch,
   matchesPersonSearch,
   normalizeSearchText,
+  richTextToPlainText,
 } = require('./businessContactSearch');
 
 test('company display prefers the standard company field and falls back to current company', () => {
@@ -42,4 +43,14 @@ test('interaction search matches linked name, company and rich-text content', ()
   assert.equal(matchesInteractionSearch(interaction, '合作方案 与预算'), true);
   assert.equal(matchesInteractionSearch(interaction, '未命中'), false);
   assert.equal(normalizeSearchText('<strong>ABC</strong>\n项目'), 'abc 项目');
+});
+
+test('rich text converts to readable reminder text without leaking markup', () => {
+  assert.equal(
+    richTextToPlainText('<p>发送<strong>合作方案</strong>&nbsp;并确认预算</p><p>下周复盘</p>'),
+    '发送合作方案 并确认预算 下周复盘',
+  );
+  assert.equal(richTextToPlainText('保持原有纯文本'), '保持原有纯文本');
+  assert.equal(richTextToPlainText('<p>使用 &lt;draft&gt; 标记</p>'), '使用 <draft> 标记');
+  assert.equal(richTextToPlainText('<p><br></p>'), '');
 });

@@ -48,6 +48,11 @@ const {
 } = require('./lib/spreadsheetWorkbookFile');
 const { applySpreadsheetOperations } = require('./lib/spreadsheetOperations');
 const {
+  assertSpreadsheetChangedCellsPassValidation,
+  assertSpreadsheetWorkbookMutationAllowed,
+  validateSpreadsheetRuleCollections,
+} = require('./lib/spreadsheetProtection');
+const {
   createDocumentCollaborationHub,
   normalizePresenceSessionId,
 } = require('./lib/documentCollaboration');
@@ -57,6 +62,7 @@ const {
   getPersonCompanyName,
   matchesInteractionSearch,
   matchesPersonSearch,
+  richTextToPlainText,
 } = require('./lib/businessContactSearch');
 const { initializeLegacyDefaultSharesBulk } = require('./lib/defaultShareMigration');
 const { createRequestPerformanceMiddleware } = require('./lib/performanceBudget');
@@ -9487,9 +9493,21 @@ app.post('/api/documents/:id/spreadsheet/operations', canWrite, (req, res) => {
 
   let operationResult;
   try {
-    operationResult = applySpreadsheetOperations(doc.content, req.body?.operations);
+    operationResult = applySpreadsheetOperations(doc.content, req.body?.operations, {
+      actor: {
+        userId: req.user.id,
+        canManage: canManageDocument(req.user, doc),
+      },
+    });
   } catch (error) {
-    return res.status(error.statusCode || 400).json({ error: error.message || '表格操作格式不合法' });
+    return res.status(error.statusCode || 400).json({
+      error: error.message || '表格操作格式不合法',
+      ...(error.code ? { code: error.code } : {}),
+      ...(error.sheetId ? { sheet_id: error.sheetId } : {}),
+      ...(error.protectedRange ? { protected_range: error.protectedRange } : {}),
+      ...(error.ruleId ? { rule_id: error.ruleId } : {}),
+      ...(error.cell ? { cell: error.cell } : {}),
+    });
   }
   if (operationResult.conflicts.length) {
     return res.status(409).json({
@@ -9702,8 +9720,21 @@ app.put('/api/documents/:id', canWrite, (req, res) => {
   )) {
     try {
       validateSpreadsheetWorkbookSheetNames(content);
+      validateSpreadsheetRuleCollections(content);
+      assertSpreadsheetWorkbookMutationAllowed(doc.content, content, {
+        userId: req.user.id,
+        canManage: canManageCurrentDocument,
+      });
+      assertSpreadsheetChangedCellsPassValidation(doc.content, content);
     } catch (error) {
-      return res.status(400).json({ error: error.message || '在线表格工作簿格式不合法' });
+      return res.status(error.statusCode || 400).json({
+        error: error.message || '在线表格工作簿格式不合法',
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.sheetId ? { sheet_id: error.sheetId } : {}),
+        ...(error.protectedRange ? { protected_range: error.protectedRange } : {}),
+        ...(error.ruleId ? { rule_id: error.ruleId } : {}),
+        ...(error.cell ? { cell: error.cell } : {}),
+      });
     }
   }
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
@@ -9790,8 +9821,21 @@ app.put('/api/documents/:id/content', canWrite, (req, res) => {
   )) {
     try {
       validateSpreadsheetWorkbookSheetNames(content);
+      validateSpreadsheetRuleCollections(content);
+      assertSpreadsheetWorkbookMutationAllowed(doc.content, content, {
+        userId: req.user.id,
+        canManage: canManageDocument(req.user, doc),
+      });
+      assertSpreadsheetChangedCellsPassValidation(doc.content, content);
     } catch (error) {
-      return res.status(400).json({ error: error.message || '在线表格工作簿格式不合法' });
+      return res.status(error.statusCode || 400).json({
+        error: error.message || '在线表格工作簿格式不合法',
+        ...(error.code ? { code: error.code } : {}),
+        ...(error.sheetId ? { sheet_id: error.sheetId } : {}),
+        ...(error.protectedRange ? { protected_range: error.protectedRange } : {}),
+        ...(error.ruleId ? { rule_id: error.ruleId } : {}),
+        ...(error.cell ? { cell: error.cell } : {}),
+      });
     }
   }
   const storedContent = typeof content === 'string' ? content : JSON.stringify(content);
@@ -11485,7 +11529,7 @@ app.get('/api/interactions', (req, res) => {
   }
   if (date_start) { query += ' AND i.date >= ?'; params.push(date_start); }
   if (date_end) { query += ' AND i.date <= ?'; params.push(date_end); }
-  query += ' ORDER BY i.date DESC';
+  query += ' ORDER BY i.created_at DESC, i.id DESC';
   const rows = db.prepare(query).all(...params);
   // interactions.* 用 interactions 解密；p.name/company/current_company 来自 persons
   const out = decryptRows('interactions', rows).map(r => {
@@ -11505,6 +11549,19 @@ app.get('/api/interactions', (req, res) => {
 
 const TASK_TYPE_VALUES = ['认知', '增长-客户', '增长-产品', '组织'];
 const TASK_TYPES = new Set(TASK_TYPE_VALUES);
+const NOTIFICATION_TYPES = Object.freeze({
+  TASK_ASSIGNED: 'task_assigned',
+  OPPORTUNITY_TASK_ASSIGNED: 'opportunity_task_assigned',
+  TASK_STATUS_UPDATED: 'task_status_updated',
+  CONTENT_MENTION: 'content_mention',
+});
+
+const TASK_STATUS_NOTIFICATION_LABELS = Object.freeze({
+  pending: '未开始',
+  in_progress: '开始任务',
+  suspended: '挂起任务',
+  done: '完成任务',
+});
 
 function normalizeTaskType(value, fieldLabel = '任务类型') {
   if (value === undefined) return { value: undefined };
@@ -11516,6 +11573,33 @@ function normalizeTaskType(value, fieldLabel = '任务类型') {
   return { value: normalized };
 }
 
+function buildOpportunityTaskDescription(description, outcome) {
+  return [
+    `描述：${richTextToPlainText(description) || '-'}`,
+    `结果：${richTextToPlainText(outcome) || '-'}`,
+  ].join('\n');
+}
+
+function notifyAssignedUser({ userId, assignedBy, type, title, content, link }) {
+  const targetId = Number(userId);
+  if (!targetId || targetId === Number(assignedBy)) return;
+  createNotification(targetId, type, title, content, link);
+}
+
+function notifyTaskStatusUpdated({ recipientId, actorId, sourceLabel, taskTitle, nextStatus, link }) {
+  const targetId = Number(recipientId);
+  const operatorId = Number(actorId);
+  if (!targetId || targetId === operatorId) return;
+  const statusLabel = TASK_STATUS_NOTIFICATION_LABELS[nextStatus] || nextStatus || '更新状态';
+  createNotification(
+    targetId,
+    NOTIFICATION_TYPES.TASK_STATUS_UPDATED,
+    `${sourceLabel || '任务'}状态已更新：${taskTitle || '-'}`,
+    `状态：${statusLabel}`,
+    link || '/'
+  );
+}
+
 function syncOpportunityFollowUpTask({
   sourceType,
   sourceId,
@@ -11523,6 +11607,8 @@ function syncOpportunityFollowUpTask({
   relatedName,
   opportunityTitle,
   opportunityNote,
+  sourceDescription,
+  sourceOutcome,
   opportunityType,
   opportunityAssignee,
   assignedBy,
@@ -11537,7 +11623,7 @@ function syncOpportunityFollowUpTask({
 
   const normalizedType = opportunityType || null;
   const linkedTasks = db.prepare(`
-    SELECT id, status, task_type
+    SELECT id, status, task_type, assigned_to
     FROM follow_up_tasks
     WHERE ${sourceConfig.column} = ?
     ORDER BY id ASC
@@ -11558,13 +11644,15 @@ function syncOpportunityFollowUpTask({
   const assigneeId = Number(opportunityAssignee) || null;
   if (normalizedTitle && assigneeId) {
     const taskTitle = `${String(relatedName || '').trim() || sourceConfig.fallbackName} - ${normalizedTitle}`;
+    const taskDescription = buildOpportunityTaskDescription(sourceDescription, sourceOutcome);
     const encrypted = encryptRow('follow_up_tasks', {
       title: taskTitle,
       opportunity_title: normalizedTitle,
-      opportunity_note: opportunityNote,
+      opportunity_note: taskDescription || opportunityNote,
     });
     const activeTasks = linkedTasks.filter(task => task.status !== 'done');
     if (activeTasks.length > 0) {
+      const notifyReassigned = !activeTasks.some(task => Number(task.assigned_to) === assigneeId);
       db.prepare(`
         UPDATE follow_up_tasks
         SET title = ?, opportunity_title = ?, opportunity_note = ?, task_type = ?, assigned_to = ?, updated_at = CURRENT_TIMESTAMP
@@ -11577,6 +11665,16 @@ function syncOpportunityFollowUpTask({
         assigneeId,
         numericSourceId,
       );
+      if (notifyReassigned) {
+        notifyAssignedUser({
+          userId: assigneeId,
+          assignedBy,
+          type: NOTIFICATION_TYPES.OPPORTUNITY_TASK_ASSIGNED,
+          title: `你有新的商机任务：${taskTitle}`,
+          content: taskDescription,
+          link: '/',
+        });
+      }
       changed = true;
     } else if (linkedTasks.length === 0) {
       const relationColumns = sourceType === 'competitor_research'
@@ -11599,6 +11697,14 @@ function syncOpportunityFollowUpTask({
         assigneeId,
         Number(assignedBy) || 0,
       );
+      notifyAssignedUser({
+        userId: assigneeId,
+        assignedBy,
+        type: NOTIFICATION_TYPES.OPPORTUNITY_TASK_ASSIGNED,
+        title: `你有新的商机任务：${taskTitle}`,
+        content: taskDescription,
+        link: '/',
+      });
       changed = true;
     }
   }
@@ -11634,12 +11740,13 @@ app.post('/api/interactions', (req, res) => {
   const interactionId = result.lastInsertRowid;
 
   // 自动创建跟进提醒
-  if (next_action_date && next_action) {
+  const nextActionText = richTextToPlainText(next_action);
+  if (next_action_date && nextActionText) {
     const remindDate = new Date(next_action_date);
     remindDate.setDate(remindDate.getDate() - 3);
     const remindDateStr = remindDate.toISOString().split('T')[0];
-    const title = `跟进: ${next_action}`;
-    const remEnc = encryptRow('reminders', { title, note: description });
+    const title = `跟进: ${nextActionText}`;
+    const remEnc = encryptRow('reminders', { title, note: richTextToPlainText(description) });
     // title 加密存储，无法 WHERE title=? 去重，改为内存过滤
     const candidates = db.prepare(
       'SELECT id, title FROM reminders WHERE person_id=? AND actual_date=? AND done=0'
@@ -11661,6 +11768,8 @@ app.post('/api/interactions', (req, res) => {
     relatedName: safeDecrypt(taskPerson?.name),
     opportunityTitle: opportunity_title,
     opportunityNote: opportunity_note,
+    sourceDescription: description,
+    sourceOutcome: outcome,
     opportunityType: nextOpportunityType,
     opportunityAssignee: opportunity_assignee,
     assignedBy: createdBy,
@@ -11679,7 +11788,7 @@ app.put('/api/interactions/:id', (req, res) => {
   const normalizedOpportunityType = normalizeTaskType(opportunity_type, '商机类型');
   if (normalizedOpportunityType.error) return res.status(400).json({ error: normalizedOpportunityType.error });
   const original = db.prepare(`
-    SELECT i.person_id, i.opportunity_type, p.id as person_record_id, p.name as person_name,
+    SELECT i.person_id, i.description, i.outcome, i.opportunity_type, p.id as person_record_id, p.name as person_name,
       p.created_by, p.assigned_to, p.visibility_scope, p.private_owner_id
     FROM interactions i
     LEFT JOIN persons p ON i.person_id = p.id
@@ -11718,17 +11827,20 @@ app.put('/api/interactions/:id', (req, res) => {
     relatedName: safeDecrypt(original.person_name),
     opportunityTitle: opportunity_title,
     opportunityNote: opportunity_note,
+    sourceDescription: description ?? safeDecrypt(original.description),
+    sourceOutcome: outcome ?? safeDecrypt(original.outcome),
     opportunityType: nextOpportunityType,
     opportunityAssignee: opportunity_assignee,
     assignedBy: req.user?.id,
   });
 
-  if (next_action_date && next_action && original) {
+  const nextActionText = richTextToPlainText(next_action);
+  if (next_action_date && nextActionText && original) {
     const remindDate = new Date(next_action_date);
     remindDate.setDate(remindDate.getDate() - 3);
     const remindDateStr = remindDate.toISOString().split('T')[0];
-    const title = `跟进: ${next_action}`;
-    const remEnc = encryptRow('reminders', { title, note: description });
+    const title = `跟进: ${nextActionText}`;
+    const remEnc = encryptRow('reminders', { title, note: richTextToPlainText(description) });
     // title 加密存储，无法 WHERE title=? 去重，先查同日未完成，再内存匹配
     const candidates = db.prepare(
       'SELECT id, title FROM reminders WHERE person_id=? AND actual_date=? AND done=0'
@@ -11940,6 +12052,8 @@ app.put('/api/opportunities/:id', (req, res) => {
       relatedName: safeDecrypt(company?.name),
       opportunityTitle: nextOpportunityTitle,
       opportunityNote: nextOpportunityNote,
+      sourceDescription: description ?? original.content,
+      sourceOutcome: outcome ?? original.outcome,
       opportunityType: nextOpportunityType,
       opportunityAssignee: nextOpportunityAssignee,
       assignedBy: original.created_by || req.user?.id,
@@ -12011,6 +12125,8 @@ app.put('/api/opportunities/:id', (req, res) => {
       relatedName: safeDecrypt(taskPerson?.name),
       opportunityTitle: opportunity_title === undefined ? safeDecrypt(original.opportunity_title) : opportunity_title,
       opportunityNote: opportunity_note === undefined ? safeDecrypt(original.opportunity_note) : opportunity_note,
+      sourceDescription: description === undefined ? safeDecrypt(original.description) : description,
+      sourceOutcome: outcome === undefined ? safeDecrypt(original.outcome) : outcome,
       opportunityType: nextOpportunityType,
       opportunityAssignee: nextOpportunityAssignee,
       assignedBy: original.created_by || req.user?.id,
@@ -12162,6 +12278,9 @@ app.get('/api/follow-up-tasks/watch/count', (req, res) => {
 
 app.put('/api/follow-up-tasks/:id', (req, res) => {
   const { status, done_note, due_date } = req.body;
+  if (status !== undefined && !TASK_STATUSES.has(status)) {
+    return res.status(400).json({ error: '任务状态不合法' });
+  }
   const task = db.prepare('SELECT * FROM follow_up_tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
   if (task.assigned_to !== req.user.id && !isAdmin(req.user.role)) {
@@ -12185,6 +12304,28 @@ app.put('/api/follow-up-tasks/:id', (req, res) => {
   db.prepare(`
     UPDATE follow_up_tasks SET status=?, done_note=?, due_date=?, started_at=?, done_at=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
   `).run(lifecycle.status, enc.done_note, due_date ?? task.due_date, lifecycle.startedAt, lifecycle.doneAt, req.params.id);
+  if (status !== undefined && lifecycle.status !== task.status) {
+    notifyTaskStatusUpdated({
+      recipientId: task.assigned_by,
+      actorId: req.user.id,
+      sourceLabel: '商机任务',
+      taskTitle: safeDecrypt(task.title),
+      nextStatus: lifecycle.status,
+      link: '/',
+    });
+  }
+  clearRuntimeCache('follow-up-tasks:');
+  res.json({ success: true });
+});
+
+app.delete('/api/follow-up-tasks/:id', (req, res) => {
+  const task = db.prepare('SELECT * FROM follow_up_tasks WHERE id = ?').get(req.params.id);
+  if (!task) return res.status(404).json({ error: '未找到' });
+  const isOwner = Number(task.assigned_by) === Number(req.user.id);
+  const isAssignee = Number(task.assigned_to) === Number(req.user.id);
+  if (!isOwner && !isAssignee && !isAdmin(req.user.role)) return res.status(403).json({ error: '无权删除' });
+  if (task.status !== 'pending' && !isAdmin(req.user.role)) return res.status(400).json({ error: '只能删除待处理的任务' });
+  db.prepare('DELETE FROM follow_up_tasks WHERE id = ?').run(req.params.id);
   clearRuntimeCache('follow-up-tasks:');
   res.json({ success: true });
 });
@@ -12391,6 +12532,15 @@ app.post('/api/tasks', (req, res) => {
     syncTaskSharedUsers(r.lastInsertRowid, shared_to);
   }
 
+  notifyAssignedUser({
+    userId: assignedToId,
+    assignedBy: me,
+    type: NOTIFICATION_TYPES.TASK_ASSIGNED,
+    title: `你有新的任务：${title}`,
+    content: description || '任务描述：-',
+    link: '/',
+  });
+
   clearRuntimeCache('tasks:');
   res.json({ id: r.lastInsertRowid });
 });
@@ -12454,16 +12604,26 @@ app.put('/api/tasks/:id', (req, res) => {
   if (Array.isArray(shared_to) && (task.created_by === me || isAdmin(role) || role === 'sales_director')) {
     syncTaskSharedUsers(req.params.id, shared_to);
   }
+  if (status !== undefined && lifecycle.status !== task.status) {
+    notifyTaskStatusUpdated({
+      recipientId: task.created_by,
+      actorId: me,
+      sourceLabel: '普通任务',
+      taskTitle: safeDecrypt(task.title),
+      nextStatus: lifecycle.status,
+      link: '/',
+    });
+  }
   clearRuntimeCache('tasks:');
   res.json({ success: true });
 });
 
-// 删除任务（只有创建人且状态为pending）
+// 删除任务（创建人或执行人可删除未开始任务，管理员不受状态限制）
 app.delete('/api/tasks/:id', (req, res) => {
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
   if (!task) return res.status(404).json({ error: '未找到' });
   const { id: me, role } = req.user;
-  if (task.created_by !== me && !isAdmin(role)) return res.status(403).json({ error: '无权删除' });
+  if (task.created_by !== me && task.assigned_to !== me && !isAdmin(role)) return res.status(403).json({ error: '无权删除' });
   if (task.status !== 'pending' && !isAdmin(role)) return res.status(400).json({ error: '只能删除待处理的任务' });
   // 同时删除子任务
   db.prepare('DELETE FROM task_shared_users WHERE task_id IN (SELECT id FROM tasks WHERE parent_id = ?)').run(req.params.id);
@@ -19205,6 +19365,8 @@ app.post('/api/competitor_research', (req, res) => {
     relatedName: safeDecrypt(taskCompany?.name),
     opportunityTitle: opportunity_title,
     opportunityNote: opportunity_note,
+    sourceDescription: content,
+    sourceOutcome: outcome,
     opportunityType: nextOpportunityType,
     opportunityAssignee: opportunity_assignee,
     assignedBy: createdBy,
@@ -19240,6 +19402,8 @@ app.put('/api/competitor_research/:id', (req, res) => {
     relatedName: safeDecrypt(taskCompany?.name),
     opportunityTitle: opportunity_title,
     opportunityNote: opportunity_note,
+    sourceDescription: content,
+    sourceOutcome: outcome,
     opportunityType: nextOpportunityType,
     opportunityAssignee: opportunity_assignee,
     assignedBy: original.created_by || req.user?.id,
@@ -21217,56 +21381,8 @@ app.delete('/api/leads/:id', (req, res) => {
 });
 
 // =========== 产品资产 API ===========
-function applyProductAssetVisibility(q, params, userId, role) {
-  if (role === 'member') {
-    const teamIds = getUserTeamIds(userId);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...teamIds, ...crossTeams])];
-
-    if (allTeamIds.length > 0) {
-      const visibleMembers = getUsersByTeamIds(allTeamIds);
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?';
-      params.push(userId, userId);
-      if (visibleMembers.length > 0) {
-        q += ' OR pa.owner_id IN (' + visibleMembers.map(() => '?').join(',') + ') OR pa.created_by IN (' + visibleMembers.map(() => '?').join(',') + ')';
-        params.push(...visibleMembers, ...visibleMembers);
-      }
-      q += ')';
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'leader') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    const crossTeams = db.prepare('SELECT target_team_id FROM cross_team_access WHERE user_id = ? AND module = ?')
-      .all(userId, 'product_assets').map(r => r.target_team_id);
-    const allTeamIds = [...new Set([...(managedTeamIds || []), ...crossTeams])];
-
-    if (allTeamIds.length) {
-      const members = getUsersByTeamIds(allTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      } else {
-        q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-        params.push(userId, userId);
-      }
-    } else {
-      q += ' AND (pa.owner_id = ? OR pa.created_by = ?)';
-      params.push(userId, userId);
-    }
-  } else if (role === 'sales_director') {
-    const managedTeamIds = getManagedTeamIds(userId, role);
-    if (managedTeamIds?.length) {
-      const members = getUsersByTeamIds(managedTeamIds);
-      if (members.length > 0) {
-        q += ` AND (pa.owner_id IN (${members.map(() => '?').join(',')}) OR pa.created_by IN (${members.map(() => '?').join(',')}))`;
-        params.push(...members, ...members);
-      }
-    }
-  }
-
+function applyProductAssetVisibility(q) {
+  // 产品资产读取以 /product-assets 菜单入口为边界，不再按负责人或团队裁剪。
   return q;
 }
 
@@ -24226,7 +24342,7 @@ app.post('/api/mentions/notify', canWrite, (req, res) => {
   const title = `${actorName} 在 ${context.moduleName} ${context.title} 页面 @ 你`;
   const rawLine = String(req.body?.line_content || '').replace(/\s+/g, ' ').trim();
   const lineContent = rawLine ? `相关内容：${rawLine.slice(0, 500)}` : '相关内容：-';
-  createNotification(targetUserId, 'content_mention', title, lineContent, context.link);
+  createNotification(targetUserId, NOTIFICATION_TYPES.CONTENT_MENTION, title, lineContent, context.link);
   return res.json({ success: true });
 });
 

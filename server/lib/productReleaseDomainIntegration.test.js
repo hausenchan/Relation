@@ -453,3 +453,103 @@ process.exit(1);
   });
   assert.equal(deletedProxy.status, 200, JSON.stringify(deletedProxy.payload));
 });
+
+test('product assets menu access can read all assets across owners', { timeout: 30000 }, async t => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-product-assets-menu-'));
+  const databasePath = path.join(tempDir, 'data.db');
+  const masterKeyPath = path.join(tempDir, 'master.key');
+  const hmacKeyPath = path.join(tempDir, 'hmac.key');
+  fs.writeFileSync(masterKeyPath, crypto.randomBytes(32).toString('hex'));
+  fs.writeFileSync(hmacKeyPath, crypto.randomBytes(32).toString('hex'));
+  const port = await getFreePort();
+  const child = spawn(process.execPath, ['server/index.js'], {
+    cwd: path.resolve(__dirname, '../..'),
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NODE_ENV: 'test',
+      RELATION_DB_PATH: databasePath,
+      RELATION_IDENTITY_KEY_DIR: path.join(tempDir, 'identity-keys'),
+      RELATION_MASTER_KEY_PATH: masterKeyPath,
+      RELATION_HMAC_KEY_PATH: hmacKeyPath,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  t.after(async () => {
+    if (child.exitCode === null) {
+      child.kill('SIGTERM');
+      await Promise.race([once(child, 'exit'), new Promise(resolve => setTimeout(resolve, 2000))]);
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  await waitForServer(child);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const adminLogin = await request(baseUrl, '/api/auth/login', {
+    method: 'POST',
+    body: { username: 'admin', password: 'admin123' },
+  });
+  assert.equal(adminLogin.status, 200, JSON.stringify(adminLogin.payload));
+  const adminToken = adminLogin.payload.token;
+
+  const userResponse = await request(baseUrl, '/api/users', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      username: 'product_asset_reader',
+      password: 'reader123',
+      display_name: '产品资产只读验收',
+      role: 'member',
+    },
+  });
+  assert.equal(userResponse.status, 200, JSON.stringify(userResponse.payload));
+  const readerId = Number(userResponse.payload.id);
+
+  const menuResponse = await request(baseUrl, `/api/admin/menu-perms/${readerId}`, {
+    method: 'PUT',
+    token: adminToken,
+    body: { menuKeys: ['/product-assets'] },
+  });
+  assert.equal(menuResponse.status, 200, JSON.stringify(menuResponse.payload));
+
+  const subject = await request(baseUrl, '/api/company-subjects', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      group_name: '菜单可见测试集团',
+      company_entity: '菜单可见测试主体',
+    },
+  });
+  assert.equal(subject.status, 200, JSON.stringify(subject.payload));
+  const asset = await request(baseUrl, '/api/product-assets', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      app_name: '菜单可见跨负责人产品',
+      budget_type: 'zhixiao',
+      company_subject_id: subject.payload.id,
+      platform: 'mini_program',
+    },
+  });
+  assert.equal(asset.status, 200, JSON.stringify(asset.payload));
+
+  const readerLogin = await request(baseUrl, '/api/auth/login', {
+    method: 'POST',
+    body: { username: 'product_asset_reader', password: 'reader123' },
+  });
+  assert.equal(readerLogin.status, 200, JSON.stringify(readerLogin.payload));
+  const readerToken = readerLogin.payload.token;
+
+  const list = await request(baseUrl, '/api/product-assets', { token: readerToken });
+  assert.equal(list.status, 200, JSON.stringify(list.payload));
+  assert.ok(list.payload.some(item => Number(item.id) === Number(asset.payload.id)), JSON.stringify(list.payload));
+
+  const releases = await request(baseUrl, `/api/product-assets/${asset.payload.id}/releases`, { token: readerToken });
+  assert.equal(releases.status, 200, JSON.stringify(releases.payload));
+  assert.deepEqual(releases.payload, []);
+
+  const detail = await request(baseUrl, `/api/product-assets/${asset.payload.id}`, { token: readerToken });
+  assert.equal(detail.status, 200, JSON.stringify(detail.payload));
+  assert.equal(detail.payload.app_name, '菜单可见跨负责人产品');
+});

@@ -39,12 +39,22 @@ jest.mock('../AuthContext', () => ({
 
 jest.mock('../components/AttachmentList', () => () => null);
 jest.mock('../components/RichText', () => ({
-  RichTextEditor: () => null,
-  RichTextView: ({ value }) => String(value || ''),
-  richTextToPlain: value => String(value || ''),
+  RichTextEditor: ({ value, onChange, placeholder }) => (
+    <textarea
+      data-rich-text-editor="true"
+      aria-label={placeholder}
+      value={value || ''}
+      onChange={event => onChange?.(event.target.value)}
+    />
+  ),
+  RichTextView: ({ value }) => String(value || '').replace(/<[^>]+>/g, ''),
+  richTextToPlain: value => String(value || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').trim(),
 }));
 
-import Interactions from './Interactions';
+import Interactions, {
+  buildInteractionPersonSelectOptions,
+  filterInteractionPersonOption,
+} from './Interactions';
 
 function setInputValue(input, value) {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -243,6 +253,51 @@ test('opens the mobile action sheet from more without also opening details', asy
 
   act(() => root.unmount());
   container.remove();
+});
+
+test('reuses the interaction rich-text editor for all opportunity narrative fields', async () => {
+  const { container, root } = await renderInteractions();
+
+  await click(findButton('添加记录'));
+  expect(document.body.textContent).toContain('添加互动记录');
+
+  const collapseHeader = Array.from(document.body.querySelectorAll('.ant-collapse-header'))
+    .find(header => header.textContent.includes('商机信息'));
+  expect(collapseHeader).not.toBeUndefined();
+  await click(collapseHeader);
+
+  const editorLabels = Array.from(document.body.querySelectorAll('[data-rich-text-editor="true"]'))
+    .map(editor => editor.getAttribute('aria-label'));
+  expect(editorLabels).toEqual(expect.arrayContaining([
+    '互动描述...',
+    '互动结果或收获...',
+    '下一步跟进事项...',
+    '背景、需求或其他说明...',
+    '当前商机跟进结果...',
+  ]));
+  expect(editorLabels).toHaveLength(5);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('builds searchable person options by name and company without string child assumptions', () => {
+  const options = buildInteractionPersonSelectOptions([
+    { id: 11, name: '侯笑', company: '集集星球' },
+    { id: 12, name: '凌杰', company: '上海神营广告 AdSet' },
+    { id: 13, name: '肖欣亮', current_company: '上海微联文化传媒有限公司' },
+  ]);
+
+  expect(options).toEqual([
+    { value: 11, label: '侯笑（集集星球）' },
+    { value: 12, label: '凌杰（上海神营广告 AdSet）' },
+    { value: 13, label: '肖欣亮（上海微联文化传媒有限公司）' },
+  ]);
+  expect(options.filter(option => filterInteractionPersonOption('微联', option)).map(option => option.value))
+    .toEqual([13]);
+  expect(options.filter(option => filterInteractionPersonOption('侯笑', option)).map(option => option.value))
+    .toEqual([11]);
+  expect(() => filterInteractionPersonOption('微联', { children: <span>肖欣亮</span> })).not.toThrow();
 });
 
 test('omits the company row on mobile when the related person has no company', async () => {
