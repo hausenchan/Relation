@@ -11485,7 +11485,7 @@ app.get('/api/interactions', (req, res) => {
   }
   if (date_start) { query += ' AND i.date >= ?'; params.push(date_start); }
   if (date_end) { query += ' AND i.date <= ?'; params.push(date_end); }
-  query += ' ORDER BY i.date DESC';
+  query += ' ORDER BY i.created_at DESC, i.id DESC';
   const rows = db.prepare(query).all(...params);
   // interactions.* 用 interactions 解密；p.name/company/current_company 来自 persons
   const out = decryptRows('interactions', rows).map(r => {
