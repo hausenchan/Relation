@@ -8,13 +8,17 @@ function decodeBasicHtmlEntities(value) {
     .replace(/&#39;/gi, "'");
 }
 
-function normalizeSearchText(value) {
-  return decodeBasicHtmlEntities(value)
+function richTextToPlainText(value) {
+  return decodeBasicHtmlEntities(String(value || '')
     .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
+    .replace(/<\/(p|div|h[1-6]|li|tr|blockquote)>/gi, ' ')
+    .replace(/<[^>]+>/g, ''))
     .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+    .trim();
+}
+
+function normalizeSearchText(value) {
+  return richTextToPlainText(value).toLowerCase();
 }
 
 function getPersonCompanyName(person = {}) {
@@ -60,4 +64,5 @@ module.exports = {
   matchesInteractionSearch,
   matchesPersonSearch,
   normalizeSearchText,
+  richTextToPlainText,
 };

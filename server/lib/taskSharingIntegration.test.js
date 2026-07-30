@@ -310,6 +310,41 @@ test('mine task query is not truncated by the dashboard visible task limit', { t
   });
   const worker = await login(baseUrl, workerUsername, password);
 
+  const assignedTask = await request(baseUrl, '/api/tasks', {
+    method: 'POST',
+    token: adminToken,
+    body: {
+      title: '普通任务通知验证',
+      description: '指派给成员后应进入通知中心',
+      date: '2026-07-23',
+      estimated_completion_date: '2026-07-24',
+      status: 'pending',
+      priority: 'medium',
+      assigned_to: workerId,
+      shared_to: [],
+    },
+  });
+  assert.equal(assignedTask.status, 200, JSON.stringify(assignedTask.payload));
+  const workerNotifications = await request(baseUrl, '/api/notifications', { token: worker.token });
+  assert.equal(workerNotifications.status, 200, JSON.stringify(workerNotifications.payload));
+  assert.equal(
+    workerNotifications.payload.some(item => item.type === 'task_assigned' && item.title.includes('普通任务通知验证')),
+    true,
+  );
+
+  const workerStartsAssignedTask = await request(baseUrl, `/api/tasks/${assignedTask.payload.id}`, {
+    method: 'PUT',
+    token: worker.token,
+    body: { status: 'in_progress' },
+  });
+  assert.equal(workerStartsAssignedTask.status, 200, JSON.stringify(workerStartsAssignedTask.payload));
+  const adminNotificationsAfterStatus = await request(baseUrl, '/api/notifications', { token: adminToken });
+  assert.equal(adminNotificationsAfterStatus.status, 200, JSON.stringify(adminNotificationsAfterStatus.payload));
+  assert.equal(
+    adminNotificationsAfterStatus.payload.some(item => item.type === 'task_status_updated' && item.title.includes('普通任务通知验证')),
+    true,
+  );
+
   for (let index = 0; index < 300; index += 1) {
     const filler = await request(baseUrl, '/api/tasks', {
       method: 'POST',

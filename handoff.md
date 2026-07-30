@@ -93,6 +93,76 @@
 - 隔离生产构建 `/tmp/relation-spreadsheet-summary-format-build` 成功；性能门禁通过，首屏 JavaScript gzip
   `329.7KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
 
+## 工作台商机任务描述与通知类型枚举（2026-07-30）
+
+### 已完成
+
+- 商机生成/同步待跟进任务时，工作台“任务描述”改为来源记录“描述”和“结果”两行组合：
+  `描述：xxx`、`结果：xxx`，空值显示 `-`；富文本输入会转为纯文本，避免 HTML 标签进入任务详情。
+- 普通任务新建并指派给他人时发送 `task_assigned` 通知；商机待跟进任务新建或改派给他人时发送
+  `opportunity_task_assigned` 通知；内容 @ 继续使用统一 `content_mention`。
+- 通知铃铛新增“普通任务 / 商机任务”类型标签；`系统需求与权限设计PRD.md` 补充通知类型枚举、
+  触发条件、接收人、自通知跳过规则和商机任务描述口径。
+
+### 验证
+
+- `node --check server/index.js`、`node --check server/lib/businessContactSearch.js` 通过。
+- `node --test server/lib/opportunityTypeIntegration.test.js` 在外部权限下通过，2/2；覆盖商机任务描述
+  和 B 收到 `opportunity_task_assigned`。
+- `node --test server/lib/taskSharingIntegration.test.js` 在默认沙箱下因 `listen EPERM: operation not permitted 127.0.0.1`
+  失败；外部权限重跑被安全策略拒绝，未绕行。
+- `CI=true npx react-scripts test --watchAll=false --runInBand src/components/DocumentBodyEditor.test.js` 通过，26/26；
+  仅有既有 React `act(...)` 警告。
+- `BUILD_PATH=/tmp/relation-task-notification-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-task-notification-build npm run performance:frontend` 通过：首屏 JavaScript
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+
+## 互动来源商机叙述字段统一富文本（2026-07-30）
+
+### 已完成
+
+- 商机统一新增/编辑弹窗中，互动来源的“商机说明 / 跟进结果 / 描述 / 结果 / 下一步行动”全部复用
+  `RichTextEditor`；竞研来源继续维持现有普通文本口径，避免改变其既有数据格式。
+- 互动记录主页面，以及人脉、客户、人才详情复用的 `InteractionForm` 同步使用相同五个富文本字段；
+  存量纯文本无需迁移即可继续编辑。
+- 互动列表和移动摘要统一通过 `richTextToPlain` 去除标签，互动与商机详情统一使用 `RichTextView`
+  白名单渲染，避免富文本 HTML 源码直接暴露给用户。
+- 服务端新增统一富文本转纯文本逻辑；下一步行动生成提前 3 天提醒时仅使用纯文本标题和备注，
+  `<p><br></p>` 等语义空内容不再创建空提醒，搜索仍可命中富文本中的可见文字。
+
+### 验证
+
+- `node --check server/index.js`、`node --test server/lib/businessContactSearch.test.js` 通过；服务端全量中
+  129 条单元测试通过，受沙箱回环监听限制的 11 条集成测试改在允许监听的隔离环境重跑并全部通过。
+- `Interactions.test.js` 8/8 通过，新增覆盖五个叙述字段同时使用富文本编辑器；前端全量 44 个套件、
+  269 条测试全部通过，在线表格底栏专项 32/32 通过。
+- 隔离生产构建 `/tmp/relation-interaction-richtext-build` 成功；性能门禁通过，首屏 JavaScript gzip
+  `329.8KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+- 真实页面检查覆盖默认桌面视口与 `390x844`：五个字段均显示同一套富文本工具栏；窄屏弹窗宽度
+  `390px`、编辑器宽度 `342px`，页面横向溢出为 `0`。视觉检查使用的临时本地身份入口已删除，
+  `AuthContext.js` 与基线无差异，未调用写接口或改动业务数据。
+
+## 在线表格石墨式底部 Sheet 栏（2026-07-29）
+
+### 已完成
+
+- 底部 Sheet 区统一为 `44px` 浅灰工具带，消除非紧凑场景被撑高的问题；活动 Sheet 改为 `38px`
+  白底灰色描边标签，非活动标签采用平面文字与竖向分隔线，不再使用蓝色下划线主色态。
+- 左侧新增工作表列表入口并保留新增按钮，活动标签下拉和右键菜单继续支持重命名、移动、删除；右侧
+  补齐普通视图、全屏、缩小、百分比选择和放大控件，原选区统计和清除筛选能力保持不变。
+- 响应式按可用宽度逐级隐藏视图、选区统计和全屏，Sheet 标签在自身区域横向滚动；缩放与核心 Sheet
+  操作始终可用，底栏不换行、不增高，也不制造页面级横向滚动。
+
+### 验证
+
+- `SpreadsheetDocumentEditor.test.js` 32 条全部通过，新增覆盖底栏控件、Sheet 列表切换、全屏调用和
+  `75% / 100% / 125% / 150%` 缩放步进；前端全量 44 个套件、267 条测试全部通过。
+- 本地真实渲染覆盖 `1440x800`、`1920x800` 和 `390x844`：三种视口底栏均为 `44px`，活动标签
+  均为 `38px`，页面横向溢出为 `0`；手机宽度下 Sheet 标签独立滚动，视图和全屏按规则收起，无控件
+  重叠或 runtime overlay。临时可视入口已删除，不进入正式代码。
+- 隔离生产构建 `/tmp/relation-spreadsheet-footer-build` 成功；性能门禁通过，首屏 JavaScript gzip
+  `329.7KB / 400KB`，77 个异步 chunk，最大 `420.8KB / 500KB`。
+
 ## 在线表格连续选区、整行排序与底栏统计（2026-07-29）
 
 ### 已完成
@@ -279,8 +349,9 @@
   标题、自动保存状态、文件夹路径、页面、分享、改动历史和收藏。
 - 原生表格增加 `fillAvailableHeight/frameless` 模式，取消卡片边框与焦点外框；菜单栏、工具栏、公式栏
   分别收敛到约 `32px/34px/29px`，名称框收窄到 `74px`。
-- Sheet 区固定为 `34px`，激活态改为平面标签加底部强调线；修正 Ant Spin 高度链，确保网格成为唯一
-  纵向伸缩/滚动区域，不会再按工作表总行数撑高页面。Univer 预览壳同步支持满高模式。
+- 该阶段 Sheet 区先固定为 `34px` 并使用底部强调线；现行样式已在 2026-07-29 后续任务升级为上文
+  `44px` 石墨式工具带和白底描边活动标签。Ant Spin 高度链已修正，网格仍是唯一纵向伸缩/滚动区域，
+  不会再按工作表总行数撑高页面；Univer 预览壳同步支持满高模式。
 
 ### 验证
 
@@ -2118,3 +2189,43 @@
   开关跳过。
 - 隔离生产构建和前端性能门禁通过：首屏 327.9KB gzip，最大异步 chunk 420.8KB gzip。
 - 生产构建页面使用 `can_delete=0` 假数据回归：编辑入口正常，删除入口数量为 0，控制台无错误。
+
+## 工作台商机任务操作与状态通知（2026-07-30）
+
+状态：开发和验证完成，待提交并推送。
+
+已完成：
+
+- 工作台“需我执行”的商机待跟进任务不再显示独立“查看”按钮，改为复用普通任务操作：开始/恢复、
+  挂起、完成、编辑、删除。
+- 商机任务编辑入口仅维护计划日期和任务进度/结果，结果写入 `follow_up_tasks.done_note`；完成商机
+  任务同样写入该字段。
+- 商机待跟进任务支持删除接口，创建人/执行人可删除未开始任务，管理员不受状态限制；普通任务删除
+  权限同步修正为创建人/执行人可删除未开始任务，保持前后端菜单口径一致。
+- 普通任务或商机待跟进任务状态变化时，通知原任务创建人/商机任务指派人，通知类型统一为
+  `task_status_updated`，自操作不通知。
+- `NotificationBell` 增加 `task_assigned`、`opportunity_task_assigned`、`task_status_updated` 展示标签。
+- `系统需求与权限设计PRD.md` 已补充工作台商机任务操作口径、普通任务删除权限和通知类型枚举。
+
+已验证：
+
+- `node --check server/index.js` 通过。
+- `node --check server/lib/businessContactSearch.js` 通过。
+- `cd client && CI=true npx react-scripts test --watchAll=false --runInBand --testPathPattern=Dashboard` 通过，1 个
+  测试套件、4 条测试。
+- `node --test server/lib/opportunityTypeIntegration.test.js` 通过，2/2，覆盖商机任务状态通知。
+- `node --test server/lib/taskSharingIntegration.test.js` 通过，2/2，覆盖普通任务状态通知。
+- `cd client && BUILD_PATH=/tmp/relation-dashboard-task-actions-build npm run build` 通过。
+- `BUILD_PATH=/tmp/relation-dashboard-task-actions-build npm run performance:frontend` 通过：首屏 JS gzip
+  `329.8KB / 400KB`，最大异步 chunk `420.8KB / 500KB`。
+
+本轮任务文件：
+
+- `client/src/api/index.js`
+- `client/src/components/NotificationBell.js`
+- `client/src/pages/Dashboard.js`
+- `server/index.js`
+- `server/lib/opportunityTypeIntegration.test.js`
+- `server/lib/taskSharingIntegration.test.js`
+- `系统需求与权限设计PRD.md`
+- `handoff.md`
