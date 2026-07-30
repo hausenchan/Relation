@@ -62,6 +62,20 @@ const opportunityStatusMap = {
 const isPrivateInteraction = (record) =>
   (record?.person_visibility_scope || record?.visibility_scope) === PRIVATE_PERSON_SCOPE;
 
+export const getInteractionPersonCompanyLabel = (person) => person?.company || person?.current_company || '';
+
+export const buildInteractionPersonSelectOptions = (persons = []) => persons.map(person => {
+  const company = getInteractionPersonCompanyLabel(person);
+  const label = company ? `${person.name}（${company}）` : person.name;
+  return {
+    value: person.id,
+    label,
+  };
+});
+
+export const filterInteractionPersonOption = (input, option) =>
+  String(option?.label || '').toLowerCase().includes(String(input || '').toLowerCase());
+
 export default function Interactions() {
   const { user } = useAuth();
   const screens = useBreakpoint();
@@ -100,6 +114,7 @@ export default function Interactions() {
   const [fileList, setFileList] = useState([]);
   const [form] = Form.useForm();
   const interactionType = Form.useWatch('type', form);
+  const personOptions = buildInteractionPersonSelectOptions(persons);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -686,16 +701,11 @@ export default function Interactions() {
                 <Form.Item label="选择人员" name="person_id" rules={[{ required: true }]}>
                   <Select
                     placeholder="选择姓名"
+                    optionFilterProp="label"
                     showSearch
-                    filterOption={(input, option) => option.children.toLowerCase().includes(input.toLowerCase())}
-                  >
-                    {persons.map(p => (
-                      <Option key={p.id} value={p.id}>
-                        {p.name}
-                        {(p.company || p.current_company) && ` (${p.company || p.current_company})`}
-                      </Option>
-                    ))}
-                  </Select>
+                    filterOption={filterInteractionPersonOption}
+                    options={personOptions}
+                  />
                 </Form.Item>
               </Col>
             )}

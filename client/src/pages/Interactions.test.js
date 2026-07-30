@@ -44,7 +44,10 @@ jest.mock('../components/RichText', () => ({
   richTextToPlain: value => String(value || ''),
 }));
 
-import Interactions from './Interactions';
+import Interactions, {
+  buildInteractionPersonSelectOptions,
+  filterInteractionPersonOption,
+} from './Interactions';
 
 function setInputValue(input, value) {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -243,6 +246,25 @@ test('opens the mobile action sheet from more without also opening details', asy
 
   act(() => root.unmount());
   container.remove();
+});
+
+test('builds searchable person options by name and company without string child assumptions', () => {
+  const options = buildInteractionPersonSelectOptions([
+    { id: 11, name: '侯笑', company: '集集星球' },
+    { id: 12, name: '凌杰', company: '上海神营广告 AdSet' },
+    { id: 13, name: '肖欣亮', current_company: '上海微联文化传媒有限公司' },
+  ]);
+
+  expect(options).toEqual([
+    { value: 11, label: '侯笑（集集星球）' },
+    { value: 12, label: '凌杰（上海神营广告 AdSet）' },
+    { value: 13, label: '肖欣亮（上海微联文化传媒有限公司）' },
+  ]);
+  expect(options.filter(option => filterInteractionPersonOption('微联', option)).map(option => option.value))
+    .toEqual([13]);
+  expect(options.filter(option => filterInteractionPersonOption('侯笑', option)).map(option => option.value))
+    .toEqual([11]);
+  expect(() => filterInteractionPersonOption('微联', { children: <span>肖欣亮</span> })).not.toThrow();
 });
 
 test('omits the company row on mobile when the related person has no company', async () => {
