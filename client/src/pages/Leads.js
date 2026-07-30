@@ -6,6 +6,7 @@ import {
 import { EditOutlined, UserOutlined, PlusOutlined, BankOutlined, UploadOutlined, PaperClipOutlined, DeleteOutlined, DownloadOutlined, FunnelPlotOutlined, UserAddOutlined, SyncOutlined, TrophyOutlined } from '@ant-design/icons';
 import { opportunitiesApi, usersApi, interactionsApi, competitorResearchApi, personsApi, companiesApi, attachmentsApi } from '../api';
 import ResizableTable from '../components/ResizableTable';
+import { RichTextEditor, RichTextView, richTextToPlain } from '../components/RichText';
 import dayjs from 'dayjs';
 import { TASK_TYPE_META, TASK_TYPE_OPTIONS } from '../utils/taskTypes';
 
@@ -289,6 +290,12 @@ export default function Leads() {
     load();
   };
 
+  const renderOpportunityLongTextEditor = (placeholder, minHeight = 100, rows = 2) => (
+    addSourceType === 'interaction'
+      ? <RichTextEditor placeholder={placeholder} minHeight={minHeight} />
+      : <Input.TextArea rows={rows} placeholder={placeholder} />
+  );
+
   const openAttachments = async (record, event) => {
     event?.stopPropagation?.();
     try {
@@ -515,7 +522,7 @@ export default function Leads() {
 
             {record.follow_result && (
               <Typography.Paragraph ellipsis={{ rows: 2, expandable: false }} style={{ marginBottom: 0 }}>
-                跟进结果：{record.follow_result}
+                跟进结果：{richTextToPlain(record.follow_result)}
               </Typography.Paragraph>
             )}
 
@@ -762,11 +769,13 @@ export default function Leads() {
                   ? <Tag color={TASK_TYPE_META[detailRecord.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[detailRecord.opportunity_type]?.label || detailRecord.opportunity_type}</Tag>
                   : '-'}
               </Descriptions.Item>
-              <Descriptions.Item label="商机说明"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.opportunity_note || '-'}</div></Descriptions.Item>
+              <Descriptions.Item label="商机说明"><RichTextView value={detailRecord.opportunity_note} /></Descriptions.Item>
               <Descriptions.Item label="互动日期">{detailRecord.date}</Descriptions.Item>
-              <Descriptions.Item label="互动描述"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.description || '-'}</div></Descriptions.Item>
-              <Descriptions.Item label="互动结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.outcome || '-'}</div></Descriptions.Item>
-              <Descriptions.Item label="跟进结果"><div style={{ whiteSpace: 'pre-wrap' }}>{detailRecord.follow_result || '-'}</div></Descriptions.Item>
+              <Descriptions.Item label="互动描述"><RichTextView value={detailRecord.description} /></Descriptions.Item>
+              <Descriptions.Item label="互动结果"><RichTextView value={detailRecord.outcome} /></Descriptions.Item>
+              <Descriptions.Item label="跟进结果"><RichTextView value={detailRecord.follow_result} /></Descriptions.Item>
+              <Descriptions.Item label="下一步行动"><RichTextView value={detailRecord.next_action} /></Descriptions.Item>
+              <Descriptions.Item label="下一步日期">{detailRecord.next_action_date || '-'}</Descriptions.Item>
               <Descriptions.Item label="关注人">{detailRecord.watcher_names || '-'}</Descriptions.Item>
               <Descriptions.Item label="创建人">{detailRecord.created_by_name || '-'}</Descriptions.Item>
             </Descriptions>
@@ -907,11 +916,11 @@ export default function Leads() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item label="商机说明" name="opportunity_note">
-            <Input.TextArea rows={2} placeholder="背景、需求、补充说明等" />
+          <Form.Item label="商机说明" name="opportunity_note" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('背景、需求、补充说明等', 100)}
           </Form.Item>
-          <Form.Item label="跟进结果" name="follow_result">
-            <Input.TextArea rows={2} placeholder="填写当前商机跟进结果" />
+          <Form.Item label="跟进结果" name="follow_result" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('填写当前商机跟进结果', 100)}
           </Form.Item>
           <Form.Item label="关注人" name="watcher_ids">
             <Select
@@ -943,11 +952,11 @@ export default function Leads() {
               </Form.Item>
             </Col>
           </Row>
-          <Form.Item label="描述" name="description">
-            <Input.TextArea rows={2} placeholder="详细描述" />
+          <Form.Item label="描述" name="description" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('详细描述', 120)}
           </Form.Item>
-          <Form.Item label="结果" name="outcome">
-            <Input.TextArea rows={2} placeholder="结果或收获" />
+          <Form.Item label="结果" name="outcome" valuePropName="value" trigger="onChange">
+            {renderOpportunityLongTextEditor('结果或收获', 100)}
           </Form.Item>
           {addSourceType === 'competitor_research' && (
             <Form.Item label="影响分析" name="impact">
@@ -955,9 +964,9 @@ export default function Leads() {
             </Form.Item>
           )}
           <Row gutter={16}>
-            <Col span={isMobile ? 24 : 12}>
-              <Form.Item label="下一步行动" name="next_action">
-                <Input placeholder="后续跟进事项" />
+            <Col span={24}>
+              <Form.Item label="下一步行动" name="next_action" valuePropName="value" trigger="onChange">
+                {renderOpportunityLongTextEditor('后续跟进事项', 100)}
               </Form.Item>
             </Col>
             <Col span={isMobile ? 24 : 12}>

@@ -39,9 +39,16 @@ jest.mock('../AuthContext', () => ({
 
 jest.mock('../components/AttachmentList', () => () => null);
 jest.mock('../components/RichText', () => ({
-  RichTextEditor: () => null,
-  RichTextView: ({ value }) => String(value || ''),
-  richTextToPlain: value => String(value || ''),
+  RichTextEditor: ({ value, onChange, placeholder }) => (
+    <textarea
+      data-rich-text-editor="true"
+      aria-label={placeholder}
+      value={value || ''}
+      onChange={event => onChange?.(event.target.value)}
+    />
+  ),
+  RichTextView: ({ value }) => String(value || '').replace(/<[^>]+>/g, ''),
+  richTextToPlain: value => String(value || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').trim(),
 }));
 
 import Interactions, {
@@ -243,6 +250,32 @@ test('opens the mobile action sheet from more without also opening details', asy
 
   await click(Array.from(actionSheet.querySelectorAll('button')).find(button => button.textContent.includes('编辑记录')));
   expect(document.body.textContent).toContain('编辑互动记录');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('reuses the interaction rich-text editor for all opportunity narrative fields', async () => {
+  const { container, root } = await renderInteractions();
+
+  await click(findButton('添加记录'));
+  expect(document.body.textContent).toContain('添加互动记录');
+
+  const collapseHeader = Array.from(document.body.querySelectorAll('.ant-collapse-header'))
+    .find(header => header.textContent.includes('商机信息'));
+  expect(collapseHeader).not.toBeUndefined();
+  await click(collapseHeader);
+
+  const editorLabels = Array.from(document.body.querySelectorAll('[data-rich-text-editor="true"]'))
+    .map(editor => editor.getAttribute('aria-label'));
+  expect(editorLabels).toEqual(expect.arrayContaining([
+    '互动描述...',
+    '互动结果或收获...',
+    '下一步跟进事项...',
+    '背景、需求或其他说明...',
+    '当前商机跟进结果...',
+  ]));
+  expect(editorLabels).toHaveLength(5);
 
   act(() => root.unmount());
   container.remove();

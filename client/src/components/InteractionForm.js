@@ -4,6 +4,7 @@ import { PlusOutlined, RiseOutlined, UploadOutlined } from '@ant-design/icons';
 import { interactionsApi } from '../api';
 import { validateAttachment, uploadAttachments, ATTACHMENT_ACCEPT } from '../utils/attachments';
 import { TASK_TYPE_OPTIONS } from '../utils/taskTypes';
+import { RichTextEditor } from './RichText';
 import dayjs from 'dayjs';
 
 const { Option } = Select;
@@ -99,20 +100,18 @@ export default function InteractionForm({ personId, onSuccess }) {
             </Select>
           </Form.Item>
         </Space>
-        <Form.Item label="描述" name="description" style={{ marginBottom: 8 }}>
-          <Input.TextArea rows={2} placeholder="本次互动内容..." />
+        <Form.Item label="描述" name="description" valuePropName="value" trigger="onChange" style={{ marginBottom: 8 }}>
+          <RichTextEditor placeholder="互动描述..." minHeight={120} />
         </Form.Item>
-        <Form.Item label="结果/收获" name="outcome" style={{ marginBottom: 8 }}>
-          <Input placeholder="此次互动的结果" />
+        <Form.Item label="结果" name="outcome" valuePropName="value" trigger="onChange" style={{ marginBottom: 8 }}>
+          <RichTextEditor placeholder="互动结果或收获..." minHeight={100} />
         </Form.Item>
-        <Space wrap>
-          <Form.Item label="下次跟进事项" name="next_action" style={{ marginBottom: 8 }}>
-            <Input style={{ width: 200 }} placeholder="如: 发送方案" />
-          </Form.Item>
-          <Form.Item label="跟进日期" name="next_action_date" style={{ marginBottom: 8 }}>
-            <DatePicker />
-          </Form.Item>
-        </Space>
+        <Form.Item label="下一步行动" name="next_action" valuePropName="value" trigger="onChange" style={{ marginBottom: 8 }}>
+          <RichTextEditor placeholder="下一步跟进事项..." minHeight={100} />
+        </Form.Item>
+        <Form.Item label="跟进日期" name="next_action_date" style={{ marginBottom: 8 }}>
+          <DatePicker style={{ width: 220 }} />
+        </Form.Item>
 
         <Collapse ghost style={{ marginBottom: 8 }}>
           <Collapse.Panel key="opp" header={<span style={{ color: '#1677ff', fontWeight: 500 }}><RiseOutlined /> 商机信息（可选）</span>}>
@@ -153,8 +152,13 @@ export default function InteractionForm({ personId, onSuccess }) {
                 </Form.Item>
               </Col>
               <Col span={24}>
-                <Form.Item label="商机补充说明" name="opportunity_note">
-                  <Input.TextArea rows={2} placeholder="背景、需求或其他说明" />
+                <Form.Item label="商机说明" name="opportunity_note" valuePropName="value" trigger="onChange">
+                  <RichTextEditor placeholder="背景、需求或其他说明..." minHeight={100} />
+                </Form.Item>
+              </Col>
+              <Col span={24}>
+                <Form.Item label="跟进结果" name="follow_result" valuePropName="value" trigger="onChange">
+                  <RichTextEditor placeholder="当前商机跟进结果..." minHeight={100} />
                 </Form.Item>
               </Col>
             </Row>

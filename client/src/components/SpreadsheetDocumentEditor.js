@@ -14,17 +14,22 @@ import {
   DownloadOutlined,
   FilterOutlined,
   FormatPainterOutlined,
+  FullscreenExitOutlined,
+  FullscreenOutlined,
   FunctionOutlined,
   InsertRowAboveOutlined,
   InsertRowRightOutlined,
   LockOutlined,
+  MenuOutlined,
   MergeCellsOutlined,
+  MinusOutlined,
   PlusOutlined,
   SortAscendingOutlined,
   SortDescendingOutlined,
+  TableOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Checkbox, Dropdown, Input, InputNumber, Modal, Select, Space, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Checkbox, Dropdown, Input, InputNumber, Modal, Select, Tooltip, Typography, message } from 'antd';
 import MentionPicker, { preloadMentionCandidates, scheduleMentionNotification } from './MentionPicker';
 import {
   SpreadsheetConditionalFormatDialog,
@@ -88,6 +93,7 @@ const MAX_FROZEN_ROWS = 100;
 const MAX_FROZEN_COLUMNS = 50;
 const MAX_HISTORY_ENTRIES = 30;
 const MAX_HISTORY_BYTES = 24 * 1024 * 1024;
+const ZOOM_LEVELS = [0.75, 1, 1.25, 1.5];
 const DEFAULT_FONT_FAMILY = 'Arial';
 const DEFAULT_FONT_SIZE = 13;
 const FONT_FAMILY_OPTIONS = ['Arial', 'PingFang SC', 'Microsoft YaHei', 'SimSun', 'Times New Roman'];
@@ -484,6 +490,7 @@ export default function SpreadsheetDocumentEditor({
   const [conditionalFormatOpen, setConditionalFormatOpen] = useState(false);
   const [dataValidationOpen, setDataValidationOpen] = useState(false);
   const [selectionSummaryMetric, setSelectionSummaryMetric] = useState('sum');
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const editorRef = useRef(null);
   const viewportRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -569,6 +576,19 @@ export default function SpreadsheetDocumentEditor({
     selectedCell?.sheetId,
     onSelectedCellChange,
   ]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+      setIsFullscreen(fullscreenElement === editorRef.current);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (!canEdit || !mentionContext?.entity_type || !mentionContext?.entity_id) return;
@@ -1594,6 +1614,38 @@ export default function SpreadsheetDocumentEditor({
     notifySelection(targetRow, targetColumn);
   };
 
+  const toggleSpreadsheetFullscreen = async () => {
+    const node = editorRef.current;
+    if (!node) return;
+    const fullscreenElement = document.fullscreenElement || document.webkitFullscreenElement;
+    try {
+      if (fullscreenElement === node) {
+        const exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exitFullscreen) await exitFullscreen.call(document);
+        return;
+      }
+      const requestFullscreen = node.requestFullscreen || node.webkitRequestFullscreen;
+      if (!requestFullscreen) {
+        message.warning('当前浏览器不支持表格全屏');
+        return;
+      }
+      await requestFullscreen.call(node);
+    } catch {
+      message.warning('无法切换表格全屏，请稍后重试');
+    }
+  };
+
+  const changeZoomByStep = direction => {
+    setZoom(current => {
+      const currentIndex = ZOOM_LEVELS.reduce((nearestIndex, level, index) => (
+        Math.abs(level - current) < Math.abs(ZOOM_LEVELS[nearestIndex] - current)
+          ? index
+          : nearestIndex
+      ), 0);
+      return ZOOM_LEVELS[clamp(currentIndex + direction, 0, ZOOM_LEVELS.length - 1)];
+    });
+  };
+
   const switchSheet = sheetId => {
     const sheet = workbook.sheets.find(item => item.id === sheetId);
     if (!sheet) return;
@@ -1674,6 +1726,47 @@ export default function SpreadsheetDocumentEditor({
       draft.sheets.splice(draftIndex + offset, 0, movedSheet);
       return draft;
     });
+  };
+
+  const getSheetActionMenu = sheet => ({
+    items: [
+      { key: 'rename', label: '重命名', disabled: !canEdit },
+      { key: 'move-left', icon: <ArrowLeftOutlined />, label: '向左移动', disabled: !canEdit || workbook.sheets[0]?.id === sheet.id },
+      { key: 'move-right', icon: <ArrowRightOutlined />, label: '向右移动', disabled: !canEdit || workbook.sheets[workbook.sheets.length - 1]?.id === sheet.id },
+      { key: 'delete', label: '删除', danger: true, disabled: !canEdit || workbook.sheets.length <= 1 },
+    ],
+    onClick: ({ key }) => {
+      if (key === 'rename') renameSheet(sheet);
+      else if (key === 'move-left') moveSheet(sheet, -1);
+      else if (key === 'move-right') moveSheet(sheet, 1);
+      else if (key === 'delete') deleteSheet(sheet);
+    },
+  });
+
+  const sheetListMenu = {
+    items: workbook.sheets.map(sheet => ({
+      key: sheet.id,
+      icon: sheet.id === activeSheet.id
+        ? <CheckOutlined />
+        : <span className="relation-spreadsheet-sheet-list-menu__icon" />,
+      label: sheet.name,
+    })),
+    onClick: ({ key }) => switchSheet(key),
+  };
+
+  const viewMenu = {
+    items: [{ key: 'normal', icon: <CheckOutlined />, label: '普通视图' }],
+  };
+
+  const zoomMenu = {
+    items: ZOOM_LEVELS.map(level => ({
+      key: String(level),
+      icon: level === zoom
+        ? <CheckOutlined />
+        : <span className="relation-spreadsheet-zoom-menu__icon" />,
+      label: `${Math.round(level * 100)}%`,
+    })),
+    onClick: ({ key }) => setZoom(Number(key)),
   };
 
   const saveSelectionRule = (property, values, existingRule, prefix, options = {}) => {
@@ -2744,84 +2837,182 @@ export default function SpreadsheetDocumentEditor({
       <div
         className="relation-spreadsheet-sheet-bar"
         data-spreadsheet-sheet-bar="true"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: fillAvailableHeight ? 4 : 8,
-          minHeight: fillAvailableHeight ? 34 : undefined,
-          padding: fillAvailableHeight ? '0 8px' : '7px 9px',
-          borderTop: '1px solid #e5e7eb',
-          background: '#fff',
-        }}
       >
-        <Tooltip title="新增工作表">
-          <Button aria-label="新增工作表" size="small" type="text" icon={<PlusOutlined />} disabled={!canEdit} onClick={addSheet} />
-        </Tooltip>
-        <Space size={4} style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}>
-          {workbook.sheets.map(sheet => (
-            <Dropdown key={sheet.id} trigger={['contextMenu']} menu={{
-              items: [
-                { key: 'rename', label: '重命名', disabled: !canEdit },
-                { key: 'move-left', icon: <ArrowLeftOutlined />, label: '向左移动', disabled: !canEdit || workbook.sheets[0]?.id === sheet.id },
-                { key: 'move-right', icon: <ArrowRightOutlined />, label: '向右移动', disabled: !canEdit || workbook.sheets[workbook.sheets.length - 1]?.id === sheet.id },
-                { key: 'delete', label: '删除', danger: true, disabled: !canEdit || workbook.sheets.length <= 1 },
-              ],
-              onClick: ({ key }) => {
-                if (key === 'rename') renameSheet(sheet);
-                else if (key === 'move-left') moveSheet(sheet, -1);
-                else if (key === 'move-right') moveSheet(sheet, 1);
-                else if (key === 'delete') deleteSheet(sheet);
-              },
-            }}>
-              <Button
-                className={`relation-spreadsheet-sheet-tab${sheet.id === activeSheet.id ? ' relation-spreadsheet-sheet-tab--active' : ''}`}
-                size="small"
-                type={fillAvailableHeight ? 'text' : (sheet.id === activeSheet.id ? 'primary' : 'text')}
-                aria-pressed={sheet.id === activeSheet.id}
-                onClick={() => switchSheet(sheet.id)}
-                onDoubleClick={() => canEdit && renameSheet(sheet)}
-              >
-                {sheet.name}
-              </Button>
-            </Dropdown>
-          ))}
-        </Space>
-        {activeSheet.filters?.length > 0 && (
-          <Button type="link" size="small" onClick={clearFilters}>清除筛选</Button>
-        )}
-        {showSelectionSummary ? (
+        <div className="relation-spreadsheet-sheet-bar__start">
           <Dropdown
             trigger={['click']}
-            placement="topRight"
-            overlayClassName="relation-spreadsheet-selection-summary-menu"
-            menu={{
-              items: selectionSummaryMenuItems,
-              onClick: ({ key }) => setSelectionSummaryMetric(key),
-            }}
+            placement="topLeft"
+            overlayClassName="relation-spreadsheet-sheet-list-menu"
+            menu={sheetListMenu}
           >
             <button
               type="button"
-              className="relation-spreadsheet-selection-summary"
-              data-spreadsheet-selection-summary="true"
-              aria-label={`选区统计，当前${selectedSummaryDefinition.label} ${formatSelectionSummaryValue(selectionSummary[effectiveSelectionSummaryMetric])}`}
+              className="relation-spreadsheet-sheet-bar__icon-button"
+              data-spreadsheet-sheet-list-trigger="true"
+              aria-label="工作表列表"
+              title="工作表列表"
             >
-              <span>{selectedSummaryDefinition.label}:</span>
-              <strong data-spreadsheet-selection-summary-value="true">
-                {formatSelectionSummaryValue(selectionSummary[effectiveSelectionSummaryMetric])}
-              </strong>
-              <CaretDownOutlined aria-hidden="true" />
+              <MenuOutlined aria-hidden="true" />
             </button>
           </Dropdown>
-        ) : null}
-        <Select
-          className="relation-spreadsheet-zoom-select"
-          size="small"
-          value={zoom}
-          variant={fillAvailableHeight ? 'borderless' : 'outlined'}
-          style={{ width: fillAvailableHeight ? 76 : 82 }}
-          options={[0.75, 1, 1.25, 1.5].map(value => ({ value, label: `${Math.round(value * 100)}%` }))}
-          onChange={setZoom}
-        />
+          <button
+            type="button"
+            className="relation-spreadsheet-sheet-bar__icon-button"
+            aria-label="新增工作表"
+            title="新增工作表"
+            disabled={!canEdit}
+            onClick={addSheet}
+          >
+            <PlusOutlined aria-hidden="true" />
+          </button>
+        </div>
+
+        <div className="relation-spreadsheet-sheet-tabs" role="tablist" aria-label="工作表">
+          {workbook.sheets.map((sheet, index) => {
+            const active = sheet.id === activeSheet.id;
+            const nextSheet = workbook.sheets[index + 1];
+            const showDivider = nextSheet
+              && !active
+              && nextSheet.id !== activeSheet.id;
+            return (
+              <React.Fragment key={sheet.id}>
+                <Dropdown trigger={['contextMenu']} menu={getSheetActionMenu(sheet)}>
+                  <div className={`relation-spreadsheet-sheet-tab-shell${active ? ' relation-spreadsheet-sheet-tab-shell--active' : ''}`}>
+                    <button
+                      type="button"
+                      role="tab"
+                      className={`relation-spreadsheet-sheet-tab${active ? ' relation-spreadsheet-sheet-tab--active' : ''}`}
+                      aria-selected={active}
+                      aria-pressed={active}
+                      title={sheet.name}
+                      onClick={() => switchSheet(sheet.id)}
+                      onDoubleClick={() => canEdit && renameSheet(sheet)}
+                    >
+                      <span className="relation-spreadsheet-sheet-tab__label">{sheet.name}</span>
+                    </button>
+                    {active ? (
+                      <Dropdown
+                        trigger={['click']}
+                        placement="topLeft"
+                        menu={getSheetActionMenu(sheet)}
+                      >
+                        <button
+                          type="button"
+                          className="relation-spreadsheet-sheet-tab__menu"
+                          aria-label={`${sheet.name} 工作表菜单`}
+                          title="工作表菜单"
+                          onClick={event => event.stopPropagation()}
+                        >
+                          <CaretDownOutlined aria-hidden="true" />
+                        </button>
+                      </Dropdown>
+                    ) : null}
+                  </div>
+                </Dropdown>
+                {showDivider ? <span className="relation-spreadsheet-sheet-tab-divider" aria-hidden="true" /> : null}
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        <div className="relation-spreadsheet-sheet-bar__end">
+          <span className="relation-spreadsheet-sheet-bar__divider" aria-hidden="true" />
+          {activeSheet.filters?.length > 0 && (
+            <Button className="relation-spreadsheet-clear-filter" type="link" size="small" onClick={clearFilters}>清除筛选</Button>
+          )}
+          {showSelectionSummary ? (
+            <Dropdown
+              trigger={['click']}
+              placement="topRight"
+              overlayClassName="relation-spreadsheet-selection-summary-menu"
+              menu={{
+                items: selectionSummaryMenuItems,
+                onClick: ({ key }) => setSelectionSummaryMetric(key),
+              }}
+            >
+              <button
+                type="button"
+                className="relation-spreadsheet-selection-summary"
+                data-spreadsheet-selection-summary="true"
+                aria-label={`选区统计，当前${selectedSummaryDefinition.label} ${formatSelectionSummaryValue(selectionSummary[effectiveSelectionSummaryMetric])}`}
+              >
+                <span>{selectedSummaryDefinition.label}:</span>
+                <strong data-spreadsheet-selection-summary-value="true">
+                  {formatSelectionSummaryValue(selectionSummary[effectiveSelectionSummaryMetric])}
+                </strong>
+                <CaretDownOutlined aria-hidden="true" />
+              </button>
+            </Dropdown>
+          ) : null}
+          <Dropdown
+            trigger={['click']}
+            placement="topRight"
+            overlayClassName="relation-spreadsheet-view-menu"
+            menu={viewMenu}
+          >
+            <button
+              type="button"
+              className="relation-spreadsheet-sheet-bar__control relation-spreadsheet-view-control"
+              data-spreadsheet-view-trigger="true"
+              aria-label="表格视图"
+              title="表格视图"
+            >
+              <TableOutlined aria-hidden="true" />
+              <CaretDownOutlined className="relation-spreadsheet-sheet-bar__caret" aria-hidden="true" />
+            </button>
+          </Dropdown>
+          <button
+            type="button"
+            className="relation-spreadsheet-sheet-bar__control relation-spreadsheet-fullscreen-control"
+            data-spreadsheet-fullscreen-trigger="true"
+            aria-label={isFullscreen ? '退出全屏' : '全屏'}
+            aria-pressed={isFullscreen}
+            title={isFullscreen ? '退出全屏' : '全屏'}
+            onClick={toggleSpreadsheetFullscreen}
+          >
+            {isFullscreen ? <FullscreenExitOutlined aria-hidden="true" /> : <FullscreenOutlined aria-hidden="true" />}
+          </button>
+          <div className="relation-spreadsheet-zoom-controls" aria-label="缩放控件">
+            <button
+              type="button"
+              className="relation-spreadsheet-sheet-bar__control"
+              data-spreadsheet-zoom-out="true"
+              aria-label="缩小表格"
+              title="缩小"
+              disabled={zoom <= ZOOM_LEVELS[0]}
+              onClick={() => changeZoomByStep(-1)}
+            >
+              <MinusOutlined aria-hidden="true" />
+            </button>
+            <Dropdown
+              trigger={['click']}
+              placement="topRight"
+              overlayClassName="relation-spreadsheet-zoom-menu"
+              menu={zoomMenu}
+            >
+              <button
+                type="button"
+                className="relation-spreadsheet-zoom-value"
+                data-spreadsheet-zoom-value="true"
+                aria-label={`当前缩放 ${Math.round(zoom * 100)}%`}
+                title="选择缩放比例"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+            </Dropdown>
+            <button
+              type="button"
+              className="relation-spreadsheet-sheet-bar__control"
+              data-spreadsheet-zoom-in="true"
+              aria-label="放大表格"
+              title="放大"
+              disabled={zoom >= ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
+              onClick={() => changeZoomByStep(1)}
+            >
+              <PlusOutlined aria-hidden="true" />
+            </button>
+          </div>
+        </div>
       </div>
       <SpreadsheetCellFormatModal
         open={cellFormatOpen}

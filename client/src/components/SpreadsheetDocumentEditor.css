@@ -155,9 +155,243 @@
   padding-inline: 10px;
 }
 
-.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-bar {
-  flex: 0 0 34px;
+.relation-spreadsheet-sheet-bar {
+  display: flex;
+  flex: 0 0 44px;
+  width: 100%;
+  height: 44px;
+  min-height: 44px;
+  align-items: center;
   overflow: hidden;
+  border-top: 1px solid #dfe3e8;
+  background: #f7f8fa;
+  color: #4b5563;
+  letter-spacing: 0;
+}
+
+.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-bar {
+  flex: 0 0 44px;
+}
+
+.relation-spreadsheet-editor:fullscreen,
+.relation-spreadsheet-editor:-webkit-full-screen {
+  width: 100vw !important;
+  height: 100vh !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+}
+
+.relation-spreadsheet-sheet-bar__start,
+.relation-spreadsheet-sheet-bar__end,
+.relation-spreadsheet-zoom-controls {
+  display: flex;
+  align-items: center;
+}
+
+.relation-spreadsheet-sheet-bar__start {
+  flex: none;
+  height: 100%;
+  padding: 0 5px;
+}
+
+.relation-spreadsheet-sheet-bar__icon-button,
+.relation-spreadsheet-sheet-bar__control,
+.relation-spreadsheet-zoom-value,
+.relation-spreadsheet-sheet-tab,
+.relation-spreadsheet-sheet-tab__menu {
+  box-sizing: border-box;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.relation-spreadsheet-sheet-bar__icon-button {
+  display: inline-flex;
+  width: 40px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 4px;
+  color: #4f5661;
+  font-size: 16px;
+}
+
+.relation-spreadsheet-sheet-bar__icon-button:hover,
+.relation-spreadsheet-sheet-bar__control:hover,
+.relation-spreadsheet-zoom-value:hover,
+.relation-spreadsheet-sheet-tab__menu:hover {
+  background: #eceff2;
+  color: #1f2937;
+}
+
+.relation-spreadsheet-sheet-bar__icon-button:focus-visible,
+.relation-spreadsheet-sheet-bar__control:focus-visible,
+.relation-spreadsheet-zoom-value:focus-visible,
+.relation-spreadsheet-sheet-tab:focus-visible,
+.relation-spreadsheet-sheet-tab__menu:focus-visible,
+.relation-spreadsheet-selection-summary:focus-visible {
+  outline: 2px solid #5b9fe5;
+  outline-offset: -2px;
+}
+
+.relation-spreadsheet-sheet-bar__icon-button:disabled,
+.relation-spreadsheet-sheet-bar__control:disabled {
+  color: #b8bec7;
+  cursor: default;
+}
+
+.relation-spreadsheet-sheet-bar__icon-button:disabled:hover,
+.relation-spreadsheet-sheet-bar__control:disabled:hover {
+  background: transparent;
+  color: #b8bec7;
+}
+
+.relation-spreadsheet-sheet-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 72px;
+  height: 100%;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 3px 0;
+  scrollbar-width: none;
+}
+
+.relation-spreadsheet-sheet-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.relation-spreadsheet-sheet-tab-shell {
+  display: inline-flex;
+  flex: none;
+  height: 38px;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.relation-spreadsheet-sheet-tab-shell:hover {
+  background: #eef1f4;
+}
+
+.relation-spreadsheet-sheet-tab-shell--active,
+.relation-spreadsheet-sheet-tab-shell--active:hover {
+  border-color: #d8dde4;
+  background: #fff;
+  box-shadow: 0 1px 1px rgb(15 23 42 / 4%);
+}
+
+.relation-spreadsheet-sheet-tab {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 180px;
+  height: 36px;
+  align-items: center;
+  padding: 0 13px;
+  border-radius: 5px;
+  color: #505761;
+  font-size: 13px;
+  line-height: 36px;
+  white-space: nowrap;
+}
+
+.relation-spreadsheet-sheet-tab--active {
+  padding-right: 4px;
+  color: #20242a;
+  font-weight: 500;
+}
+
+.relation-spreadsheet-sheet-tab__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.relation-spreadsheet-sheet-tab__menu {
+  display: inline-flex;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 3px;
+  padding: 0;
+  border-radius: 4px;
+  color: #737b87;
+  font-size: 9px;
+}
+
+.relation-spreadsheet-sheet-tab-divider {
+  flex: 0 0 1px;
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: #d9dde3;
+}
+
+.relation-spreadsheet-sheet-bar__end {
+  flex: none;
+  height: 100%;
+  margin-left: auto;
+  padding: 0 7px 0 0;
+  background: #f7f8fa;
+}
+
+.relation-spreadsheet-sheet-bar__divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 7px;
+  background: #d9dde3;
+}
+
+.relation-spreadsheet-sheet-bar__control {
+  display: inline-flex;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 4px;
+  color: #59616d;
+  font-size: 14px;
+}
+
+.relation-spreadsheet-view-control {
+  width: 42px;
+  flex-basis: 42px;
+  gap: 5px;
+}
+
+.relation-spreadsheet-sheet-bar__caret {
+  font-size: 8px;
+}
+
+.relation-spreadsheet-zoom-controls {
+  flex: none;
+}
+
+.relation-spreadsheet-zoom-value {
+  min-width: 50px;
+  height: 34px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: #444c57;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.relation-spreadsheet-clear-filter.ant-btn {
+  height: 30px;
+  padding-inline: 5px;
+  font-size: 12px;
 }
 
 .relation-spreadsheet-selection-fill-handle {
@@ -173,45 +407,16 @@
   pointer-events: none;
 }
 
-.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab {
-  position: relative;
-  height: 33px;
-  padding: 0 12px;
-  border-radius: 0;
-  color: #4b5563;
-  font-size: 12px;
-}
-
-.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab:hover {
-  background: #f3f5f7;
-  color: #1f2937;
-}
-
-.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab--active {
-  background: #f6f8fa;
-  color: #1677d2;
-  font-weight: 600;
-}
-
-.relation-spreadsheet-editor--fill .relation-spreadsheet-sheet-tab--active::after {
-  position: absolute;
-  right: 10px;
-  bottom: 0;
-  left: 10px;
-  height: 2px;
-  background: #1677d2;
-  content: '';
-}
-
 .relation-spreadsheet-selection-summary {
   display: inline-flex;
   min-width: 0;
   max-width: 190px;
-  height: 28px;
+  height: 34px;
   align-items: center;
   gap: 5px;
   padding: 0 7px;
   border: 0;
+  border-radius: 4px;
   background: transparent;
   color: #4b5563;
   font: inherit;
@@ -273,17 +478,89 @@
   font-weight: 500;
 }
 
-@media (max-width: 640px) {
-  .relation-spreadsheet-selection-summary {
-    max-width: 116px;
-    padding-inline: 4px;
+.relation-spreadsheet-sheet-list-menu .ant-dropdown-menu,
+.relation-spreadsheet-view-menu .ant-dropdown-menu,
+.relation-spreadsheet-zoom-menu .ant-dropdown-menu {
+  padding: 4px;
+  border: 1px solid #e1e5ea;
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 14%);
+}
+
+.relation-spreadsheet-sheet-list-menu .ant-dropdown-menu {
+  min-width: 180px;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: min(360px, calc(100vh - 24px));
+  overflow-y: auto;
+}
+
+.relation-spreadsheet-view-menu .ant-dropdown-menu,
+.relation-spreadsheet-zoom-menu .ant-dropdown-menu {
+  min-width: 136px;
+}
+
+.relation-spreadsheet-sheet-list-menu .ant-dropdown-menu-item,
+.relation-spreadsheet-view-menu .ant-dropdown-menu-item,
+.relation-spreadsheet-zoom-menu .ant-dropdown-menu-item {
+  min-height: 32px;
+  border-radius: 2px;
+  font-size: 13px;
+}
+
+.relation-spreadsheet-sheet-list-menu__icon,
+.relation-spreadsheet-zoom-menu__icon {
+  display: inline-block;
+  width: 12px;
+}
+
+@media (max-width: 900px) {
+  .relation-spreadsheet-view-control {
+    display: none;
   }
 }
 
-.relation-spreadsheet-editor--fill .relation-spreadsheet-zoom-select .ant-select-selector {
-  padding-inline: 6px;
-  border-radius: 2px;
-  font-size: 12px;
+@media (max-width: 720px) {
+  .relation-spreadsheet-selection-summary,
+  .relation-spreadsheet-fullscreen-control {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .relation-spreadsheet-sheet-bar__start {
+    padding-inline: 2px;
+  }
+
+  .relation-spreadsheet-sheet-bar__icon-button {
+    width: 34px;
+  }
+
+  .relation-spreadsheet-sheet-tab {
+    max-width: 116px;
+    padding-inline: 9px;
+  }
+
+  .relation-spreadsheet-sheet-tab--active {
+    padding-right: 2px;
+  }
+
+  .relation-spreadsheet-sheet-bar__end {
+    padding-right: 2px;
+  }
+
+  .relation-spreadsheet-sheet-bar__divider {
+    margin-inline: 3px;
+  }
+
+  .relation-spreadsheet-sheet-bar__control {
+    width: 30px;
+    flex-basis: 30px;
+  }
+
+  .relation-spreadsheet-zoom-value {
+    min-width: 44px;
+    padding-inline: 2px;
+  }
 }
 
 .relation-spreadsheet-freeze-trigger.ant-btn {

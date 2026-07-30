@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { List, Tag, Button, Popconfirm, Space, Typography, Empty, Drawer, Descriptions } from 'antd';
 import { DeleteOutlined, EyeOutlined, RiseOutlined } from '@ant-design/icons';
 import AttachmentList from './AttachmentList';
+import { RichTextView, richTextToPlain } from './RichText';
 import { formatBusinessDateTime } from '../utils/businessTime';
 import { TASK_TYPE_META } from '../utils/taskTypes';
 
@@ -41,36 +42,43 @@ export default function InteractionList({ data, onDelete }) {
       <List
         size="small"
         dataSource={data}
-        renderItem={item => (
-          <List.Item
-            actions={[
-              <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailRecord(item)}>详情</Button>,
-              <Popconfirm title="确认删除？" onConfirm={() => onDelete(item.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />} />
-              </Popconfirm>
-            ]}
-          >
-            <List.Item.Meta
-              title={
-                <Space size={4}>
-                  <Text type="secondary">{item.date}</Text>
-                  <Tag color={typeMap[item.type]?.color}>{typeMap[item.type]?.label || item.type}</Tag>
-                </Space>
-              }
-              description={
-                <div>
-                  {item.description && <div>{item.description}</div>}
-                  {item.outcome && <div style={{ color: '#52c41a' }}>结果: {item.outcome}</div>}
-                  {item.next_action && (
-                    <div style={{ color: '#fa8c16' }}>
-                      下次: {item.next_action} {item.next_action_date && `(${item.next_action_date})`}
-                    </div>
-                  )}
-                </div>
-              }
-            />
-          </List.Item>
-        )}
+        renderItem={(item) => {
+          const descriptionText = richTextToPlain(item.description);
+          const outcomeText = richTextToPlain(item.outcome);
+          const followResultText = richTextToPlain(item.follow_result);
+          const nextActionText = richTextToPlain(item.next_action);
+          return (
+            <List.Item
+              actions={[
+                <Button size="small" icon={<EyeOutlined />} onClick={() => setDetailRecord(item)}>详情</Button>,
+                <Popconfirm title="确认删除？" onConfirm={() => onDelete(item.id)}>
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              ]}
+            >
+              <List.Item.Meta
+                title={
+                  <Space size={4}>
+                    <Text type="secondary">{item.date}</Text>
+                    <Tag color={typeMap[item.type]?.color}>{typeMap[item.type]?.label || item.type}</Tag>
+                  </Space>
+                }
+                description={
+                  <div>
+                    {descriptionText && <div>{descriptionText}</div>}
+                    {outcomeText && <div style={{ color: '#52c41a' }}>结果: {outcomeText}</div>}
+                    {followResultText && <div style={{ color: '#1677ff' }}>跟进结果: {followResultText}</div>}
+                    {nextActionText && (
+                      <div style={{ color: '#fa8c16' }}>
+                        下一步: {nextActionText} {item.next_action_date && `(${item.next_action_date})`}
+                      </div>
+                    )}
+                  </div>
+                }
+              />
+            </List.Item>
+          );
+        }}
       />
 
       <Drawer
@@ -95,14 +103,18 @@ export default function InteractionList({ data, onDelete }) {
                 <Descriptions.Item label="重要程度"><Tag color={imp.color}>{imp.label}</Tag></Descriptions.Item>
                 {r.gift_name && <Descriptions.Item label="礼物">{r.gift_name}</Descriptions.Item>}
                 <Descriptions.Item label="描述">
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.description || '-'}</div>
+                  <RichTextView value={r.description} />
                 </Descriptions.Item>
                 <Descriptions.Item label="结果">
-                  <div style={{ whiteSpace: 'pre-wrap' }}>{r.outcome || '-'}</div>
+                  <RichTextView value={r.outcome} />
                 </Descriptions.Item>
-                <Descriptions.Item label="下次跟进">
-                  {r.next_action ? `${r.next_action}${r.next_action_date ? ` (${r.next_action_date})` : ''}` : '-'}
+                <Descriptions.Item label="跟进结果">
+                  <RichTextView value={r.follow_result} />
                 </Descriptions.Item>
+                <Descriptions.Item label="下一步行动">
+                  <RichTextView value={r.next_action} />
+                </Descriptions.Item>
+                <Descriptions.Item label="下一步日期">{r.next_action_date || '-'}</Descriptions.Item>
                 <Descriptions.Item label="商机">
                   {r.opportunity_title ? (
                     <Space size={4} wrap>
@@ -116,11 +128,9 @@ export default function InteractionList({ data, onDelete }) {
                     ? <Tag color={TASK_TYPE_META[r.opportunity_type]?.color || 'default'}>{TASK_TYPE_META[r.opportunity_type]?.label || r.opportunity_type}</Tag>
                     : '-'}
                 </Descriptions.Item>
-                {r.opportunity_note && (
-                  <Descriptions.Item label="商机说明">
-                    <div style={{ whiteSpace: 'pre-wrap' }}>{r.opportunity_note}</div>
-                  </Descriptions.Item>
-                )}
+                <Descriptions.Item label="商机说明">
+                  <RichTextView value={r.opportunity_note} />
+                </Descriptions.Item>
                 <Descriptions.Item label="创建时间">{formatBusinessDateTime(r.created_at, 'YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
               </Descriptions>
 

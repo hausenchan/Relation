@@ -80,6 +80,90 @@ test('fills a frameless document workspace while keeping every spreadsheet regio
   expect(container.querySelector('[data-spreadsheet-grid="true"]')).not.toBeNull();
   expect(container.querySelector('[data-spreadsheet-sheet-bar="true"]')).not.toBeNull();
   expect(container.querySelector('.relation-spreadsheet-sheet-tab--active')).not.toBeNull();
+  expect(container.querySelector('.relation-spreadsheet-sheet-tab-shell--active')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-sheet-list-trigger="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-view-trigger="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-fullscreen-trigger="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-zoom-out="true"]')).not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-zoom-value="true"]').textContent).toBe('100%');
+  expect(container.querySelector('[data-spreadsheet-zoom-in="true"]')).not.toBeNull();
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('switches sheets from the footer list and exposes working fullscreen and zoom controls', async () => {
+  const workbook = createDefaultSpreadsheetWorkbook();
+  const secondSheet = createDefaultSpreadsheetSheet(1, workbook.sheets);
+  secondSheet.name = '数据明细';
+  workbook.sheets.push(secondSheet);
+  const onSelectedCellChange = jest.fn();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <SpreadsheetDocumentEditor
+      workbook={workbook}
+      canEdit
+      fillAvailableHeight
+      selectedCell={{ sheetId: workbook.sheets[0].id, rowIndex: 0, columnIndex: 0 }}
+      onSelectedCellChange={onSelectedCellChange}
+      onWorkbookChange={() => {}}
+    />,
+  ));
+
+  const editor = container.querySelector('[data-spreadsheet-editor-root="true"]');
+  editor.requestFullscreen = jest.fn().mockResolvedValue(undefined);
+  await act(async () => {
+    container.querySelector('[data-spreadsheet-fullscreen-trigger="true"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(editor.requestFullscreen).toHaveBeenCalledTimes(1);
+
+  act(() => container.querySelector('[data-spreadsheet-zoom-in="true"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(container.querySelector('[data-spreadsheet-zoom-value="true"]').textContent).toBe('125%');
+  act(() => container.querySelector('[data-spreadsheet-zoom-out="true"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  expect(container.querySelector('[data-spreadsheet-zoom-value="true"]').textContent).toBe('100%');
+
+  await act(async () => {
+    container.querySelector('.relation-spreadsheet-sheet-tab__menu')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(document.body.textContent).toContain('重命名');
+  expect(document.body.textContent).toContain('向右移动');
+
+  await act(async () => {
+    container.querySelector('[data-spreadsheet-view-trigger="true"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  const viewMenu = document.body.querySelector('.relation-spreadsheet-view-menu');
+  expect(viewMenu).not.toBeNull();
+  expect(viewMenu.textContent).toContain('普通视图');
+
+  await act(async () => {
+    container.querySelector('[data-spreadsheet-sheet-list-trigger="true"]')
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  const sheetListMenu = document.body.querySelector('.relation-spreadsheet-sheet-list-menu');
+  expect(sheetListMenu).not.toBeNull();
+  const secondSheetItem = [...sheetListMenu.querySelectorAll('.ant-dropdown-menu-item')]
+    .find(item => item.textContent.includes('数据明细'));
+  expect(secondSheetItem).not.toBeUndefined();
+  await act(async () => {
+    secondSheetItem.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  expect(onSelectedCellChange).toHaveBeenLastCalledWith({
+    sheetId: secondSheet.id,
+    rowIndex: 0,
+    columnIndex: 0,
+  });
 
   act(() => root.unmount());
   container.remove();
