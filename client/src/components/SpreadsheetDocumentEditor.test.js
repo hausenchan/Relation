@@ -618,6 +618,104 @@ test('sorts a selected whole column descending without moving blanks before valu
   container.remove();
 });
 
+test('enables a single-column value filter from its header cell and keeps it undoable', async () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '日期' }, B1: { v: '区域' },
+    A2: { v: '07-28' }, B2: { v: '华东' },
+    A3: { v: '07-29' }, B3: { v: '华南' },
+    A4: { v: '07-30' }, B4: { v: '华东' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />,
+  ));
+
+  act(() => container.querySelector('[data-spreadsheet-column-header="1"]')
+    .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  act(() => container.querySelector('[aria-label="筛选"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 3, startColumn: 1, endColumn: 1 });
+  const filterTrigger = container.querySelector('[data-spreadsheet-filter-trigger="1"]');
+  expect(filterTrigger).not.toBeNull();
+  expect(filterTrigger.closest('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="1"]'))
+    .not.toBeNull();
+  expect(container.querySelector('[data-spreadsheet-column-header="1"] .anticon-filter')).toBeNull();
+
+  await act(async () => {
+    filterTrigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await Promise.resolve();
+  });
+  const panel = document.body.querySelector('[data-spreadsheet-filter-panel="true"]');
+  expect(panel).not.toBeNull();
+  expect(panel.textContent).toContain('按值筛选 · B 列');
+  expect(panel.textContent).toContain('华东');
+  expect(panel.textContent).toContain('2');
+  expect(panel.textContent).toContain('华南');
+
+  const southCheckbox = panel.querySelector('[data-spreadsheet-filter-option="华南"]');
+  act(() => southCheckbox.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  const applyButton = [...panel.querySelectorAll('button')]
+    .find(button => button.textContent.includes('应用筛选'));
+  act(() => applyButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filters).toEqual([
+    { columnIndex: 1, operator: 'in', values: ['华东'] },
+  ]);
+  expect(container.querySelector('[data-spreadsheet-row-index="2"][data-spreadsheet-column-index="1"]')).toBeNull();
+  expect(container.querySelector('[data-spreadsheet-row-index="3"][data-spreadsheet-column-index="1"]')).not.toBeNull();
+
+  act(() => document.body.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'z', metaKey: true, bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].filters).toEqual([]);
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 3, startColumn: 1, endColumn: 1 });
+
+  act(() => root.unmount());
+  container.remove();
+});
+
+test('enables filter controls for every used column from the select-all corner', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  latestWorkbook.sheets[0].cells = {
+    A1: { v: '日期' }, B1: { v: '申请量' }, C1: { v: '状态' },
+    A2: { v: '07-28' }, B2: { v: '5575' }, C2: { v: '完成' },
+    A3: { v: '07-29' }, B3: { v: '6445' }, C3: { v: '进行中' },
+  };
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />,
+  ));
+
+  act(() => container.querySelector('[data-spreadsheet-corner="true"]')
+    .dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true })));
+  expect(container.querySelector('.relation-spreadsheet-name-box').value).toBe('A1:C3');
+  act(() => container.querySelector('[aria-label="筛选"]')
+    .dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+  expect(latestWorkbook.sheets[0].filterRange)
+    .toEqual({ startRow: 0, endRow: 2, startColumn: 0, endColumn: 2 });
+  expect(container.querySelectorAll('[data-spreadsheet-filter-trigger]').length).toBe(3);
+  expect([...container.querySelectorAll('[data-spreadsheet-filter-trigger]')]
+    .map(trigger => trigger.getAttribute('data-spreadsheet-filter-trigger'))).toEqual(['0', '1', '2']);
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('renders a Shimo-style range outline and selection statistics', async () => {
   const onWorkbookChange = jest.fn();
   const workbook = createDefaultSpreadsheetWorkbook();

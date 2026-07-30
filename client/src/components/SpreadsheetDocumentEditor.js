@@ -24,7 +24,7 @@ import {
   SortDescendingOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Checkbox, Dropdown, Input, InputNumber, Modal, Select, Space, Tooltip, Typography, message } from 'antd';
+import { Alert, Button, Checkbox, Dropdown, Input, InputNumber, Modal, Popover, Select, Space, Tooltip, Typography, message } from 'antd';
 import MentionPicker, { preloadMentionCandidates, scheduleMentionNotification } from './MentionPicker';
 import {
   SpreadsheetConditionalFormatDialog,
@@ -38,10 +38,13 @@ import {
   createDefaultSpreadsheetSheet,
   createSpreadsheetFormatPattern,
   createSpreadsheetFormulaEvaluator,
+  clearSpreadsheetColumnFilter,
   extractSpreadsheetFormulaReferences,
   findSpreadsheetMergedRange,
   formatSpreadsheetDisplayValue,
   getSpreadsheetConditionalStyle,
+  getSpreadsheetColumnFilterOptions,
+  getSpreadsheetFilterRange,
   getSpreadsheetProtectedRangeAccess,
   getSpreadsheetCellObject,
   getSpreadsheetCellRawValue,
@@ -55,6 +58,7 @@ import {
   resolveSpreadsheetSortRange,
   setSpreadsheetCellValue,
   setSpreadsheetColumnFilter,
+  setSpreadsheetFilterRange,
   shiftSpreadsheetCells,
   shiftSpreadsheetColumns,
   shiftSpreadsheetRows,
@@ -91,6 +95,7 @@ const MAX_HISTORY_ENTRIES = 30;
 const MAX_HISTORY_BYTES = 24 * 1024 * 1024;
 const SELECTION_AUTO_SCROLL_EDGE = 36;
 const SELECTION_AUTO_SCROLL_MAX_STEP = 28;
+const FILTER_PANEL_VALUE_LIMIT = 500;
 const DEFAULT_FONT_FAMILY = 'Arial';
 const DEFAULT_FONT_SIZE = 13;
 const FONT_FAMILY_OPTIONS = ['Arial', 'PingFang SC', 'Microsoft YaHei', 'SimSun', 'Times New Roman'];
@@ -494,6 +499,109 @@ function SpreadsheetCustomSortModal({ open, columns, activeColumnIndex, onCancel
   );
 }
 
+function SpreadsheetColumnFilterPanel({
+  columnLabel,
+  options,
+  selectedValues,
+  filtered,
+  onSort,
+  onApply,
+  onClear,
+}) {
+  const [query, setQuery] = useState('');
+  const [selected, setSelected] = useState(() => new Set(selectedValues));
+  const matchedOptions = useMemo(() => {
+    const keyword = String(query || '').trim().toLocaleLowerCase('zh-CN');
+    if (!keyword) return options;
+    return options.filter(option => option.label.toLocaleLowerCase('zh-CN').includes(keyword));
+  }, [options, query]);
+  const visibleOptions = matchedOptions.slice(0, FILTER_PANEL_VALUE_LIMIT);
+  const visibleValues = matchedOptions.map(option => option.value);
+  const selectedVisibleCount = visibleValues.filter(value => selected.has(value)).length;
+  const allVisibleSelected = visibleValues.length > 0 && selectedVisibleCount === visibleValues.length;
+
+  const updateVisibleSelection = checked => {
+    setSelected(current => {
+      const next = new Set(current);
+      visibleValues.forEach(value => {
+        if (checked) next.add(value);
+        else next.delete(value);
+      });
+      return next;
+    });
+  };
+
+  const invertVisibleSelection = () => {
+    setSelected(current => {
+      const next = new Set(current);
+      visibleValues.forEach(value => {
+        if (next.has(value)) next.delete(value);
+        else next.add(value);
+      });
+      return next;
+    });
+  };
+
+  return (
+    <div className="relation-spreadsheet-filter-panel" data-spreadsheet-filter-panel="true">
+      <div className="relation-spreadsheet-filter-panel__sorts">
+        <Button icon={<SortAscendingOutlined />} onClick={() => onSort('asc')}>升序</Button>
+        <Button icon={<SortDescendingOutlined />} onClick={() => onSort('desc')}>降序</Button>
+      </div>
+      <div className="relation-spreadsheet-filter-panel__section-label">按值筛选 · {columnLabel} 列</div>
+      <Input
+        allowClear
+        value={query}
+        placeholder="搜索筛选项"
+        aria-label={`搜索 ${columnLabel} 列筛选项`}
+        onChange={event => setQuery(event.target.value)}
+      />
+      <div className="relation-spreadsheet-filter-panel__selection-tools">
+        <Checkbox
+          checked={allVisibleSelected}
+          indeterminate={selectedVisibleCount > 0 && !allVisibleSelected}
+          onChange={event => updateVisibleSelection(event.target.checked)}
+        >
+          全选
+        </Checkbox>
+        <Button type="link" size="small" onClick={invertVisibleSelection}>反选</Button>
+        <span>{selected.size}/{options.length}</span>
+      </div>
+      <div className="relation-spreadsheet-filter-panel__values" role="group" aria-label={`${columnLabel} 列筛选值`}>
+        {visibleOptions.length ? visibleOptions.map(option => (
+          <div className="relation-spreadsheet-filter-panel__value" key={`filter-value:${option.value}`}>
+            <Checkbox
+              checked={selected.has(option.value)}
+              data-spreadsheet-filter-option={option.value || '__blank__'}
+              onChange={event => {
+                setSelected(current => {
+                  const next = new Set(current);
+                  if (event.target.checked) next.add(option.value);
+                  else next.delete(option.value);
+                  return next;
+                });
+              }}
+            />
+            <span className="relation-spreadsheet-filter-panel__value-label" title={option.label}>{option.label}</span>
+            <span className="relation-spreadsheet-filter-panel__value-count">{option.count}</span>
+          </div>
+        )) : (
+          <div className="relation-spreadsheet-filter-panel__empty">没有匹配的筛选项</div>
+        )}
+      </div>
+      {matchedOptions.length > visibleOptions.length ? (
+        <div className="relation-spreadsheet-filter-panel__limit-hint">
+          仅展示前 {FILTER_PANEL_VALUE_LIMIT} 项，请搜索定位其他值
+        </div>
+      ) : null}
+      <div className="relation-spreadsheet-filter-panel__footer">
+        <Button type="text" disabled={!filtered} onClick={onClear}>清除此列</Button>
+        <Button type="primary" onClick={() => onApply([...selected])}>应用筛选</Button>
+      </div>
+    </div>
+  );
+}
+
 export default function SpreadsheetDocumentEditor({
   workbook: workbookValue,
   canEdit = false,
@@ -539,6 +647,7 @@ export default function SpreadsheetDocumentEditor({
   const [clipboardState, setClipboardState] = useState(null);
   const [cellFormatOpen, setCellFormatOpen] = useState(false);
   const [customSortOpen, setCustomSortOpen] = useState(false);
+  const [filterPanel, setFilterPanel] = useState(null);
   const [protectionOpen, setProtectionOpen] = useState(false);
   const [conditionalFormatOpen, setConditionalFormatOpen] = useState(false);
   const [dataValidationOpen, setDataValidationOpen] = useState(false);
@@ -615,6 +724,27 @@ export default function SpreadsheetDocumentEditor({
         : next
     ));
   }, [activeSheet.id, activeRowIndex, activeColumnIndex]);
+
+  useEffect(() => {
+    setFilterPanel(null);
+  }, [activeSheet.id]);
+
+  useEffect(() => {
+    if (!filterPanel) return undefined;
+    const closeOnOutsideMouseDown = event => {
+      if (event.target?.closest?.('[data-spreadsheet-filter-panel], [data-spreadsheet-filter-trigger]')) return;
+      setFilterPanel(null);
+    };
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setFilterPanel(null);
+    };
+    document.addEventListener('mousedown', closeOnOutsideMouseDown);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideMouseDown);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [filterPanel]);
 
   useEffect(() => {
     if (selectedCell?.sheetId === activeSheet.id) return;
@@ -1002,6 +1132,39 @@ export default function SpreadsheetDocumentEditor({
     && currentSelection.endRow === activeSheet.rowCount - 1;
   const selectedCellCount = (currentSelection.endRow - currentSelection.startRow + 1)
     * (currentSelection.endColumn - currentSelection.startColumn + 1);
+  const activeFilterRange = getSpreadsheetFilterRange(activeSheet);
+  const filterPanelColumnIndex = filterPanel?.sheetId === activeSheet.id
+    ? Number(filterPanel.columnIndex)
+    : null;
+  const filterPanelOptions = useMemo(() => (
+    Number.isInteger(filterPanelColumnIndex)
+      ? getSpreadsheetColumnFilterOptions(workbook, activeSheet.id, filterPanelColumnIndex)
+      : []
+  ), [workbook, activeSheet.id, filterPanelColumnIndex]);
+  const activeColumnFilter = Number.isInteger(filterPanelColumnIndex)
+    ? (activeSheet.filters || []).find(filter => Number(filter.columnIndex) === filterPanelColumnIndex)
+    : null;
+  const filterOptionValues = filterPanelOptions.map(option => option.value);
+  const filterPanelSelectedValues = (() => {
+    if (!activeColumnFilter) return filterOptionValues;
+    if (activeColumnFilter.operator === 'in') {
+      const availableValues = new Set(filterOptionValues);
+      return (activeColumnFilter.values || [])
+        .map(value => String(value ?? ''))
+        .filter(value => availableValues.has(value));
+    }
+    if (activeColumnFilter.operator === 'not_in') {
+      const excluded = new Set((activeColumnFilter.values || []).map(value => String(value ?? '')));
+      return filterOptionValues.filter(value => !excluded.has(value));
+    }
+    const expected = String(activeColumnFilter.value ?? '');
+    if (activeColumnFilter.operator === 'contains') return filterOptionValues.filter(value => value.includes(expected));
+    if (activeColumnFilter.operator === 'not_equals') return filterOptionValues.filter(value => value !== expected);
+    if (activeColumnFilter.operator === 'empty') return filterOptionValues.filter(value => !value.trim());
+    if (activeColumnFilter.operator === 'not_empty') return filterOptionValues.filter(value => value.trim());
+    return filterOptionValues.filter(value => value === expected);
+  })();
+  const filterPanelKey = `${activeSheet.id}:${filterPanelColumnIndex}:${JSON.stringify(activeColumnFilter || null)}`;
   const selectionSummary = useMemo(() => selectedCellCount > 1
     ? summarizeSpreadsheetRange(
       activeSheet,
@@ -1734,18 +1897,135 @@ export default function SpreadsheetDocumentEditor({
     focusSpreadsheetGrid();
   };
 
-  const filterCurrentValue = () => {
-    if (!ensureSpreadsheetRangeEditable({ rowIndex: activeRowIndex, columnIndex: activeColumnIndex })) return;
-    const value = evaluator.getValue(activeSheet.id, activeRowIndex, activeColumnIndex);
+  const resolveSelectionFilterRange = () => {
+    const usedRange = getSpreadsheetUsedRange(activeSheet);
+    if (selectsWholeColumns) {
+      return normalizeSpreadsheetRange({
+        startRow: usedRange.startRow,
+        endRow: usedRange.endRow,
+        startColumn: currentSelection.startColumn,
+        endColumn: currentSelection.endColumn,
+      });
+    }
+    if (selectsWholeRows) {
+      return normalizeSpreadsheetRange({
+        startRow: currentSelection.startRow,
+        endRow: currentSelection.endRow,
+        startColumn: usedRange.startColumn,
+        endColumn: usedRange.endColumn,
+      });
+    }
+    if (rangeIsSingleCell(currentSelection)) {
+      return normalizeSpreadsheetRange({
+        startRow: usedRange.startRow,
+        endRow: usedRange.endRow,
+        startColumn: activeColumnIndex,
+        endColumn: activeColumnIndex,
+      });
+    }
+    return normalizeSpreadsheetRange(currentSelection);
+  };
+
+  const enableFiltersForSelection = () => {
+    const range = resolveSelectionFilterRange();
+    if (!range || range.endRow <= range.startRow) {
+      message.warning('筛选区域至少需要一行标题和一行数据');
+      return;
+    }
+    if (!ensureSpreadsheetRangeEditable(range)) return;
+    const headerHasMergedCells = (activeSheet.mergedCells || []).some(merged => {
+      const normalized = normalizeSpreadsheetRange(merged);
+      return normalized
+        && normalized.startRow <= range.startRow
+        && normalized.endRow >= range.startRow
+        && normalized.startColumn <= range.endColumn
+        && normalized.endColumn >= range.startColumn;
+    });
+    if (headerHasMergedCells) {
+      message.warning('筛选标题行不能包含合并单元格，请先取消合并');
+      return;
+    }
     applyWorkbookUpdate(draft => {
-      setSpreadsheetColumnFilter(draft.sheets.find(item => item.id === activeSheet.id), activeColumnIndex, value, 'equals');
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id);
+      setSpreadsheetFilterRange(sheet, range);
       return draft;
     });
+    setFilterPanel(null);
+    message.success(`已为 ${range.endColumn - range.startColumn + 1} 列启用筛选`);
+    focusSpreadsheetGrid();
   };
-  const clearFilters = () => applyWorkbookUpdate(draft => {
-    draft.sheets.find(item => item.id === activeSheet.id).filters = [];
-    return draft;
-  });
+
+  const sortFilterColumn = (columnIndex, direction) => {
+    const range = getSpreadsheetFilterRange(activeSheet);
+    if (!range || !ensureSpreadsheetRangeEditable(range)) return;
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id);
+      sortSpreadsheetRange(
+        sheet,
+        getSpreadsheetFilterRange(sheet),
+        columnIndex,
+        direction,
+        (row, column) => evaluator.getValue(activeSheet.id, row, column),
+        { hasHeader: true },
+      );
+      return draft;
+    });
+    setFilterPanel(null);
+    focusSpreadsheetGrid();
+  };
+
+  const applyColumnFilterValues = (columnIndex, values) => {
+    if (!ensureSpreadsheetRangeEditable({
+      startRow: activeFilterRange?.startRow || 0,
+      endRow: activeFilterRange?.endRow || 0,
+      startColumn: columnIndex,
+      endColumn: columnIndex,
+    })) return;
+    const normalizedValues = [...new Set(values.map(value => String(value ?? '')))];
+    const normalizedValueSet = new Set(normalizedValues);
+    const excludedValues = filterPanelOptions
+      .map(option => option.value)
+      .filter(value => !normalizedValueSet.has(value));
+    const allValuesSelected = normalizedValues.length === filterPanelOptions.length
+      && filterPanelOptions.every(option => normalizedValueSet.has(option.value));
+    applyWorkbookUpdate(draft => {
+      const sheet = draft.sheets.find(item => item.id === activeSheet.id);
+      if (allValuesSelected) clearSpreadsheetColumnFilter(sheet, columnIndex);
+      else if (normalizedValues.length <= excludedValues.length) {
+        setSpreadsheetColumnFilter(sheet, columnIndex, normalizedValues, 'in');
+      } else setSpreadsheetColumnFilter(sheet, columnIndex, excludedValues, 'not_in');
+      return draft;
+    });
+    setFilterPanel(null);
+    focusSpreadsheetGrid();
+  };
+
+  const clearColumnFilter = columnIndex => {
+    applyWorkbookUpdate(draft => {
+      clearSpreadsheetColumnFilter(draft.sheets.find(item => item.id === activeSheet.id), columnIndex);
+      return draft;
+    });
+    setFilterPanel(null);
+    focusSpreadsheetGrid();
+  };
+
+  const clearFilters = () => {
+    applyWorkbookUpdate(draft => {
+      draft.sheets.find(item => item.id === activeSheet.id).filters = [];
+      return draft;
+    });
+    setFilterPanel(null);
+    focusSpreadsheetGrid();
+  };
+
+  const disableFilters = () => {
+    applyWorkbookUpdate(draft => {
+      setSpreadsheetFilterRange(draft.sheets.find(item => item.id === activeSheet.id), null);
+      return draft;
+    });
+    setFilterPanel(null);
+    focusSpreadsheetGrid();
+  };
   const updateFrozen = patch => applyWorkbookUpdate(draft => {
     const sheet = draft.sheets.find(item => item.id === activeSheet.id);
     const next = { rows: Number(sheet.frozen?.rows) || 0, columns: Number(sheet.frozen?.columns) || 0, ...patch };
@@ -1995,8 +2275,9 @@ export default function SpreadsheetDocumentEditor({
       items: [
         { key: 'sort-asc', label: '按当前列升序', onClick: () => sortSelection('asc') },
         { key: 'sort-desc', label: '按当前列降序', onClick: () => sortSelection('desc') },
-        { key: 'filter-value', label: '筛选为当前值', onClick: filterCurrentValue },
+        { key: 'enable-filter', label: '为选中列启用筛选', onClick: enableFiltersForSelection },
         { key: 'clear-filter', label: '清除筛选', disabled: !activeSheet.filters?.length, onClick: clearFilters },
+        { key: 'disable-filter', label: '关闭筛选', disabled: !activeFilterRange, onClick: disableFilters },
       ],
     },
     {
@@ -2081,6 +2362,11 @@ export default function SpreadsheetDocumentEditor({
       ],
     },
     {
+      key: 'enable-filter',
+      label: '为选中列启用筛选',
+      disabled: !canEdit || selectionLocked,
+    },
+    {
       key: 'merge',
       label: findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex) ? '取消合并单元格' : '合并单元格',
       disabled: !canEdit || selectionLocked || (rangeIsSingleCell(currentSelection) && !findSpreadsheetMergedRange(activeSheet, activeRowIndex, activeColumnIndex)),
@@ -2117,6 +2403,7 @@ export default function SpreadsheetDocumentEditor({
     else if (key === 'sort-asc') sortSelection('asc');
     else if (key === 'sort-desc') sortSelection('desc');
     else if (key === 'sort-custom') setCustomSortOpen(true);
+    else if (key === 'enable-filter') enableFiltersForSelection();
     else if (key === 'merge') toggleMerge();
     else if (key === 'cell-format') setCellFormatOpen(true);
     else if (key === 'protection') setProtectionOpen(true);
@@ -2189,6 +2476,14 @@ export default function SpreadsheetDocumentEditor({
       rule?.enabled !== false && spreadsheetRangeContainsCell(rule.range, rowIndex, columnIndex)
     ));
     const listValidationRule = cellValidationRules.find(rule => rule.type === 'list' && Array.isArray(rule.values));
+    const filterHeader = activeFilterRange
+      && rowIndex === activeFilterRange.startRow
+      && columnIndex >= activeFilterRange.startColumn
+      && columnIndex <= activeFilterRange.endColumn;
+    const columnFilter = filterHeader
+      ? (activeSheet.filters || []).find(filter => Number(filter.columnIndex) === columnIndex)
+      : null;
+    const filterPanelOpen = filterPanelColumnIndex === columnIndex;
     const cellLocked = !cellProtectionAccess.allowed;
     const cellHasProtection = cellProtectionAccess.rules.length > 0;
     const editing = active && editingCellKey === buildSpreadsheetCellKey(rowIndex, columnIndex) && canEdit && !cellLocked;
@@ -2288,11 +2583,57 @@ export default function SpreadsheetDocumentEditor({
             ? (selectionEdgeShadows || 'none')
             : (remoteCollaborator ? `inset 0 0 0 2px ${remoteCollaborator.color || '#389e0d'}` : 'none'),
           overflow: selectionHandle ? 'visible' : 'hidden',
+          position: 'relative',
           cursor: cellLocked ? 'not-allowed' : 'cell',
         }}
       >
         {cellHasProtection ? <LockOutlined className="relation-spreadsheet-cell-lock" aria-hidden="true" /> : null}
-        {active && canEdit && !cellLocked && !editing && listValidationRule ? (
+        {filterHeader && !editing ? (
+          <Popover
+            open={filterPanelOpen}
+            trigger={[]}
+            placement="bottomRight"
+            destroyOnHidden
+            overlayClassName="relation-spreadsheet-filter-popover"
+            content={filterPanelOpen ? (
+              <SpreadsheetColumnFilterPanel
+                key={filterPanelKey}
+                columnLabel={spreadsheetColumnLabel(columnIndex)}
+                options={filterPanelOptions}
+                selectedValues={filterPanelSelectedValues}
+                filtered={Boolean(columnFilter)}
+                onSort={direction => sortFilterColumn(columnIndex, direction)}
+                onApply={values => applyColumnFilterValues(columnIndex, values)}
+                onClear={() => clearColumnFilter(columnIndex)}
+              />
+            ) : null}
+          >
+            <button
+              type="button"
+              className={`relation-spreadsheet-filter-trigger${columnFilter ? ' relation-spreadsheet-filter-trigger--active' : ''}`}
+              aria-label={`筛选 ${spreadsheetColumnLabel(columnIndex)} 列`}
+              aria-pressed={Boolean(columnFilter)}
+              data-spreadsheet-filter-trigger={columnIndex}
+              disabled={!canEdit || cellLocked}
+              onMouseDown={event => {
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onClick={event => {
+                event.stopPropagation();
+                if (!canEdit || cellLocked) return;
+                setFilterPanel(current => (
+                  current?.sheetId === activeSheet.id && Number(current.columnIndex) === columnIndex
+                    ? null
+                    : { sheetId: activeSheet.id, columnIndex }
+                ));
+              }}
+            >
+              <FilterOutlined />
+            </button>
+          </Popover>
+        ) : null}
+        {active && canEdit && !cellLocked && !editing && listValidationRule && !filterHeader ? (
           <Dropdown
             trigger={['click']}
             placement="bottomRight"
@@ -2366,7 +2707,7 @@ export default function SpreadsheetDocumentEditor({
         ) : (
           <div style={{
             height: '100%',
-            padding: listValidationRule && active ? '0 24px 0 6px' : '0 6px',
+            padding: filterHeader ? '0 30px 0 6px' : (listValidationRule && active ? '0 24px 0 6px' : '0 6px'),
             overflow: 'hidden',
             display: 'flex',
             alignItems,
@@ -2676,7 +3017,7 @@ export default function SpreadsheetDocumentEditor({
           </Dropdown>
           <SpreadsheetToolbarButton title="升序" disabled={selectionMutationDisabled} icon={<SortAscendingOutlined />} onClick={() => sortSelection('asc')} />
           <SpreadsheetToolbarButton title="降序" disabled={selectionMutationDisabled} icon={<SortDescendingOutlined />} onClick={() => sortSelection('desc')} />
-          <SpreadsheetToolbarButton title="筛选为当前值" disabled={selectionMutationDisabled} active={Boolean(activeSheet.filters?.length)} icon={<FilterOutlined />} onClick={filterCurrentValue} />
+          <SpreadsheetToolbarButton title="筛选" disabled={selectionMutationDisabled} active={Boolean(activeFilterRange)} icon={<FilterOutlined />} onClick={enableFiltersForSelection} />
           <Tooltip title="冻结行列">
             <Dropdown
               trigger={['click']}
@@ -2869,9 +3210,6 @@ export default function SpreadsheetDocumentEditor({
                     cursor: 'pointer',
                   }}>
                   {spreadsheetColumnLabel(columnIndex)}
-                  {activeSheet.filters?.some(filter => Number(filter.columnIndex) === columnIndex) && (
-                    <FilterOutlined style={{ marginLeft: 5, color: '#1677ff', fontSize: 11 }} />
-                  )}
                   {canEdit && columnResizeAllowed && (
                     <span
                       aria-label={`调整 ${spreadsheetColumnLabel(columnIndex)} 列宽`}
@@ -2975,10 +3313,29 @@ export default function SpreadsheetDocumentEditor({
             totalHeight={totalHeight}
             zIndex={30}
           >
-            <div data-spreadsheet-corner="true" data-spreadsheet-pinned-axes="xy" style={{
+            <div
+              role="button"
+              aria-label="选择全部已用单元格"
+              tabIndex={0}
+              data-spreadsheet-corner="true"
+              data-spreadsheet-pinned-axes="xy"
+              onMouseDown={event => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                selectUsedSheetRange();
+                window.requestAnimationFrame(() => editorRef.current?.focus());
+              }}
+              onKeyDown={event => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                selectUsedSheetRange();
+                window.requestAnimationFrame(() => editorRef.current?.focus());
+              }}
+              style={{
               borderRight: '1px solid #d1d5db',
               borderBottom: '1px solid #d1d5db',
               background: '#e5e7eb',
+              cursor: 'pointer',
             }} />
           </SpreadsheetPinnedGridElement>
           </div>
