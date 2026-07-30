@@ -3,7 +3,7 @@ import { Card, List, Tag, Badge, Button, Typography, Space, Tabs, Table, Tooltip
 import {
   TeamOutlined, BellOutlined, CalendarOutlined,
   CheckSquareOutlined, PlusOutlined, EditOutlined, DeleteOutlined,
-  CheckOutlined, PlayCircleOutlined, FlagOutlined, UserOutlined,
+  CheckOutlined, PlayCircleOutlined, PauseCircleOutlined, FlagOutlined, UserOutlined,
   ThunderboltOutlined, ScheduleOutlined, LikeFilled, CheckCircleFilled,
   RobotOutlined, BulbOutlined, BarChartOutlined, FundOutlined, EyeOutlined
 } from '@ant-design/icons';
@@ -374,6 +374,9 @@ export default function Dashboard() {
   const [completeModalOpen, setCompleteModalOpen] = useState(false);
   const [completeTarget, setCompleteTarget] = useState(null);
   const [completeSaving, setCompleteSaving] = useState(false);
+  const [opportunityEditOpen, setOpportunityEditOpen] = useState(false);
+  const [opportunityEditTarget, setOpportunityEditTarget] = useState(null);
+  const [opportunityEditSaving, setOpportunityEditSaving] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState(null);
   const [taskColumnWidths, setTaskColumnWidths] = useState(() => {
@@ -391,6 +394,7 @@ export default function Dashboard() {
   });
   const [form] = Form.useForm();
   const [completeForm] = Form.useForm();
+  const [opportunityEditForm] = Form.useForm();
   const [users, setUsers] = useState([]);
   const navigate = useNavigate();
 
@@ -562,6 +566,7 @@ export default function Dashboard() {
       .filter(t => sameId(t.assigned_by, user?.id) && !sameId(t.assigned_to, user?.id))
       .map(t => ({
         ...t,
+        follow_up_task_id: t.id,
         id: `follow_up_${t.id}`,
         task_source: 'opportunity',
         task_source_label: '商机',
@@ -600,6 +605,7 @@ export default function Dashboard() {
       .filter(t => sameId(t.assigned_to, user?.id))
       .map(t => ({
         ...t,
+        follow_up_task_id: t.id,
         id: `follow_up_${t.id}`,
         task_source: 'opportunity',
         task_source_label: '商机',
@@ -638,6 +644,7 @@ export default function Dashboard() {
     const followUpItems = canManageTeamTasks ? allFollowUpData
       .map(t => ({
         ...t,
+        follow_up_task_id: t.id,
         id: `follow_up_${t.id}`,
         task_source: 'opportunity',
         task_source_label: '商机',
@@ -674,6 +681,7 @@ export default function Dashboard() {
 
     const watchedItems = watchData.map(t => ({
       ...t,
+      follow_up_task_id: t.id,
       id: `watch_${t.id}`,
       task_source: 'opportunity',
       task_source_label: '商机',
@@ -887,6 +895,28 @@ export default function Dashboard() {
     setModalOpen(true);
   };
 
+  const getFollowUpTaskId = (record) => {
+    const value = record?.follow_up_task_id ?? String(record?.id || '').replace(/^(follow_up_|watch_)/, '');
+    const numericValue = Number(value);
+    return Number.isFinite(numericValue) && numericValue > 0 ? numericValue : null;
+  };
+
+  const openOpportunityEdit = (record) => {
+    setOpportunityEditTarget(record);
+    opportunityEditForm.setFieldsValue({
+      due_date: record?.plan_date || record?.due_date ? dayjs(record.plan_date || record.due_date) : null,
+      done_note: record?.display_result || record?.done_note || '',
+    });
+    setOpportunityEditOpen(true);
+  };
+
+  const closeOpportunityEdit = () => {
+    if (opportunityEditSaving) return;
+    setOpportunityEditOpen(false);
+    setOpportunityEditTarget(null);
+    opportunityEditForm.resetFields();
+  };
+
   const openTaskDetail = (record) => {
     setDetailRecord(record);
     setDetailOpen(true);
@@ -974,24 +1004,48 @@ export default function Dashboard() {
     }
   };
 
-  const canEditTaskRecord = (record) => (
-    record?.task_source === 'normal'
-    && !['readonly', 'guest'].includes(user?.role)
-    && (
-      sameId(record.created_by, user?.id)
-      || sameId(record.assigned_to, user?.id)
-      || Number(record.shared_to_me) === 1
-      || ['admin', 'sales_director'].includes(user?.role)
-    )
-  );
+  const canEditTaskRecord = (record) => {
+    if (!record || ['readonly', 'guest'].includes(user?.role)) return false;
+    if (record.task_source === 'opportunity') {
+      return (
+        sameId(record.assigned_to, user?.id)
+        || user?.role === 'admin'
+      );
+    }
+    return (
+      record.task_source === 'normal'
+      && (
+        sameId(record.created_by, user?.id)
+        || sameId(record.assigned_to, user?.id)
+        || Number(record.shared_to_me) === 1
+        || ['admin', 'sales_director'].includes(user?.role)
+      )
+    );
+  };
 
-  const handleUpdateStatus = async (id, status) => {
+  const canDeleteTaskRecord = (record) => {
+    if (!record || ['readonly', 'guest'].includes(user?.role)) return false;
+    if (user?.role === 'admin') return true;
+    if (record.status !== 'pending') return false;
+    if (record.task_source === 'opportunity') {
+      return sameId(record.assigned_by, user?.id) || sameId(record.assigned_to, user?.id);
+    }
+    return sameId(record.created_by, user?.id) || sameId(record.assigned_to, user?.id);
+  };
+
+  const handleUpdateStatus = async (record, status) => {
     try {
-      await tasksApi.update(id, { status });
+      if (record?.task_source === 'opportunity') {
+        const followUpTaskId = getFollowUpTaskId(record);
+        if (!followUpTaskId) throw new Error('商机任务 ID 无效');
+        await followUpTasksApi.update(followUpTaskId, { status });
+      } else {
+        await tasksApi.update(record.id, { status });
+      }
       message.success('状态更新成功');
       loadData();
     } catch (err) {
-      message.error('更新失败');
+      message.error(err.response?.data?.error || err.message || '更新失败');
     }
   };
 
@@ -1020,10 +1074,19 @@ export default function Dashboard() {
     }
     setCompleteSaving(true);
     try {
-      await tasksApi.update(completeTarget.id, {
-        status: 'done',
-        result: values.result,
-      });
+      if (completeTarget.task_source === 'opportunity') {
+        const followUpTaskId = getFollowUpTaskId(completeTarget);
+        if (!followUpTaskId) throw new Error('商机任务 ID 无效');
+        await followUpTasksApi.update(followUpTaskId, {
+          status: 'done',
+          done_note: values.result,
+        });
+      } else {
+        await tasksApi.update(completeTarget.id, {
+          status: 'done',
+          result: values.result,
+        });
+      }
       message.success('任务已完成');
       setCompleteModalOpen(false);
       setCompleteTarget(null);
@@ -1036,13 +1099,47 @@ export default function Dashboard() {
     }
   };
 
-  const handleDelete = async (id) => {
+  const handleOpportunityEditSave = async () => {
+    if (!opportunityEditTarget) return;
+    let values;
     try {
-      await tasksApi.delete(id);
+      values = await opportunityEditForm.validateFields();
+    } catch {
+      return;
+    }
+    setOpportunityEditSaving(true);
+    try {
+      const followUpTaskId = getFollowUpTaskId(opportunityEditTarget);
+      if (!followUpTaskId) throw new Error('商机任务 ID 无效');
+      await followUpTasksApi.update(followUpTaskId, {
+        due_date: values.due_date ? values.due_date.format('YYYY-MM-DD') : null,
+        done_note: values.done_note || '',
+      });
+      message.success('更新成功');
+      setOpportunityEditOpen(false);
+      setOpportunityEditTarget(null);
+      opportunityEditForm.resetFields();
+      loadData();
+    } catch (err) {
+      message.error(err.response?.data?.error || err.message || '操作失败');
+    } finally {
+      setOpportunityEditSaving(false);
+    }
+  };
+
+  const handleDelete = async (record) => {
+    try {
+      if (record?.task_source === 'opportunity') {
+        const followUpTaskId = getFollowUpTaskId(record);
+        if (!followUpTaskId) throw new Error('商机任务 ID 无效');
+        await followUpTasksApi.delete(followUpTaskId);
+      } else {
+        await tasksApi.delete(record.id);
+      }
       message.success('删除成功');
       loadData();
     } catch (err) {
-      message.error('删除失败');
+      message.error(err.response?.data?.error || err.message || '删除失败');
     }
   };
 
@@ -1125,6 +1222,84 @@ export default function Dashboard() {
       </Form.Item>
     </Form>
   );
+
+  const renderTaskActions = (record, options = {}) => {
+    const { section, mobile = false } = options;
+    const canEdit = section !== 'team' && canEditTaskRecord(record);
+    const canDelete = section === 'execution' && canDeleteTaskRecord(record);
+    const canChangeStatus = canEdit && (section === 'execution' || section === 'watched' || !section);
+    const canStart = canChangeStatus && ['pending', 'suspended'].includes(record.status);
+    const canSuspend = canChangeStatus && record.status === 'in_progress';
+    const canDone = canChangeStatus && record.status === 'in_progress';
+    const buttonType = mobile ? 'default' : 'link';
+    const buttonStyle = mobile ? { width: '100%' } : undefined;
+    const showView = !canEdit && (record.task_source !== 'opportunity' || section !== 'execution');
+    const handleEditClick = () => {
+      if (record.task_source === 'opportunity') {
+        openOpportunityEdit(record);
+      } else {
+        openEdit(record);
+      }
+    };
+
+    return (
+      <Space size={mobile ? 'small' : 2} wrap direction={mobile ? 'vertical' : 'horizontal'} style={mobile ? { width: '100%' } : undefined}>
+        {canStart && (
+          <Button
+            type={buttonType}
+            size="small"
+            icon={<PlayCircleOutlined />}
+            style={buttonStyle}
+            onClick={() => handleUpdateStatus(record, 'in_progress')}
+          >
+            {record.status === 'suspended' ? '恢复' : '开始'}
+          </Button>
+        )}
+        {canSuspend && (
+          <Button
+            type={buttonType}
+            size="small"
+            icon={<PauseCircleOutlined />}
+            style={buttonStyle}
+            onClick={() => handleUpdateStatus(record, 'suspended')}
+          >
+            挂起
+          </Button>
+        )}
+        {canDone && (
+          <Button
+            type={mobile ? 'primary' : 'link'}
+            size="small"
+            icon={<CheckOutlined />}
+            style={buttonStyle}
+            onClick={() => openCompleteTask(record)}
+          >
+            完成
+          </Button>
+        )}
+        {canEdit && (
+          <Button type={buttonType} size="small" icon={<EditOutlined />} style={buttonStyle} onClick={handleEditClick}>
+            编辑
+          </Button>
+        )}
+        {canDelete && (
+          <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record)}>
+            <Button type={buttonType} size="small" danger icon={<DeleteOutlined />} style={buttonStyle}>删除</Button>
+          </Popconfirm>
+        )}
+        {showView && (
+          <Button
+            type={buttonType}
+            size="small"
+            style={buttonStyle}
+            onClick={() => (record.task_source === 'opportunity' ? navigate('/follow-up-tasks') : openTaskDetail(record))}
+          >
+            查看
+          </Button>
+        )}
+      </Space>
+    );
+  };
 
   const dashboardPersonalTasks = [...assignedTasks, ...executionTasks];
   const isCurrentMonthTask = (task) => task.plan_date && dayjs(task.plan_date).isSame(dayjs(), 'month');
@@ -1459,42 +1634,8 @@ export default function Dashboard() {
     {
       title: '操作',
       key: 'action',
-      width: 160,
-      render: (_, record) => (
-        <Space size={2} wrap={false}>
-          {record.task_source === 'normal' && record.status === 'pending' && (
-            <Button
-              type="link"
-              size="small"
-              icon={<PlayCircleOutlined />}
-              onClick={() => handleUpdateStatus(record.id, 'in_progress')}
-            >
-              开始
-            </Button>
-          )}
-          {record.task_source === 'normal' && record.status === 'in_progress' && (
-            <Button
-              type="link"
-              size="small"
-              icon={<CheckOutlined />}
-              onClick={() => openCompleteTask(record)}
-            >
-              完成
-            </Button>
-          )}
-          {record.task_source === 'normal' && (
-            <>
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>编辑</Button>
-              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                <Button type="link" size="small" danger icon={<DeleteOutlined />}>删除</Button>
-              </Popconfirm>
-            </>
-          )}
-          {record.task_source === 'opportunity' && (
-            <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>查看</Button>
-          )}
-        </Space>
-      ),
+      width: 220,
+      render: (_, record) => renderTaskActions(record, { section: 'execution' }),
     },
   ];
 
@@ -1562,21 +1703,8 @@ export default function Dashboard() {
     {
       title: '操作',
       key: 'action',
-      width: 120,
-      render: (_, record) => (
-        <Space size={4}>
-          {record.task_source === 'normal' && (
-            <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-              编辑
-            </Button>
-          )}
-          {record.task_source === 'opportunity' && (
-            <Button type="link" size="small" onClick={() => navigate('/follow-up-tasks')}>
-              查看
-            </Button>
-          )}
-        </Space>
-      ),
+      width: 140,
+      render: (_, record) => renderTaskActions(record, { section: 'assigned' }),
     },
   ];
 
@@ -1651,38 +1779,8 @@ export default function Dashboard() {
     {
       title: '操作',
       key: 'action',
-      width: 160,
-      render: (_, record) => {
-        const canEdit = canEditTaskRecord(record);
-        return (
-          <Space size={2} wrap={false}>
-            {canEdit && record.status === 'pending' && (
-              <Button type="link" size="small" icon={<PlayCircleOutlined />} onClick={() => handleUpdateStatus(record.id, 'in_progress')}>
-                开始
-              </Button>
-            )}
-            {canEdit && record.status === 'in_progress' && (
-              <Button type="link" size="small" icon={<CheckOutlined />} onClick={() => openCompleteTask(record)}>
-                完成
-              </Button>
-            )}
-            {canEdit && (
-              <Button type="link" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)}>
-                编辑
-              </Button>
-            )}
-            {(!canEdit || record.task_source === 'opportunity') && (
-              <Button
-                type="link"
-                size="small"
-                onClick={() => (record.task_source === 'opportunity' ? navigate('/follow-up-tasks') : openTaskDetail(record))}
-              >
-                查看
-              </Button>
-            )}
-          </Space>
-        );
-      },
+      width: 220,
+      render: (_, record) => renderTaskActions(record, { section: 'watched' }),
     },
   ];
 
@@ -1757,12 +1855,6 @@ export default function Dashboard() {
   ];
 
   const renderTaskCard = (record, section) => {
-    const showViewButton = record.task_source === 'opportunity' || section === 'watched' || section === 'team';
-    const canEdit = section !== 'team' && canEditTaskRecord(record);
-    const canDelete = record.task_source === 'normal' && section === 'execution';
-    const canStart = canEdit && (section === 'execution' || section === 'watched') && record.status === 'pending';
-    const canDone = canEdit && (section === 'execution' || section === 'watched') && record.status === 'in_progress';
-
     return (
       <List.Item style={{ padding: 0, marginBottom: 12, border: 'none' }}>
         <div
@@ -1823,38 +1915,7 @@ export default function Dashboard() {
               </Typography.Paragraph>
             )}
 
-            <Space size="small" wrap direction={isMobile ? 'vertical' : 'horizontal'} style={{ width: isMobile ? '100%' : undefined }}>
-              {canStart && (
-                <Button type={isMobile ? 'default' : 'link'} size="small" icon={<PlayCircleOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => handleUpdateStatus(record.id, 'in_progress')}>
-                  开始
-                </Button>
-              )}
-              {canDone && (
-                <Button type={isMobile ? 'primary' : 'link'} size="small" icon={<CheckOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => openCompleteTask(record)}>
-                  完成
-                </Button>
-              )}
-              {canEdit && (
-                <Button type={isMobile ? 'default' : 'link'} size="small" icon={<EditOutlined />} style={{ width: isMobile ? '100%' : undefined }} onClick={() => openEdit(record)}>
-                  编辑
-                </Button>
-              )}
-              {canDelete && (
-                <Popconfirm title="确认删除？" onConfirm={() => handleDelete(record.id)}>
-                  <Button type={isMobile ? 'default' : 'link'} size="small" danger icon={<DeleteOutlined />} style={{ width: isMobile ? '100%' : undefined }}>删除</Button>
-                </Popconfirm>
-              )}
-              {showViewButton && (
-                <Button
-                  type={isMobile ? 'default' : 'link'}
-                  size="small"
-                  style={{ width: isMobile ? '100%' : undefined }}
-                  onClick={() => (record.task_source === 'opportunity' ? navigate('/follow-up-tasks') : openTaskDetail(record))}
-                >
-                  查看
-                </Button>
-              )}
-            </Space>
+            {renderTaskActions(record, { section, mobile: isMobile })}
           </Space>
         </div>
       </List.Item>
@@ -2750,6 +2811,29 @@ export default function Dashboard() {
         </Form>
       </Modal>
 
+      <Modal
+        title="编辑商机任务"
+        open={opportunityEditOpen}
+        onOk={handleOpportunityEditSave}
+        onCancel={closeOpportunityEdit}
+        confirmLoading={opportunityEditSaving}
+        okText="保存"
+        cancelText="取消"
+        destroyOnClose={false}
+      >
+        <Form form={opportunityEditForm} layout="vertical">
+          <Form.Item label="计划日期" name="due_date">
+            <DatePicker inputReadOnly={isMobile} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item label="任务进度/任务结果" name="done_note">
+            <Input.TextArea
+              rows={isMobile ? 5 : 4}
+              placeholder="填写当前进展、跟进情况或最终结果"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
+
       <Drawer
         title="AI建议详情"
         open={aiSuggestionDrawerOpen}
@@ -2825,7 +2909,11 @@ export default function Dashboard() {
               icon={<EditOutlined />}
               onClick={() => {
                 setDetailOpen(false);
-                openEdit(detailRecord);
+                if (detailRecord.task_source === 'opportunity') {
+                  openOpportunityEdit(detailRecord);
+                } else {
+                  openEdit(detailRecord);
+                }
               }}
             >
               编辑

@@ -124,6 +124,9 @@ export default function NotificationBell() {
   const getTypeTag = (type) => {
     const map = {
       lead_assigned: { label: '线索', color: 'blue' },
+      task_assigned: { label: '普通任务', color: 'orange' },
+      opportunity_task_assigned: { label: '商机任务', color: 'gold' },
+      task_status_updated: { label: '状态', color: 'green' },
       dev_task_assigned: { label: '任务', color: 'orange' },
       dev_task_completed: { label: '完成', color: 'green' },
       task_center_product_found: { label: '采集', color: 'cyan' },
