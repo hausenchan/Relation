@@ -49,6 +49,8 @@ ${MIDMAX_SELECTDB_TEMPLATE_DIR}/zhixiao_app_income_daily.sql
 
 ## 运行开关
 
+完整运维配置见 `zhixiao-selectdb-ops.md`。核心开关如下：
+
 启用支小 SelectDB 输入层：
 
 ```text

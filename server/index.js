@@ -95,6 +95,7 @@ const {
   normalizeZhixiaoReportHtmlForArtifact,
 } = require('./lib/businessDailyReports');
 const {
+  appendZhixiaoSelectDbCompletionArtifacts,
   collectZhixiaoSelectDbSnapshots,
   getZhixiaoSelectDbRuntimeStatus,
   isZhixiaoSelectDbMode,
@@ -17795,7 +17796,7 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
           scope_name: report.scope_name,
         },
       });
-      if (report.scope_type === 'business_line' && report.scope_code === 'ZHIXIAO') {
+      if (isZhixiaoBusinessDailyReportScope(report.scope_type, report.scope_code)) {
         const useSelectDb = isZhixiaoSelectDbMode();
         const sourceStatus = getZhixiaoSourceFileStatus();
         businessDailyReportStore.completeStage(reportId, 'collecting', {
@@ -17871,53 +17872,10 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
         });
         const completion = buildZhixiaoBusinessDailyReportCompletion(report);
         if (selectDbSnapshot) {
-          completion.source = {
-            ...completion.source,
-            type: 'midmax_selectdb_snapshot',
-            snapshot_id: selectDbSnapshot.snapshot_id,
-            dataset_count: selectDbSnapshot.dataset_count,
-            datasets: selectDbSnapshot.datasets.map(item => ({
-              dataset_code: item.dataset_code,
-              title: item.title,
-              row_count: item.row_count,
-              legacy_filename: item.legacy_filename,
-            })),
-          };
-          completion.normalized = {
-            ...completion.normalized,
-            source_v2: 'zhixiao-selectdb-compat-v1',
-            snapshot_id: selectDbSnapshot.snapshot_id,
-          };
-          completion.reportModel = {
-            ...completion.reportModel,
-            source_v2: {
-              type: 'zhixiao-selectdb-compat-v1',
-              snapshot_id: selectDbSnapshot.snapshot_id,
-              dataset_count: selectDbSnapshot.dataset_count,
-            },
-          };
-          completion.artifacts = [
-            ...(completion.artifacts || []),
-            {
-              artifactType: 'source_json',
-              content: JSON.stringify({
-                type: 'midmax_selectdb_snapshot',
-                snapshot_id: selectDbSnapshot.snapshot_id,
-                report_date: selectDbSnapshot.report_date,
-                datasets: selectDbSnapshot.datasets,
-              }, null, 2),
-              contentType: 'application/json; charset=utf-8',
-            },
-            {
-              artifactType: 'execution_manifest',
-              content: JSON.stringify({
-                source_mode: 'midmax_selectdb',
-                snapshot_id: selectDbSnapshot.snapshot_id,
-                materializer: selectDbMaterialized,
-              }, null, 2),
-              contentType: 'application/json; charset=utf-8',
-            },
-          ];
+          Object.assign(completion, appendZhixiaoSelectDbCompletionArtifacts(completion, {
+            snapshot: selectDbSnapshot,
+            materialized: selectDbMaterialized,
+          }));
         }
         currentStageCode = 'reconciling';
         businessDailyReportStore.completeStage(reportId, 'reconciling', {

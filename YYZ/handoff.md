@@ -21,6 +21,17 @@
   环境、SQL 模板或物化脚本时以明确 blocker 失败，不回退造数。
 - 新增零第三方依赖的默认物化脚本 `DaAgent/Distillation/scripts/materialize_zhixiao_selectdb_snapshots.py`，
   用于把快照 rows 写成旧生成器可读取的工作簿输入；SQL 模板需负责把字段别名对齐旧 XLS 表头。
+- 快照采集已补充假 connector 回归：覆盖 8 个数据集的采集顺序、manifest 与 dataset JSON 落盘、旧报表
+  文件名映射、内容 hash，以及默认连接器生命周期关闭。
+- 存储层已补充 SelectDB 链路回归：mock 采集 8 个数据集、运行兼容物化脚本、导入去本地密码门的
+  `zhixiao_html_report`，并验证 `source_json` 和 `execution_manifest` 产物可读取。
+- Relation 展示版支小 HTML 现在会额外移除 `zfb666` 密码常量；原始本地 HTML 保持不变。
+- 支小 SelectDB 回归继续补齐失败路径：采集失败时默认连接器也会关闭；产物 helper 明确保留 HTML 产物
+  并追加 SelectDB 来源与执行摘要。
+- SelectDB runtime status 已补充缺模板、非法模板、缺物化脚本、就绪状态和密码不外泄回归；SelectDB 输入
+  就绪时不依赖本地 XLS 是否存在。
+- 新增 `YYZ/shared/data-contracts/midmax-selectdb/zhixiao-selectdb-ops.md`，作为运维配置说明，覆盖环境变量、
+  SQL 模板部署、blocker 排查、上线校验和回滚。
 
 ### 待办
 

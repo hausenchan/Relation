@@ -380,6 +380,7 @@ function normalizeZhixiaoReportHtmlForArtifact(html) {
   });
   output = output.replace(/checkPwd\(\);\s*/g, '');
   output = output.replace(/localStorage\.setItem\(PASS_KEY,\s*["']ok["']\);/g, '');
+  output = output.replace(/\s*const\s+PASSWORD\s*=\s*["']zfb666["'];?/g, '');
 
   if (/password-mask/i.test(output) || /class=(["'])[^"']*\blocked\b[^"']*\1/i.test(output)) {
     throw new BusinessDailyReportError('支小 HTML 密码门移除失败', {

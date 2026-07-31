@@ -98,7 +98,8 @@ function getZhixiaoSelectDbRuntimeStatus({ env = process.env } = {}) {
 async function collectZhixiaoSelectDbSnapshots({
   reportDate,
   env = process.env,
-  connector = createMidmaxSelectDbConnector({ env }),
+  connector,
+  connectorFactory = createMidmaxSelectDbConnector,
 } = {}) {
   const targetDate = assertDateOnly(reportDate, '支小日报日期');
   const status = getZhixiaoSelectDbRuntimeStatus({ env });
@@ -111,48 +112,56 @@ async function collectZhixiaoSelectDbSnapshots({
     error.code = first.code;
     throw error;
   }
+  const activeConnector = connector || connectorFactory({ env });
+  const shouldCloseConnector = !connector && typeof activeConnector.close === 'function';
   const snapshotDir = path.join(getZhixiaoSelectDbSnapshotDir(env), targetDate);
-  fs.mkdirSync(snapshotDir, { recursive: true });
-  const datasets = [];
-  for (const dataset of ZHIXIAO_LEGACY_REPORT_DATASETS) {
-    const result = await connector.queryDataset(dataset.dataset_code, {
-      startDate: targetDate,
-      endDate: targetDate,
-    });
-    const payload = {
-      ...result,
-      legacy_filename: dataset.legacy_filename,
-      captured_at: new Date().toISOString(),
+  try {
+    fs.mkdirSync(snapshotDir, { recursive: true });
+    const datasets = [];
+    for (const dataset of ZHIXIAO_LEGACY_REPORT_DATASETS) {
+      const result = await activeConnector.queryDataset(dataset.dataset_code, {
+        startDate: targetDate,
+        endDate: targetDate,
+      });
+      const payload = {
+        ...result,
+        legacy_filename: dataset.legacy_filename,
+        captured_at: new Date().toISOString(),
+      };
+      payload.content_hash = sha256(JSON.stringify(payload.rows || []));
+      const filename = `${dataset.dataset_code}.json`;
+      const filePath = path.join(snapshotDir, filename);
+      fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      datasets.push({
+        dataset_code: dataset.dataset_code,
+        title: dataset.title,
+        legacy_filename: dataset.legacy_filename,
+        row_count: payload.row_count,
+        content_hash: payload.content_hash,
+        filename,
+      });
+    }
+    const manifest = {
+      source_type: 'midmax_selectdb',
+      report_date: targetDate,
+      snapshot_id: `zhixiao_selectdb_${targetDate}_${sha256(JSON.stringify(datasets)).slice(0, 12)}`,
+      dataset_count: datasets.length,
+      datasets,
+      snapshot_dir: path.basename(snapshotDir),
+      created_at: new Date().toISOString(),
     };
-    payload.content_hash = sha256(JSON.stringify(payload.rows || []));
-    const filename = `${dataset.dataset_code}.json`;
-    const filePath = path.join(snapshotDir, filename);
-    fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-    datasets.push({
-      dataset_code: dataset.dataset_code,
-      title: dataset.title,
-      legacy_filename: dataset.legacy_filename,
-      row_count: payload.row_count,
-      content_hash: payload.content_hash,
-      filename,
-    });
+    const manifestPath = path.join(snapshotDir, 'manifest.json');
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    return {
+      ...manifest,
+      snapshot_dir: snapshotDir,
+      manifest_path: manifestPath,
+    };
+  } finally {
+    if (shouldCloseConnector) {
+      await activeConnector.close();
+    }
   }
-  const manifest = {
-    source_type: 'midmax_selectdb',
-    report_date: targetDate,
-    snapshot_id: `zhixiao_selectdb_${targetDate}_${sha256(JSON.stringify(datasets)).slice(0, 12)}`,
-    dataset_count: datasets.length,
-    datasets,
-    snapshot_dir: path.basename(snapshotDir),
-    created_at: new Date().toISOString(),
-  };
-  const manifestPath = path.join(snapshotDir, 'manifest.json');
-  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-  return {
-    ...manifest,
-    snapshot_dir: snapshotDir,
-    manifest_path: manifestPath,
-  };
 }
 
 function runZhixiaoSelectDbMaterializer({ manifestPath, sourceDir, env = process.env, timeoutMs = 300000 } = {}) {
@@ -195,8 +204,63 @@ function runZhixiaoSelectDbMaterializer({ manifestPath, sourceDir, env = process
   return output;
 }
 
+function appendZhixiaoSelectDbCompletionArtifacts(completion, { snapshot, materialized } = {}) {
+  if (!snapshot) return completion;
+  return {
+    ...completion,
+    source: {
+      ...(completion.source || {}),
+      type: 'midmax_selectdb_snapshot',
+      snapshot_id: snapshot.snapshot_id,
+      dataset_count: snapshot.dataset_count,
+      datasets: (snapshot.datasets || []).map(item => ({
+        dataset_code: item.dataset_code,
+        title: item.title,
+        row_count: item.row_count,
+        legacy_filename: item.legacy_filename,
+      })),
+    },
+    normalized: {
+      ...(completion.normalized || {}),
+      source_v2: 'zhixiao-selectdb-compat-v1',
+      snapshot_id: snapshot.snapshot_id,
+    },
+    reportModel: {
+      ...(completion.reportModel || {}),
+      source_v2: {
+        type: 'zhixiao-selectdb-compat-v1',
+        snapshot_id: snapshot.snapshot_id,
+        dataset_count: snapshot.dataset_count,
+      },
+    },
+    artifacts: [
+      ...(completion.artifacts || []),
+      {
+        artifactType: 'source_json',
+        content: JSON.stringify({
+          type: 'midmax_selectdb_snapshot',
+          snapshot_id: snapshot.snapshot_id,
+          report_date: snapshot.report_date,
+          datasets: snapshot.datasets || [],
+        }, null, 2),
+        contentType: 'application/json; charset=utf-8',
+      },
+      {
+        artifactType: 'execution_manifest',
+        content: JSON.stringify({
+          source_mode: 'midmax_selectdb',
+          snapshot_id: snapshot.snapshot_id,
+          materializer: materialized || null,
+        }, null, 2),
+        contentType: 'application/json; charset=utf-8',
+      },
+    ],
+  };
+}
+
 module.exports = {
   ZHIXIAO_SELECTDB_DATASET_CODES,
+  appendZhixiaoSelectDbCompletionArtifacts,
   collectZhixiaoSelectDbSnapshots,
   getZhixiaoSelectDbRuntimeStatus,
   isZhixiaoSelectDbMode,
