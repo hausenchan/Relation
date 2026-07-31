@@ -1,0 +1,97 @@
+version: midmax-selectdb-datasets-v1
+updated_at: 2026-07-31
+owner: YYZ data intelligence
+principles:
+  - Mid-Max SelectDB is read-only production fact storage.
+  - Relation only exposes audited dataset_code queries, never free-form SQL.
+  - Business daily reports bind immutable snapshot_id values for replay.
+  - Credentials, physical table names, and production row samples must not be committed.
+
+datasets:
+  - dataset_code: yyz_project_daily
+    title: YYZ project daily facts
+    grain: day
+    required_for:
+      - yyz-dashboard-analysis
+  - dataset_code: yyz_business_line_daily
+    title: YYZ business-line daily facts
+    grain: day_business_line
+    required_for:
+      - yyz-dashboard-analysis
+  - dataset_code: yyz_media_daily
+    title: YYZ media daily facts
+    grain: day_media
+    required_for:
+      - yyz-dashboard-analysis
+  - dataset_code: yyz_media_business_line_daily
+    title: YYZ media and business-line daily facts
+    grain: day_media_business_line
+    required_for:
+      - yyz-dashboard-analysis
+  - dataset_code: yyz_user_funnel_daily
+    title: YYZ user funnel daily facts
+    grain: day_media_business_line
+    required_for:
+      - yyz-dashboard-analysis
+  - dataset_code: yyz_ad_funnel_daily
+    title: YYZ ad funnel daily facts
+    grain: day_app_adslot
+    required_for:
+      - yyz-dashboard-analysis
+      - zhixiao-html-report
+  - dataset_code: yyz_task_daily
+    title: YYZ task daily facts
+    grain: day_media_task
+    required_for:
+      - yyz-dashboard-analysis
+      - zhixiao-html-report
+  - dataset_code: zhixiao_dashboard_summary_daily
+    title: 支小大盘汇总
+    grain: day
+    legacy_filename: 支小大盘汇总.xls
+    required_for:
+      - zhixiao-html-report
+  - dataset_code: zhixiao_new_order_daily
+    title: 新后台订单
+    grain: day_order
+    legacy_filename: 新后台订单.xls
+    required_for:
+      - zhixiao-html-report
+  - dataset_code: zhixiao_app_income_daily
+    title: 支小应用收入
+    grain: day_app
+    legacy_filename: 支小应用收入.xls
+    required_for:
+      - zhixiao-html-report
+  - dataset_code: zhixiao_adslot_summary_daily
+    title: 广告位维度汇总
+    grain: day_app_adslot
+    legacy_filename: 广告位维度汇总.xls
+    required_for:
+      - zhixiao-html-report
+  - dataset_code: zhixiao_media_total_daily
+    title: 支小媒体数据
+    grain: day_media
+    legacy_filename: 支小媒体数据.xls
+    required_for:
+      - zhixiao-html-report
+  - dataset_code: zhixiao_media_task_app_daily
+    title: 支小媒体应用任务维度
+    grain: day_media_app_task
+    legacy_filename: 支小媒体应用任务维度.xls
+    required_for:
+      - zhixiao-html-report
+  - dataset_code: zhixiao_app_media_share_daily
+    title: 应用媒体数据占比
+    grain: day_app_media
+    legacy_filename: 应用媒体数据占比 .xls
+    required_for:
+      - zhixiao-html-report
+  - dataset_code: zhixiao_denghuo_adslot_daily
+    title: 广告位维度汇总-灯火投放
+    grain: day_app_adslot
+    legacy_filename: 广告位维度汇总-灯火投放.xls
+    fixed_filters:
+      channel: bb
+    required_for:
+      - zhixiao-html-report

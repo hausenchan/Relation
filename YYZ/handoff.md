@@ -5,13 +5,38 @@
 本文件只记录愉悦赚业务增长、数据分析、运营策略、实验和 Skill 蒸馏的当前进度。Relation 组织中台
 页面、API、权限、数据库、连接器和部署等功能开发进度统一记录在仓库根目录 `handoff.md`。
 
+## 支小 HTML 日报 SelectDB 输入层（2026-07-31）
+
+### 已完成
+
+- 根据 `DaAgent/Distillation/MIDMAX_SELECTDB_DISTILLATION_ARCHITECTURE.md` 的方向，将支小同款
+  `支小数据new.html` 的数据输入层设计落成首版工程骨架：SelectDB 只读连接、白名单数据集、不可变
+  JSON 快照、兼容物化、旧 HTML 生成器和 Relation 展示产物分层。
+- 新增 `YYZ/shared/data-contracts/midmax-selectdb/datasets.yaml` 和
+  `zhixiao-html-report-compat.md`，明确 8 个支小 SelectDB 兼容数据集与旧 XLS 的对应关系、SQL 模板要求、
+  运行开关和快照产物格式。
+- 新增 `YYZ/shared/data-contracts/midmax-selectdb/sql/examples/`，提供 8 份按旧 XLS 表头别名输出的 SQL
+  样例，供数据侧替换真实审核视图后部署。
+- Relation 业务日报支小范围支持 `ZHIXIAO_REPORT_SOURCE_MODE=selectdb` 运行模式；未配置真实 SelectDB
+  环境、SQL 模板或物化脚本时以明确 blocker 失败，不回退造数。
+- 新增零第三方依赖的默认物化脚本 `DaAgent/Distillation/scripts/materialize_zhixiao_selectdb_snapshots.py`，
+  用于把快照 rows 写成旧生成器可读取的工作簿输入；SQL 模板需负责把字段别名对齐旧 XLS 表头。
+
+### 待办
+
+- 数据侧盘点 SelectDB 物理表和字段，补齐 8 个数据集的生产 SQL 模板；模板文件由运维部署到
+  `MIDMAX_SELECTDB_TEMPLATE_DIR`，不提交真实表结构和生产样例。
+- 补齐 SQL 模板，跑通默认物化脚本后对比同日浏览器 XLS 版核心指标；旧 HTML 生成器仍需满足既有
+  pandas/soffice 运行条件。
+- 中期把兼容物化改造成 `source-v2 -> report_model -> HTML`，彻底摆脱旧 XLS 中间形态。
+
 ## Relation 业务日报训练台账 MVP（2026-07-30）
 
 ### 已完成
 
 - Relation 已新增 YYZ 业务日报列表、详情、编辑、修订审核、同日多次生成、七阶段执行记录、机器原稿、
-  安全 HTML、软删除和恢复，具体组织中台实现见根目录`handoff.md`与
-  `Agent中台-业务日报训练与蒸馏PRD.md`。
+  安全 HTML、软删除和恢复，具体组织中台实现见`../handoff.md`与
+  `../doc/Agent中台-业务日报训练与蒸馏PRD.md`。
 - 日报入口已按 YYZ 项目总览、业务线和媒体从总到分组织；业务线首期覆盖支小、H5/百度JS、CPA及
   子类、淘小、微小、宝箱/签到，媒体首期覆盖媒体大盘和爱奇艺极速版，后续媒体目录再动态补齐。
 - 日报数据只写线上 MySQL；生产推荐独立`relation_ai_distill`逻辑库，未配置时为 Relation MySQL 中
@@ -106,7 +131,7 @@
   日环比减少约 4,598 元，爱奇艺极速版约贡献 74.5% 的媒体侧缺口，支小是业务线侧第一拖累。
 - 识别 P0 数据问题：经营罗盘与 YYZ 综合明细同日毛利相差 7,191.43 元；H5、CPA 和用户行为口径
   也未对齐，支小应用收入报表在目标窗口无数据，媒体 x 业务线仅抽取前 100/206 行。
-- 完成`Agent中台-业务日报训练与蒸馏PRD.md`的 YYZ 接入设计：机器原稿、人工修订、结构化纠错、
+- 完成`../doc/Agent中台-业务日报训练与蒸馏PRD.md`的 YYZ 接入设计：机器原稿、人工修订、结构化纠错、
   错误分类、质量评分和同日期 Skill 版本回放形成训练闭环；删除日报只做可恢复软删除。
 
 ## 当前数据与工具状态

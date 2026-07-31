@@ -1,6 +1,78 @@
 # 开发交接
 
-最后更新：2026-07-30
+最后更新：2026-07-31
+
+## 支小业务日报 SelectDB 输入层（2026-07-31）
+
+### 已完成
+
+- 新增 `server/lib/midmaxSelectDbConnector.js`：封装 Mid-Max SelectDB 只读连接配置、白名单数据集、SQL 模板
+  校验和运行状态检查；只允许 `SELECT/WITH` 模板和 `:start_date`、`:end_date`、`:limit` 参数，不向前端
+  暴露凭据。
+- 新增 `server/lib/zhixiaoSelectDbReports.js`：定义支小同款 HTML 所需 8 个 SelectDB 兼容数据集，对应当前
+  8 份旧 XLS；支持 `ZHIXIAO_REPORT_SOURCE_MODE=selectdb` 时检查模板、生成 JSON 快照 manifest，并调用
+  受控物化脚本把快照转换为当前 HTML 生成器可读取的兼容源。
+- 新增 `DaAgent/Distillation/scripts/materialize_zhixiao_selectdb_snapshots.py` 作为零第三方依赖的默认兼容
+  物化脚本；SQL 模板字段别名对齐旧报表表头后，可将 SelectDB 快照写成当前生成器期望的工作簿输入。
+- Agent 业务日报支小范围的 runtime status 已区分 `local_xls` 与 `selectdb` 两种来源模式；SelectDB 模式
+  下不再要求本地 XLS 源文件，但会明确要求 SelectDB 环境变量、数据集 SQL 模板、兼容物化脚本和 HTML
+  渲染器脚本。
+- 支小生成队列在 SelectDB 模式下会先采集不可变快照，再物化兼容源、运行现有 HTML 生成器、导入移除
+  本地密码门后的 `zhixiao_html_report`；完成产物额外写入 `source_json` 和 `execution_manifest`，记录
+  `snapshot_id`、数据集行数和物化执行摘要。
+- 新增 `YYZ/shared/data-contracts/midmax-selectdb/` 数据契约，落档 YYZ 通用数据集和支小 HTML 兼容数据集。
+- 新增 8 份 `YYZ/shared/data-contracts/midmax-selectdb/sql/examples/*.sql.example`，按旧报表表头给出 SelectDB
+  SQL 模板别名示例；数据/运维替换为真实审核视图后可部署为 `.sql` 模板。
+
+### 待办
+
+- 运维/数据侧需提供 SelectDB 只读账号和 8 个支小数据集 SQL 模板；未配置前不会连接 SelectDB，也不会
+  伪造日报成功。默认物化脚本不依赖第三方 Python 包，但旧 HTML 生成器仍需满足既有 pandas/soffice
+  运行条件。
+- 后续把当前兼容物化层替换为真正 `source-v2 -> report_model -> HTML` 渲染器，减少对旧 XLS 形态和旧
+  Python 生成器的依赖。
+
+### 验证
+
+- `node --check server/lib/midmaxSelectDbConnector.js` 通过。
+- `node --check server/lib/zhixiaoSelectDbReports.js` 通过。
+- `node --check server/index.js` 通过。
+- `node --test server/lib/midmaxSelectDbConnector.test.js` 通过，4/4。
+- `node --test server/lib/businessDailyReports.test.js` 通过，8/8。
+- `PYTHONPYCACHEPREFIX=/tmp/relation-pycache python3 DaAgent/Distillation/scripts/materialize_zhixiao_selectdb_snapshots_test.py`
+  通过。
+
+## 人脉管理移动端操作收口（2026-07-31）
+
+### 已完成
+
+- 人脉管理移动端卡片参考互动记录和工作台移动端，卡片右上角新增 `···` 操作入口。
+- 移动端卡片底部不再直接铺开“互动记录 / 编辑 / 删除”按钮；点击 `···` 后从底部弹出操作面板。
+- 底部操作面板固定提供“互动记录”，并按原权限动态展示“编辑人脉 / 删除人脉”；删除继续二次确认。
+- 桌面端表格操作列保持原有按钮逻辑不变。
+
+### 验证
+
+- 仓库内未找到人脉管理专项测试文件。
+- `BUILD_PATH=/tmp/relation-persons-mobile-actions-build npm run build` 在 `client/` 目录通过。
+- `BUILD_PATH=/tmp/relation-persons-mobile-actions-build npm run performance:budget` 在 `client/` 目录通过：
+  首屏 JavaScript `329.5KB / 400KB`，78 个异步 chunk，最大 `420.8KB / 500KB`。
+
+## 工作台移动端任务操作收口（2026-07-31）
+
+### 已完成
+
+- 工作台移动端任务卡片不再在卡片底部直接铺开“编辑 / 删除 / 完成 / 挂起”等按钮，改为参考互动记录：
+  卡片标题右侧展示 `···` 操作入口，点击后从底部弹出动作面板。
+- 底部动作面板复用原任务权限和状态口径，按记录动态展示开始、恢复、挂起、完成、编辑、查看和删除；
+  删除继续二次确认，桌面端表格操作保持原逻辑。
+
+### 验证
+
+- `CI=true ./node_modules/.bin/react-scripts test --watchAll=false --runInBand --testPathPattern=Dashboard` 通过。
+- `BUILD_PATH=/tmp/relation-dashboard-mobile-actions-build npm run build` 在 `client/` 目录通过。
+- `BUILD_PATH=/tmp/relation-dashboard-mobile-actions-build npm run performance:budget` 在 `client/` 目录通过：
+  首屏 JavaScript `329.6KB / 400KB`，78 个异步 chunk，最大 `420.8KB / 500KB`。
 
 ## Agent 中台业务日报 MVP（2026-07-30）
 
@@ -69,7 +141,7 @@
 
 ### 已完成
 
-- 新增`Agent中台-业务日报训练与蒸馏PRD.md`，定义 Agent 中台“业务日报”独立菜单、列表页、详情页、
+- 新增`doc/Agent中台-业务日报训练与蒸馏PRD.md`，定义 Agent 中台“业务日报”独立菜单、列表页、详情页、
   编辑页、异步生成状态、权限和 API 设计；MVP 固定为 YYZ 项目日报并调用已发布的
   `yyz-dashboard-analysis`版本。
 - 明确日报的主要目的为 Skill 训练和蒸馏：机器原稿不可覆盖，人工编辑形成版本化修订，自动保留字段级
@@ -90,7 +162,7 @@
 
 ### 已完成
 
-- 新增 `Relation业务中台UI规范.md`，将工作台、媒体管理、人脉管理、互动记录、商机、公司研究、
+- 新增 `doc/Relation业务中台UI规范.md`，将工作台、媒体管理、人脉管理、互动记录、商机、公司研究、
   策略、需求、产品资产、主体管理、产品模版等页面纳入统一业务列表页规范。
 - 明确统一页面结构、字体层级、基础色和状态色、间距尺寸、页面治理栏、轻量指标卡、筛选工具条、
   表格、Tag、按钮、移动端卡片、详情/编辑抽屉和禁止项。
@@ -151,7 +223,7 @@
   `描述：xxx`、`结果：xxx`，空值显示 `-`；富文本输入会转为纯文本，避免 HTML 标签进入任务详情。
 - 普通任务新建并指派给他人时发送 `task_assigned` 通知；商机待跟进任务新建或改派给他人时发送
   `opportunity_task_assigned` 通知；内容 @ 继续使用统一 `content_mention`。
-- 通知铃铛新增“普通任务 / 商机任务”类型标签；`系统需求与权限设计PRD.md` 补充通知类型枚举、
+- 通知铃铛新增“普通任务 / 商机任务”类型标签；`doc/系统需求与权限设计PRD.md` 补充通知类型枚举、
   触发条件、接收人、自通知跳过规则和商机任务描述口径。
 
 ### 验证
@@ -466,7 +538,7 @@
   普通字符转成单元格编辑。
 - 已修复：可编辑状态下，普通字符键会覆盖当前选中单元格、进入单元格编辑态，并继续复用同一次
   输入事务；输入框、公式栏、组合输入和快捷键仍按原逻辑处理。
-- 新增独立 PRD：`文档中心-在线表格原生基础版PRD.md`，明确近期在线表格从 Univer 验证路线调整为
+- 新增独立 PRD：`doc/文档中心-在线表格原生基础版PRD.md`，明确近期在线表格从 Univer 验证路线调整为
   原生自研基础版路线。
 - PRD 按用户截图中的范围拆解一期能力：基础录入、复制粘贴、行列增删、简单公式和常用函数、
   排序、普通筛选、冻结、合并、基础格式、Excel 简单导入导出，以及 Relation 权限、历史、协作结合。
@@ -1133,7 +1205,7 @@
 
 ### 已完成
 
-- `文档中心-在线表格文档PRD.md` 明确新版在线表格以 Univer 为目标内核，自研
+- `doc/文档中心-在线表格文档PRD.md` 明确新版在线表格以 Univer 为目标内核，自研
   `SpreadsheetDocumentEditor` / `spreadsheetWorkbook.js` / `spreadsheetWorkbookFile.js` 仅作为旧数据
   兼容和 fallback，不再继续扩展完整石墨级能力。
 - PRD 新增石墨像素级 UI 验收口径：菜单栏、工具栏、公式栏、网格、选区、Sheet 标签、右键菜单、
@@ -1141,7 +1213,7 @@
   水印或受保护素材。
 - PRD 新增 Univer 数据格式 `relation_univer_spreadsheet_workbook_v1`、适配层、旧工作簿迁移、
   fallback、只读态、附件对象和操作日志脱敏约束。
-- `文档中心模块PRD.md` 同步说明：当前自研在线表格是过渡能力，后续完整能力由 Univer 承载。
+- `doc/文档中心模块PRD.md` 同步说明：当前自研在线表格是过渡能力，后续完整能力由 Univer 承载。
 - `AGENTS.md` 固化长期开发约束：新增复杂公式、条件筛选、条件格式、附件/图片对象、复杂排序、
   冻结、格式刷、填充柄、查找替换、图表等能力时优先接入 Univer，不再继续堆叠自研引擎。
 
@@ -1630,8 +1702,8 @@
 
 ### 已完成
 
-- 新增 `文档中心-在线表格文档PRD.md`，明确在线表格是独立文档形态，不是普通文档内嵌表格块。
-- 更新 `文档中心模块PRD.md`，新建文档入口默认普通文档，并支持选择在线表格。
+- 新增 `doc/文档中心-在线表格文档PRD.md`，明确在线表格是独立文档形态，不是普通文档内嵌表格块。
+- 更新 `doc/文档中心模块PRD.md`，新建文档入口默认普通文档，并支持选择在线表格。
 - 更新 `AGENTS.md`，固化 `document_kind=rich_text/spreadsheet` 与 `doc_type` 业务分类的边界。
 - 服务端 `documents` 表新增 `document_kind`，旧数据默认 `rich_text`，并在加列后创建索引，兼容旧库增量启动。
 - 新建文档接口支持 `document_kind=spreadsheet`，自动初始化
@@ -1945,8 +2017,8 @@
 
 - `AGENTS.md`
 - `handoff.md`
-- `文档中心模块PRD.md`
-- `文档中心-在线表格文档PRD.md`
+- `doc/文档中心模块PRD.md`
+- `doc/文档中心-在线表格文档PRD.md`
 - `server/index.js`
 - `server/lib/spreadsheetWorkbookFile.js`
 - `server/lib/spreadsheetWorkbookFile.test.js`
@@ -2040,7 +2112,7 @@
 - `server/lib/mediaManagement.js`
 - `server/lib/mediaManagement.test.js`
 - `server/lib/mediaManagementRouter.test.js`
-- `资产管理模块PRD.md`
+- `doc/资产管理模块PRD.md`
 
 ## 上一轮：生产启动故障（2026-07-21）
 
@@ -2143,7 +2215,7 @@
 - 每条媒体自动关联真实文档，复用块编辑、目录、附件、共享、版本记录、页面编辑记录和历史恢复。
 - 媒体可见和编辑权限沿用关联文档；负责人自动加入共享；访客还需 `product_assets` 模块读权限。
 - 媒体名称是关联文档标题的唯一来源；文档编辑或历史恢复不会造成标题分叉，删除关联文档会同步移除媒体记录。
-- 更新 `资产管理模块PRD.md` 和 `系统需求与权限设计PRD.md`。
+- 更新 `doc/资产管理模块PRD.md` 和 `doc/系统需求与权限设计PRD.md`。
 
 已验证：
 
@@ -2171,8 +2243,8 @@
 - `server/lib/mediaManagement.js`
 - `server/lib/mediaManagement.test.js`
 - `server/lib/mediaManagementRouter.test.js`
-- `资产管理模块PRD.md`
-- `系统需求与权限设计PRD.md`
+- `doc/资产管理模块PRD.md`
+- `doc/系统需求与权限设计PRD.md`
 
 ## 产品资产权限优化（2026-07-21）
 
@@ -2231,7 +2303,7 @@
 - 普通任务或商机待跟进任务状态变化时，通知原任务创建人/商机任务指派人，通知类型统一为
   `task_status_updated`，自操作不通知。
 - `NotificationBell` 增加 `task_assigned`、`opportunity_task_assigned`、`task_status_updated` 展示标签。
-- `系统需求与权限设计PRD.md` 已补充工作台商机任务操作口径、普通任务删除权限和通知类型枚举。
+- `doc/系统需求与权限设计PRD.md` 已补充工作台商机任务操作口径、普通任务删除权限和通知类型枚举。
 
 已验证：
 
@@ -2253,7 +2325,7 @@
 - `server/index.js`
 - `server/lib/opportunityTypeIntegration.test.js`
 - `server/lib/taskSharingIntegration.test.js`
-- `系统需求与权限设计PRD.md`
+- `doc/系统需求与权限设计PRD.md`
 - `handoff.md`
 
 ## 在线表格原生公式、粘贴与数字格式增强（2026-07-30）
@@ -2276,8 +2348,8 @@
   公式，并进入工作簿撤销、重做和自动保存链路。
 - 删除 Univer 四个依赖、传递依赖、编辑器组件、样式、适配器、测试、预览查询参数、localStorage
   开关和动态加载入口；Relation 原生表格成为唯一正式及长期实现路线。
-- 已同步更新 `AGENTS.md`、`文档中心-在线表格文档PRD.md`、
-  `文档中心-在线表格原生基础版PRD.md` 和 `文档中心模块PRD.md`。
+- 已同步更新 `AGENTS.md`、`doc/文档中心-在线表格文档PRD.md`、
+  `doc/文档中心-在线表格原生基础版PRD.md` 和 `doc/文档中心模块PRD.md`。
 
 已验证：
 
@@ -2295,3 +2367,21 @@
 - 本机没有隔离 MySQL 测试库凭据，浏览器回归使用一次性内存 API，不连接或修改真实业务库；自动保存、
   历史和协作接口沿用此前已通过的 operation API 与 READY-TEST 回归，本轮未改服务端协议。
 - 浏览器剪贴板无法从不提供任何公式元数据的来源恢复公式语义；此类来源按 PRD 明确降级为结果值并提示。
+
+## Relation 根目录文档整理（2026-07-30）
+
+### 已完成
+
+- 根目录仅保留 `AGENTS.md` 和 `handoff.md` 两个开发入口；其余 PRD、设计、SOP、报告和原型文档统一移入 `doc/`。
+- 新增 `doc/README.md`，按使用与运维、核心 PRD、文档中心、AI/Agent、数据架构、原型和历史记录分类索引。
+- 更新 `AGENTS.md`、根目录 `handoff.md` 和 `YYZ/handoff.md` 中的文档路径，并将文档间的本机绝对链接改为可移植相对链接。
+
+### 已验证
+
+- `doc/README.md` 覆盖当前 `doc/` 下除索引自身外的全部 49 份文档，本地 Markdown 链接全部可解析。
+- 根目录已无其他 `.md` / `.html` / `.docx` 文档。
+- 两份经营周会 `.docx` 已由用户移走，不在仓库文档目录中保留或索引。
+- 静态扫描已覆盖前后端、服务端、迁移脚本、Wolai 导入器、AI Skill、部署脚本和 Dockerfile；没有运行时逻辑读取旧根目录文档路径。
+- Git 原跟踪的 44 份根目录文档全部存在对应 `doc/` 目标文件；`git diff --check` 通过。
+- `node --check server/index.js` 通过；前端隔离生产构建成功，产物写入 `/tmp/relation-doc-reorg-build`。
+- 前端性能门禁通过：首屏 JavaScript gzip `328.0KB / 400KB`，最大异步 chunk `420.8KB / 500KB`。

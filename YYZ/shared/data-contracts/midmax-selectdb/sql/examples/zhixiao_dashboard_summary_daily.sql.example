@@ -1,0 +1,12 @@
+SELECT
+  CAST(stat_date AS DATE) AS `日期`,
+  apply_task_uv AS `申请任务uv`,
+  zhixiao_dau AS `支小DAU`,
+  order_uv AS `订单uv`,
+  denghuo_official_revenue AS `灯火官方收入`,
+  yyz_order_cost AS `yyz订单成本`
+FROM __AUDITED_SELECTDB_VIEW_ZHIXIAO_DASHBOARD_SUMMARY_DAILY__
+WHERE stat_date >= :start_date
+  AND stat_date <= :end_date
+ORDER BY stat_date
+LIMIT :limit

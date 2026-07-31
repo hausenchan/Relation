@@ -1,0 +1,18 @@
+SELECT
+  CAST(stat_date AS DATE) AS `日期`,
+  CAST(app_id AS CHAR) AS `小程序APPID`,
+  app_name AS `小程序名称`,
+  CAST(adslot_id AS CHAR) AS `广告位ID`,
+  adslot_type AS `广告位类型`,
+  official_ad_impression_count AS `官方广告曝光`,
+  official_component_impression_count AS `官方组件曝光`,
+  official_click_count AS `官方点击`,
+  official_revenue AS `官方收入`,
+  cpc AS `CPC`,
+  cpm AS `CPM`
+FROM __AUDITED_SELECTDB_VIEW_ZHIXIAO_ADSLOT_SUMMARY_DAILY__
+WHERE stat_date >= :start_date
+  AND stat_date <= :end_date
+  AND channel_code = 'bb'
+ORDER BY stat_date, official_revenue DESC
+LIMIT :limit

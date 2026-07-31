@@ -1,0 +1,18 @@
+SELECT
+  CAST(stat_date AS DATE) AS `日期`,
+  CAST(media_id AS CHAR) AS `媒体ID`,
+  media_name AS `媒体名称`,
+  CAST(app_id AS CHAR) AS `小程序ID`,
+  app_name AS `小程序名称`,
+  task_name AS `任务名称`,
+  visit_uv AS `访问uv`,
+  apply_uv AS `申请uv`,
+  completed_uv AS `完成uv`,
+  estimated_revenue AS `预估收入`,
+  media_cost AS `媒体成本`,
+  order_count AS `订单数`
+FROM __AUDITED_SELECTDB_VIEW_ZHIXIAO_MEDIA_TASK_APP_DAILY__
+WHERE stat_date >= :start_date
+  AND stat_date <= :end_date
+ORDER BY stat_date, media_name, app_name, order_count DESC
+LIMIT :limit
