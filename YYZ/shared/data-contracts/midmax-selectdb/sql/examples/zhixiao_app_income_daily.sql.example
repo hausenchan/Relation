@@ -1,0 +1,15 @@
+SELECT
+  CAST(stat_date AS DATE) AS `日期`,
+  CAST(app_id AS CHAR) AS `小程序ID`,
+  app_name AS `小程序名称`,
+  revenue AS `收入`,
+  visit_uv AS `访问uv`,
+  ad_click_count AS `点击数`,
+  component_impression_count AS `组件曝光`,
+  avg_cpm AS `平均CPM`,
+  avg_cpc AS `平均cpc`
+FROM __AUDITED_SELECTDB_VIEW_ZHIXIAO_APP_INCOME_DAILY__
+WHERE stat_date >= :start_date
+  AND stat_date <= :end_date
+ORDER BY stat_date, revenue DESC
+LIMIT :limit

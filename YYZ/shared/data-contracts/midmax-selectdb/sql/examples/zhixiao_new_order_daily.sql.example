@@ -1,0 +1,14 @@
+SELECT
+  CAST(stat_date AS DATE) AS `日期`,
+  remark AS `备注`,
+  order_count AS `订单数`,
+  task_cost AS `任务成本`,
+  unit_price AS `单价`,
+  configured_unit_price AS `配置单价`,
+  media_id AS `媒体ID`,
+  media_name AS `媒体名称`
+FROM __AUDITED_SELECTDB_VIEW_ZHIXIAO_NEW_ORDER_DAILY__
+WHERE stat_date >= :start_date
+  AND stat_date <= :end_date
+ORDER BY stat_date, order_count DESC
+LIMIT :limit

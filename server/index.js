@@ -103,6 +103,12 @@ const {
   normalizeZhixiaoReportHtmlForArtifact,
 } = require('./lib/businessDailyReports');
 const {
+  collectZhixiaoSelectDbSnapshots,
+  getZhixiaoSelectDbRuntimeStatus,
+  isZhixiaoSelectDbMode,
+  runZhixiaoSelectDbMaterializer,
+} = require('./lib/zhixiaoSelectDbReports');
+const {
   canAccessMediaManagement: resolveMediaManagementAccess,
   createMediaManagementRouter,
   deleteMediaAssetByDocumentId,
@@ -17771,14 +17777,20 @@ function getZhixiaoBusinessDailyReportRuntimeStatus() {
   const generatorPath = getZhixiaoReportGeneratorPath();
   const htmlPath = getZhixiaoReportHtmlPath();
   const sourceStatus = getZhixiaoSourceFileStatus();
+  const useSelectDb = isZhixiaoSelectDbMode();
+  const selectDbStatus = getZhixiaoSelectDbRuntimeStatus();
   const blockers = [];
   if (!fs.existsSync(generatorPath)) {
     blockers.push({
       code: 'ZHIXIAO_GENERATOR_NOT_FOUND',
-      message: '支小日报生成器脚本不存在，请先安装或修复 zhixiao-ai 本机生成项目',
+      message: useSelectDb
+        ? '支小 HTML 渲染器脚本不存在，SelectDB 快照采集后仍需要渲染同款 HTML'
+        : '支小日报生成器脚本不存在，请先安装或修复 zhixiao-ai 本机生成项目',
     });
   }
-  if (sourceStatus.missing_files.length > 0) {
+  if (useSelectDb) {
+    blockers.push(...selectDbStatus.blockers);
+  } else if (sourceStatus.missing_files.length > 0) {
     blockers.push({
       code: 'ZHIXIAO_SOURCE_FILES_MISSING',
       message: `支小源报表缺失 ${sourceStatus.missing_files.length} 份：${sourceStatus.missing_files.join('、')}`,
@@ -17799,6 +17811,7 @@ function getZhixiaoBusinessDailyReportRuntimeStatus() {
       dedicated_schema_configured: BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE,
     },
     local_runtime: {
+      source_mode: useSelectDb ? 'selectdb' : 'local_xls',
       generator_exists: fs.existsSync(generatorPath),
       generator_filename: path.basename(generatorPath),
       html_exists: fs.existsSync(htmlPath),
@@ -17815,6 +17828,15 @@ function getZhixiaoBusinessDailyReportRuntimeStatus() {
           modified_at: file.modified_at,
         })),
       },
+    },
+    selectdb_runtime: {
+      source_mode: selectDbStatus.source_mode,
+      enabled: selectDbStatus.enabled,
+      required_dataset_count: selectDbStatus.required_datasets.length,
+      datasets: selectDbStatus.selectdb.datasets,
+      missing_env_keys: selectDbStatus.selectdb.missing_env_keys,
+      template_dir_configured: selectDbStatus.selectdb.template_dir_configured,
+      materializer: selectDbStatus.materializer,
     },
     blockers,
   };
@@ -17960,7 +17982,7 @@ function buildZhixiaoBusinessDailyReportCompletion(report) {
 }
 
 function scheduleBusinessDailyReportGeneration(reportId, user) {
-  setImmediate(() => {
+  setImmediate(async () => {
     let currentStageCode = 'collecting';
     try {
       const report = businessDailyReportStore.getReport(reportId, { includeDeleted: false });
@@ -17974,7 +17996,7 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
       businessDailyReportStore.startStage(reportId, 'collecting', {
         inputSummary: {
           source: isZhixiaoBusinessDailyReportScope(report.scope_type, report.scope_code)
-            ? 'local_zhixiao_reports'
+            ? (isZhixiaoSelectDbMode() ? 'midmax_selectdb' : 'local_zhixiao_reports')
             : 'Mid-Max',
           skill_code: runtime.skill_code || BUSINESS_DAILY_REPORT_SKILL_CODE,
           skill_version: runtime.skill?.version_no || null,
@@ -17984,37 +18006,73 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
         },
       });
       if (report.scope_type === 'business_line' && report.scope_code === 'ZHIXIAO') {
+        const useSelectDb = isZhixiaoSelectDbMode();
         const sourceStatus = getZhixiaoSourceFileStatus();
         businessDailyReportStore.completeStage(reportId, 'collecting', {
           outputSummary: {
-            source: 'local_zhixiao_reports',
-            ready_count: sourceStatus.ready_count,
-            required_count: sourceStatus.required_count,
+            source: useSelectDb ? 'midmax_selectdb' : 'local_zhixiao_reports',
+            ready_count: useSelectDb ? runtime.selectdb_runtime?.datasets?.filter(item => item.status === 'ready').length : sourceStatus.ready_count,
+            required_count: useSelectDb ? runtime.selectdb_runtime?.required_dataset_count : sourceStatus.required_count,
           },
         });
         currentStageCode = 'validating_source';
         businessDailyReportStore.startStage(reportId, 'validating_source', {
-          inputSummary: {
-            required_files: ZHIXIAO_REQUIRED_REPORT_FILES,
-          },
+          inputSummary: useSelectDb
+            ? {
+              source: 'midmax_selectdb',
+              required_dataset_count: runtime.selectdb_runtime?.required_dataset_count,
+            }
+            : {
+              required_files: ZHIXIAO_REQUIRED_REPORT_FILES,
+            },
         });
         assertZhixiaoRuntimeReadyForGeneration();
         businessDailyReportStore.completeStage(reportId, 'validating_source', {
-          outputSummary: {
-            missing_files: [],
-            generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
-          },
+          outputSummary: useSelectDb
+            ? {
+              missing_dataset_templates: [],
+              generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+              materializer_filename: runtime.selectdb_runtime?.materializer?.filename || null,
+            }
+            : {
+              missing_files: [],
+              generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+            },
         });
         currentStageCode = 'normalizing';
         businessDailyReportStore.startStage(reportId, 'normalizing', {
-          inputSummary: {
-            generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
-            html_filename: path.basename(getZhixiaoReportHtmlPath()),
-          },
+          inputSummary: useSelectDb
+            ? {
+              source: 'midmax_selectdb',
+              snapshot_mode: 'immutable_json',
+              generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+              html_filename: path.basename(getZhixiaoReportHtmlPath()),
+            }
+            : {
+              generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+              html_filename: path.basename(getZhixiaoReportHtmlPath()),
+            },
         });
+        let selectDbSnapshot = null;
+        let selectDbMaterialized = null;
+        if (useSelectDb) {
+          selectDbSnapshot = await collectZhixiaoSelectDbSnapshots({
+            reportDate: report.report_date,
+          });
+          selectDbMaterialized = runZhixiaoSelectDbMaterializer({
+            manifestPath: selectDbSnapshot.manifest_path,
+            sourceDir: getZhixiaoReportSourceDir(),
+            timeoutMs: Math.max(30000, Number(process.env.ZHIXIAO_SELECTDB_MATERIALIZER_TIMEOUT_MS || 300000)),
+          });
+        }
         const generation = runZhixiaoReportGenerator();
         businessDailyReportStore.completeStage(reportId, 'normalizing', {
           outputSummary: {
+            source: useSelectDb ? 'midmax_selectdb' : 'local_zhixiao_reports',
+            snapshot_id: selectDbSnapshot?.snapshot_id || null,
+            dataset_count: selectDbSnapshot?.dataset_count || null,
+            materializer_stdout: selectDbMaterialized?.stdout || null,
+            materializer_stderr: selectDbMaterialized?.stderr || null,
             html_modified_at: generation.html_modified_at,
             compile_stdout: generation.compile.stdout,
             generator_stdout: generation.generated.stdout,
@@ -18022,6 +18080,55 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
           },
         });
         const completion = buildZhixiaoBusinessDailyReportCompletion(report);
+        if (selectDbSnapshot) {
+          completion.source = {
+            ...completion.source,
+            type: 'midmax_selectdb_snapshot',
+            snapshot_id: selectDbSnapshot.snapshot_id,
+            dataset_count: selectDbSnapshot.dataset_count,
+            datasets: selectDbSnapshot.datasets.map(item => ({
+              dataset_code: item.dataset_code,
+              title: item.title,
+              row_count: item.row_count,
+              legacy_filename: item.legacy_filename,
+            })),
+          };
+          completion.normalized = {
+            ...completion.normalized,
+            source_v2: 'zhixiao-selectdb-compat-v1',
+            snapshot_id: selectDbSnapshot.snapshot_id,
+          };
+          completion.reportModel = {
+            ...completion.reportModel,
+            source_v2: {
+              type: 'zhixiao-selectdb-compat-v1',
+              snapshot_id: selectDbSnapshot.snapshot_id,
+              dataset_count: selectDbSnapshot.dataset_count,
+            },
+          };
+          completion.artifacts = [
+            ...(completion.artifacts || []),
+            {
+              artifactType: 'source_json',
+              content: JSON.stringify({
+                type: 'midmax_selectdb_snapshot',
+                snapshot_id: selectDbSnapshot.snapshot_id,
+                report_date: selectDbSnapshot.report_date,
+                datasets: selectDbSnapshot.datasets,
+              }, null, 2),
+              contentType: 'application/json; charset=utf-8',
+            },
+            {
+              artifactType: 'execution_manifest',
+              content: JSON.stringify({
+                source_mode: 'midmax_selectdb',
+                snapshot_id: selectDbSnapshot.snapshot_id,
+                materializer: selectDbMaterialized,
+              }, null, 2),
+              contentType: 'application/json; charset=utf-8',
+            },
+          ];
+        }
         currentStageCode = 'reconciling';
         businessDailyReportStore.completeStage(reportId, 'reconciling', {
           outputSummary: { quality_status: completion.qualityStatus },
@@ -18052,8 +18159,10 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
       console.error('[business-daily-report] generation failed:', error);
       try {
         businessDailyReportStore.failReport(reportId, currentStageCode, {
-          errorCode: error instanceof BusinessDailyReportError ? error.code : 'GENERATION_INTERNAL_ERROR',
-          errorMessage: error instanceof BusinessDailyReportError
+          errorCode: error instanceof BusinessDailyReportError
+            ? error.code
+            : (error?.code || 'GENERATION_INTERNAL_ERROR'),
+          errorMessage: error instanceof BusinessDailyReportError || error?.code
             ? error.message
             : '日报生成任务发生内部错误，请查看服务端日志后重试。',
         });
