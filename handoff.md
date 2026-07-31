@@ -20,9 +20,23 @@
 - 支小生成队列在 SelectDB 模式下会先采集不可变快照，再物化兼容源、运行现有 HTML 生成器、导入移除
   本地密码门后的 `zhixiao_html_report`；完成产物额外写入 `source_json` 和 `execution_manifest`，记录
   `snapshot_id`、数据集行数和物化执行摘要。
+- SelectDB 产物补充统一组装 helper，生成队列和测试共用同一逻辑写入 `source_json` 与
+  `execution_manifest`；新增存储层回归覆盖 mock SelectDB 采集、兼容物化、去密码门 HTML 入库和三类
+  产物读取。
+- Relation 导入版支小 HTML 现在移除本地密码遮罩、输入框和 `zfb666` 密码常量；原始本地 HTML 不改动。
 - 新增 `YYZ/shared/data-contracts/midmax-selectdb/` 数据契约，落档 YYZ 通用数据集和支小 HTML 兼容数据集。
 - 新增 8 份 `YYZ/shared/data-contracts/midmax-selectdb/sql/examples/*.sql.example`，按旧报表表头给出 SelectDB
   SQL 模板别名示例；数据/运维替换为真实审核视图后可部署为 `.sql` 模板。
+- SelectDB 快照采集默认创建的连接器在成功或失败后会主动关闭连接池，避免日报异步任务反复运行后留下
+  空闲连接；新增假 connector 回归覆盖 8 个数据集采集顺序、manifest 落盘、legacy 文件名和内容 hash。
+- 支小范围异步生成队列统一复用 `isZhixiaoBusinessDailyReportScope()`，与创建、重跑和 runtime status
+  的范围判断保持一致。
+- SelectDB completion helper 已补充单测，覆盖不丢失 `zhixiao_html_report` 的同时追加 `source_json` 与
+  `execution_manifest`；快照采集失败时也会关闭默认连接器。
+- SelectDB runtime status 回归补齐：缺 SQL 模板、非法 SQL 模板、缺物化脚本、就绪状态和密码不外泄均有
+  blocker/状态断言；SelectDB 输入就绪时不依赖本地 XLS 文件状态。
+- 新增 `YYZ/shared/data-contracts/midmax-selectdb/zhixiao-selectdb-ops.md`，整理生产环境变量、8 个 SQL 模板、
+  runtime status blocker、上线校验和回滚方式。
 
 ### 待办
 
@@ -37,8 +51,9 @@
 - `node --check server/lib/midmaxSelectDbConnector.js` 通过。
 - `node --check server/lib/zhixiaoSelectDbReports.js` 通过。
 - `node --check server/index.js` 通过。
-- `node --test server/lib/midmaxSelectDbConnector.test.js` 通过，4/4。
-- `node --test server/lib/businessDailyReports.test.js` 通过，8/8。
+- `node --test server/lib/midmaxSelectDbConnector.test.js` 通过，9/9；覆盖 SelectDB runtime status、快照采集、
+  失败关闭和 completion 产物组装。
+- `node --test server/lib/businessDailyReports.test.js` 通过，9/9；新增 SelectDB 采集、物化与产物入库回归。
 - `PYTHONPYCACHEPREFIX=/tmp/relation-pycache python3 DaAgent/Distillation/scripts/materialize_zhixiao_selectdb_snapshots_test.py`
   通过。
 
