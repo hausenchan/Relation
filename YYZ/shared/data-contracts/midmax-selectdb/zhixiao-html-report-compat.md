@@ -1,6 +1,6 @@
 # 支小 HTML 日报 SelectDB 兼容数据契约
 
-最后更新：2026-07-31
+最后更新：2026-08-03
 
 ## 目标
 
@@ -17,6 +17,13 @@ Mid-Max SelectDB
 
 一期保持 HTML 交互效果不变，包括收入汇总、应用汇总、媒体汇总、小程序详情、搜索、导出和本地密码门
 移除逻辑。SelectDB 只替换数据输入层，不把模型或前端暴露给任意 SQL。
+
+当前 Relation 支持两种 SelectDB 接入模式：
+
+- `ZHIXIAO_REPORT_SOURCE_MODE=selectdb`：Relation 后端查询 8 个受控 dataset SQL 模板，保存 JSON 快照后
+  物化为旧生成器输入。
+- `ZHIXIAO_REPORT_SOURCE_MODE=generator_selectdb`：新版 `zhixiao-ai` 生成器自行运行
+  `work/query_selectdb_*.mjs` helper 查询 SelectDB，Relation 负责运行生成器、导入 HTML、保存 CSV 和执行摘要。
 
 ## 必需数据集
 

@@ -10,9 +10,13 @@ const {
   validateSqlTemplate,
 } = require('./midmaxSelectDbConnector');
 const {
+  ZHIXIAO_GENERATOR_SELECTDB_HELPERS,
   ZHIXIAO_SELECTDB_DATASET_CODES,
+  appendZhixiaoGeneratorSelectDbCompletionArtifacts,
   appendZhixiaoSelectDbCompletionArtifacts,
+  collectZhixiaoGeneratorSelectDbOutputs,
   collectZhixiaoSelectDbSnapshots,
+  getZhixiaoGeneratorSelectDbRuntimeStatus,
   getZhixiaoSelectDbRuntimeStatus,
 } = require('./zhixiaoSelectDbReports');
 
@@ -38,6 +42,14 @@ function buildReadyZhixiaoSelectDbEnv({ templateDir, snapshotDir, materializerPa
     ZHIXIAO_SELECTDB_SNAPSHOT_DIR: snapshotDir,
     ZHIXIAO_SELECTDB_MATERIALIZER_PATH: materializerPath,
   };
+}
+
+function writeReadyZhixiaoGeneratorHelpers(projectDir) {
+  const workDir = path.join(projectDir, 'work');
+  fs.mkdirSync(workDir, { recursive: true });
+  for (const helper of ZHIXIAO_GENERATOR_SELECTDB_HELPERS) {
+    fs.writeFileSync(path.join(workDir, helper.filename), '// test helper\n', 'utf8');
+  }
 }
 
 test('SelectDB SQL templates only allow audited read queries and named parameters', () => {
@@ -154,6 +166,78 @@ test('Zhixiao SelectDB runtime status ignores local XLS readiness when SelectDB 
   assert.equal(status.selectdb.datasets.every(item => item.status === 'ready'), true);
   assert.equal(status.selectdb.required_dataset_count, ZHIXIAO_SELECTDB_DATASET_CODES.length);
   assert.deepEqual(status.blockers, []);
+});
+
+test('Zhixiao generator SelectDB runtime status reports missing helpers and query configuration', () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-zhixiao-generator-'));
+  const status = getZhixiaoGeneratorSelectDbRuntimeStatus({
+    projectDir,
+    env: {
+      ZHIXIAO_REPORT_SOURCE_MODE: 'generator_selectdb',
+    },
+  });
+
+  assert.equal(status.source_mode, 'generator_selectdb');
+  assert.equal(status.enabled, false);
+  assert.equal(status.ready_helper_count, 0);
+  assert.deepEqual(
+    status.blockers.map(item => item.code),
+    ['ZHIXIAO_SELECTDB_HELPERS_MISSING', 'SELECTDB_QUERY_MCP_NOT_CONFIGURED'],
+  );
+  assert.equal(status.missing_env_keys.includes('MIDMAX_SELECTDB_PASSWORD'), true);
+  assert.doesNotMatch(JSON.stringify(status), /password-value/);
+});
+
+test('Zhixiao generator SelectDB runtime status is ready with helpers and env credentials', () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-zhixiao-generator-'));
+  writeReadyZhixiaoGeneratorHelpers(projectDir);
+  const status = getZhixiaoGeneratorSelectDbRuntimeStatus({
+    projectDir,
+    env: {
+      ZHIXIAO_REPORT_SOURCE_MODE: 'generator_selectdb',
+      MIDMAX_SELECTDB_HOST: 'selectdb.internal',
+      MIDMAX_SELECTDB_PORT: '3306',
+      MIDMAX_SELECTDB_DATABASE: 'midmax',
+      MIDMAX_SELECTDB_USER: 'readonly',
+      MIDMAX_SELECTDB_PASSWORD: 'password-value',
+    },
+  });
+
+  assert.equal(status.enabled, true);
+  assert.equal(status.ready_helper_count, ZHIXIAO_GENERATOR_SELECTDB_HELPERS.length);
+  assert.equal(status.credentials_configured, true);
+  assert.deepEqual(status.missing_env_keys, []);
+  assert.deepEqual(status.blockers, []);
+  assert.doesNotMatch(JSON.stringify(status), /password-value/);
+});
+
+test('Zhixiao generator SelectDB runtime status accepts an external MCP config file', () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-zhixiao-generator-'));
+  writeReadyZhixiaoGeneratorHelpers(projectDir);
+  const configPath = path.join(projectDir, '.mcp.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    host: 'selectdb.internal',
+    port: 9030,
+    database: 'midmax',
+    user: 'readonly',
+    password: 'password-value',
+  }), 'utf8');
+
+  const status = getZhixiaoGeneratorSelectDbRuntimeStatus({
+    projectDir,
+    env: {
+      ZHIXIAO_REPORT_SOURCE_MODE: 'generator_selectdb',
+      SELECTDB_QUERY_MCP_CONFIG_PATH: configPath,
+    },
+  });
+
+  assert.equal(status.enabled, true);
+  assert.equal(status.credentials_configured, true);
+  assert.deepEqual(status.missing_env_keys, []);
+  assert.equal(status.mcp_config.configured, true);
+  assert.equal(status.mcp_config.exists, true);
+  assert.deepEqual(status.blockers, []);
+  assert.doesNotMatch(JSON.stringify(status), /password-value/);
 });
 
 test('Zhixiao SelectDB mode discovers the bundled default materializer', () => {
@@ -303,4 +387,53 @@ test('Zhixiao SelectDB completion helper appends source and execution artifacts 
   );
   assert.equal(JSON.parse(completion.artifacts[1].content).datasets[0].row_count, 3);
   assert.equal(JSON.parse(completion.artifacts[2].content).materializer.status, 0);
+});
+
+test('Zhixiao generator SelectDB output collector and completion helper summarize CSV artifacts', () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relation-zhixiao-generator-'));
+  const outputDir = path.join(projectDir, 'outputs');
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(path.join(outputDir, 'selectdb_app_income_20260731_20260731.csv'), '日期,收入\n2026-07-31,1\n', 'utf8');
+  fs.writeFileSync(path.join(outputDir, 'unrelated.csv'), 'ignored\n', 'utf8');
+  const runtime = getZhixiaoGeneratorSelectDbRuntimeStatus({
+    projectDir,
+    env: {
+      ZHIXIAO_REPORT_SOURCE_MODE: 'generator_selectdb',
+      MIDMAX_SELECTDB_HOST: 'selectdb.internal',
+      MIDMAX_SELECTDB_PORT: '3306',
+      MIDMAX_SELECTDB_DATABASE: 'midmax',
+      MIDMAX_SELECTDB_USER: 'readonly',
+      MIDMAX_SELECTDB_PASSWORD: 'password-value',
+    },
+  });
+  const outputs = collectZhixiaoGeneratorSelectDbOutputs({ projectDir });
+  const completion = appendZhixiaoGeneratorSelectDbCompletionArtifacts({
+    source: { type: 'local_zhixiao_html' },
+    normalized: { type: 'zhixiao_html_artifact' },
+    reportModel: { narrative: { summary: 'ok' } },
+    artifacts: [{
+      artifactType: 'zhixiao_html_report',
+      content: '<html><body>支小应用数据</body></html>',
+      contentType: 'text/html; charset=utf-8',
+    }],
+  }, {
+    runtime,
+    outputs,
+    generation: {
+      compile: { status: 0 },
+      generated: { status: 0 },
+      html_modified_at: '2026-07-31T00:00:00.000Z',
+    },
+  });
+
+  assert.equal(outputs.csv_count, 1);
+  assert.equal(outputs.csv_files[0].filename, 'selectdb_app_income_20260731_20260731.csv');
+  assert.equal(completion.source.type, 'zhixiao_generator_selectdb');
+  assert.equal(completion.normalized.source_v2, 'zhixiao-generator-selectdb-v1');
+  assert.deepEqual(
+    completion.artifacts.map(item => item.artifactType),
+    ['zhixiao_html_report', 'source_json', 'execution_manifest'],
+  );
+  assert.equal(JSON.parse(completion.artifacts[1].content).outputs.csv_count, 1);
+  assert.equal(JSON.parse(completion.artifacts[2].content).source_mode, 'generator_selectdb');
 });

@@ -95,9 +95,14 @@ const {
   normalizeZhixiaoReportHtmlForArtifact,
 } = require('./lib/businessDailyReports');
 const {
+  appendZhixiaoGeneratorSelectDbCompletionArtifacts,
   appendZhixiaoSelectDbCompletionArtifacts,
+  collectZhixiaoGeneratorSelectDbOutputs,
   collectZhixiaoSelectDbSnapshots,
+  getZhixiaoGeneratorSelectDbRuntimeStatus,
+  getZhixiaoReportSourceMode,
   getZhixiaoSelectDbRuntimeStatus,
+  isZhixiaoGeneratorSelectDbMode,
   isZhixiaoSelectDbMode,
   runZhixiaoSelectDbMaterializer,
 } = require('./lib/zhixiaoSelectDbReports');
@@ -17568,19 +17573,26 @@ function getZhixiaoBusinessDailyReportRuntimeStatus() {
   const generatorPath = getZhixiaoReportGeneratorPath();
   const htmlPath = getZhixiaoReportHtmlPath();
   const sourceStatus = getZhixiaoSourceFileStatus();
+  const sourceMode = getZhixiaoReportSourceMode();
   const useSelectDb = isZhixiaoSelectDbMode();
+  const useGeneratorSelectDb = isZhixiaoGeneratorSelectDbMode();
   const selectDbStatus = getZhixiaoSelectDbRuntimeStatus();
+  const generatorSelectDbStatus = getZhixiaoGeneratorSelectDbRuntimeStatus({
+    projectDir: getZhixiaoReportProjectDir(),
+  });
   const blockers = [];
   if (!fs.existsSync(generatorPath)) {
     blockers.push({
       code: 'ZHIXIAO_GENERATOR_NOT_FOUND',
-      message: useSelectDb
+      message: useSelectDb || useGeneratorSelectDb
         ? '支小 HTML 渲染器脚本不存在，SelectDB 快照采集后仍需要渲染同款 HTML'
         : '支小日报生成器脚本不存在，请先安装或修复 zhixiao-ai 本机生成项目',
     });
   }
   if (useSelectDb) {
     blockers.push(...selectDbStatus.blockers);
+  } else if (useGeneratorSelectDb) {
+    blockers.push(...generatorSelectDbStatus.blockers);
   } else if (sourceStatus.missing_files.length > 0) {
     blockers.push({
       code: 'ZHIXIAO_SOURCE_FILES_MISSING',
@@ -17602,7 +17614,7 @@ function getZhixiaoBusinessDailyReportRuntimeStatus() {
       dedicated_schema_configured: BUSINESS_DAILY_REPORT_USES_DEDICATED_DATABASE,
     },
     local_runtime: {
-      source_mode: useSelectDb ? 'selectdb' : 'local_xls',
+      source_mode: sourceMode,
       generator_exists: fs.existsSync(generatorPath),
       generator_filename: path.basename(generatorPath),
       html_exists: fs.existsSync(htmlPath),
@@ -17628,6 +17640,18 @@ function getZhixiaoBusinessDailyReportRuntimeStatus() {
       missing_env_keys: selectDbStatus.selectdb.missing_env_keys,
       template_dir_configured: selectDbStatus.selectdb.template_dir_configured,
       materializer: selectDbStatus.materializer,
+    },
+    generator_selectdb_runtime: {
+      source_mode: generatorSelectDbStatus.source_mode,
+      enabled: generatorSelectDbStatus.enabled,
+      helper_count: generatorSelectDbStatus.helper_count,
+      ready_helper_count: generatorSelectDbStatus.ready_helper_count,
+      missing_helpers: generatorSelectDbStatus.missing_helpers,
+      helpers: generatorSelectDbStatus.helpers,
+      mcp_config: generatorSelectDbStatus.mcp_config,
+      credentials_configured: generatorSelectDbStatus.credentials_configured,
+      missing_env_keys: generatorSelectDbStatus.missing_env_keys,
+      retained_sources: generatorSelectDbStatus.retained_sources,
     },
     blockers,
   };
@@ -17787,7 +17811,7 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
       businessDailyReportStore.startStage(reportId, 'collecting', {
         inputSummary: {
           source: isZhixiaoBusinessDailyReportScope(report.scope_type, report.scope_code)
-            ? (isZhixiaoSelectDbMode() ? 'midmax_selectdb' : 'local_zhixiao_reports')
+            ? getZhixiaoReportSourceMode()
             : 'Mid-Max',
           skill_code: runtime.skill_code || BUSINESS_DAILY_REPORT_SKILL_CODE,
           skill_version: runtime.skill?.version_no || null,
@@ -17798,17 +17822,29 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
       });
       if (isZhixiaoBusinessDailyReportScope(report.scope_type, report.scope_code)) {
         const useSelectDb = isZhixiaoSelectDbMode();
+        const useGeneratorSelectDb = isZhixiaoGeneratorSelectDbMode();
+        const sourceMode = getZhixiaoReportSourceMode();
         const sourceStatus = getZhixiaoSourceFileStatus();
         businessDailyReportStore.completeStage(reportId, 'collecting', {
           outputSummary: {
-            source: useSelectDb ? 'midmax_selectdb' : 'local_zhixiao_reports',
-            ready_count: useSelectDb ? runtime.selectdb_runtime?.datasets?.filter(item => item.status === 'ready').length : sourceStatus.ready_count,
-            required_count: useSelectDb ? runtime.selectdb_runtime?.required_dataset_count : sourceStatus.required_count,
+            source: sourceMode,
+            ready_count: useGeneratorSelectDb
+              ? runtime.generator_selectdb_runtime?.ready_helper_count
+              : (useSelectDb ? runtime.selectdb_runtime?.datasets?.filter(item => item.status === 'ready').length : sourceStatus.ready_count),
+            required_count: useGeneratorSelectDb
+              ? runtime.generator_selectdb_runtime?.helper_count
+              : (useSelectDb ? runtime.selectdb_runtime?.required_dataset_count : sourceStatus.required_count),
           },
         });
         currentStageCode = 'validating_source';
         businessDailyReportStore.startStage(reportId, 'validating_source', {
-          inputSummary: useSelectDb
+          inputSummary: useGeneratorSelectDb
+            ? {
+              source: 'generator_selectdb',
+              helper_count: runtime.generator_selectdb_runtime?.helper_count,
+              mcp_configured: runtime.generator_selectdb_runtime?.mcp_config?.configured || false,
+            }
+            : useSelectDb
             ? {
               source: 'midmax_selectdb',
               required_dataset_count: runtime.selectdb_runtime?.required_dataset_count,
@@ -17819,7 +17855,14 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
         });
         assertZhixiaoRuntimeReadyForGeneration();
         businessDailyReportStore.completeStage(reportId, 'validating_source', {
-          outputSummary: useSelectDb
+          outputSummary: useGeneratorSelectDb
+            ? {
+              missing_helpers: [],
+              generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+              ready_helper_count: runtime.generator_selectdb_runtime?.ready_helper_count,
+              retained_sources: runtime.generator_selectdb_runtime?.retained_sources,
+            }
+            : useSelectDb
             ? {
               missing_dataset_templates: [],
               generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
@@ -17832,7 +17875,13 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
         });
         currentStageCode = 'normalizing';
         businessDailyReportStore.startStage(reportId, 'normalizing', {
-          inputSummary: useSelectDb
+          inputSummary: useGeneratorSelectDb
+            ? {
+              source: 'generator_selectdb',
+              generator_filename: path.basename(getZhixiaoReportGeneratorPath()),
+              html_filename: path.basename(getZhixiaoReportHtmlPath()),
+            }
+            : useSelectDb
             ? {
               source: 'midmax_selectdb',
               snapshot_mode: 'immutable_json',
@@ -17846,6 +17895,7 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
         });
         let selectDbSnapshot = null;
         let selectDbMaterialized = null;
+        let generatorSelectDbOutputs = null;
         if (useSelectDb) {
           selectDbSnapshot = await collectZhixiaoSelectDbSnapshots({
             reportDate: report.report_date,
@@ -17857,11 +17907,17 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
           });
         }
         const generation = runZhixiaoReportGenerator();
+        if (useGeneratorSelectDb) {
+          generatorSelectDbOutputs = collectZhixiaoGeneratorSelectDbOutputs({
+            projectDir: getZhixiaoReportProjectDir(),
+          });
+        }
         businessDailyReportStore.completeStage(reportId, 'normalizing', {
           outputSummary: {
-            source: useSelectDb ? 'midmax_selectdb' : 'local_zhixiao_reports',
+            source: sourceMode,
             snapshot_id: selectDbSnapshot?.snapshot_id || null,
             dataset_count: selectDbSnapshot?.dataset_count || null,
+            csv_count: generatorSelectDbOutputs?.csv_count || null,
             materializer_stdout: selectDbMaterialized?.stdout || null,
             materializer_stderr: selectDbMaterialized?.stderr || null,
             html_modified_at: generation.html_modified_at,
@@ -17875,6 +17931,12 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
           Object.assign(completion, appendZhixiaoSelectDbCompletionArtifacts(completion, {
             snapshot: selectDbSnapshot,
             materialized: selectDbMaterialized,
+          }));
+        } else if (useGeneratorSelectDb) {
+          Object.assign(completion, appendZhixiaoGeneratorSelectDbCompletionArtifacts(completion, {
+            runtime: runtime.generator_selectdb_runtime,
+            outputs: generatorSelectDbOutputs,
+            generation,
           }));
         }
         currentStageCode = 'reconciling';
