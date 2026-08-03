@@ -1,0 +1,10 @@
+{
+  "host": "selectdb.example.internal",
+  "port": 9030,
+  "database": "midmax",
+  "user": "readonly_user",
+  "password": "replace-with-secret-from-env-or-local-untracked-file",
+  "maxRows": 50000,
+  "queryTimeoutMs": 30000,
+  "sslMode": ""
+}

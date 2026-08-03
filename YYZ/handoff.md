@@ -1,6 +1,6 @@
 # YYZ 业务调优交接
 
-最后更新：2026-07-30
+最后更新：2026-08-03
 
 本文件只记录愉悦赚业务增长、数据分析、运营策略、实验和 Skill 蒸馏的当前进度。Relation 组织中台
 页面、API、权限、数据库、连接器和部署等功能开发进度统一记录在仓库根目录 `handoff.md`。
@@ -9,6 +9,12 @@
 
 ### 已完成
 
+- 已支持同事新版 `zhixiao-ai` 的 `generator_selectdb` 集成路线：服务器端 Agent 中台生成按钮不依赖 Codex
+  MCP 会话，而是后端检查新版生成器 helper 和 SelectDB 查询配置，运行生成器，再把 HTML 导入 Relation。
+- 新增本地/开发用 `YYZ/shared/tools/selectdb-query-mcp/server.mjs`，作为只读 SelectDB MCP 工具；真实凭据只放
+  环境变量或未跟踪配置文件，不提交到仓库。
+- `generator_selectdb` 模式会把生成器输出的 `outputs/selectdb_*` CSV 摘要、helper 状态、编译和运行摘要写入
+  `source_json` 与 `execution_manifest`，方便日报详情追踪来源。
 - 根据 `DaAgent/Distillation/MIDMAX_SELECTDB_DISTILLATION_ARCHITECTURE.md` 的方向，将支小同款
   `支小数据new.html` 的数据输入层设计落成首版工程骨架：SelectDB 只读连接、白名单数据集、不可变
   JSON 快照、兼容物化、旧 HTML 生成器和 Relation 展示产物分层。

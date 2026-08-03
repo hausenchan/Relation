@@ -1,11 +1,19 @@
 # 开发交接
 
-最后更新：2026-07-31
+最后更新：2026-08-03
 
 ## 支小业务日报 SelectDB 输入层（2026-07-31）
 
 ### 已完成
 
+- 支持新版 `zhixiao-ai` 的 `generator_selectdb` 模式：Relation 后端不依赖 Codex MCP 会话，而是检查
+  `work/query_selectdb_*.mjs` helper、SelectDB 查询配置和生成器路径，直接运行 `generate_multi3_report_project.py`，
+  再导入生成后的 `支小数据new.html`。
+- 新增只读开发工具 `YYZ/shared/tools/selectdb-query-mcp/server.mjs`，可作为本地 Codex skill 的
+  `selectdb-query-mcp`；只允许 `SELECT/WITH`，禁止多语句、DDL/DML 和文件导入导出，真实凭据只走环境变量或
+  未跟踪配置文件。
+- `generator_selectdb` 完成后会扫描 `outputs/selectdb_*` CSV、可选生成器日志，并把 helper 状态、CSV 摘要、
+  编译/运行结果写入 `source_json` 和 `execution_manifest`。
 - 新增 `server/lib/midmaxSelectDbConnector.js`：封装 Mid-Max SelectDB 只读连接配置、白名单数据集、SQL 模板
   校验和运行状态检查；只允许 `SELECT/WITH` 模板和 `:start_date`、`:end_date`、`:limit` 参数，不向前端
   暴露凭据。
@@ -51,11 +59,12 @@
 - `node --check server/lib/midmaxSelectDbConnector.js` 通过。
 - `node --check server/lib/zhixiaoSelectDbReports.js` 通过。
 - `node --check server/index.js` 通过。
-- `node --test server/lib/midmaxSelectDbConnector.test.js` 通过，9/9；覆盖 SelectDB runtime status、快照采集、
-  失败关闭和 completion 产物组装。
+- `node --test server/lib/midmaxSelectDbConnector.test.js` 通过，13/13；覆盖 SelectDB runtime status、快照采集、
+  失败关闭、`generator_selectdb` runtime status、CSV 摘要和 completion 产物组装。
 - `node --test server/lib/businessDailyReports.test.js` 通过，9/9；新增 SelectDB 采集、物化与产物入库回归。
 - `PYTHONPYCACHEPREFIX=/tmp/relation-pycache python3 DaAgent/Distillation/scripts/materialize_zhixiao_selectdb_snapshots_test.py`
   通过。
+- `MIDMAX_SELECTDB_*` 假配置下，`node YYZ/shared/tools/selectdb-query-mcp/server.mjs --check-config` 通过，未连接真实库。
 
 ## 人脉管理移动端操作收口（2026-07-31）
 
