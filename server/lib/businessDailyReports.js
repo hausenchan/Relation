@@ -333,9 +333,7 @@ function removeClassToken(classValue, token) {
 
 function normalizeZhixiaoReportHtmlForArtifact(html) {
   const source = String(html || '');
-  if (!/<title>\s*支小应用数据\s*<\/title>/i.test(source)
-    || !/const\s+PASSWORD\s*=\s*["']zfb666["']/.test(source)
-    || !/zfb_pass_multi_\d{4}-\d{2}-\d{2}/.test(source)) {
+  if (!/<title>\s*支小应用数据\s*<\/title>/i.test(source)) {
     throw new BusinessDailyReportError('支小 HTML 报告格式不符合预期', {
       code: 'INVALID_ZHIXIAO_HTML',
       status: 422,

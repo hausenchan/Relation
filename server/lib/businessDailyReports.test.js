@@ -197,6 +197,28 @@ test('normalizeZhixiaoReportHtmlForArtifact removes local password gate and keep
   assert.match(html, /zfb_pass_multi_2026-07-30/);
 });
 
+test('normalizeZhixiaoReportHtmlForArtifact accepts password-free Zhixiao HTML', () => {
+  const html = normalizeZhixiaoReportHtmlForArtifact(`
+    <!doctype html>
+    <html lang="zh-CN">
+    <head><title>支小应用数据</title></head>
+    <body>
+      <main class="app"><h1>支小应用数据</h1><div id="app-summary">应用汇总</div></main>
+      <script>
+        window.APP_INCOME_DETAIL_DATA = {"2026-08-02":[]};
+        window.AD_DETAIL_DATA = {};
+        window.MEDIA_DETAIL_DATA = {};
+        window.ORDER_DETAIL_DATA = {};
+      </script>
+    </body>
+    </html>
+  `);
+
+  assert.match(html, /<title>支小应用数据<\/title>/);
+  assert.match(html, /APP_INCOME_DETAIL_DATA/);
+  assert.doesNotMatch(html, /password-mask|class="locked"/);
+});
+
 test('store preserves generation history, revisions and recoverable deletion', () => {
   const db = new BetterSqliteDatabase(':memory:');
   db.exec(`
