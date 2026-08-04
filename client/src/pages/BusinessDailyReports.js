@@ -215,7 +215,7 @@ function escapeScriptString(value) {
 
 function extractZhixiaoDateMeta(html) {
   const source = String(html || '');
-  const datesMatch = source.match(/"dates"\s*:\s*(\[[\s\S]*?\])\s*,\s*"latest"/);
+  const datesMatch = source.match(/"dates"\s*:\s*(\[[^\]]*\])/);
   let dates = [];
   if (datesMatch) {
     try {
@@ -273,25 +273,98 @@ function buildArtifactHtmlDocument(html, artifactType, selectedDate = '') {
   return secureInteractiveHtmlDocument(source);
 }
 
-function ReportHtmlFrame({ reportId, machine = false, revisionId = null }) {
-  const [state, setState] = useState({ loading: true, html: '', error: '' });
+function InteractiveReportFrame({ state, title, onDateChange }) {
+  return (
+    <div className="daily-report-artifact-frame">
+      {state.dateMeta.dates.length > 1 && (
+        <div className="daily-report-artifact-toolbar">
+          <Text type="secondary">查看日期</Text>
+          <Select
+            className="daily-report-artifact-date-select"
+            value={state.selectedDate}
+            options={state.dateMeta.dates.slice().reverse().map(date => ({ value: date, label: date }))}
+            onChange={onDateChange}
+          />
+          <Text type="secondary">
+            已内置 {state.dateMeta.dates[0]} 至 {state.dateMeta.dates[state.dateMeta.dates.length - 1]} 数据
+          </Text>
+        </div>
+      )}
+      <iframe
+        key={`interactive:${state.selectedDate || 'default'}`}
+        className="daily-report-frame daily-report-frame-interactive"
+        title={title}
+        sandbox="allow-scripts"
+        srcDoc={state.html}
+      />
+    </div>
+  );
+}
+
+function ReportHtmlFrame({ reportId, machine = false, revisionId = null, interactiveZhixiao = false }) {
+  const [state, setState] = useState({
+    loading: true,
+    rawHtml: '',
+    html: '',
+    error: '',
+    dateMeta: { dates: [], latest: '' },
+    selectedDate: '',
+  });
 
   useEffect(() => {
     let alive = true;
-    setState({ loading: true, html: '', error: '' });
+    setState({ loading: true, rawHtml: '', html: '', error: '', dateMeta: { dates: [], latest: '' }, selectedDate: '' });
     businessDailyReportsApi.html(reportId, {
       machine: machine ? 1 : undefined,
       revision_id: revisionId || undefined,
     }).then(html => {
-      if (alive) setState({ loading: false, html: secureHtmlDocument(html), error: '' });
+      if (!alive) return;
+      const dateMeta = interactiveZhixiao ? extractZhixiaoDateMeta(html) : { dates: [], latest: '' };
+      const selectedDate = dateMeta.latest || '';
+      setState({
+        loading: false,
+        rawHtml: html,
+        html: interactiveZhixiao
+          ? buildArtifactHtmlDocument(html, 'zhixiao_html_report', selectedDate)
+          : secureHtmlDocument(html),
+        error: '',
+        dateMeta,
+        selectedDate,
+      });
     }).catch(error => {
-      if (alive) setState({ loading: false, html: '', error: getErrorMessage(error, '日报正文加载失败') });
+      if (alive) {
+        setState({
+          loading: false,
+          rawHtml: '',
+          html: '',
+          error: getErrorMessage(error, '日报正文加载失败'),
+          dateMeta: { dates: [], latest: '' },
+          selectedDate: '',
+        });
+      }
     });
     return () => { alive = false; };
-  }, [machine, reportId, revisionId]);
+  }, [interactiveZhixiao, machine, reportId, revisionId]);
+
+  const changeZhixiaoDate = value => {
+    setState(prev => ({
+      ...prev,
+      selectedDate: value,
+      html: buildArtifactHtmlDocument(prev.rawHtml, 'zhixiao_html_report', value),
+    }));
+  };
 
   if (state.loading) return <Skeleton active paragraph={{ rows: 10 }} />;
   if (state.error) return <Empty description={state.error} />;
+  if (interactiveZhixiao) {
+    return (
+      <InteractiveReportFrame
+        state={state}
+        title={machine ? '业务日报机器原稿' : '业务日报'}
+        onDateChange={changeZhixiaoDate}
+      />
+    );
+  }
   return (
     <iframe
       className="daily-report-frame"
@@ -352,31 +425,7 @@ function ArtifactHtmlFrame({ reportId, artifactType, title }) {
 
   if (state.loading) return <Skeleton active paragraph={{ rows: 10 }} />;
   if (state.error) return <Empty description={state.error} />;
-  return (
-    <div className="daily-report-artifact-frame">
-      {artifactType === 'zhixiao_html_report' && state.dateMeta.dates.length > 1 && (
-        <div className="daily-report-artifact-toolbar">
-          <Text type="secondary">查看日期</Text>
-          <Select
-            className="daily-report-artifact-date-select"
-            value={state.selectedDate}
-            options={state.dateMeta.dates.slice().reverse().map(date => ({ value: date, label: date }))}
-            onChange={changeZhixiaoDate}
-          />
-          <Text type="secondary">
-            已内置 {state.dateMeta.dates[0]} 至 {state.dateMeta.dates[state.dateMeta.dates.length - 1]} 数据
-          </Text>
-        </div>
-      )}
-      <iframe
-        key={`${artifactType}:${state.selectedDate || 'default'}`}
-        className="daily-report-frame daily-report-frame-interactive"
-        title={title}
-        sandbox="allow-scripts"
-        srcDoc={state.html}
-      />
-    </div>
-  );
+  return <InteractiveReportFrame state={state} title={title} onDateChange={changeZhixiaoDate} />;
 }
 
 function DeleteReportModal({ report, open, onCancel, onDeleted }) {
@@ -960,12 +1009,16 @@ function BusinessDailyReportDetail({ reportId }) {
     {
       key: 'current',
       label: '当前日报',
-      children: reportReady ? <ReportHtmlFrame reportId={reportId} /> : <Empty description="日报正文尚未生成" />,
+      children: reportReady
+        ? <ReportHtmlFrame reportId={reportId} interactiveZhixiao={hasZhixiaoHtmlReport} />
+        : <Empty description="日报正文尚未生成" />,
     },
     {
       key: 'machine',
       label: '机器原稿',
-      children: reportReady ? <ReportHtmlFrame reportId={reportId} machine /> : <Empty description="机器原稿尚未生成" />,
+      children: reportReady
+        ? <ReportHtmlFrame reportId={reportId} machine interactiveZhixiao={hasZhixiaoHtmlReport} />
+        : <Empty description="机器原稿尚未生成" />,
     },
     ...(hasZhixiaoHtmlReport ? [{
       key: 'zhixiao',
@@ -1226,7 +1279,11 @@ function BusinessDailyReportEdit({ reportId }) {
         </Form>
         <aside className="daily-report-editor-reference">
           <Title level={2}>机器原稿</Title>
-          <ReportHtmlFrame reportId={reportId} machine />
+          <ReportHtmlFrame
+            reportId={reportId}
+            machine
+            interactiveZhixiao={(detail.artifacts || []).some(artifact => artifact.artifact_type === 'zhixiao_html_report')}
+          />
         </aside>
       </div>
     </div>
