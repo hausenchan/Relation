@@ -209,6 +209,70 @@ function secureInteractiveHtmlDocument(html) {
   return `<!doctype html><html><head>${meta}</head><body>${source}</body></html>`;
 }
 
+function escapeScriptString(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/</g, '\\u003c');
+}
+
+function extractZhixiaoDateMeta(html) {
+  const source = String(html || '');
+  const datesMatch = source.match(/"dates"\s*:\s*(\[[\s\S]*?\])\s*,\s*"latest"/);
+  let dates = [];
+  if (datesMatch) {
+    try {
+      const parsed = JSON.parse(datesMatch[1]);
+      dates = Array.isArray(parsed)
+        ? parsed.filter(item => /^\d{4}-\d{2}-\d{2}$/.test(String(item || '')))
+        : [];
+    } catch {
+      dates = [];
+    }
+  }
+  const latest = source.match(/"latest"\s*:\s*"(\d{4}-\d{2}-\d{2})"/)?.[1] || dates[dates.length - 1] || '';
+  return {
+    dates,
+    latest: dates.includes(latest) ? latest : dates[dates.length - 1] || '',
+  };
+}
+
+function applyZhixiaoSelectedDate(html, selectedDate) {
+  if (!selectedDate) return html;
+  const safeDate = escapeScriptString(selectedDate);
+  let output = String(html || '');
+  output = output.replace(
+    /\b(?:let|var|const)\s+currentDate\s*=\s*REPORT_DATA\.latest\s*;/,
+    `let currentDate = "${safeDate}";`,
+  );
+  const syncScript = `<script data-relation-zhixiao-selected-date="${safeDate}">
+(function(){
+  function applySelectedDate(){
+    try {
+      var targetDate = "${safeDate}";
+      var data = window.REPORT_DATA || {};
+      if (!Array.isArray(data.dates) || data.dates.indexOf(targetDate) < 0) return;
+      var select = document.getElementById("dateSelect");
+      if (select) select.value = targetDate;
+      try { currentDate = targetDate; } catch (error) { window.currentDate = targetDate; }
+      try { if (typeof activeApp !== "undefined") activeApp = null; } catch (error) {}
+      if (typeof renderAll === "function") renderAll();
+    } catch (error) {
+      console.error("Relation 支小日报指定日期失败", error);
+    }
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", applySelectedDate, { once: true });
+  else applySelectedDate();
+})();
+</script>`;
+  if (/<\/body\s*>/i.test(output)) return output.replace(/<\/body\s*>/i, `${syncScript}</body>`);
+  return `${output}${syncScript}`;
+}
+
+function buildArtifactHtmlDocument(html, artifactType, selectedDate = '') {
+  const source = artifactType === 'zhixiao_html_report'
+    ? applyZhixiaoSelectedDate(html, selectedDate)
+    : html;
+  return secureInteractiveHtmlDocument(source);
+}
+
 function ReportHtmlFrame({ reportId, machine = false, revisionId = null }) {
   const [state, setState] = useState({ loading: true, html: '', error: '' });
 
@@ -239,28 +303,79 @@ function ReportHtmlFrame({ reportId, machine = false, revisionId = null }) {
 }
 
 function ArtifactHtmlFrame({ reportId, artifactType, title }) {
-  const [state, setState] = useState({ loading: true, html: '', error: '' });
+  const [state, setState] = useState({
+    loading: true,
+    rawHtml: '',
+    html: '',
+    error: '',
+    dateMeta: { dates: [], latest: '' },
+    selectedDate: '',
+  });
 
   useEffect(() => {
     let alive = true;
-    setState({ loading: true, html: '', error: '' });
+    setState({ loading: true, rawHtml: '', html: '', error: '', dateMeta: { dates: [], latest: '' }, selectedDate: '' });
     businessDailyReportsApi.artifactText(reportId, artifactType).then(html => {
-      if (alive) setState({ loading: false, html: secureInteractiveHtmlDocument(html), error: '' });
+      if (!alive) return;
+      const dateMeta = artifactType === 'zhixiao_html_report' ? extractZhixiaoDateMeta(html) : { dates: [], latest: '' };
+      const selectedDate = dateMeta.latest || '';
+      setState({
+        loading: false,
+        rawHtml: html,
+        html: buildArtifactHtmlDocument(html, artifactType, selectedDate),
+        error: '',
+        dateMeta,
+        selectedDate,
+      });
     }).catch(error => {
-      if (alive) setState({ loading: false, html: '', error: getErrorMessage(error, '日报产物加载失败') });
+      if (alive) {
+        setState({
+          loading: false,
+          rawHtml: '',
+          html: '',
+          error: getErrorMessage(error, '日报产物加载失败'),
+          dateMeta: { dates: [], latest: '' },
+          selectedDate: '',
+        });
+      }
     });
     return () => { alive = false; };
   }, [artifactType, reportId]);
 
+  const changeZhixiaoDate = value => {
+    setState(prev => ({
+      ...prev,
+      selectedDate: value,
+      html: buildArtifactHtmlDocument(prev.rawHtml, artifactType, value),
+    }));
+  };
+
   if (state.loading) return <Skeleton active paragraph={{ rows: 10 }} />;
   if (state.error) return <Empty description={state.error} />;
   return (
-    <iframe
-      className="daily-report-frame daily-report-frame-interactive"
-      title={title}
-      sandbox="allow-scripts"
-      srcDoc={state.html}
-    />
+    <div className="daily-report-artifact-frame">
+      {artifactType === 'zhixiao_html_report' && state.dateMeta.dates.length > 1 && (
+        <div className="daily-report-artifact-toolbar">
+          <Text type="secondary">查看日期</Text>
+          <Select
+            className="daily-report-artifact-date-select"
+            value={state.selectedDate}
+            options={state.dateMeta.dates.slice().reverse().map(date => ({ value: date, label: date }))}
+            onChange={changeZhixiaoDate}
+          />
+          <Text type="secondary">
+            已内置 {state.dateMeta.dates[0]} 至 {state.dateMeta.dates[state.dateMeta.dates.length - 1]} 数据
+          </Text>
+        </div>
+      )}
+      <iframe
+        key={`${artifactType}:${state.selectedDate || 'default'}`}
+        className="daily-report-frame daily-report-frame-interactive"
+        title={title}
+        sandbox="allow-scripts"
+        srcDoc={state.html}
+      />
+    </div>
   );
 }
 
