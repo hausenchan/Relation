@@ -381,7 +381,9 @@ function removeZhixiaoPasswordGateStyles(html) {
 
 function appendZhixiaoDateSelectorRecovery(html) {
   const source = String(html || '');
-  if (!/\bid=(["'])dateSelect\1/i.test(source) || !/\bREPORT_DATA\b/.test(source)) return source;
+  const hasLegacySelector = /\bid=(["'])dateSelect\1/i.test(source) && /\bREPORT_DATA\b/.test(source);
+  const hasCalendarSelector = /\bid=(["'])calendarPicker\1/i.test(source) && /\bAVAILABLE_DATES\b/.test(source);
+  if (!hasLegacySelector && !hasCalendarSelector) return source;
   if (/data-relation-zhixiao-date-recovery/i.test(source)) return source;
   const recoveryScript = `<script data-relation-zhixiao-date-recovery="1">
 (function(){
@@ -392,7 +394,26 @@ function appendZhixiaoDateSelectorRecovery(html) {
   ready(function(){
     try {
       var data = window.REPORT_DATA || {};
-      var dates = Array.isArray(data.dates) ? data.dates.slice() : [];
+      var dates = Array.isArray(window.AVAILABLE_DATES)
+        ? window.AVAILABLE_DATES.slice()
+        : (Array.isArray(data.dates) ? data.dates.slice() : []);
+      var calendarPicker = document.getElementById("calendarPicker");
+      if (calendarPicker && typeof switchDate === "function") {
+        var trigger = calendarPicker.querySelector(".calendar-trigger");
+        var previous = document.getElementById("calendarPrev");
+        var next = document.getElementById("calendarNext");
+        var grid = document.getElementById("calendarGrid");
+        if (trigger) trigger.addEventListener("click", function(){ if (typeof toggleCalendar === "function") toggleCalendar(); });
+        if (previous) previous.addEventListener("click", function(){ if (typeof changeCalendarMonth === "function") changeCalendarMonth(-1); });
+        if (next) next.addEventListener("click", function(){ if (typeof changeCalendarMonth === "function") changeCalendarMonth(1); });
+        if (grid) grid.addEventListener("click", function(event){
+          var button = event.target.closest(".calendar-day[data-date]");
+          if (!button || dates.indexOf(button.dataset.date) < 0) return;
+          try { calendarMonth = button.dataset.date.slice(0, 7); } catch (error) {}
+          switchDate(button.dataset.date);
+          if (typeof closeCalendar === "function") closeCalendar();
+        });
+      }
       var select = document.getElementById("dateSelect");
       if (!select || !dates.length) return;
       if (!select.options.length) {

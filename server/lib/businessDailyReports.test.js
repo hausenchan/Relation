@@ -224,6 +224,27 @@ test('normalizeZhixiaoReportHtmlForArtifact accepts password-free Zhixiao HTML',
   assert.doesNotMatch(html, /password-mask|class="locked"/);
 });
 
+test('normalizeZhixiaoReportHtmlForArtifact restores current calendar date controls after sanitizing handlers', () => {
+  const html = normalizeZhixiaoReportHtmlForArtifact(`
+    <!doctype html><html><head><title>支小应用数据</title></head><body>
+      <div id="calendarPicker">
+        <button class="calendar-trigger" onclick="toggleCalendar()">日期</button>
+        <button id="calendarPrev" onclick="changeCalendarMonth(-1)">上月</button>
+        <button id="calendarNext" onclick="changeCalendarMonth(1)">下月</button>
+        <div id="calendarGrid"></div>
+      </div>
+      <div class="day-report" data-date="2026-06-14"></div>
+      <div class="day-report active" data-date="2026-08-03"></div>
+      <script>window.AVAILABLE_DATES=["2026-06-14","2026-08-03"];</script>
+    </body></html>
+  `);
+
+  assert.doesNotMatch(html, /onclick=/i);
+  assert.match(html, /data-relation-zhixiao-date-recovery="1"/);
+  assert.match(html, /calendar-day\[data-date\]/);
+  assert.match(html, /switchDate\(button\.dataset\.date\)/);
+});
+
 test('normalizeZhixiaoReportHtmlForArtifact removes relocated password gate markup and styles', () => {
   const html = normalizeZhixiaoReportHtmlForArtifact(`
     <!doctype html>
