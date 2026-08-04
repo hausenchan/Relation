@@ -47,6 +47,7 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { businessDailyReportsApi } from '../api';
 import { useAuth } from '../AuthContext';
 import { formatBusinessDateTime } from '../utils/businessTime';
+import { applyZhixiaoSelectedDate, extractZhixiaoDateMeta } from '../utils/zhixiaoReportHtml';
 import '../styles/businessPage.css';
 import './BusinessDailyReports.css';
 
@@ -207,63 +208,6 @@ function secureInteractiveHtmlDocument(html) {
   const source = String(html || '');
   if (/<head\b[^>]*>/i.test(source)) return source.replace(/<head\b[^>]*>/i, match => `${match}${meta}`);
   return `<!doctype html><html><head>${meta}</head><body>${source}</body></html>`;
-}
-
-function escapeScriptString(value) {
-  return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/</g, '\\u003c');
-}
-
-function extractZhixiaoDateMeta(html) {
-  const source = String(html || '');
-  const datesMatch = source.match(/"dates"\s*:\s*(\[[^\]]*\])/);
-  let dates = [];
-  if (datesMatch) {
-    try {
-      const parsed = JSON.parse(datesMatch[1]);
-      dates = Array.isArray(parsed)
-        ? parsed.filter(item => /^\d{4}-\d{2}-\d{2}$/.test(String(item || '')))
-        : [];
-    } catch {
-      dates = [];
-    }
-  }
-  const latest = source.match(/"latest"\s*:\s*"(\d{4}-\d{2}-\d{2})"/)?.[1] || dates[dates.length - 1] || '';
-  return {
-    dates,
-    latest: dates.includes(latest) ? latest : dates[dates.length - 1] || '',
-  };
-}
-
-function applyZhixiaoSelectedDate(html, selectedDate) {
-  if (!selectedDate) return html;
-  const safeDate = escapeScriptString(selectedDate);
-  let output = String(html || '');
-  output = output.replace(
-    /\b(?:let|var|const)\s+currentDate\s*=\s*REPORT_DATA\.latest\s*;/,
-    `let currentDate = "${safeDate}";`,
-  );
-  const syncScript = `<script data-relation-zhixiao-selected-date="${safeDate}">
-(function(){
-  function applySelectedDate(){
-    try {
-      var targetDate = "${safeDate}";
-      var data = window.REPORT_DATA || {};
-      if (!Array.isArray(data.dates) || data.dates.indexOf(targetDate) < 0) return;
-      var select = document.getElementById("dateSelect");
-      if (select) select.value = targetDate;
-      try { currentDate = targetDate; } catch (error) { window.currentDate = targetDate; }
-      try { if (typeof activeApp !== "undefined") activeApp = null; } catch (error) {}
-      if (typeof renderAll === "function") renderAll();
-    } catch (error) {
-      console.error("Relation 支小日报指定日期失败", error);
-    }
-  }
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", applySelectedDate, { once: true });
-  else applySelectedDate();
-})();
-</script>`;
-  if (/<\/body\s*>/i.test(output)) return output.replace(/<\/body\s*>/i, `${syncScript}</body>`);
-  return `${output}${syncScript}`;
 }
 
 function buildArtifactHtmlDocument(html, artifactType, selectedDate = '') {
