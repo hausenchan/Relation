@@ -1496,17 +1496,27 @@ function createBusinessDailyReportStore({ db, identityDb = db, encryptRow, decry
     getHtml(reportId, { revisionId = null, machine = false } = {}) {
       const report = requireReport(reportId);
       let artifact = null;
+      let selectedRevision = null;
       if (machine) {
         artifact = getArtifactRow({ reportId, artifactType: 'report_html' });
       } else if (revisionId) {
-        const revision = requireRevision(reportId, revisionId);
-        if (revision.rendered_html_artifact_id) {
-          artifact = getArtifactRow({ reportId, artifactId: revision.rendered_html_artifact_id });
+        selectedRevision = requireRevision(reportId, revisionId);
+        if (selectedRevision.rendered_html_artifact_id) {
+          artifact = getArtifactRow({ reportId, artifactId: selectedRevision.rendered_html_artifact_id });
         }
       } else if (report.current_revision_id) {
-        const revision = requireRevision(reportId, report.current_revision_id);
-        if (revision.rendered_html_artifact_id) {
-          artifact = getArtifactRow({ reportId, artifactId: revision.rendered_html_artifact_id });
+        selectedRevision = requireRevision(reportId, report.current_revision_id);
+        if (selectedRevision.rendered_html_artifact_id) {
+          artifact = getArtifactRow({ reportId, artifactId: selectedRevision.rendered_html_artifact_id });
+        }
+      }
+      const canUseZhixiaoSource = machine
+        || (!revisionId && !report.current_revision_id)
+        || selectedRevision?.status === 'machine';
+      if (canUseZhixiaoSource) {
+        const zhixiaoArtifact = getArtifactRow({ reportId, artifactType: 'zhixiao_html_report' });
+        if (zhixiaoArtifact?.content_text) {
+          return normalizeZhixiaoReportHtmlForArtifact(zhixiaoArtifact.content_text);
         }
       }
       if (!artifact) artifact = getArtifactRow({ reportId, artifactType: 'report_html' });
