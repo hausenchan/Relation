@@ -6,7 +6,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const Database = require('./lib/database');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
@@ -86,6 +86,7 @@ const {
 const { createAiTrainingExternalConnectorRuntime } = require('./lib/aiTrainingConnectors');
 const { createAiTrainingEventStream } = require('./lib/aiTrainingEventStream');
 const {
+  ACTIVE_STATUSES,
   BUSINESS_DAILY_REPORT_MENU_KEY,
   BUSINESS_DAILY_REPORT_MODULE_KEY,
   BUSINESS_DAILY_REPORT_SCOPE_TREE,
@@ -17669,46 +17670,138 @@ function assertZhixiaoRuntimeReadyForGeneration() {
   return status;
 }
 
-function runZhixiaoReportPythonStep(label, args, { timeoutMs }) {
+const activeBusinessDailyReportJobs = new Map();
+
+function createBusinessDailyReportCancellationError(message = '用户已终止本次生成') {
+  return new BusinessDailyReportError(message, {
+    code: 'GENERATION_CANCELLED',
+    status: 409,
+  });
+}
+
+function cancelProcessTree(child) {
+  if (!child || child.exitCode !== null) return;
+  try {
+    if (process.platform === 'win32') {
+      child.kill('SIGTERM');
+    } else {
+      process.kill(-child.pid, 'SIGTERM');
+    }
+  } catch {
+    try { child.kill('SIGTERM'); } catch {}
+  }
+  setTimeout(() => {
+    if (!child || child.exitCode !== null) return;
+    try {
+      if (process.platform === 'win32') {
+        child.kill('SIGKILL');
+      } else {
+        process.kill(-child.pid, 'SIGKILL');
+      }
+    } catch {
+      try { child.kill('SIGKILL'); } catch {}
+    }
+  }, 5000).unref?.();
+}
+
+function getOrCreateBusinessDailyReportJob(reportId) {
+  const key = Number(reportId);
+  let job = activeBusinessDailyReportJobs.get(key);
+  if (!job) {
+    job = {
+      reportId: key,
+      cancelled: false,
+      children: new Set(),
+      cancel() {
+        this.cancelled = true;
+        for (const child of this.children) cancelProcessTree(child);
+      },
+    };
+    activeBusinessDailyReportJobs.set(key, job);
+  }
+  return job;
+}
+
+function assertBusinessDailyReportJobNotCancelled(job) {
+  if (job?.cancelled) throw createBusinessDailyReportCancellationError();
+}
+
+function runZhixiaoReportPythonStep(label, args, { timeoutMs, job = null }) {
   const pythonPath = getZhixiaoPythonPath();
   const env = { ...process.env };
   if (pythonPath) {
     env.PYTHONPATH = env.PYTHONPATH ? `${pythonPath}${path.delimiter}${env.PYTHONPATH}` : pythonPath;
   }
-  const result = spawnSync(getZhixiaoPythonCommand(), args, {
-    cwd: getZhixiaoReportProjectDir(),
-    env,
-    encoding: 'utf8',
-    timeout: timeoutMs,
-    maxBuffer: 1024 * 1024 * 10,
-  });
-  const output = {
-    label,
-    command: getZhixiaoPythonCommand(),
-    args,
-    status: result.status,
-    signal: result.signal,
-    stdout: clipZhixiaoRuntimeText(result.stdout),
-    stderr: clipZhixiaoRuntimeText(result.stderr),
-  };
-  if (result.error || result.status !== 0) {
-    throw new BusinessDailyReportError(`${label}失败：${clipZhixiaoRuntimeText(result.stderr || result.stdout || result.error?.message, 800)}`, {
-      code: result.error?.code === 'ETIMEDOUT' ? 'ZHIXIAO_GENERATOR_TIMEOUT' : 'ZHIXIAO_GENERATOR_FAILED',
-      status: 500,
-      details: output,
+  assertBusinessDailyReportJobNotCancelled(job);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    const maxBuffer = 1024 * 1024 * 10;
+    const child = spawn(getZhixiaoPythonCommand(), args, {
+      cwd: getZhixiaoReportProjectDir(),
+      env,
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
-  }
-  return output;
+    job?.children?.add(child);
+    const finish = (error, result = {}) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      job?.children?.delete(child);
+      const output = {
+        label,
+        command: getZhixiaoPythonCommand(),
+        args,
+        status: result.status ?? null,
+        signal: result.signal ?? null,
+        stdout: clipZhixiaoRuntimeText(stdout),
+        stderr: clipZhixiaoRuntimeText(stderr),
+      };
+      if (job?.cancelled) {
+        reject(createBusinessDailyReportCancellationError());
+        return;
+      }
+      if (error || result.status !== 0) {
+        reject(new BusinessDailyReportError(`${label}失败：${clipZhixiaoRuntimeText(stderr || stdout || error?.message, 800)}`, {
+          code: error?.code === 'ETIMEDOUT' ? 'ZHIXIAO_GENERATOR_TIMEOUT' : 'ZHIXIAO_GENERATOR_FAILED',
+          status: 500,
+          details: output,
+        }));
+        return;
+      }
+      resolve(output);
+    };
+    const timer = setTimeout(() => {
+      const error = new Error(`${label}超时`);
+      error.code = 'ETIMEDOUT';
+      cancelProcessTree(child);
+      finish(error, { status: null, signal: 'SIGTERM' });
+    }, timeoutMs);
+    timer.unref?.();
+    child.stdout.on('data', chunk => {
+      if (stdout.length < maxBuffer) stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', chunk => {
+      if (stderr.length < maxBuffer) stderr += chunk.toString('utf8');
+    });
+    child.on('error', error => finish(error, { status: null, signal: null }));
+    child.on('close', (status, signal) => finish(null, { status, signal }));
+  });
 }
 
-function runZhixiaoReportGenerator() {
+async function runZhixiaoReportGenerator({ job = null } = {}) {
   const runtime = assertZhixiaoRuntimeReadyForGeneration();
   const generatorPath = getZhixiaoReportGeneratorPath();
   const timeoutMs = Math.max(30000, Number(process.env.ZHIXIAO_REPORT_GENERATOR_TIMEOUT_MS || 300000));
-  const compile = runZhixiaoReportPythonStep('支小日报生成器编译检查', ['-m', 'py_compile', generatorPath], {
+  const compile = await runZhixiaoReportPythonStep('支小日报生成器编译检查', ['-m', 'py_compile', generatorPath], {
     timeoutMs: Math.min(timeoutMs, 60000),
+    job,
   });
-  const generated = runZhixiaoReportPythonStep('支小日报生成', [generatorPath], { timeoutMs });
+  assertBusinessDailyReportJobNotCancelled(job);
+  const generated = await runZhixiaoReportPythonStep('支小日报生成', [generatorPath], { timeoutMs, job });
+  assertBusinessDailyReportJobNotCancelled(job);
   if (!fs.existsSync(getZhixiaoReportHtmlPath())) {
     throw new BusinessDailyReportError('支小日报生成完成后未发现 HTML 输出文件', {
       code: 'ZHIXIAO_HTML_NOT_FOUND_AFTER_GENERATION',
@@ -17799,12 +17892,14 @@ function buildZhixiaoBusinessDailyReportCompletion(report) {
 function scheduleBusinessDailyReportGeneration(reportId, user) {
   setImmediate(async () => {
     let currentStageCode = 'collecting';
+    const activeJob = getOrCreateBusinessDailyReportJob(reportId);
     try {
       const report = businessDailyReportStore.getReport(reportId, { includeDeleted: false });
       const runtime = getBusinessDailyReportRuntimeStatus(user, {
         scopeType: report.scope_type,
         scopeCode: report.scope_code,
       });
+      assertBusinessDailyReportJobNotCancelled(activeJob);
       businessDailyReportStore.completeStage(reportId, 'queued', {
         outputSummary: { accepted: true },
       });
@@ -17906,7 +18001,7 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
             timeoutMs: Math.max(30000, Number(process.env.ZHIXIAO_SELECTDB_MATERIALIZER_TIMEOUT_MS || 300000)),
           });
         }
-        const generation = runZhixiaoReportGenerator();
+        const generation = await runZhixiaoReportGenerator({ job: activeJob });
         if (useGeneratorSelectDb) {
           generatorSelectDbOutputs = collectZhixiaoGeneratorSelectDbOutputs({
             projectDir: getZhixiaoReportProjectDir(),
@@ -17968,17 +18063,28 @@ function scheduleBusinessDailyReportGeneration(reportId, user) {
     } catch (error) {
       console.error('[business-daily-report] generation failed:', error);
       try {
-        businessDailyReportStore.failReport(reportId, currentStageCode, {
-          errorCode: error instanceof BusinessDailyReportError
-            ? error.code
-            : (error?.code || 'GENERATION_INTERNAL_ERROR'),
-          errorMessage: error instanceof BusinessDailyReportError || error?.code
-            ? error.message
-            : '日报生成任务发生内部错误，请查看服务端日志后重试。',
-        });
+        const errorCode = error instanceof BusinessDailyReportError
+          ? error.code
+          : (error?.code || 'GENERATION_INTERNAL_ERROR');
+        const errorMessage = error instanceof BusinessDailyReportError || error?.code
+          ? error.message
+          : '日报生成任务发生内部错误，请查看服务端日志后重试。';
+        if (errorCode === 'GENERATION_CANCELLED') {
+          businessDailyReportStore.cancelReport(reportId, currentStageCode, {
+            errorCode,
+            errorMessage,
+          });
+        } else {
+          businessDailyReportStore.failReport(reportId, currentStageCode, {
+            errorCode,
+            errorMessage,
+          });
+        }
       } catch (persistError) {
         console.error('[business-daily-report] persist failure failed:', persistError);
       }
+    } finally {
+      activeBusinessDailyReportJobs.delete(Number(reportId));
     }
   });
 }
@@ -18077,6 +18183,10 @@ app.get('/api/agents/business-daily-reports/:id', (req, res) => {
       permissions: {
         can_write: !['readonly', 'guest'].includes(req.user.role),
         can_manage: canManageBusinessDailyReports(req.user),
+        can_cancel: ACTIVE_STATUSES.has(report.status) && (
+          Number(report.created_by) === Number(req.user.id)
+          || canManageBusinessDailyReports(req.user)
+        ),
         can_delete: Number(report.created_by) === Number(req.user.id)
           || canManageBusinessDailyReports(req.user),
         can_restore: canManageBusinessDailyReports(req.user),
@@ -18092,6 +18202,32 @@ app.get('/api/agents/business-daily-reports/:id/runs', (req, res) => {
     res.json(businessDailyReportStore.listRuns(req.params.id));
   } catch (error) {
     sendBusinessDailyReportError(res, error, '加载日报执行步骤失败');
+  }
+});
+
+app.post('/api/agents/business-daily-reports/:id/cancel', canWrite, (req, res) => {
+  try {
+    const report = businessDailyReportStore.getReport(req.params.id, { includeDeleted: false });
+    if (!(Number(report.created_by) === Number(req.user.id) || canManageBusinessDailyReports(req.user))) {
+      return res.status(403).json({ error: '无权终止该日报生成任务' });
+    }
+    if (!ACTIVE_STATUSES.has(report.status)) {
+      return res.status(409).json({ error: '当前日报不在生成中，无法终止', code: 'REPORT_NOT_ACTIVE' });
+    }
+    const activeJob = activeBusinessDailyReportJobs.get(Number(report.id));
+    activeJob?.cancel();
+    const cancelled = businessDailyReportStore.cancelReport(report.id, report.stage_code, {
+      errorCode: 'GENERATION_CANCELLED',
+      errorMessage: activeJob
+        ? '用户已终止本次生成'
+        : '用户已终止本次生成；未发现活动进程，已修正任务状态。',
+    });
+    res.json({
+      report: cancelled,
+      process_cancelled: Boolean(activeJob),
+    });
+  } catch (error) {
+    sendBusinessDailyReportError(res, error, '终止业务日报生成失败');
   }
 });
 
