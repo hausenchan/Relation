@@ -18499,7 +18499,10 @@ app.get('/api/agents/business-daily-reports/:id/artifacts/:type', (req, res) => 
         "frame-ancestors 'self'",
       ].join('; '));
       res.setHeader('X-Content-Type-Options', 'nosniff');
-      return res.type('html').send(artifact.content_text || '');
+      const html = req.params.type === 'zhixiao_html_report'
+        ? normalizeZhixiaoReportHtmlForArtifact(artifact.content_text || '')
+        : (artifact.content_text || '');
+      return res.type('html').send(html);
     }
     if (String(artifact.content_type || '').includes('application/json')) {
       try {

@@ -174,16 +174,18 @@ test('normalizeZhixiaoReportHtmlForArtifact removes local password gate and keep
         <div class="pwd-box"><input id="pwdInput"><button onclick="submitPwd()">进入</button></div>
       </div>
       <nav class="side-nav"><a href="#income">收入汇总</a></nav>
-      <main class="app"><h1>支小应用数据</h1><div id="app-summary">应用汇总</div></main>
+      <main class="app"><h1>支小应用数据</h1><select id="dateSelect"></select><div id="app-summary">应用汇总</div></main>
       <script>
         const PASS_KEY = "zfb_pass_multi_2026-07-30";
         const PASSWORD = "zfb666";
+        window.REPORT_DATA = { dates: ["2026-07-29", "2026-07-30"], latest: "2026-07-30" };
         window.APP_INCOME_DETAIL_DATA = {"2026-07-30":[]};
         window.AD_DETAIL_DATA = {};
         window.MEDIA_DETAIL_DATA = {};
         window.ORDER_DETAIL_DATA = {};
         function checkPwd(){ if (localStorage.getItem(PASS_KEY) === "ok") document.body.classList.remove("locked"); }
         function submitPwd(){ localStorage.setItem(PASS_KEY, "ok"); }
+        document.getElementById("pwdInput").addEventListener("keydown", e => { if (e.key === "Enter") submitPwd(); });
         checkPwd();
       </script>
     </body>
@@ -193,8 +195,11 @@ test('normalizeZhixiaoReportHtmlForArtifact removes local password gate and keep
   assert.doesNotMatch(html, /password-mask|pwdInput|class="locked report"|checkPwd\(\);/);
   assert.match(html, /<body class="report">/);
   assert.match(html, /APP_INCOME_DETAIL_DATA/);
+  assert.match(html, /data-relation-zhixiao-date-recovery="1"/);
+  assert.match(html, /dateSelect/);
   assert.match(html, /AD_DETAIL_DATA/);
   assert.match(html, /zfb_pass_multi_2026-07-30/);
+  assert.doesNotMatch(html, /function\s+(checkPwd|submitPwd)\s*\(/);
 });
 
 test('normalizeZhixiaoReportHtmlForArtifact accepts password-free Zhixiao HTML', () => {
