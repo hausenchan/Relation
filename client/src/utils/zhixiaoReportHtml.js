@@ -46,8 +46,40 @@ export function applyZhixiaoSelectedDate(html, selectedDate) {
   );
   const syncScript = `<script data-relation-zhixiao-selected-date="${safeDate}">
 (function(){
+  var reportPageIds = {
+    income: "incomeSummaryPage",
+    app: "mainReportPage",
+    daily: "dailyAnalysisPage",
+    traffic: "trafficSummaryPage",
+    delivery: "deliverySummaryPage",
+    media: "mediaSummaryPage"
+  };
+  function showReportPage(page, button){
+    if (!reportPageIds[page] || !document.getElementById(reportPageIds[page])) return;
+    if (typeof switchReportPage === "function") {
+      switchReportPage(page, button);
+      return;
+    }
+    Object.keys(reportPageIds).forEach(function(key){
+      var panel = document.getElementById(reportPageIds[key]);
+      if (panel) panel.style.display = key === page ? "" : "none";
+    });
+    var detail = document.getElementById("appDetailPage");
+    if (detail) detail.classList.remove("active");
+    document.querySelectorAll(".page-side-nav button[data-page]").forEach(function(item){
+      item.classList.toggle("active", item === button);
+    });
+  }
+  function bindReportNavigation(){
+    document.querySelectorAll(".page-side-nav button[data-page]").forEach(function(button){
+      if (button.dataset.relationPageBound === "1") return;
+      button.dataset.relationPageBound = "1";
+      button.addEventListener("click", function(){ showReportPage(button.dataset.page, button); });
+    });
+  }
   function applySelectedDate(){
     try {
+      bindReportNavigation();
       var targetDate = "${safeDate}";
       var availableDates = Array.isArray(window.AVAILABLE_DATES)
         ? window.AVAILABLE_DATES
