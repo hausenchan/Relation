@@ -213,6 +213,38 @@
   width: 150px;
 }
 
+.daily-report-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 520px;
+  gap: 14px;
+  padding: 32px 16px;
+  color: #667085;
+  text-align: center;
+}
+
+.daily-report-placeholder-active {
+  min-height: 560px;
+}
+
+.daily-report-placeholder-title {
+  margin-bottom: 6px;
+  color: #111827;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.daily-report-placeholder-text {
+  max-width: 520px;
+  margin: 0 auto 14px;
+  color: #667085;
+  font-size: 13px;
+  line-height: 20px;
+}
+
 .daily-report-execution-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.8fr) minmax(360px, 1.2fr);
