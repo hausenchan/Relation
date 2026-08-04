@@ -39,6 +39,7 @@ import {
   RestOutlined,
   SaveOutlined,
   SendOutlined,
+  StopOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -74,6 +75,7 @@ const STATUS_META = {
   completed: { label: '已完成', status: 'success' },
   partial: { label: '部分完成', status: 'warning' },
   failed: { label: '失败', status: 'error' },
+  cancelled: { label: '已终止', status: 'warning' },
 };
 
 const STAGE_STATUS_META = {
@@ -81,6 +83,7 @@ const STAGE_STATUS_META = {
   running: { status: 'process', label: '执行中' },
   completed: { status: 'finish', label: '已完成' },
   failed: { status: 'error', label: '失败' },
+  cancelled: { status: 'error', label: '已终止' },
   skipped: { status: 'wait', label: '已跳过' },
 };
 
@@ -174,6 +177,7 @@ function qualityTag(status) {
     passed: { color: 'green', label: '通过' },
     warning: { color: 'gold', label: '有缺口' },
     blocked: { color: 'red', label: '已阻断' },
+    cancelled: { color: 'orange', label: '已中止' },
   }[status] || { color: 'default', label: status || '待校验' };
   return <Tag color={meta.color}>{meta.label}</Tag>;
 }
@@ -438,9 +442,33 @@ function BusinessDailyReportList() {
     }
   };
 
+  const cancelReportGeneration = report => {
+    Modal.confirm({
+      title: '终止本次生成？',
+      content: '终止后本次日报会标记为已终止，已生成的临时文件不会作为正式日报使用，可重新生成。',
+      okText: '终止生成',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      async onOk() {
+        try {
+          await businessDailyReportsApi.cancel(report.id);
+          message.success('已终止本次生成');
+          load({ page: state.page, pageSize: state.pageSize });
+        } catch (error) {
+          message.error(getErrorMessage(error, '终止生成失败'));
+        }
+      },
+    });
+  };
+
   const rowMenu = report => ({
     items: [
       { key: 'view', icon: <EyeOutlined />, label: '查看详情' },
+      !report.deleted_at && writable
+        && (Number(report.created_by) === Number(user?.id) || canManage)
+        && ACTIVE_STATUSES.has(report.status)
+        ? { key: 'cancel', icon: <StopOutlined />, danger: true, label: '终止生成' }
+        : null,
       !report.deleted_at && writable && ['completed', 'partial'].includes(report.status)
         ? { key: 'edit', icon: <EditOutlined />, label: '创建修订' }
         : null,
@@ -456,6 +484,7 @@ function BusinessDailyReportList() {
       domEvent?.stopPropagation();
       if (key === 'view') navigate(`/agents/business-daily-reports/${report.id}`);
       if (key === 'edit') navigate(`/agents/business-daily-reports/${report.id}/edit`);
+      if (key === 'cancel') cancelReportGeneration(report);
       if (key === 'delete') setDeleteReport(report);
       if (key === 'restore') restore(report);
     },
@@ -592,6 +621,7 @@ function BusinessDailyReportList() {
               options={[
                 { value: 'completed', label: '已完成' },
                 { value: 'failed', label: '失败' },
+                { value: 'cancelled', label: '已终止' },
                 { value: 'collecting', label: '采集中' },
                 { value: 'analyzing', label: '分析中' },
                 { value: 'rendering', label: '生成报告' },
@@ -727,6 +757,28 @@ function BusinessDailyReportDetail({ reportId }) {
     } finally {
       setWorking(false);
     }
+  };
+
+  const cancelReportGeneration = () => {
+    Modal.confirm({
+      title: '终止本次生成？',
+      content: '终止后本次日报会标记为已终止，已生成的临时文件不会作为正式日报使用，可重新生成。',
+      okText: '终止生成',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      async onOk() {
+        setWorking(true);
+        try {
+          await businessDailyReportsApi.cancel(reportId);
+          message.success('已终止本次生成');
+          await load();
+        } catch (error) {
+          message.error(getErrorMessage(error, '终止生成失败'));
+        } finally {
+          setWorking(false);
+        }
+      },
+    });
   };
 
   const submitRevision = async revision => {
@@ -893,6 +945,9 @@ function BusinessDailyReportDetail({ reportId }) {
           </div>
         </div>
         <div className="business-page-actions">
+          {!report.deleted_at && detail.permissions?.can_cancel && (
+            <Button danger icon={<StopOutlined />} loading={working} onClick={cancelReportGeneration}>终止生成</Button>
+          )}
           {!report.deleted_at && detail.permissions?.can_write && (
             <Button icon={<ReloadOutlined />} loading={working} onClick={regenerate}>重新生成</Button>
           )}

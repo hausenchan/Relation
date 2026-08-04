@@ -599,6 +599,7 @@ export const businessDailyReportsApi = {
     { params, responseType: 'text' },
   ).then(r => r.data),
   regenerate: (id) => api.post(`/agents/business-daily-reports/${id}/regenerate`).then(r => r.data),
+  cancel: (id) => api.post(`/agents/business-daily-reports/${id}/cancel`).then(r => r.data),
   revisions: (id, params) => api.get(`/agents/business-daily-reports/${id}/revisions`, { params }).then(r => r.data),
   createRevision: (id, data) => api.post(`/agents/business-daily-reports/${id}/revisions`, data).then(r => r.data),
   updateRevision: (id, revisionId, data) => api.put(

@@ -1220,6 +1220,45 @@ function createBusinessDailyReportStore({ db, identityDb = db, encryptRow, decry
       fail();
     },
 
+    cancelReport(reportId, stageCode, { errorCode = 'GENERATION_CANCELLED', errorMessage = '用户已终止本次生成' } = {}) {
+      const report = requireReport(reportId, { includeDeleted: false });
+      const currentStageCode = stageCode || report.stage_code || 'queued';
+      const reportEncrypted = encryptRow ? encryptRow('ai_business_daily_reports', {
+        error_message: clipText(errorMessage, 4000),
+      }) : { error_message: clipText(errorMessage, 4000) };
+      const runEncrypted = encryptRow ? encryptRow('ai_business_daily_report_runs', {
+        error_message: clipText(errorMessage, 4000),
+      }) : { error_message: clipText(errorMessage, 4000) };
+      const currentStage = db.prepare(`
+        SELECT stage_order
+        FROM ai_business_daily_report_runs
+        WHERE report_id = ? AND stage_code = ?
+        LIMIT 1
+      `).get(Number(reportId), currentStageCode);
+      const cancel = db.transaction(() => {
+        db.prepare(`
+          UPDATE ai_business_daily_report_runs
+          SET stage_status = 'cancelled', error_code = ?, error_message = ?,
+              started_at = COALESCE(started_at, CURRENT_TIMESTAMP), completed_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE report_id = ? AND stage_code = ?
+        `).run(errorCode, runEncrypted.error_message, Number(reportId), currentStageCode);
+        db.prepare(`
+          UPDATE ai_business_daily_report_runs
+          SET stage_status = 'skipped', updated_at = CURRENT_TIMESTAMP
+          WHERE report_id = ? AND stage_order > ? AND stage_status = 'pending'
+        `).run(Number(reportId), Number(currentStage?.stage_order || 0));
+        db.prepare(`
+          UPDATE ai_business_daily_reports
+          SET status = 'cancelled', stage_code = ?, quality_status = 'cancelled',
+              error_code = ?, error_message = ?, completed_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(currentStageCode, errorCode, reportEncrypted.error_message, Number(reportId));
+      });
+      cancel();
+      return serializeReport(requireReport(reportId), decryptRow);
+    },
+
     completeReport(reportId, {
       source = null,
       normalized = null,

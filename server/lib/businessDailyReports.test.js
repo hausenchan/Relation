@@ -281,12 +281,29 @@ test('store preserves generation history, revisions and recoverable deletion', (
   });
   assert.equal(store.getReport(failed.id).status, 'failed');
   assert.equal(store.listRuns(failed.id).find(item => item.stage_code === 'normalizing').stage_status, 'skipped');
+
+  const cancelled = store.createReport({ reportDate: '2026-07-24', userId: 1 });
+  store.completeStage(cancelled.id, 'queued');
+  store.startStage(cancelled.id, 'collecting');
+  store.cancelReport(cancelled.id, 'collecting', {
+    errorCode: 'GENERATION_CANCELLED',
+    errorMessage: '用户已终止本次生成',
+  });
+  const cancelledReport = store.getReport(cancelled.id);
+  assert.equal(cancelledReport.status, 'cancelled');
+  assert.equal(cancelledReport.quality_status, 'cancelled');
+  assert.equal(cancelledReport.error_code, 'GENERATION_CANCELLED');
+  const cancelledRuns = store.listRuns(cancelled.id);
+  assert.equal(cancelledRuns.find(item => item.stage_code === 'collecting').stage_status, 'cancelled');
+  assert.equal(cancelledRuns.find(item => item.stage_code === 'normalizing').stage_status, 'skipped');
+
   assert.throws(
     () => store.softDelete(failed.id, { userId: 1, reason: '' }),
     error => error.code === 'DELETE_REASON_REQUIRED',
   );
   assert.ok(store.softDelete(failed.id, { userId: 1, reason: '训练清理' }).deleted_at);
-  assert.equal(store.listReports().total, 0);
+  assert.equal(store.listReports().total, 1);
+  assert.equal(store.listReports({ status: 'cancelled' }).total, 1);
   assert.equal(store.listReports({ deleted: true }).total, 1);
   assert.equal(store.restore(failed.id).deleted_at, null);
 
@@ -345,7 +362,7 @@ test('store preserves generation history, revisions and recoverable deletion', (
   assert.equal(scoped.scope_name, '支小业务');
   assert.equal(scoped.skill_code, 'zhixiao-ai');
   assert.equal(store.listReports({ scopeType: 'business_line', scopeCode: 'ZHIXIAO' }).total, 1);
-  assert.equal(store.listReports({ scopeType: 'project', scopeCode: 'YYZ' }).total, 2);
+  assert.equal(store.listReports({ scopeType: 'project', scopeCode: 'YYZ' }).total, 3);
   store.failReport(scoped.id, 'queued', {
     errorCode: 'TEST_COMPLETE',
     errorMessage: '测试结束',
