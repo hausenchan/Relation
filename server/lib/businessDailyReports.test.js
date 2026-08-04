@@ -219,6 +219,41 @@ test('normalizeZhixiaoReportHtmlForArtifact accepts password-free Zhixiao HTML',
   assert.doesNotMatch(html, /password-mask|class="locked"/);
 });
 
+test('normalizeZhixiaoReportHtmlForArtifact removes relocated password gate markup and styles', () => {
+  const html = normalizeZhixiaoReportHtmlForArtifact(`
+    <!doctype html>
+    <html lang="zh-CN">
+    <head>
+      <title>支小应用数据</title>
+      <style>
+        .password-mask{position:fixed}
+        body.locked .app{display:none}
+        .app{display:block}
+      </style>
+    </head>
+    <body class="locked report">
+      <header><h1>支小应用数据</h1></header>
+      <section class="password-mask">
+        <div class="pwd-box">
+          <div><input id="pwdInput"><button onclick="submitPwd()">进入</button></div>
+        </div>
+      </section>
+      <main class="app"><div id="app-summary">应用汇总</div></main>
+      <script>
+        const PASS_KEY = "zfb_pass_multi_2026-08-02";
+        const PASSWORD = "zfb666";
+        function checkPwd(){ document.body.classList.add("locked"); }
+        checkPwd();
+      </script>
+    </body>
+    </html>
+  `);
+
+  assert.match(html, /<body class="report">/);
+  assert.match(html, /应用汇总/);
+  assert.doesNotMatch(html, /password-mask|pwdInput|body\.locked|class="locked report"|checkPwd\(\);/);
+});
+
 test('store preserves generation history, revisions and recoverable deletion', () => {
   const db = new BetterSqliteDatabase(':memory:');
   db.exec(`
