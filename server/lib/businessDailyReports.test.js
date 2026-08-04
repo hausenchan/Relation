@@ -452,11 +452,14 @@ test('store persists Zhixiao SelectDB report artifacts after snapshot and materi
     <html><head><title>支小应用数据</title></head><body class="locked report">
       <div class="password-mask"><input id="pwdInput"></div>
       <nav class="side-nav"><a href="#income">收入汇总</a></nav>
-      <main class="app"><h1>支小应用数据</h1></main>
+      <main class="app"><h1>支小应用数据</h1><div id="trendChart"></div></main>
       <script>
         const PASS_KEY = "zfb_pass_multi_2026-07-31";
         const PASSWORD = "zfb666";
+        window.AVAILABLE_DATES = ["2026-07-30", "2026-07-31"];
         window.APP_INCOME_DETAIL_DATA = {"2026-07-31":[]};
+        function drawTrendChart(){ document.getElementById("trendChart").innerHTML = "<svg></svg>"; }
+        drawTrendChart();
       </script>
     </body></html>
   `;
@@ -504,6 +507,19 @@ test('store persists Zhixiao SelectDB report artifacts after snapshot and materi
   const zhixiaoHtml = store.getArtifact(report.id, 'zhixiao_html_report').content_text;
   assert.match(zhixiaoHtml, /支小应用数据/);
   assert.doesNotMatch(zhixiaoHtml, /password-mask|pwdInput|zfb666/);
+  const genericHtml = store.getArtifact(report.id, 'report_html').content_text;
+  assert.doesNotMatch(genericHtml, /drawTrendChart|AVAILABLE_DATES|<script/i);
+  const currentHtml = store.getHtml(report.id);
+  assert.match(currentHtml, /drawTrendChart|AVAILABLE_DATES/);
+  assert.match(currentHtml, /<script/i);
+  assert.match(store.getHtml(report.id, { machine: true }), /drawTrendChart/);
+  const draftRevision = store.createRevision(report.id, {
+    userId: 1,
+    narrative: { summary: '人工修订摘要' },
+  });
+  const revisedHtml = store.getHtml(report.id, { revisionId: draftRevision.id });
+  assert.doesNotMatch(revisedHtml, /drawTrendChart|AVAILABLE_DATES|<script/i);
+  assert.match(revisedHtml, /人工修订摘要/);
   const sourceJson = JSON.parse(store.getArtifact(report.id, 'source_json').content_text);
   assert.equal(sourceJson.type, 'midmax_selectdb_snapshot');
   assert.equal(sourceJson.datasets.length, ZHIXIAO_SELECTDB_DATASET_CODES.length);
