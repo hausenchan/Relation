@@ -379,6 +379,99 @@ function removeZhixiaoPasswordGateStyles(html) {
   });
 }
 
+function appendZhixiaoDateSelectorRecovery(html) {
+  const source = String(html || '');
+  if (!/\bid=(["'])dateSelect\1/i.test(source) || !/\bREPORT_DATA\b/.test(source)) return source;
+  if (/data-relation-zhixiao-date-recovery/i.test(source)) return source;
+  const recoveryScript = `<script data-relation-zhixiao-date-recovery="1">
+(function(){
+  function ready(fn) {
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", fn, { once: true });
+    else fn();
+  }
+  ready(function(){
+    try {
+      var data = window.REPORT_DATA || {};
+      var dates = Array.isArray(data.dates) ? data.dates.slice() : [];
+      var select = document.getElementById("dateSelect");
+      if (!select || !dates.length) return;
+      if (!select.options.length) {
+        select.innerHTML = dates.slice().reverse().map(function(date){
+          return '<option value="' + String(date).replace(/"/g, '&quot;') + '">' + String(date) + '</option>';
+        }).join('');
+      }
+      if (!select.value || dates.indexOf(select.value) < 0) select.value = data.latest || dates[dates.length - 1];
+      select.onchange = function() {
+        try { currentDate = select.value; } catch (error) { window.currentDate = select.value; }
+        try { if (typeof activeApp !== "undefined") activeApp = null; } catch (error) {}
+        if (typeof renderAll === "function") renderAll();
+      };
+      if (typeof renderAll === "function") renderAll();
+    } catch (error) {
+      console.error("Relation 支小日报日期选择初始化失败", error);
+    }
+  });
+})();
+</script>`;
+  if (/<\/body\s*>/i.test(source)) return source.replace(/<\/body\s*>/i, `${recoveryScript}</body>`);
+  return `${source}${recoveryScript}`;
+}
+
+function removeJavaScriptFunctionByName(source, functionName) {
+  const namePattern = String(functionName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let output = String(source || '');
+  const functionPattern = new RegExp(`function\\s+${namePattern}\\s*\\(`, 'g');
+
+  while (true) {
+    const match = functionPattern.exec(output);
+    if (!match) return output;
+    const start = match.index;
+    let cursor = functionPattern.lastIndex;
+    let parenDepth = 1;
+    while (cursor < output.length && parenDepth > 0) {
+      const char = output[cursor];
+      if (char === '(') parenDepth += 1;
+      if (char === ')') parenDepth -= 1;
+      cursor += 1;
+    }
+    while (cursor < output.length && /\s/.test(output[cursor])) cursor += 1;
+    if (output[cursor] !== '{') {
+      functionPattern.lastIndex = cursor;
+      continue;
+    }
+    let braceDepth = 0;
+    let quote = '';
+    let escaped = false;
+    while (cursor < output.length) {
+      const char = output[cursor];
+      if (quote) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === quote) {
+          quote = '';
+        }
+      } else if (char === '"' || char === "'" || char === '`') {
+        quote = char;
+      } else if (char === '{') {
+        braceDepth += 1;
+      } else if (char === '}') {
+        braceDepth -= 1;
+        if (braceDepth === 0) {
+          cursor += 1;
+          if (output[cursor] === ';') cursor += 1;
+          output = `${output.slice(0, start)}${output.slice(cursor)}`;
+          functionPattern.lastIndex = start;
+          break;
+        }
+      }
+      cursor += 1;
+    }
+    if (braceDepth !== 0) return output;
+  }
+}
+
 function normalizeZhixiaoReportHtmlForArtifact(html) {
   const source = String(html || '');
   if (!/<title>\s*支小应用数据\s*<\/title>/i.test(source)) {
@@ -428,7 +521,11 @@ function normalizeZhixiaoReportHtmlForArtifact(html) {
   });
   output = output.replace(/checkPwd\(\);\s*/g, '');
   output = output.replace(/localStorage\.setItem\(PASS_KEY,\s*["']ok["']\);/g, '');
+  output = output.replace(/^[^\n]*document\.getElementById\((["'])pwdInput\1\)\.addEventListener\([^\n]*(?:\n|$)/gm, '');
+  output = removeJavaScriptFunctionByName(output, 'checkPwd');
+  output = removeJavaScriptFunctionByName(output, 'submitPwd');
   output = output.replace(/\s*const\s+PASSWORD\s*=\s*["']zfb666["'];?/g, '');
+  output = appendZhixiaoDateSelectorRecovery(output);
 
   if (/password-mask/i.test(output) || /class=(["'])[^"']*\blocked\b[^"']*\1/i.test(output)) {
     throw new BusinessDailyReportError('支小 HTML 密码门移除失败', {
