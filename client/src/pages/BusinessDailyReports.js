@@ -428,6 +428,71 @@ function ArtifactHtmlFrame({ reportId, artifactType, title }) {
   return <InteractiveReportFrame state={state} title={title} onDateChange={changeZhixiaoDate} />;
 }
 
+function getCurrentRun(runs = [], report = {}) {
+  return runs.find(run => run.stage_status === 'running')
+    || runs.find(run => run.stage_code === report.stage_code)
+    || null;
+}
+
+function ReportPendingState({ report, runs = [], onShowExecution }) {
+  const isActive = ACTIVE_STATUSES.has(report.status);
+  const isFailed = report.status === 'failed';
+  const isCancelled = report.status === 'cancelled';
+  const currentRun = getCurrentRun(runs, report);
+  const stageLabel = currentRun?.stage_label || STATUS_META[report.status]?.label || '生成中';
+  const progress = Math.max(0, Math.min(100, Number(report.progress_percent || 0)));
+
+  if (isFailed) {
+    return (
+      <div className="daily-report-placeholder">
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={(
+            <div>
+              <div className="daily-report-placeholder-title">日报生成失败</div>
+              <div className="daily-report-placeholder-text">查看执行记录可定位失败阶段和原因。</div>
+            </div>
+          )}
+        />
+        <Button onClick={onShowExecution}>查看执行记录</Button>
+      </div>
+    );
+  }
+
+  if (isCancelled) {
+    return (
+      <div className="daily-report-placeholder">
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={(
+            <div>
+              <div className="daily-report-placeholder-title">本次生成已终止</div>
+              <div className="daily-report-placeholder-text">日报正文未作为正式产物保存，可重新生成。</div>
+            </div>
+          )}
+        />
+        <Button onClick={onShowExecution}>查看执行记录</Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="daily-report-placeholder daily-report-placeholder-active">
+      <Progress type="circle" percent={progress} size={84} />
+      <div>
+        <div className="daily-report-placeholder-title">日报正文生成中</div>
+        <div className="daily-report-placeholder-text">
+          当前正在{stageLabel}，日报正文会在“生成日报产物”完成后展示。
+        </div>
+        <Button type="primary" onClick={onShowExecution}>查看执行进度</Button>
+      </div>
+      {isActive && currentRun?.error_message && (
+        <Alert type="warning" showIcon message={currentRun.error_message} />
+      )}
+    </div>
+  );
+}
+
 function DeleteReportModal({ report, open, onCancel, onDeleted }) {
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
@@ -877,6 +942,7 @@ function BusinessDailyReportDetail({ reportId }) {
   const [loading, setLoading] = useState(true);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('current');
+  const [tabTouched, setTabTouched] = useState(false);
   const [working, setWorking] = useState(false);
 
   const load = useCallback(async ({ quiet = false } = {}) => {
@@ -896,6 +962,10 @@ function BusinessDailyReportDetail({ reportId }) {
     const timer = window.setInterval(() => load({ quiet: true }), 2500);
     return () => window.clearInterval(timer);
   }, [detail?.report?.status, load]);
+  useEffect(() => {
+    if (!detail?.report || tabTouched) return;
+    setActiveTab(ACTIVE_STATUSES.has(detail.report.status) ? 'execution' : 'current');
+  }, [detail?.report, tabTouched]);
 
   const report = detail?.report;
   const regenerate = async () => {
@@ -984,7 +1054,16 @@ function BusinessDailyReportDetail({ reportId }) {
       render: (_, revision) => (
         <Space size={4}>
           {revision.rendered_html_artifact_id && (
-            <Button type="link" size="small" onClick={() => setActiveTab(`revision-${revision.id}`)}>查看</Button>
+            <Button
+              type="link"
+              size="small"
+              onClick={() => {
+                setTabTouched(true);
+                setActiveTab(`revision-${revision.id}`);
+              }}
+            >
+              查看
+            </Button>
           )}
           {revision.status === 'draft' && detail.permissions?.can_write
             && Number(revision.created_by) === Number(user?.id) && (
@@ -1008,10 +1087,19 @@ function BusinessDailyReportDetail({ reportId }) {
   const tabItems = [
     {
       key: 'current',
-      label: '当前日报',
+      label: reportReady ? '当前日报' : '当前日报（生成中）',
       children: reportReady
         ? <ReportHtmlFrame reportId={reportId} interactiveZhixiao={hasZhixiaoHtmlReport} />
-        : <Empty description="日报正文尚未生成" />,
+        : (
+          <ReportPendingState
+            report={report}
+            runs={detail.runs || []}
+            onShowExecution={() => {
+              setTabTouched(true);
+              setActiveTab('execution');
+            }}
+          />
+        ),
     },
     {
       key: 'machine',
@@ -1047,7 +1135,7 @@ function BusinessDailyReportDetail({ reportId }) {
     },
     {
       key: 'execution',
-      label: '数据与执行',
+      label: ACTIVE_STATUSES.has(report.status) ? '数据与执行（进行中）' : '数据与执行',
       children: (
         <div className="daily-report-execution-grid">
           <section className="daily-report-section">
@@ -1153,7 +1241,14 @@ function BusinessDailyReportDetail({ reportId }) {
       )}
 
       <div className="daily-report-detail-panel">
-        <Tabs activeKey={activeTab} onChange={setActiveTab} items={tabItems} />
+        <Tabs
+          activeKey={activeTab}
+          onChange={key => {
+            setTabTouched(true);
+            setActiveTab(key);
+          }}
+          items={tabItems}
+        />
       </div>
 
       <DeleteReportModal
