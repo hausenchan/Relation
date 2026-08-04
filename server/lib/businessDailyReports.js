@@ -331,6 +331,54 @@ function removeClassToken(classValue, token) {
     .join(' ');
 }
 
+function removeHtmlBlockByClass(html, className) {
+  let output = String(html || '');
+  const classPattern = String(className || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const openTagPattern = new RegExp(
+    `<([a-z][\\w:-]*)\\b[^>]*\\bclass=(["'])[^"']*\\b${classPattern}\\b[^"']*\\2[^>]*>`,
+    'i',
+  );
+
+  while (true) {
+    const match = output.match(openTagPattern);
+    if (!match || match.index === undefined) return output;
+
+    const start = match.index;
+    const tagName = match[1].toLowerCase();
+    const tagPattern = new RegExp(`<\\/?${tagName}\\b[^>]*>`, 'gi');
+    tagPattern.lastIndex = start;
+    let depth = 0;
+    let end = -1;
+    let tagMatch;
+    while ((tagMatch = tagPattern.exec(output))) {
+      if (tagMatch[0].startsWith('</')) {
+        depth -= 1;
+        if (depth === 0) {
+          end = tagPattern.lastIndex;
+          break;
+        }
+      } else if (!/\/>\s*$/.test(tagMatch[0])) {
+        depth += 1;
+      }
+    }
+
+    if (end < 0) {
+      output = `${output.slice(0, start)}${output.slice(start + match[0].length)}`;
+    } else {
+      output = `${output.slice(0, start)}${output.slice(end)}`;
+    }
+  }
+}
+
+function removeZhixiaoPasswordGateStyles(html) {
+  return String(html || '').replace(/<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi, (match, attrs, css) => {
+    let nextCss = String(css || '');
+    nextCss = nextCss.replace(/[^{}]*\.password-mask[^{}]*\{[^{}]*\}/gi, '');
+    nextCss = nextCss.replace(/[^{}]*\blocked\b[^{}]*\{[^{}]*\}/gi, '');
+    return `<style${attrs}>${nextCss}</style>`;
+  });
+}
+
 function normalizeZhixiaoReportHtmlForArtifact(html) {
   const source = String(html || '');
   if (!/<title>\s*支小应用数据\s*<\/title>/i.test(source)) {
@@ -350,6 +398,8 @@ function normalizeZhixiaoReportHtmlForArtifact(html) {
   output = output.replace(/<embed\b[^>]*\/?>/gi, '');
   output = output.replace(/<form\b[^>]*>[\s\S]*?<\/form\s*>/gi, '');
   output = output.replace(/<div\b([^>]*\bclass=(["'])[^"']*\bpassword-mask\b[^"']*\2[^>]*)>[\s\S]*?<\/div>\s*(?=<nav\b[^>]*\bclass=(["'])[^"']*\bside-nav\b)/i, '');
+  output = removeHtmlBlockByClass(output, 'password-mask');
+  output = removeZhixiaoPasswordGateStyles(output);
   output = output.replace(/<body\b([^>]*)>/i, (match, attrs) => {
     const classMatch = String(attrs || '').match(/\bclass=(["'])([\s\S]*?)\1/i);
     const nextClass = removeClassToken(classMatch?.[2], 'locked');
