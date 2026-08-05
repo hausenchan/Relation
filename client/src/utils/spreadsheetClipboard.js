@@ -100,6 +100,17 @@ function getCellRawValue(cell) {
   return cell ?? '';
 }
 
+function normalizeGroupedNumericDisplayValue(value) {
+  const text = String(value ?? '');
+  const trimmed = text.trim();
+  if (!/^[+-]?(?:[1-9]\d{0,2}|0)(?:,\d{3})+(?:\.\d+)?$/.test(trimmed)) return text;
+  const unsigned = trimmed.replace(/^[+-]/, '');
+  const integer = unsigned.split('.')[0].replace(/,/g, '');
+  if (integer.length > 1 && integer.startsWith('0')) return text;
+  const normalized = trimmed.replace(/,/g, '');
+  return Number.isFinite(Number(normalized)) ? normalized : text;
+}
+
 export function spreadsheetClipboardPayloadToText(payload, displayMatrix = null) {
   const cells = normalizedCellMatrix(payload?.cells);
   return cells.map((row, rowIndex) => row.map((cell, columnIndex) => {
@@ -247,8 +258,9 @@ export function parseSpreadsheetHtmlClipboard(html) {
       while (matrix[rowIndex][columnIndex] !== undefined) columnIndex += 1;
       const formula = cellFormulaFromHtml(cellElement);
       const style = parseCellStyle(cellElement);
+      const displayValue = String(cellElement.textContent || '').replace(/\u00a0/g, ' ');
       const cell = {
-        v: formula || String(cellElement.textContent || '').replace(/\u00a0/g, ' '),
+        v: formula || normalizeGroupedNumericDisplayValue(displayValue),
         ...(Object.keys(style).length ? { style } : {}),
       };
       if (formula) hasFormulaMetadata = true;
@@ -285,7 +297,9 @@ function cellFromStructuredClipboardValue(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value !== 'object' || Array.isArray(value)) return { v: String(value) };
   const formula = formulaFromStructuredValue(value);
-  const rawValue = value.v ?? value.value ?? value.text ?? value.displayValue ?? value.formattedValue ?? '';
+  const explicitRawValue = value.v ?? value.value ?? value.text;
+  const displayValue = value.displayValue ?? value.formattedValue ?? '';
+  const rawValue = explicitRawValue ?? normalizeGroupedNumericDisplayValue(displayValue);
   const cell = { v: formula || String(rawValue ?? '') };
   if (value.style && typeof value.style === 'object') cell.style = clone(value.style);
   return cell;
@@ -341,20 +355,27 @@ function parseStructuredSpreadsheetClipboard(raw) {
   }
 }
 
-function mergeTextFormulasIntoHtmlPayload(htmlResult, textPayload) {
+function mergeTextRawValuesIntoHtmlPayload(htmlResult, textPayload) {
   if (!htmlResult?.payload?.cells?.length || !textPayload?.cells?.length) return htmlResult;
   if (htmlResult.payload.cells.length !== textPayload.cells.length
     || htmlResult.payload.cells[0]?.length !== textPayload.cells[0]?.length) return htmlResult;
-  let mergedFormula = false;
+  let mergedRawValue = false;
   const cells = htmlResult.payload.cells.map((row, rowIndex) => row.map((cell, columnIndex) => {
     const textCell = textPayload.cells[rowIndex]?.[columnIndex];
-    const formula = String(getCellRawValue(textCell) || '');
-    if (!formula.startsWith('=')) return cell;
-    mergedFormula = true;
-    return { ...(cell || {}), v: formula };
+    const textValue = String(getCellRawValue(textCell) ?? '');
+    const htmlValue = String(getCellRawValue(cell) ?? '');
+    const isFormula = textValue.startsWith('=');
+    const isRawNumericMatch = textValue !== htmlValue
+      && Number.isFinite(Number(textValue))
+      && normalizeGroupedNumericDisplayValue(htmlValue) === textValue;
+    if (!isFormula && !isRawNumericMatch) return cell;
+    mergedRawValue = true;
+    return { ...(cell || {}), v: textValue };
   }));
-  return mergedFormula
-    ? { ...htmlResult, payload: { ...htmlResult.payload, cells }, hasFormulaMetadata: true }
+  const hasFormulaMetadata = htmlResult.hasFormulaMetadata
+    || cells.some(row => row.some(cell => String(getCellRawValue(cell)).startsWith('=')));
+  return mergedRawValue
+    ? { ...htmlResult, payload: { ...htmlResult.payload, cells }, hasFormulaMetadata }
     : htmlResult;
 }
 
@@ -403,7 +424,7 @@ export function parseSpreadsheetClipboardData(clipboardData) {
     }
   }
   const payload = parseSpreadsheetTextClipboard(clipboardData.getData('text/plain'));
-  const htmlResult = mergeTextFormulasIntoHtmlPayload(
+  const htmlResult = mergeTextRawValuesIntoHtmlPayload(
     parseSpreadsheetHtmlClipboard(clipboardData.getData('text/html')),
     payload,
   );

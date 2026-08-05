@@ -105,6 +105,30 @@ test('merges formulas from plain text when interoperable HTML only contains disp
   expect(parsed.payload.cells[0][1].v).toBe("='飞猪-海韵'!Q18+'小德果园-海韵'!R18");
 });
 
+test('uses raw numeric text instead of grouped HTML display values', () => {
+  const parsed = parseSpreadsheetClipboardData(clipboardData({
+    'text/html': '<table><tr><td>5,107</td><td>-12,345.67</td></tr></table>',
+    'text/plain': '5107\t-12345.67',
+  }));
+  expect(parsed.source).toBe('html');
+  expect(parsed.payload.cells[0]).toEqual([{ v: '5107' }, { v: '-12345.67' }]);
+});
+
+test('normalizes strict grouped numeric displays without changing comma text or identifiers', () => {
+  const parsed = parseSpreadsheetHtmlClipboard(`
+    <table><tr>
+      <td>5,107</td><td>北京,上海</td><td>1,23</td><td>001,234</td><td>=SUM(A1,B1)</td>
+    </tr></table>
+  `);
+  expect(parsed.payload.cells[0]).toEqual([
+    { v: '5107' },
+    { v: '北京,上海' },
+    { v: '1,23' },
+    { v: '001,234' },
+    { v: '=SUM(A1,B1)' },
+  ]);
+});
+
 test('reads formula cells from a structured Shimo clipboard MIME payload', () => {
   const parsed = parseSpreadsheetClipboardData(clipboardData({
     'application/x-shimo-spreadsheet': JSON.stringify({
@@ -118,6 +142,23 @@ test('reads formula cells from a structured Shimo clipboard MIME payload', () =>
   expect(parsed.sourceLooksLikeShimo).toBe(true);
   expect(parsed.hasFormulaMetadata).toBe(true);
   expect(parsed.payload.cells[0][1].v).toBe('=A1*3');
+});
+
+test('prefers structured raw values and normalizes display-only grouped numbers', () => {
+  const parsed = parseSpreadsheetClipboardData(clipboardData({
+    'application/x-shimo-spreadsheet': JSON.stringify({
+      cells: [[
+        { value: '5107', displayValue: '5,107' },
+        { displayValue: '6,108' },
+        { displayValue: '渠道A,渠道B' },
+      ]],
+    }),
+  }));
+  expect(parsed.payload.cells[0]).toEqual([
+    { v: '5107' },
+    { v: '6108' },
+    { v: '渠道A,渠道B' },
+  ]);
 });
 
 test('falls back to a text matrix when HTML and Relation data are absent', () => {
