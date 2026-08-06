@@ -1206,6 +1206,62 @@ test('commits the live input value when Enter arrives before React draft state f
   container.remove();
 });
 
+test('keeps Sogou-style Chinese composition intact in cell and formula inputs', () => {
+  let latestWorkbook = createDefaultSpreadsheetWorkbook();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => root.render(
+    <ControlledSpreadsheetEditor
+      initialWorkbook={latestWorkbook}
+      onWorkbookChange={nextWorkbook => { latestWorkbook = nextWorkbook; }}
+    />
+  ));
+
+  const editor = container.querySelector('[aria-label="在线表格编辑区"]');
+  act(() => editor.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Process', keyCode: 229, which: 229, bubbles: true, cancelable: true,
+  })));
+  expect(container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"] input')?.value)
+    .toBe('');
+
+  const nativeValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const firstCell = container.querySelector('[data-spreadsheet-row-index="0"][data-spreadsheet-column-index="0"]');
+  const cellInput = firstCell.querySelector('input');
+  act(() => cellInput.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' })));
+  nativeValueSetter.call(cellInput, 'shi');
+  act(() => cellInput.dispatchEvent(new Event('input', { bubbles: true })));
+  expect(cellInput.value).toBe('shi');
+  act(() => cellInput.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '是' })));
+  nativeValueSetter.call(cellInput, '是');
+  act(() => cellInput.dispatchEvent(new Event('input', { bubbles: true })));
+  act(() => cellInput.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A1).toBeUndefined();
+  act(() => cellInput.blur());
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('是');
+
+  const formulaInput = container.querySelector('[data-spreadsheet-formula-input="true"]');
+  act(() => formulaInput.focus());
+  act(() => formulaInput.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' })));
+  nativeValueSetter.call(formulaInput, 'shi');
+  act(() => formulaInput.dispatchEvent(new Event('input', { bubbles: true })));
+  expect(formulaInput.value).toBe('shi');
+  nativeValueSetter.call(formulaInput, '是');
+  act(() => formulaInput.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '是' })));
+  act(() => formulaInput.dispatchEvent(new Event('input', { bubbles: true })));
+  act(() => formulaInput.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  })));
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('是');
+  act(() => formulaInput.blur());
+  expect(latestWorkbook.sheets[0].cells.A1.v).toBe('是');
+
+  act(() => root.unmount());
+  container.remove();
+});
+
 test('keeps Excel import and cell editing disabled for readonly users while allowing export', () => {
   const onImportXlsx = jest.fn();
   const onExportXlsx = jest.fn();

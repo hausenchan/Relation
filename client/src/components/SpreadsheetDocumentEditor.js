@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   ArrowLeftOutlined,
   ArrowRightOutlined,
@@ -33,6 +34,10 @@ import {
 } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Dropdown, Input, InputNumber, Modal, Select, Tooltip, Typography, message } from 'antd';
 import MentionPicker, { preloadMentionCandidates, scheduleMentionNotification } from './MentionPicker';
+import {
+  isContentEditableComposing,
+  shouldSuppressEnterAfterComposition,
+} from '../utils/contentEditableComposition';
 import {
   SpreadsheetConditionalFormatDialog,
   SpreadsheetDataValidationDialog,
@@ -526,6 +531,10 @@ export default function SpreadsheetDocumentEditor({
   const cellEditSessionRef = useRef(null);
   const formulaEditSessionRef = useRef(null);
   const formulaReferenceNavigationRef = useRef(false);
+  const cellInputComposingRef = useRef(false);
+  const cellCompositionEndedAtRef = useRef(0);
+  const formulaInputComposingRef = useRef(false);
+  const formulaCompositionEndedAtRef = useRef(0);
   const keyCommandRef = useRef(null);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const formatPainterRef = useRef(null);
@@ -1581,12 +1590,20 @@ export default function SpreadsheetDocumentEditor({
     }
     if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
     if ((event.metaKey || event.ctrlKey) && ['c', 'v', 'x'].includes(event.key.toLowerCase())) return;
+    if (canEdit && isContentEditableComposing(event)) {
+      if (!ensureSpreadsheetRangeEditable({ rowIndex: activeRowIndex, columnIndex: activeColumnIndex })) return;
+      flushSync(() => beginCellEdit(activeRowIndex, activeColumnIndex, ''));
+      editorRef.current
+        ?.querySelector?.(`[data-spreadsheet-row-index="${activeRowIndex}"][data-spreadsheet-column-index="${activeColumnIndex}"] input`)
+        ?.focus({ preventScroll: true });
+      return;
+    }
     if (
       canEdit
       && !event.altKey
       && !event.metaKey
       && !event.ctrlKey
-      && !event.isComposing
+      && !isContentEditableComposing(event)
       && event.key
       && event.key.length === 1
     ) {
@@ -2451,15 +2468,38 @@ export default function SpreadsheetDocumentEditor({
             onMouseDown={event => event.stopPropagation()}
             onChange={event => {
               updateActiveCellDraft(event.target.value, event.target.selectionStart);
-              window.setTimeout(() => detectInputMention(event, rowIndex, columnIndex), 0);
+              if (!cellInputComposingRef.current) {
+                window.setTimeout(() => detectInputMention(event, rowIndex, columnIndex), 0);
+              }
             }}
-            onSelect={event => updateActiveCellDraft(event.currentTarget.value, event.currentTarget.selectionStart)}
+            onSelect={event => {
+              if (!cellInputComposingRef.current) {
+                updateActiveCellDraft(event.currentTarget.value, event.currentTarget.selectionStart);
+              }
+            }}
+            onCompositionStart={() => {
+              cellInputComposingRef.current = true;
+              cellCompositionEndedAtRef.current = 0;
+            }}
+            onCompositionEnd={event => {
+              cellInputComposingRef.current = false;
+              cellCompositionEndedAtRef.current = Date.now();
+              updateActiveCellDraft(event.currentTarget.value, event.currentTarget.selectionStart);
+            }}
             onBlur={event => {
               if (formulaReferenceNavigationRef.current) return;
+              cellInputComposingRef.current = false;
+              cellCompositionEndedAtRef.current = 0;
               commitCellEditSession(event.currentTarget.value);
             }}
             onKeyDown={event => {
-              if (event.isComposing || event.nativeEvent?.isComposing) return;
+              if (isContentEditableComposing(event, cellInputComposingRef.current)) return;
+              if (shouldSuppressEnterAfterComposition(event, cellCompositionEndedAtRef.current)) {
+                cellCompositionEndedAtRef.current = 0;
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+              }
               if (event.key === 'Enter' || event.key === 'Tab') {
                 event.preventDefault();
                 const committed = commitCellEditSession(event.currentTarget.value);
@@ -2929,16 +2969,39 @@ export default function SpreadsheetDocumentEditor({
               onChange={event => {
                 if (!formulaEditSessionRef.current) beginFormulaEdit(event.currentTarget);
                 updateActiveFormulaDraft(event.target.value, event.target.selectionStart);
-                window.setTimeout(() => detectInputMention(event, formulaOriginRow, formulaOriginColumn), 0);
+                if (!formulaInputComposingRef.current) {
+                  window.setTimeout(() => detectInputMention(event, formulaOriginRow, formulaOriginColumn), 0);
+                }
               }}
-              onSelect={event => updateActiveFormulaDraft(event.currentTarget.value, event.currentTarget.selectionStart)}
+              onSelect={event => {
+                if (!formulaInputComposingRef.current) {
+                  updateActiveFormulaDraft(event.currentTarget.value, event.currentTarget.selectionStart);
+                }
+              }}
+              onCompositionStart={() => {
+                formulaInputComposingRef.current = true;
+                formulaCompositionEndedAtRef.current = 0;
+              }}
+              onCompositionEnd={event => {
+                formulaInputComposingRef.current = false;
+                formulaCompositionEndedAtRef.current = Date.now();
+                updateActiveFormulaDraft(event.currentTarget.value, event.currentTarget.selectionStart);
+              }}
               onScroll={event => setFormulaInputScrollLeft(event.currentTarget.scrollLeft)}
               onBlur={event => {
                 if (formulaReferenceNavigationRef.current) return;
+                formulaInputComposingRef.current = false;
+                formulaCompositionEndedAtRef.current = 0;
                 commitFormulaEditSession({ draftValue: event.currentTarget.value });
               }}
               onKeyDown={event => {
-                if (event.isComposing || event.nativeEvent?.isComposing) return;
+                if (isContentEditableComposing(event, formulaInputComposingRef.current)) return;
+                if (shouldSuppressEnterAfterComposition(event, formulaCompositionEndedAtRef.current)) {
+                  formulaCompositionEndedAtRef.current = 0;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
                 if (event.key === 'Enter') {
                   event.preventDefault();
                   commitFormulaEditSession({
