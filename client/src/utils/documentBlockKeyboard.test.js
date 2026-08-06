@@ -1,6 +1,7 @@
 import {
   mergeAdjacentDocumentBlocks,
   shouldIgnoreGlobalDocumentDelete,
+  supportsDocumentBlockHierarchyKeyboard,
 } from './documentBlockKeyboard';
 
 describe('document block keyboard handling', () => {
@@ -34,5 +35,13 @@ describe('document block keyboard handling', () => {
     expect(result.blocks[1]).toMatchObject({ type: 'bullet', content: '若3W/日', meta: { indent: 2 } });
     expect(result.blocks[2]).toBe(blocks[3]);
     expect(result.blocks[3]).toBe(blocks[4]);
+  });
+
+  test('media and attachment blocks expose block-level Tab indentation', () => {
+    ['image', 'recent-image', 'video', 'audio', 'external-link', 'attachment'].forEach(type => {
+      expect(supportsDocumentBlockHierarchyKeyboard({ type })).toBe(true);
+    });
+    expect(supportsDocumentBlockHierarchyKeyboard({ type: 'numbered' })).toBe(false);
+    expect(supportsDocumentBlockHierarchyKeyboard({ type: 'paragraph' })).toBe(false);
   });
 });

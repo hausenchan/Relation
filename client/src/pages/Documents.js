@@ -117,6 +117,7 @@ import {
   buildDocumentNumberedListValues,
   canNestDocumentBlock,
   getDocumentBlockHierarchyIndent,
+  getDocumentBlockHierarchyIndentChange,
   isDocumentBlockHierarchyMember,
 } from '../utils/documentBlockHierarchy';
 import {
@@ -145,6 +146,7 @@ import {
 import {
   mergeAdjacentDocumentBlocks,
   shouldIgnoreGlobalDocumentDelete,
+  supportsDocumentBlockHierarchyKeyboard,
 } from '../utils/documentBlockKeyboard';
 import {
   deleteDocumentTableColumnWidths,
@@ -8134,16 +8136,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const updateListIndent = (block, index, direction) => {
     if (!canAdjustBlockHierarchyIndent(block)) return false;
     const currentIndent = getBlockHierarchyIndent(block);
-    const previousBlock = editorBlocks[index - 1];
-    const previousIndent = isDocumentBlockHierarchyMember(previousBlock)
-      ? getBlockHierarchyIndent(previousBlock)
-      : -1;
-    const maxAllowedIndent = direction > 0
-      ? Math.min(maxListIndent, previousIndent + 1)
-      : maxListIndent;
-    const nextIndent = direction > 0
-      ? Math.min(currentIndent + 1, maxAllowedIndent)
-      : Math.max(0, currentIndent - 1);
+    const nextIndent = getDocumentBlockHierarchyIndentChange(editorBlocks, index, direction, maxListIndent);
+    if (nextIndent === null) return false;
     if (nextIndent === currentIndent) return true;
     updateBlock(block.id, {
       meta: {
@@ -8166,16 +8160,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     nextBlocks.forEach((block, index) => {
       if (!targetSet.has(block.id) || !canAdjustBlockHierarchyIndent(block)) return;
       const currentIndent = getBlockHierarchyIndent(block);
-      const previousBlock = nextBlocks[index - 1];
-      const previousIndent = isDocumentBlockHierarchyMember(previousBlock)
-        ? getBlockHierarchyIndent(previousBlock)
-        : -1;
-      const maxAllowedIndent = direction > 0
-        ? Math.min(maxListIndent, previousIndent + 1)
-        : maxListIndent;
-      const nextIndent = direction > 0
-        ? Math.min(currentIndent + 1, maxAllowedIndent)
-        : Math.max(0, currentIndent - 1);
+      const nextIndent = getDocumentBlockHierarchyIndentChange(nextBlocks, index, direction, maxListIndent);
+      if (nextIndent === null) return;
       if (nextIndent === currentIndent) return;
       changed = true;
       block.meta = {
@@ -15670,6 +15656,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       ? getBlockHierarchyIndent(block)
       : 0;
     const listBlockSelectionActive = hierarchicalListBlock && blockSelected && !menuOpen;
+    const keyboardNestableBlock = supportsDocumentBlockHierarchyKeyboard(block);
     const handleIcon = blankParagraph ? <BlockAddIcon /> : <BlockHandleIcon />;
     const handleLabel = blankParagraph ? '添加各种样式内容' : '块菜单';
     const handleTooltip = blankParagraph
@@ -15680,13 +15667,28 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         id={`doc-block-${block.id}`}
         data-doc-block-id={block.id}
         key={block.id}
-        onClick={() => {
+        tabIndex={keyboardNestableBlock ? 0 : undefined}
+        role={keyboardNestableBlock ? 'group' : undefined}
+        aria-label={keyboardNestableBlock ? `${blockTypeMap[block.type]?.label || '媒体'}块` : undefined}
+        onClick={(event) => {
           if (suppressEditorClickRef.current) return;
           setSelectedBlockId(block.id);
           const currentSelection = selectedAreaBlockIdsRef.current.length ? selectedAreaBlockIdsRef.current : selectedAreaBlockIds;
           if (!currentSelection.includes(block.id)) {
             clearAreaBlockSelection();
           }
+          if (
+            keyboardNestableBlock
+            && !event.target.closest('a, button, input, textarea, select, [role="button"], [contenteditable="true"]')
+          ) {
+            event.currentTarget.focus({ preventScroll: true });
+          }
+        }}
+        onKeyDown={(event) => {
+          if (!keyboardNestableBlock || event.key !== 'Tab' || !canAdjustBlockHierarchyIndent(block)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          updateListIndent(block, index, event.shiftKey ? -1 : 1);
         }}
         onDragOver={handleBlockDragOver}
         onDrop={event => handleBlockDrop(event, block)}

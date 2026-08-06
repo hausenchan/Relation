@@ -1,3 +1,19 @@
+const BLOCK_LEVEL_HIERARCHY_KEYBOARD_TYPES = new Set([
+  'attachment',
+  'audio',
+  'bilibili-video',
+  'external-link',
+  'image',
+  'netease-music',
+  'recent-image',
+  'tencent-video',
+  'video',
+]);
+
+export function supportsDocumentBlockHierarchyKeyboard(block) {
+  return Boolean(block?.type && BLOCK_LEVEL_HIERARCHY_KEYBOARD_TYPES.has(block.type));
+}
+
 export function isEditableDocumentKeyTarget(target) {
   if (!target || typeof target.closest !== 'function') return false;
   return Boolean(target.closest('textarea, input, [contenteditable]:not([contenteditable="false"])'));

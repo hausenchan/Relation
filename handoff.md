@@ -1,6 +1,25 @@
 # 开发交接
 
-最后更新：2026-08-03
+最后更新：2026-08-06
+
+## 普通文档媒体块列表缩进修复（2026-08-06）
+
+### 已完成
+
+- 修复普通文档图片块点击选中后无法通过 `Tab` 缩进的问题；图片、视频、音频、外部媒体和附件块现可
+  获得块级键盘焦点，并支持 `Tab / Shift+Tab` 调整列表层级。
+- 媒体缩进后统一写入 `hierarchy=list` 和 `indent`，不会打断前后同级数字列表编号，并会跟随折叠列表
+  父项展开或隐藏。
+- 抽取统一层级缩进计算，单块快捷键和多块菜单调整复用同一上限规则。
+
+### 验证
+
+- `cd client && CI=true ./node_modules/.bin/react-scripts test --watchAll=false --runInBand
+  src/utils/documentBlockHierarchy.test.js src/utils/documentBlockKeyboard.test.js` 通过，10/10。
+- `cd client && BUILD_PATH=/tmp/relation-document-media-indent-build npm run build` 通过。
+- 同一构建目录前端性能预算通过：首屏 JavaScript gzip `329.5KB / 400KB`，最大异步 chunk
+  `420.8KB / 500KB`。
+- 相关文件 `git diff --check` 通过。
 
 ## 支小业务日报 SelectDB 输入层（2026-07-31）
 

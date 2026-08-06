@@ -19,6 +19,21 @@ export function getDocumentBlockHierarchyIndent(block, maxIndent = 9) {
   return Math.max(0, Math.min(maxIndent, Math.floor(indent)));
 }
 
+export function getDocumentBlockHierarchyIndentChange(blocks = [], index, direction, maxIndent = 9) {
+  const block = blocks[index];
+  if (!canNestDocumentBlock(block)) return null;
+
+  const currentIndent = getDocumentBlockHierarchyIndent(block, maxIndent);
+  if (direction <= 0) return Math.max(0, currentIndent - 1);
+
+  const previousBlock = blocks[index - 1];
+  const previousIndent = isDocumentBlockHierarchyMember(previousBlock)
+    ? getDocumentBlockHierarchyIndent(previousBlock, maxIndent)
+    : -1;
+  const maxAllowedIndent = Math.min(maxIndent, previousIndent + 1);
+  return Math.min(currentIndent + 1, maxAllowedIndent);
+}
+
 export function buildDocumentNumberedListValues(blocks = [], maxIndent = 9) {
   const counters = [];
   const values = new Map();

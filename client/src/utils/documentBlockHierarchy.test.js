@@ -4,6 +4,7 @@ import {
   buildDocumentNumberedListValues,
   canNestDocumentBlock,
   getDocumentBlockHierarchyIndent,
+  getDocumentBlockHierarchyIndentChange,
 } from './documentBlockHierarchy';
 
 describe('document block hierarchy', () => {
@@ -44,6 +45,44 @@ describe('document block hierarchy', () => {
     expect(numberedValues.get('first')).toEqual({ index: 1, indent: 0 });
     expect(numberedValues.get('second')).toEqual({ index: 2, indent: 0 });
     expect(numberedValues.get('next-list')).toEqual({ index: 1, indent: 0 });
+  });
+
+  test('a selected local image can indent under a list item without restarting numbering', () => {
+    const blocks = [
+      { id: 'first', type: 'numbered', meta: { indent: 0 } },
+      { id: 'image', type: 'image', meta: { url: '/uploads/example.png' } },
+      { id: 'second', type: 'numbered', meta: { indent: 0 } },
+    ];
+
+    expect(getDocumentBlockHierarchyIndentChange(blocks, 1, 1)).toBe(1);
+
+    const nestedBlocks = blocks.map((block, index) => (
+      index === 1
+        ? { ...block, meta: { ...block.meta, hierarchy: 'list', indent: 1 } }
+        : block
+    ));
+    const numberedValues = buildDocumentNumberedListValues(nestedBlocks);
+
+    expect(numberedValues.get('first')).toEqual({ index: 1, indent: 0 });
+    expect(numberedValues.get('second')).toEqual({ index: 2, indent: 0 });
+  });
+
+  test('the same image indentation participates in fold-list visibility', () => {
+    const blocks = [
+      { id: 'fold', type: 'fold-list', meta: { indent: 0, collapsed: true } },
+      { id: 'image', type: 'image', meta: { url: '/uploads/example.png' } },
+    ];
+
+    const imageIndent = getDocumentBlockHierarchyIndentChange(blocks, 1, 1);
+    const nestedBlocks = blocks.map((block, index) => (
+      index === 1
+        ? { ...block, meta: { ...block.meta, hierarchy: 'list', indent: imageIndent } }
+        : block
+    ));
+
+    expect(imageIndent).toBe(1);
+    expect([...buildCollapsedDocumentBlockIds(nestedBlocks)]).toEqual(['image']);
+    expect(getDocumentBlockHierarchyIndentChange(nestedBlocks, 1, -1)).toBe(0);
   });
 
   test('table children do not restart numbered siblings at the same indent', () => {
