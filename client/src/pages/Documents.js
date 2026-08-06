@@ -89,6 +89,7 @@ import {
   updateExplicitDocumentShareUsers,
 } from '../utils/documentDefaultShares';
 import { getDocumentKind, isSpreadsheetDocument } from '../utils/documentKind';
+import { canOpenDocumentFolderMenu } from '../utils/documentFolderPermissions';
 import { loadFreshDocumentHistoryDetail } from '../utils/documentHistory';
 import {
   buildSpreadsheetCollaborationHint,
@@ -109,6 +110,7 @@ import {
   resolveSpreadsheetContextAutoCollapsed,
 } from '../utils/spreadsheetWorkspaceLayout';
 import { activateDocumentLink } from '../utils/documentLinkNavigation';
+import { getDocumentTreeLocation } from '../utils/documentLibraryNavigation';
 import {
   buildCollapsedDocumentBlockIds,
   buildDocumentBlockGuideMap,
@@ -188,6 +190,13 @@ const domainOptions = [
   { value: 'executive_management', label: '经营管理' },
   { value: 'general', label: '通用文档' },
   { value: 'cross_region', label: '跨区域' },
+];
+
+const documentLibraryViewOptions = [
+  { value: 'directory', label: '目录' },
+  { value: 'recent', label: '最近访问' },
+  { value: 'shared', label: '与我共享' },
+  { value: 'favorite', label: '收藏' },
 ];
 
 const departmentOptions = [
@@ -2724,10 +2733,17 @@ function renderDocumentTreeSwitcher({ expanded, isLeaf }) {
   );
 }
 
-function buildFolderNode(folder, childrenByParent, documentsByFolder, folderSelectionMap, folderCheckboxEnabled) {
+function buildFolderNode(folder, childrenByParent, documentsByFolder, folderSelectionMap, folderCheckboxEnabled, locatedDocumentId) {
   const folderDocuments = documentsByFolder.get(Number(folder.id)) || [];
   const childFolders = (childrenByParent.get(Number(folder.id)) || [])
-    .map(child => buildFolderNode(child, childrenByParent, documentsByFolder, folderSelectionMap, folderCheckboxEnabled));
+    .map(child => buildFolderNode(
+      child,
+      childrenByParent,
+      documentsByFolder,
+      folderSelectionMap,
+      folderCheckboxEnabled,
+      locatedDocumentId
+    ));
   const documentChildren = folderDocuments.map(doc => ({
     title: renderDocumentTreeTitle(doc.title || '未命名文档', 'document', doc.icon_key),
     key: `document-${doc.id}`,
@@ -2737,6 +2753,7 @@ function buildFolderNode(folder, childrenByParent, documentsByFolder, folderSele
     documentId: doc.id,
     folderId: folder.id,
     document: doc,
+    className: Number(doc.id) === Number(locatedDocumentId) ? 'document-library-located-node' : undefined,
     disableCheckbox: !Number(doc.can_edit || 0),
   }));
   const children = [...childFolders, ...documentChildren];
@@ -2817,7 +2834,8 @@ function buildFolderTree(folders, activeDomain, visibleDocuments = [], options =
       childrenByParent,
       documentsByFolder,
       options.folderSelectionMap || new Map(),
-      Boolean(options.folderCheckboxEnabled)
+      Boolean(options.folderCheckboxEnabled),
+      options.locatedDocumentId
     ));
   });
 
@@ -3355,6 +3373,12 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [users, setUsers] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [folderTreeDocuments, setFolderTreeDocuments] = useState([]);
+  const [recentDocuments, setRecentDocuments] = useState([]);
+  const [sharedDocuments, setSharedDocuments] = useState([]);
+  const [documentLibraryView, setDocumentLibraryView] = useState('directory');
+  const [quickViewLoading, setQuickViewLoading] = useState(false);
+  const [locatedDocumentId, setLocatedDocumentId] = useState(null);
+  const [, setLocatedDocumentPath] = useState('');
   const [selectedDocId, setSelectedDocId] = useState(null);
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [openDocTabs, setOpenDocTabs] = useState([]);
@@ -3402,7 +3426,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const [optionsSaving, setOptionsSaving] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingPropertyDoc, setEditingPropertyDoc] = useState(null);
-  const [templateOpen, setTemplateOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareLoading, setShareLoading] = useState(false);
   const [shareSaving, setShareSaving] = useState(false);
@@ -3492,6 +3515,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const documentSelectionVersionRef = useRef(0);
   const documentListRequestRef = useRef(null);
   const documentListRequestSequenceRef = useRef(0);
+  const quickViewRequestSequenceRef = useRef(0);
   const detailRequestIdsRef = useRef({});
   const activeDetailLoadingRef = useRef(null);
   const lastSavedSignatureRef = useRef({});
@@ -3730,6 +3754,80 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .document-folder-tree .document-library-located-node::before {
+        background: #eef2ff;
+        border: 1px solid #c7d2fe;
+        box-shadow: inset 3px 0 0 #4f46e5;
+        opacity: 1;
+      }
+      .document-folder-tree .document-library-located-node .document-tree-title {
+        color: #312e81;
+        font-weight: 600;
+      }
+      .document-folder-tree .document-library-located-node .document-tree-item-icon {
+        border-color: #4f46e5;
+        background: #ffffff;
+      }
+      .document-folder-tree .document-library-located-node .document-tree-item-icon::before {
+        background: #4f46e5;
+        box-shadow: 0 5px 0 #4f46e5;
+      }
+      .document-library-tabs {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        width: 100%;
+        min-height: 38px;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      .document-library-tab {
+        position: relative;
+        min-width: 0;
+        height: 38px;
+        padding: 0 3px;
+        overflow: hidden;
+        color: #6b7280;
+        font-size: 13px;
+        line-height: 38px;
+        text-align: center;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        background: transparent;
+        border: 0;
+        cursor: pointer;
+      }
+      .document-library-tab:hover,
+      .document-library-tab:focus-visible {
+        color: #374151;
+        background: #f8fafc;
+      }
+      .document-library-tab.is-active {
+        color: #3730a3;
+        font-weight: 600;
+      }
+      .document-library-tab.is-active::after {
+        content: "";
+        position: absolute;
+        right: 8px;
+        bottom: -1px;
+        left: 8px;
+        height: 2px;
+        background: #6366f1;
+      }
+      .document-library-tab:disabled {
+        color: #c4c7cc;
+        cursor: not-allowed;
+        background: transparent;
+      }
+      .document-library-panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 28px;
+        padding: 0 2px;
+      }
+      .document-library-quick-list .ant-list-item {
+        min-height: 62px;
+      }
       .document-sidebar-resize-handle:hover .document-sidebar-resize-line,
       .document-sidebar-resize-handle:active .document-sidebar-resize-line {
         background: #6366f1 !important;
@@ -3778,8 +3876,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     () => buildFolderTree(folders, domainFilter, folderTreeDocuments, {
       folderSelectionMap: bulkFolderSelectionMap,
       folderCheckboxEnabled: bulkShareMode && !bulkShareDocumentsLoading,
+      locatedDocumentId,
     }),
-    [folders, domainFilter, folderTreeDocuments, bulkFolderSelectionMap, bulkShareMode, bulkShareDocumentsLoading]
+    [folders, domainFilter, folderTreeDocuments, bulkFolderSelectionMap, bulkShareMode, bulkShareDocumentsLoading, locatedDocumentId]
   );
   const defaultFolderTreeExpandedKeys = useMemo(() => collectDefaultFolderExpandedKeys(folderTree), [folderTree]);
   const folderTreeKeySet = useMemo(() => collectTreeKeys(folderTree), [folderTree]);
@@ -3816,6 +3915,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   const activePresentationSlideIndex = Math.min(presentationSlideIndex, presentationSlideCount - 1);
   const activePresentationSection = presentationSections[activePresentationSlideIndex] || presentationSections[0];
   const isFolderSidebarCollapsed = !isMobile && folderSidebarCollapsed;
+  const activeDocumentLibraryView = documentLibraryViewOptions.find(option => option.value === documentLibraryView)
+    || documentLibraryViewOptions[0];
+  const quickViewDocuments = documentLibraryView === 'recent'
+    ? recentDocuments
+    : (documentLibraryView === 'shared' ? sharedDocuments : documents);
   const selectedDocDomainTag = domainLabel[selectedDoc?.domain] || selectedDoc?.domain || '';
   const selectedDocProjectGroupTag = getDirectoryProjectGroupLabel(selectedDoc);
   const selectedDocDepartmentTag = departmentLabel[selectedDoc?.department_key] || selectedDoc?.department_key || '';
@@ -4118,6 +4222,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const cachedDoc = getValidDocTabState(docId, docTabStates)?.doc;
     return documents.find(item => getDocTabId(item.id) === docId)
       || folderTreeDocuments.find(item => getDocTabId(item.id) === docId)
+      || recentDocuments.find(item => getDocTabId(item.id) === docId)
+      || sharedDocuments.find(item => getDocTabId(item.id) === docId)
       || openDocTabs.find(item => getDocTabId(item.id) === docId)
       || cachedDoc;
   };
@@ -4155,17 +4261,28 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     return { teamRows, userRows };
   };
 
-  const buildDocumentQueryParams = ({ includeFolder = true, favoriteOnly = false } = {}) => {
+  const buildDocumentQueryParams = ({
+    includeFolder = true,
+    favoriteOnly = false,
+    view = '',
+    domainValue = domainFilter,
+    keywordValue = keyword,
+  } = {}) => {
     const params = {};
-    if (domainFilter !== 'all') params.domain = domainFilter;
-    if (keyword.trim()) params.search = keyword.trim();
+    if (domainValue !== 'all') params.domain = domainValue;
+    if (String(keywordValue || '').trim()) params.search = String(keywordValue).trim();
     if (includeFolder && selectedFolderId) params.folder_id = selectedFolderId;
     if (favoriteOnly) params.favorite = 1;
+    if (view) params.view = view;
     return params;
   };
 
-  const loadFolderTreeDocuments = async () => {
-    const params = buildDocumentQueryParams({ includeFolder: false });
+  const loadFolderTreeDocuments = async (options = {}) => {
+    const params = buildDocumentQueryParams({
+      includeFolder: false,
+      domainValue: options.domainValue ?? domainFilter,
+      keywordValue: options.keywordValue ?? keyword,
+    });
     const requestKey = JSON.stringify(params);
     if (documentListRequestRef.current?.key === requestKey) {
       return documentListRequestRef.current.promise;
@@ -4194,6 +4311,39 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       });
     documentListRequestRef.current = { key: requestKey, promise: request };
     return request;
+  };
+
+  const loadDocumentLibraryView = async (view = documentLibraryView, options = {}) => {
+    if (view === 'directory') return loadFolderTreeDocuments(options);
+    const requestSequence = quickViewRequestSequenceRef.current + 1;
+    quickViewRequestSequenceRef.current = requestSequence;
+    const params = buildDocumentQueryParams({
+      includeFolder: false,
+      favoriteOnly: view === 'favorite',
+      view: ['recent', 'shared'].includes(view) ? view : '',
+      domainValue: options.domainValue ?? domainFilter,
+      keywordValue: options.keywordValue ?? keyword,
+    });
+    if (view !== 'favorite') params.limit = 100;
+    setQuickViewLoading(true);
+    try {
+      const rows = await documentsApi.list(params);
+      if (quickViewRequestSequenceRef.current !== requestSequence) return rows;
+      const normalizedRows = Array.isArray(rows) ? rows : [];
+      if (view === 'recent') setRecentDocuments(normalizedRows);
+      if (view === 'shared') setSharedDocuments(normalizedRows);
+      if (view === 'favorite') setDocuments(normalizedRows);
+      return normalizedRows;
+    } catch (err) {
+      if (quickViewRequestSequenceRef.current !== requestSequence) return [];
+      if (view === 'recent') setRecentDocuments([]);
+      if (view === 'shared') setSharedDocuments([]);
+      if (view === 'favorite') setDocuments([]);
+      message.error(err.response?.data?.error || err.message || '加载文档列表失败');
+      return [];
+    } finally {
+      if (quickViewRequestSequenceRef.current === requestSequence) setQuickViewLoading(false);
+    }
   };
 
   const loadDetail = async (id, options = {}) => {
@@ -4299,7 +4449,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const docId = getDocTabId(typeof docOrId === 'object' ? docOrId?.id : docOrId);
     if (!docId) return;
     if (!options.keepContextMenu) closeDocContextMenu();
-    if (isMobile) setMobileLibraryVisible(false);
+    if (isMobile && !options.keepLibraryVisible) setMobileLibraryVisible(false);
     if (!embedded && getDocumentIdFromSearch(searchParams) !== docId) {
       replaceDocumentLinkParam(docId);
     }
@@ -4330,6 +4480,44 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setSelectedDoc(null);
       loadDetail(docId, { force: true });
     }
+  };
+
+  const locateDocumentInDirectory = async (doc) => {
+    if (!doc?.id) return;
+    const location = getDocumentTreeLocation(folders, doc);
+    const targetFolder = location.folderId
+      ? folders.find(folder => Number(folder.id) === Number(location.folderId))
+      : null;
+    const path = targetFolder
+      ? getFolderPathLabel(targetFolder, folderPathMap)
+      : `${domainLabel[location.domain] || location.domain || '文档中心'} / 未归档`;
+
+    setDocumentLibraryView('directory');
+    setKeyword('');
+    setDomainFilter(location.domain || 'all');
+    setSelectedFolderId(location.folderId || null);
+    setLocatedDocumentId(Number(doc.id));
+    setLocatedDocumentPath(path);
+    setFolderTreeExpandedKeys(prev => [...new Set([...prev, ...location.expandedKeys])]);
+    if (isMobile) {
+      setMobileLibraryVisible(true);
+    } else {
+      setFolderSidebarCollapsed(false);
+    }
+
+    const rows = await loadFolderTreeDocuments({
+      domainValue: location.domain || 'all',
+      keywordValue: '',
+    });
+    const targetDoc = rows.find(item => Number(item.id) === Number(doc.id)) || doc;
+    openDocumentTab(targetDoc, { keepLibraryVisible: isMobile });
+    message.success(`已在目录中定位：${path}`);
+    window.setTimeout(() => {
+      const targetNode = document.querySelector(
+        `.document-folder-tree [data-key="document-${Number(doc.id)}"]`
+      );
+      targetNode?.scrollIntoView?.({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    }, isMobile ? 120 : 260);
   };
 
   const handleDocumentContentLinkClick = (event) => {
@@ -4432,12 +4620,14 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   }, []);
 
   useEffect(() => {
-    loadFolderTreeDocuments();
-  }, [domainFilter]);
+    if (documentLibraryView === 'directory') loadFolderTreeDocuments();
+    else loadDocumentLibraryView(documentLibraryView);
+  }, [domainFilter, documentLibraryView]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      loadFolderTreeDocuments();
+      if (documentLibraryView === 'directory') loadFolderTreeDocuments();
+      else loadDocumentLibraryView(documentLibraryView);
     }, 300);
     return () => clearTimeout(timer);
   }, [keyword]);
@@ -4688,7 +4878,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
 
   useEffect(() => {
     const handleUndoKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const key = String(event.key || '').toLowerCase();
       if (key !== 'z' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
@@ -4696,11 +4886,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     window.addEventListener('keydown', handleUndoKeyDown);
     return () => window.removeEventListener('keydown', handleUndoKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
 
   useEffect(() => {
     const handleSaveKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const key = String(event.key || '').toLowerCase();
       if (key !== 's' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       event.preventDefault();
@@ -4708,11 +4898,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     window.addEventListener('keydown', handleSaveKeyDown);
     return () => window.removeEventListener('keydown', handleSaveKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen]);
 
   useEffect(() => {
     const handleSelectAllKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const key = String(event.key || '').toLowerCase();
       if (key !== 'a' || event.shiftKey || event.altKey || !(event.metaKey || event.ctrlKey)) return;
       const editorNode = document.getElementById('document-editor-blocks');
@@ -4726,11 +4916,11 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     window.addEventListener('keydown', handleSelectAllKeyDown);
     return () => window.removeEventListener('keydown', handleSelectAllKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen, editorBlocks]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen, editorBlocks]);
 
   useEffect(() => {
     const handleDocumentCopy = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       const activeElement = document.activeElement;
       const activeTextSelection = activeElement?.closest?.('textarea, input, [contenteditable="true"]')
         && window.getSelection?.()?.toString?.();
@@ -4754,7 +4944,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     selectedDoc?.id,
     presentationOpen,
     createOpen,
-    templateOpen,
     shareOpen,
     bulkShareOpen,
     changeLogOpen,
@@ -6250,6 +6439,9 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       setBulkShareDocuments([]);
       return;
     }
+    setDocumentLibraryView('directory');
+    setLocatedDocumentId(null);
+    setLocatedDocumentPath('');
     setBulkShareMode(true);
   };
 
@@ -6680,13 +6872,20 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
   };
 
   const toggleFavorite = async (doc) => {
+    const nextFavorite = Number(doc.is_favorite) === 1 ? 0 : 1;
     try {
       if (doc.is_favorite) {
         await documentsApi.unfavorite(doc.id);
       } else {
         await documentsApi.favorite(doc.id);
       }
+      const updateFavoriteFlag = item => (
+        Number(item.id) === Number(doc.id) ? { ...item, is_favorite: nextFavorite } : item
+      );
+      setRecentDocuments(prev => prev.map(updateFavoriteFlag));
+      setSharedDocuments(prev => prev.map(updateFavoriteFlag));
       await loadFolderTreeDocuments();
+      if (documentLibraryView === 'favorite') await loadDocumentLibraryView('favorite');
       if (selectedDoc?.id === doc.id) await loadDetail(doc.id, { force: true });
     } catch (err) {
       message.error(err.response?.data?.error || err.message || '收藏操作失败');
@@ -6703,17 +6902,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
       message.success(nextPinned ? '已置顶' : '已取消置顶');
     } catch (err) {
       message.error(err.message || '置顶操作失败');
-    }
-  };
-
-  const handleApplyTemplate = async () => {
-    try {
-      const data = await documentsApi.applyFolderTemplate({});
-      message.success(data.created > 0 ? `目录结构已初始化，新增 ${data.created} 个目录` : '目录结构已是最新');
-      setTemplateOpen(false);
-      await loadFolders();
-    } catch (err) {
-      message.error(err.response?.data?.error || err.message || '初始化目录失败');
     }
   };
 
@@ -8819,7 +9007,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
 
   useEffect(() => {
     const handleSelectionDeleteKeyDown = (event) => {
-      if (!selectedDoc?.id || presentationOpen || createOpen || templateOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
+      if (!selectedDoc?.id || presentationOpen || createOpen || shareOpen || bulkShareOpen || changeLogOpen || moveFolderOpen) return;
       if (!['Delete', 'Backspace'].includes(event.key) || event.metaKey || event.ctrlKey || event.altKey) return;
       if (shouldIgnoreGlobalDocumentDelete(event)) return;
       if (hasActiveNativeTextSelection()) return;
@@ -8834,7 +9022,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     };
     window.addEventListener('keydown', handleSelectionDeleteKeyDown);
     return () => window.removeEventListener('keydown', handleSelectionDeleteKeyDown);
-  }, [selectedDoc?.id, presentationOpen, createOpen, templateOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen, editorBlocks, editorTitle, selectedBlockId, selectedAreaBlockIds, selectedTableCell]);
+  }, [selectedDoc?.id, presentationOpen, createOpen, shareOpen, bulkShareOpen, changeLogOpen, moveFolderOpen, editorBlocks, editorTitle, selectedBlockId, selectedAreaBlockIds, selectedTableCell]);
 
   const scrollToBlock = (id) => {
     setSelectedBlockId(id);
@@ -8857,7 +9045,7 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
 
   const openTreeDocContextMenu = ({ event, node }) => {
     if (node?.nodeType === 'folder') {
-      if (!canManageDocumentFolders || !node.canAddChild) return;
+      if (!canOpenDocumentFolderMenu(node, canManageDocumentFolders)) return;
       const folderId = normalizeDocumentFolderSelectValue(node.folderId);
       if (folderId) setSelectedFolderId(folderId);
       event.preventDefault();
@@ -9177,6 +9365,14 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
     const docId = getDocTabId(item.id);
     const bulkSelected = bulkSelectedDocIdSet.has(docId);
     const bulkDisabled = !Number(item.can_edit || 0);
+    const itemFolder = item.folder_id
+      ? folders.find(folder => Number(folder.id) === Number(item.folder_id))
+      : null;
+    const itemPath = itemFolder
+      ? getFolderPathLabel(itemFolder, folderPathMap)
+      : `${domainLabel[item.domain] || item.domain || '文档中心'} / 未归档`;
+    const timeLabel = documentLibraryView === 'recent' ? '访问' : '更新';
+    const timeValue = documentLibraryView === 'recent' ? item.last_accessed_at : item.updated_at;
     return (
       <List.Item
         key={item.id}
@@ -9198,10 +9394,23 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
           opacity: bulkShareMode && bulkDisabled ? 0.58 : 1,
         }}
         actions={bulkShareMode ? [] : [
+          <Tooltip title="在目录中定位" key="locate">
+            <Button
+              type="text"
+              size="small"
+              aria-label="在目录中定位"
+              icon={<FolderOpenOutlined />}
+              onClick={(event) => {
+                event.stopPropagation();
+                locateDocumentInDirectory(item);
+              }}
+            />
+          </Tooltip>,
           <Button
             key="favorite"
             type="text"
             size="small"
+            aria-label={item.is_favorite ? '取消收藏' : '收藏'}
             icon={item.is_favorite ? <StarFilled style={{ color: '#f59e0b' }} /> : <StarOutlined />}
             onClick={(event) => {
               event.stopPropagation();
@@ -9225,26 +9434,22 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
               {renderDocumentInlineIcon(item, { marginTop: 2 })}
             </Space>
           )}
-          title={
-            <Space size={6} style={{ maxWidth: '100%', overflow: 'hidden', lineHeight: 1.25, whiteSpace: 'nowrap' }}>
-              <Text
-                strong
-                ellipsis={{ tooltip: item.title }}
-                style={{
-                  maxWidth: isMobile ? 'calc(100vw - 164px)' : Math.max(150, folderSidebarWidth - (bulkShareMode ? 214 : 188)),
-                  lineHeight: '20px',
-                }}
-              >
-                {item.title}
-              </Text>
-              {item.pinned_at && <Tag color="gold" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>置顶</Tag>}
-              {isSpreadsheetDocument(item) && <Tag color="green" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>在线表格</Tag>}
-              <Tag color="blue" style={{ marginInlineEnd: 0, lineHeight: '20px' }}>{docTypeLabel[item.doc_type] || item.doc_type}</Tag>
-            </Space>
-          }
+          title={(
+            <Text
+              strong
+              ellipsis={{ tooltip: item.title }}
+              style={{
+                display: 'block',
+                maxWidth: '100%',
+                lineHeight: '20px',
+              }}
+            >
+              {item.title}
+            </Text>
+          )}
           description={
-            <Text type="secondary" style={{ fontSize: 12, lineHeight: 1.35 }}>
-              {item.updated_by_name || item.created_by_name || '-'} · {formatDocumentTimestamp(item.updated_at)}
+            <Text ellipsis={{ tooltip: itemPath }} type="secondary" style={{ display: 'block', maxWidth: '100%', fontSize: 12, lineHeight: 1.4 }}>
+              {itemPath} · {timeLabel}{formatDocumentTimestamp(timeValue)}
             </Text>
           }
         />
@@ -15758,7 +15963,14 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                   />
                 </Tooltip>
                 <Tooltip title="刷新">
-                  <Button icon={<ReloadOutlined />} onClick={() => { loadFolders(); loadFolderTreeDocuments(); }} />
+                  <Button
+                    icon={<ReloadOutlined />}
+                    onClick={() => {
+                      loadFolders();
+                      if (documentLibraryView === 'directory') loadFolderTreeDocuments();
+                      else loadDocumentLibraryView(documentLibraryView);
+                    }}
+                  />
                 </Tooltip>
                 <Tooltip title="导入">
                   <Button icon={<DownloadOutlined />} aria-label="导入" onClick={openWolaiImport} />
@@ -15778,6 +15990,8 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 onChange={(value) => {
                   setDomainFilter(value);
                   setSelectedFolderId(null);
+                  setLocatedDocumentId(null);
+                  setLocatedDocumentPath('');
                   if (isMobile) setMobileLibraryVisible(true);
                 }}
                 style={{ width: '100%' }}
@@ -15789,9 +16003,33 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 value={keyword}
                 onChange={event => {
                   setKeyword(event.target.value);
+                  setLocatedDocumentId(null);
+                  setLocatedDocumentPath('');
                   if (isMobile) setMobileLibraryVisible(true);
                 }}
               />
+
+              <div className="document-library-tabs" role="tablist" aria-label="文档导航视图">
+                {documentLibraryViewOptions.map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="tab"
+                    aria-selected={documentLibraryView === option.value}
+                    disabled={bulkShareMode && option.value !== 'directory'}
+                    className={`document-library-tab${documentLibraryView === option.value ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setDocumentLibraryView(option.value);
+                      setSelectedFolderId(null);
+                      setLocatedDocumentId(null);
+                      setLocatedDocumentPath('');
+                      if (isMobile) setMobileLibraryVisible(true);
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
 
               {bulkShareMode && (
                 <div style={{
@@ -15825,73 +16063,86 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                 </div>
               )}
 
-              {canManageDocumentFolders && (
-                <Space size={8} wrap>
-                  <Button size="small" icon={<FolderOutlined />} onClick={() => setTemplateOpen(true)}>初始化目录</Button>
-                </Space>
+              {documentLibraryView === 'directory' ? (
+                <div>
+                  <div className="document-library-panel-head">
+                    <Text type="secondary" style={{ fontSize: 12 }}>目录</Text>
+                  </div>
+                  <Spin spinning={loading}>
+                    {folderTree.length ? (
+                      <Tree
+                        className="document-folder-tree"
+                        blockNode
+                        showIcon={false}
+                        expandedKeys={folderTreeExpandedKeys}
+                        selectedKeys={bulkShareMode ? [] : selectedTreeKeys}
+                        checkable={bulkShareMode}
+                        checkStrictly={bulkShareMode}
+                        checkedKeys={bulkShareMode ? bulkTreeCheckState : []}
+                        treeData={folderTree}
+                        switcherIcon={renderDocumentTreeSwitcher}
+                        onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
+                        onCheck={handleBulkTreeCheck}
+                        onRightClick={openTreeDocContextMenu}
+                        onSelect={(keys, info) => {
+                          const key = keys[0] || info?.node?.key;
+                          setLocatedDocumentId(null);
+                          setLocatedDocumentPath('');
+                          if (typeof key === 'string' && key.startsWith('folder-')) {
+                            if (bulkShareMode) {
+                              setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]));
+                              return;
+                            }
+                            const folderId = normalizeDocumentFolderSelectValue(key.replace('folder-', ''));
+                            if (folderId) setSelectedFolderId(folderId);
+                            if (isMobile) setMobileLibraryVisible(true);
+                            setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev : [...prev, key]));
+                          } else if (typeof key === 'string' && key.startsWith('document-')) {
+                            const documentId = Number(key.replace('document-', ''));
+                            if (bulkShareMode) {
+                              const doc = info?.node?.document || getDocumentSummaryById(documentId);
+                              toggleBulkDocumentSelection(doc || { id: documentId }, !bulkSelectedDocIdSet.has(documentId));
+                              return;
+                            }
+                            const folderId = normalizeDocumentFolderSelectValue(info?.node?.folderId);
+                            if (folderId) {
+                              const folderKey = `folder-${folderId}`;
+                              setSelectedFolderId(folderId);
+                              setFolderTreeExpandedKeys(prev => (prev.includes(folderKey) ? prev : [...prev, folderKey]));
+                            }
+                            openDocumentTab(getDocumentSummaryById(documentId) || documentId);
+                          }
+                        }}
+                        style={{ background: 'transparent' }}
+                      />
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无目录" />
+                    )}
+                  </Spin>
+                </div>
+              ) : (
+                <div>
+                  <div className="document-library-panel-head">
+                    <Text type="secondary" style={{ fontSize: 12 }}>{activeDocumentLibraryView.label}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{quickViewDocuments.length} 篇</Text>
+                  </div>
+                  <Spin spinning={quickViewLoading}>
+                    <List
+                      className="document-library-quick-list"
+                      dataSource={quickViewDocuments}
+                      renderItem={renderDocItem}
+                      locale={{
+                        emptyText: (
+                          <Empty
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                            description={`暂无${activeDocumentLibraryView.label}文档`}
+                          />
+                        ),
+                      }}
+                    />
+                  </Spin>
+                </div>
               )}
-
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>目录</Text>
-                {folderTree.length ? (
-                  <Tree
-                    className="document-folder-tree"
-                    blockNode
-                    showIcon={false}
-                    expandedKeys={folderTreeExpandedKeys}
-                    selectedKeys={bulkShareMode ? [] : selectedTreeKeys}
-                    checkable={bulkShareMode}
-                    checkStrictly={bulkShareMode}
-                    checkedKeys={bulkShareMode ? bulkTreeCheckState : []}
-                    treeData={folderTree}
-                    switcherIcon={renderDocumentTreeSwitcher}
-                    onExpand={(keys) => setFolderTreeExpandedKeys(keys)}
-                    onCheck={handleBulkTreeCheck}
-                    onRightClick={openTreeDocContextMenu}
-                    onSelect={(keys, info) => {
-                      const key = keys[0] || info?.node?.key;
-                      if (typeof key === 'string' && key.startsWith('folder-')) {
-                        if (bulkShareMode) {
-                          setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]));
-                          return;
-                        }
-                        const folderId = normalizeDocumentFolderSelectValue(key.replace('folder-', ''));
-                        if (folderId) setSelectedFolderId(folderId);
-                        if (isMobile) setMobileLibraryVisible(true);
-                        setFolderTreeExpandedKeys(prev => (prev.includes(key) ? prev : [...prev, key]));
-                      } else if (typeof key === 'string' && key.startsWith('document-')) {
-                        const documentId = Number(key.replace('document-', ''));
-                        if (bulkShareMode) {
-                          const doc = info?.node?.document || getDocumentSummaryById(documentId);
-                          toggleBulkDocumentSelection(doc || { id: documentId }, !bulkSelectedDocIdSet.has(documentId));
-                          return;
-                        }
-                        const folderId = normalizeDocumentFolderSelectValue(info?.node?.folderId);
-                        if (folderId) {
-                          const folderKey = `folder-${folderId}`;
-                          setSelectedFolderId(folderId);
-                          setFolderTreeExpandedKeys(prev => (prev.includes(folderKey) ? prev : [...prev, folderKey]));
-                        }
-                        openDocumentTab(getDocumentSummaryById(documentId) || documentId);
-                      }
-                    }}
-                    style={{ marginTop: 8, background: 'transparent' }}
-                  />
-                ) : (
-                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无目录" />
-                )}
-              </div>
-
-              <div>
-                <Text type="secondary" style={{ fontSize: 12 }}>收藏文档</Text>
-                <Spin spinning={loading}>
-                  <List
-                    dataSource={documents}
-                    renderItem={renderDocItem}
-                    locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无收藏文档" /> }}
-                    style={{ marginTop: 8 }}
-                  />
-                </Spin>
                 <Dropdown
                   open={docContextMenu.open}
                   trigger={[]}
@@ -15988,7 +16239,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                     height: 1,
                   }} />
                 </Dropdown>
-              </div>
             </Space>
             </div>
           )}
@@ -16144,6 +16394,16 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                       <Button size="small" icon={<MoreOutlined />}>页面</Button>
                     </Dropdown>
                     {!isSpreadsheetDocument(selectedDoc) && <Button size="small" icon={<FundProjectionScreenOutlined />} onClick={openPresentationMode}>演示</Button>}
+                    {!embedded && (
+                      <Button
+                        size="small"
+                        type={Number(locatedDocumentId) === Number(selectedDoc.id) ? 'primary' : 'default'}
+                        icon={<FolderOpenOutlined />}
+                        onClick={() => locateDocumentInDirectory(selectedDoc)}
+                      >
+                        定位
+                      </Button>
+                    )}
                     <Button size="small" icon={<UserAddOutlined />} onClick={openShare}>分享</Button>
                     <Button size="small" icon={<HistoryOutlined />} loading={changeLogRefreshing} onClick={openChangeLogs}>历史</Button>
                     <Button
@@ -16193,6 +16453,15 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                     )}
                   </div>
                   <Space className="documents-spreadsheet-header-actions" size={2}>
+                    <Tooltip title="在目录中定位">
+                      <Button
+                        type="text"
+                        icon={<FolderOpenOutlined />}
+                        onClick={() => locateDocumentInDirectory(selectedDoc)}
+                        aria-label="在目录中定位"
+                        style={Number(locatedDocumentId) === Number(selectedDoc.id) ? { color: '#4f46e5', background: '#eef2ff' } : undefined}
+                      />
+                    </Tooltip>
                     <Tooltip title="页面">
                       <Dropdown
                         trigger={['click']}
@@ -16242,6 +16511,17 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
                   </Text>
                 </Space>
                 <Space wrap size={6}>
+                  {!embedded && (
+                    <Tooltip title="在目录中定位">
+                      <Button
+                        type={Number(locatedDocumentId) === Number(selectedDoc.id) ? 'primary' : 'default'}
+                        icon={<FolderOpenOutlined />}
+                        onClick={() => locateDocumentInDirectory(selectedDoc)}
+                      >
+                        定位
+                      </Button>
+                    </Tooltip>
+                  )}
                   {!isSpreadsheetDocument(selectedDoc) && (
                     <Tooltip title="目录">
                       <span>
@@ -16945,29 +17225,6 @@ export default function Documents({ embedded = false, embeddedDocumentId = null 
         </Form>
       </Modal>
 
-      <Modal
-        title="初始化目录结构"
-        open={templateOpen}
-        onCancel={() => setTemplateOpen(false)}
-        onOk={handleApplyTemplate}
-        okText="初始化"
-        cancelText="取消"
-        destroyOnClose
-        width={isMobile ? '100%' : undefined}
-        style={isMobile ? { top: 0, maxWidth: '100%', paddingBottom: 0 } : undefined}
-        styles={isMobile ? { body: { maxHeight: 'calc(100vh - 150px)', overflowY: 'auto' } } : undefined}
-      >
-        <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <Text>
-            将确保国内项目下包含产运、商务、研发、投放，海外项目下包含商务、投放，
-            人力行政下包含人力、行政。
-          </Text>
-          <Text type="secondary">
-            每个一级目录会自动包含规划、落地、沉淀、团队四个二级目录；系统目录名称固定，
-            四类目录及其后代可继续新建自定义子文件夹。已有项目文档会按目录规则归到新的阶段目录中。
-          </Text>
-        </Space>
-      </Modal>
     </div>
   );
 }

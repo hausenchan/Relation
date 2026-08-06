@@ -2927,6 +2927,14 @@ db.exec(`
     PRIMARY KEY (user_id, document_id)
   );
 
+  CREATE TABLE IF NOT EXISTS document_accesses (
+    user_id INTEGER NOT NULL,
+    document_id INTEGER NOT NULL,
+    last_accessed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    access_count INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (user_id, document_id)
+  );
+
   CREATE TABLE IF NOT EXISTS document_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER NOT NULL,
@@ -3027,6 +3035,10 @@ createIndexesIfColumnsExist('documents', [
 ]);
 createIndexesIfColumnsExist('document_favorites', [
   { name: 'idx_document_favorites_document', columnsSql: 'document_id, user_id', columns: ['document_id', 'user_id'] },
+]);
+createIndexesIfColumnsExist('document_accesses', [
+  { name: 'idx_document_accesses_user_recent', columnsSql: 'user_id, last_accessed_at', columns: ['user_id', 'last_accessed_at'] },
+  { name: 'idx_document_accesses_document', columnsSql: 'document_id, user_id', columns: ['document_id', 'user_id'] },
 ]);
 createIndexesIfColumnsExist('document_change_logs', [
   { name: 'idx_document_change_logs_doc_changed', columnsSql: 'document_id, changed_at', columns: ['document_id', 'changed_at'] },
@@ -7909,6 +7921,16 @@ function getVisibleDocumentLiveMeta(id, user) {
   `).get(id, ...visibility.params);
 }
 
+function recordDocumentAccess(userId, documentId) {
+  db.prepare(`
+    INSERT INTO document_accesses (user_id, document_id, last_accessed_at, access_count)
+    VALUES (?, ?, CURRENT_TIMESTAMP, 1)
+    ON CONFLICT(user_id, document_id) DO UPDATE SET
+      last_accessed_at = CURRENT_TIMESTAMP,
+      access_count = COALESCE(access_count, 0) + 1
+  `).run(Number(userId), Number(documentId));
+}
+
 function normalizeDocumentShares(shares) {
   if (!Array.isArray(shares)) return [];
   const seen = new Set();
@@ -8642,18 +8664,26 @@ app.get('/api/documents', (req, res) => {
   const searchText = String(search || '').trim();
   const titleOnlySearch = isTruthyQueryValue(title_only);
   const exactSearch = isTruthyQueryValue(exact);
+  const libraryView = ['recent', 'shared'].includes(String(req.query.view || '').trim())
+    ? String(req.query.view).trim()
+    : '';
   const visibility = buildDocumentVisibilityFilter(req.user, 'd');
+  const recentAccessJoin = libraryView === 'recent'
+    ? 'INNER JOIN document_accesses recent_access ON recent_access.document_id = d.id AND recent_access.user_id = ?'
+    : '';
   let q = `
     SELECT d.id, d.document_no, d.global_seq, d.title, d.summary, d.domain, d.project_group_id,
       d.project_code, d.department_key, d.doc_type, d.document_kind, d.current_version, d.folder_id,
       d.tags, d.icon_key, d.pinned_at, d.created_by, d.updated_by, d.created_at, d.updated_at,
       ${searchText ? 'd.content_text as search_content_text,' : ''}
+      ${libraryView === 'recent' ? 'recent_access.last_accessed_at,' : ''}
       creator.display_name as created_by_name,
       updater.display_name as updated_by_name,
       pg.name as project_group_name,
       f.name as folder_name,
       CASE WHEN fav.user_id IS NULL THEN 0 ELSE 1 END as is_favorite
     FROM documents d
+    ${recentAccessJoin}
     LEFT JOIN users creator ON d.created_by = creator.id
     LEFT JOIN users updater ON d.updated_by = updater.id
     LEFT JOIN project_groups pg ON d.project_group_id = pg.id
@@ -8662,7 +8692,11 @@ app.get('/api/documents', (req, res) => {
     WHERE COALESCE(d.is_deleted, 0) = 0
     ${visibility.sql}
   `;
-  const params = [req.user.id, ...visibility.params];
+  const params = [
+    ...(libraryView === 'recent' ? [req.user.id] : []),
+    req.user.id,
+    ...visibility.params,
+  ];
   if (searchText) {
     const columns = titleOnlySearch ? ['d.title'] : ['d.title', 'd.document_no', 'd.content_text', 'd.tags'];
     getDocumentSearchTerms(searchText, exactSearch).forEach(term => {
@@ -8686,11 +8720,29 @@ app.get('/api/documents', (req, res) => {
   if (doc_type) { q += ' AND d.doc_type = ?'; params.push(normalizeDocumentType(doc_type)); }
   if (sop_only === '1' || sop_only === 'true') { q += " AND d.doc_type = 'SOP'"; }
   if (favorite === '1' || favorite === 'true') { q += ' AND fav.user_id IS NOT NULL'; }
-  q += ' ORDER BY CASE WHEN d.pinned_at IS NULL THEN 1 ELSE 0 END, d.pinned_at DESC, d.updated_at DESC, d.id DESC';
+  if (libraryView === 'shared') {
+    const shareTarget = buildShareTargetMatch(req.user, 'shared_view');
+    const sharedClauses = [
+      `EXISTS (
+        SELECT 1 FROM document_shares shared_view
+        WHERE shared_view.document_id = d.id AND (${shareTarget.sql})
+      )`,
+    ];
+    if (canAccessMediaManagement(req.user)) {
+      sharedClauses.push('EXISTS (SELECT 1 FROM media_assets shared_media WHERE shared_media.document_id = d.id)');
+    }
+    q += ` AND COALESCE(d.created_by, 0) != ? AND (${sharedClauses.join(' OR ')})`;
+    params.push(req.user.id, ...shareTarget.params);
+  }
+  q += libraryView === 'recent'
+    ? ' ORDER BY recent_access.last_accessed_at DESC, d.id DESC'
+    : ' ORDER BY CASE WHEN d.pinned_at IS NULL THEN 1 ELSE 0 END, d.pinned_at DESC, d.updated_at DESC, d.id DESC';
   const requestedLimit = Number(limit);
   if (Number.isFinite(requestedLimit) && requestedLimit > 0) {
     q += ' LIMIT ?';
-    params.push(Math.min(Math.round(requestedLimit), 300));
+    params.push(Math.min(Math.round(requestedLimit), libraryView ? 100 : 300));
+  } else if (libraryView) {
+    q += ' LIMIT 100';
   }
   const rows = db.prepare(q).all(...params);
   const editableDocumentIds = new Set(getEditableDocumentIds(req.user, rows.map(row => row.id)));
@@ -9628,6 +9680,7 @@ app.post('/api/documents/:id/spreadsheet/operations', canWrite, (req, res) => {
 app.get('/api/documents/:id', (req, res) => {
   const row = getVisibleDocument(req.params.id, req.user);
   if (!row) return res.status(404).json({ error: '文档不存在或无权限访问' });
+  recordDocumentAccess(req.user.id, row.id);
   res.json({
     ...serializeDocument(row, { withAccessSummary: true, user: req.user }),
     shares: getDocumentShares(row.id),

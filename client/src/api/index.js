@@ -738,7 +738,6 @@ export const documentsApi = {
   createFolder: (data) => api.post('/document-folders', data).then(r => r.data),
   updateFolder: (id, data) => api.put(`/document-folders/${id}`, data).then(r => r.data),
   deleteFolder: (id) => api.delete(`/document-folders/${id}`).then(r => r.data),
-  applyFolderTemplate: (data) => api.post('/document-folders/apply-template', data).then(r => r.data),
   listShares: (id) => api.get(`/documents/${id}/shares`).then(r => r.data),
   saveShares: (id, shares) => api.put(`/documents/${id}/shares`, { shares }).then(r => r.data),
   addBulkShares: (documentIds, shares) => api.post('/documents/bulk-shares', { document_ids: documentIds, shares }).then(r => r.data),
